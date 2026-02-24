@@ -5,7 +5,7 @@
 # Requirements: AWS CLI v2, Python 3.8+, boto3, SecurityAudit IAM policy
 # Usage: bash aws_security_audit_scripts.sh [--region eu-west-1]
 
-# Author: Krishnendu De
+# Author: Krishnendu De with support from Claude.AI
 # ============================================================================
 
 set -euo pipefail
