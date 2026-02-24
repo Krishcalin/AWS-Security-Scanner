@@ -1,5 +1,3 @@
-# CLAUDE.md
-
 ## Project Overview
 
 AWS-Security-Scanner is a collection of Bash scripts that perform automated security audits of AWS cloud environments. The scripts are aligned to the **CIS AWS Foundations Benchmark v3.0** and produce color-coded terminal output with PASS/FAIL/WARN verdicts plus evidence files saved to a timestamped output directory.
