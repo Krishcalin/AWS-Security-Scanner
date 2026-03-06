@@ -1,9 +1,29 @@
-# AWS-Security-Scanner
+<p align="center">
+  <img src="docs/banner.svg" alt="AWS Security Scanner" width="800"/>
+</p>
+
+<p align="center">
+  <strong>Automated security audit scripts for AWS cloud environments, aligned to the CIS AWS Foundations Benchmark v3.0</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/bash-5.0%2B-4EAA25?style=flat-square&logo=gnubash&logoColor=white" alt="Bash 5.0+"/>
+  <img src="https://img.shields.io/badge/python-3.8%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.8+"/>
+  <img src="https://img.shields.io/badge/license-GPL--3.0-orange?style=flat-square" alt="GPL-3.0 License"/>
+  <img src="https://img.shields.io/badge/AWS-CIS%20Benchmark%20v3.0-ff9900?style=flat-square&logo=amazonaws&logoColor=white" alt="CIS AWS v3.0"/>
+  <img src="https://img.shields.io/badge/checks-57%2B-red?style=flat-square" alt="57+ Checks"/>
+</p>
+
+---
+
+## Overview
 
 Automated security audit scripts for AWS cloud environments, aligned to the **CIS AWS Foundations Benchmark v3.0**. Produces color-coded terminal output with PASS/FAIL/WARN verdicts and saves evidence files to a timestamped output directory.
 
-**License:** GPL-3.0
-**Author:** Krishnendu De
+- **57+ security checks** across 16 audit sections
+- **CIS Benchmark aligned** — AWS Foundations Benchmark v3.0
+- **Zero external dependencies** — Bash + AWS CLI + boto3 only
+- **Read-only by design** — never modifies AWS resources
 
 ---
 
