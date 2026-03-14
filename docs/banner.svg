@@ -1,25 +1,163 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#0a0e17"/>
-      <stop offset="100%" style="stop-color:#111827"/>
+      <stop offset="0%" style="stop-color:#0f1923"/>
+      <stop offset="40%" style="stop-color:#1a2332"/>
+      <stop offset="100%" style="stop-color:#0d1117"/>
     </linearGradient>
-    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+    <linearGradient id="awsGrad" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" style="stop-color:#ff9900"/>
-      <stop offset="100%" style="stop-color:#e67e22"/>
+      <stop offset="100%" style="stop-color:#ffb347"/>
     </linearGradient>
+    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ff9900"/>
+      <stop offset="100%" style="stop-color:#e68a00"/>
+    </linearGradient>
+    <linearGradient id="accentLine" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#ff9900"/>
+      <stop offset="50%" style="stop-color:#ffb347"/>
+      <stop offset="100%" style="stop-color:#ff9900"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="bannerClip">
+      <rect width="1200" height="300" rx="16"/>
+    </clipPath>
   </defs>
-  <rect width="800" height="200" rx="12" fill="url(#bg)"/>
-  <rect x="0" y="0" width="800" height="3" rx="1.5" fill="url(#accent)"/>
-  <g transform="translate(60, 55)">
-    <path d="M45 5 L85 20 L85 55 C85 80 65 95 45 100 C25 95 5 80 5 55 L5 20 Z"
-          fill="none" stroke="#ff9900" stroke-width="3" opacity="0.9"/>
-    <path d="M30 55 C30 35 60 25 70 45" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round"/>
-    <path d="M25 48 L30 55 L37 50" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Background -->
+  <g clip-path="url(#bannerClip)">
+    <rect width="1200" height="300" rx="16" fill="url(#bg)"/>
+
+    <!-- Subtle hex grid pattern -->
+    <g opacity="0.03" stroke="#ff9900" stroke-width="0.5" fill="none">
+      <path d="M50,30 L70,18 L90,30 L90,54 L70,66 L50,54 Z"/>
+      <path d="M90,30 L110,18 L130,30 L130,54 L110,66 L90,54 Z"/>
+      <path d="M130,30 L150,18 L170,30 L170,54 L150,66 L130,54 Z"/>
+      <path d="M70,66 L90,54 L110,66 L110,90 L90,102 L70,90 Z"/>
+      <path d="M110,66 L130,54 L150,66 L150,90 L130,102 L110,90 Z"/>
+      <path d="M50,102 L70,90 L90,102 L90,126 L70,138 L50,126 Z"/>
+      <path d="M90,102 L110,90 L130,102 L130,126 L110,138 L90,126 Z"/>
+      <path d="M900,60 L920,48 L940,60 L940,84 L920,96 L900,84 Z"/>
+      <path d="M940,60 L960,48 L980,60 L980,84 L960,96 L940,84 Z"/>
+      <path d="M980,60 L1000,48 L1020,60 L1020,84 L1000,96 L980,84 Z"/>
+      <path d="M1020,60 L1040,48 L1060,60 L1060,84 L1040,96 L1020,84 Z"/>
+      <path d="M920,96 L940,84 L960,96 L960,120 L940,132 L920,120 Z"/>
+      <path d="M960,96 L980,84 L1000,96 L1000,120 L980,132 L960,120 Z"/>
+      <path d="M1000,96 L1020,84 L1040,96 L1040,120 L1020,132 L1000,120 Z"/>
+      <path d="M940,132 L960,120 L980,132 L980,156 L960,168 L940,156 Z"/>
+      <path d="M980,132 L1000,120 L1020,132 L1020,156 L1000,168 L980,156 Z"/>
+      <path d="M900,200 L920,188 L940,200 L940,224 L920,236 L900,224 Z"/>
+      <path d="M940,200 L960,188 L980,200 L980,224 L960,236 L940,224 Z"/>
+      <path d="M1060,180 L1080,168 L1100,180 L1100,204 L1080,216 L1060,204 Z"/>
+      <path d="M1100,180 L1120,168 L1140,180 L1140,204 L1120,216 L1100,204 Z"/>
+    </g>
+
+    <!-- Top accent line -->
+    <rect x="0" y="0" width="1200" height="4" fill="url(#accentLine)"/>
+
+    <!-- Decorative circuit lines -->
+    <g stroke="#ff9900" stroke-width="1" opacity="0.08">
+      <line x1="0" y1="80" x2="60" y2="80"/>
+      <circle cx="60" cy="80" r="2" fill="#ff9900"/>
+      <line x1="60" y1="80" x2="60" y2="150"/>
+      <circle cx="60" cy="150" r="2" fill="#ff9900"/>
+      <line x1="1140" y1="120" x2="1200" y2="120"/>
+      <circle cx="1140" cy="120" r="2" fill="#ff9900"/>
+      <line x1="1140" y1="120" x2="1140" y2="200"/>
+      <circle cx="1140" cy="200" r="2" fill="#ff9900"/>
+      <line x1="1140" y1="200" x2="1200" y2="200"/>
+    </g>
+
+    <!-- Shield + cloud icon -->
+    <g transform="translate(105, 150)" filter="url(#glow)">
+      <!-- Outer shield -->
+      <path d="M0,-70 L55,-50 L55,10 C55,50 28,72 0,82 C-28,72 -55,50 -55,10 L-55,-50 Z"
+            fill="none" stroke="url(#shieldGrad)" stroke-width="3" opacity="0.9"/>
+      <!-- Inner shield fill -->
+      <path d="M0,-60 L45,-43 L45,8 C45,42 23,60 0,68 C-23,60 -45,42 -45,8 L-45,-43 Z"
+            fill="#ff9900" opacity="0.08"/>
+
+      <!-- AWS smile/arrow inside shield -->
+      <path d="M-22,8 Q0,28 22,8" fill="none" stroke="#ff9900" stroke-width="3" stroke-linecap="round"/>
+      <path d="M12,8 L22,8 L18,-2" fill="none" stroke="#ff9900" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+      <!-- Cloud outline above the smile -->
+      <path d="M-18,-20 C-18,-34 -6,-38 2,-32 C6,-40 20,-38 22,-28 C30,-26 30,-16 24,-12 L-14,-12 C-22,-12 -24,-16 -18,-20 Z"
+            fill="none" stroke="#ffb347" stroke-width="1.8" opacity="0.7"/>
+
+      <!-- Lock icon below -->
+      <rect x="-8" y="32" width="16" height="12" rx="2" fill="none" stroke="#ff9900" stroke-width="1.5" opacity="0.6"/>
+      <path d="M-4,32 L-4,27 C-4,22 4,22 4,27 L4,32" fill="none" stroke="#ff9900" stroke-width="1.5" opacity="0.6"/>
+      <circle cx="0" cy="38" r="1.5" fill="#ff9900" opacity="0.6"/>
+    </g>
+
+    <!-- Title -->
+    <text x="210" y="105" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="46" font-weight="700" fill="#ffffff" letter-spacing="-0.5">
+      AWS Security Scanner
+    </text>
+
+    <!-- Subtitle -->
+    <text x="210" y="148" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="19" fill="#ff9900" letter-spacing="0.5" font-weight="500">
+      Cloud Security Audit &amp; IaC Static Analysis
+    </text>
+
+    <!-- Description -->
+    <text x="210" y="185" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="14" fill="#8b949e">
+      CIS AWS Foundations Benchmark v3.0 | CloudFormation | Terraform | 160+ Security Checks
+    </text>
+
+    <!-- Tags row -->
+    <g transform="translate(210, 210)">
+      <rect x="0" y="0" width="56" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
+      <text x="28" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">IAM</text>
+
+      <rect x="66" y="0" width="42" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
+      <text x="87" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">S3</text>
+
+      <rect x="118" y="0" width="52" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
+      <text x="144" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">EC2</text>
+
+      <rect x="180" y="0" width="52" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
+      <text x="206" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">RDS</text>
+
+      <rect x="242" y="0" width="52" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
+      <text x="268" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">VPC</text>
+
+      <rect x="304" y="0" width="52" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
+      <text x="330" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">KMS</text>
+
+      <rect x="366" y="0" width="52" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
+      <text x="392" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">EKS</text>
+
+      <rect x="428" y="0" width="52" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
+      <text x="454" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">WAF</text>
+
+      <rect x="490" y="0" width="78" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
+      <text x="529" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">Bedrock</text>
+
+      <rect x="578" y="0" width="60" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
+      <text x="608" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">+16</text>
+    </g>
+
+    <!-- Version badge -->
+    <g transform="translate(1065, 30)">
+      <rect x="0" y="0" width="95" height="30" rx="15" fill="#ff9900" opacity="0.15" stroke="#ff9900" stroke-width="1" stroke-opacity="0.4"/>
+      <text x="48" y="20" font-family="'Segoe UI', monospace" font-size="13" fill="#ffb347" text-anchor="middle" font-weight="700">v1.1.0</text>
+    </g>
+
+    <!-- CIS badge -->
+    <g transform="translate(1025, 70)">
+      <rect x="0" y="0" width="135" height="26" rx="13" fill="#232f3e" stroke="#ff9900" stroke-width="1" stroke-opacity="0.3"/>
+      <text x="68" y="17" font-family="'Segoe UI', sans-serif" font-size="11" fill="#8b949e" text-anchor="middle">CIS Benchmark v3.0</text>
+    </g>
+
+    <!-- Bottom accent line -->
+    <rect x="0" y="296" width="1200" height="4" fill="url(#accentLine)"/>
   </g>
-  <text x="170" y="78" font-family="monospace" font-size="28" font-weight="bold" fill="#e2e8f0">AWS Security Scanner</text>
-  <text x="170" y="110" font-family="monospace" font-size="20" fill="#ff9900">CIS Benchmark Audit</text>
-  <text x="170" y="145" font-family="sans-serif" font-size="14" fill="#64748b">Automated Security Audit for AWS Cloud Environments — CIS Foundations Benchmark v3.0</text>
-  <rect x="650" y="70" width="80" height="26" rx="13" fill="rgba(255,153,0,0.1)" stroke="#ff9900" stroke-width="1"/>
-  <text x="690" y="88" font-family="monospace" font-size="12" fill="#ff9900" text-anchor="middle">v1.0</text>
 </svg>
