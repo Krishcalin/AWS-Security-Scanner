@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AWS IaC Security Scan Report</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#c9d1d9;margin:0;padding:20px}
+  .header{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;margin-bottom:20px}
+  .header h1{margin:0 0 8px;color:#58a6ff;font-size:22px}
+  .meta{color:#8b949e;font-size:13px;margin:4px 0}
+  .chips{margin:12px 0}
+  table{width:100%;border-collapse:collapse;background:#161b22;border-radius:8px;overflow:hidden;border:1px solid #30363d}
+  th{background:#21262d;color:#8b949e;padding:10px 8px;text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #30363d}
+  td{padding:10px 8px;border-bottom:1px solid #21262d;vertical-align:top;font-size:13px}
+  tr:hover td{background:#1c2128}
+  .filter-bar{margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap}
+  .filter-btn{background:#21262d;border:1px solid #30363d;color:#c9d1d9;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:13px}
+  .filter-btn.active{border-color:#58a6ff;color:#58a6ff}
+  input[type=text]{background:#21262d;border:1px solid #30363d;color:#c9d1d9;padding:6px 12px;border-radius:6px;font-size:13px;width:300px}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>&#x1F6E1; AWS IaC Security Scanner v1.1.0 — Scan Report</h1>
+  <div class="meta">Generated: 2026-03-16 20:40:20</div>
+  <div class="meta">Files scanned: 1 &nbsp;|&nbsp; Total findings: 41</div>
+  <div class="chips"><span style="background:#c0392b;color:#fff;padding:3px 10px;border-radius:12px;margin:2px;font-weight:bold;font-size:13px;">CRITICAL 6</span><span style="background:#e67e22;color:#fff;padding:3px 10px;border-radius:12px;margin:2px;font-weight:bold;font-size:13px;">HIGH 23</span><span style="background:#2980b9;color:#fff;padding:3px 10px;border-radius:12px;margin:2px;font-weight:bold;font-size:13px;">MEDIUM 11</span><span style="background:#27ae60;color:#fff;padding:3px 10px;border-radius:12px;margin:2px;font-weight:bold;font-size:13px;">LOW 1</span></div>
+</div>
+<div class="filter-bar">
+  <input type="text" id="searchBox" onkeyup="filterTable()" placeholder="Search findings...">
+  <button class="filter-btn active" onclick="setSev('')">All</button>
+  <button class="filter-btn" style="color:#c0392b" onclick="setSev('CRITICAL')">CRITICAL</button>
+  <button class="filter-btn" style="color:#e67e22" onclick="setSev('HIGH')">HIGH</button>
+  <button class="filter-btn" style="color:#2980b9" onclick="setSev('MEDIUM')">MEDIUM</button>
+  <button class="filter-btn" style="color:#27ae60" onclick="setSev('LOW')">LOW</button>
+</div>
+<table id="findingsTable">
+<thead>
+<tr>
+  <th>Severity</th><th>Rule ID</th><th>Category</th>
+  <th>Finding</th><th>Location</th><th>Recommendation</th><th>CWE</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><span style="background:#c0392b;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">CRITICAL</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-CRED-TF-001</td>
+  <td>Credentials: Hardcoded Secrets</td>
+  <td><strong>Hardcoded AWS access key ID in Terraform config</strong><br><small style="color:#aaa">Hardcoded AWS access key IDs committed to version control expose the credentials to anyone with repository access.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:20<br><code style="font-size:11px">access_key = &quot;AKIAIOSFODNN7EXAMPLE&quot;</code></td>
+  <td style="font-size:12px;color:#5dade2">Remove hardcoded credentials. Use IAM roles, environment variables, or AWS Secrets Manager.</td>
+  <td style="font-size:12px">CWE-798</td>
+</tr>
+<tr>
+  <td><span style="background:#c0392b;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">CRITICAL</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-SG-TF-001</td>
+  <td>EC2: Security Group</td>
+  <td><strong>Security Group allows SSH (22) from any IP</strong><br><small style="color:#aaa">A security group ingress rule permits SSH access from the entire internet (0.0.0.0/0 or ::/0), enabling brute-force and exploitation attacks.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:93<br><code style="font-size:11px">cidr_blocks = [&quot;0.0.0.0/0&quot;]</code></td>
+  <td style="font-size:12px;color:#5dade2">Restrict SSH access to specific trusted IP ranges or use AWS Systems Manager Session Manager to eliminate the need for SSH.</td>
+  <td style="font-size:12px">CWE-284</td>
+</tr>
+<tr>
+  <td><span style="background:#c0392b;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">CRITICAL</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-SG-TF-001</td>
+  <td>EC2: Security Group</td>
+  <td><strong>Security Group allows SSH (22) from any IP</strong><br><small style="color:#aaa">A security group ingress rule permits SSH access from the entire internet (0.0.0.0/0 or ::/0), enabling brute-force and exploitation attacks.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:102<br><code style="font-size:11px">cidr_blocks = [&quot;0.0.0.0/0&quot;]</code></td>
+  <td style="font-size:12px;color:#5dade2">Restrict SSH access to specific trusted IP ranges or use AWS Systems Manager Session Manager to eliminate the need for SSH.</td>
+  <td style="font-size:12px">CWE-284</td>
+</tr>
+<tr>
+  <td><span style="background:#c0392b;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">CRITICAL</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-SG-TF-001</td>
+  <td>EC2: Security Group</td>
+  <td><strong>Security Group allows SSH (22) from any IP</strong><br><small style="color:#aaa">A security group ingress rule permits SSH access from the entire internet (0.0.0.0/0 or ::/0), enabling brute-force and exploitation attacks.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:111<br><code style="font-size:11px">cidr_blocks = [&quot;0.0.0.0/0&quot;]</code></td>
+  <td style="font-size:12px;color:#5dade2">Restrict SSH access to specific trusted IP ranges or use AWS Systems Manager Session Manager to eliminate the need for SSH.</td>
+  <td style="font-size:12px">CWE-284</td>
+</tr>
+<tr>
+  <td><span style="background:#c0392b;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">CRITICAL</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-SG-TF-001</td>
+  <td>EC2: Security Group</td>
+  <td><strong>Security Group allows SSH (22) from any IP</strong><br><small style="color:#aaa">A security group ingress rule permits SSH access from the entire internet (0.0.0.0/0 or ::/0), enabling brute-force and exploitation attacks.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:119<br><code style="font-size:11px">cidr_blocks = [&quot;0.0.0.0/0&quot;]</code></td>
+  <td style="font-size:12px;color:#5dade2">Restrict SSH access to specific trusted IP ranges or use AWS Systems Manager Session Manager to eliminate the need for SSH.</td>
+  <td style="font-size:12px">CWE-284</td>
+</tr>
+<tr>
+  <td><span style="background:#c0392b;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">CRITICAL</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-ECS-TF-001</td>
+  <td>ECS: Container Security</td>
+  <td><strong>ECS container running in privileged mode</strong><br><small style="color:#aaa">A privileged container has root access to the host EC2 instance, enabling full host compromise.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:428<br><code style="font-size:11px">privileged = true</code></td>
+  <td style="font-size:12px;color:#5dade2">Remove privileged = true. Use task IAM roles for specific AWS permissions instead of privileged mode.</td>
+  <td style="font-size:12px">CWE-250</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-S3-TF-002</td>
+  <td>S3: Public Access</td>
+  <td><strong>S3 bucket ACL allows public read</strong><br><small style="color:#aaa">Setting acl=public-read allows any internet user to list and download all bucket objects.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:204<br><code style="font-size:11px">acl    = &quot;public-read&quot;</code></td>
+  <td style="font-size:12px;color:#5dade2">Remove the public ACL. Use pre-signed URLs or CloudFront OAC for public content delivery.</td>
+  <td style="font-size:12px">CWE-732</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-S3-TF-003</td>
+  <td>S3: Public Access</td>
+  <td><strong>S3 Block Public ACLs disabled</strong><br><small style="color:#aaa">Disabling block_public_acls allows public ACLs to be applied, potentially exposing objects.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:211<br><code style="font-size:11px">block_public_acls       = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set block_public_acls = true in aws_s3_bucket_public_access_block.</td>
+  <td style="font-size:12px">CWE-732</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-S3-TF-004</td>
+  <td>S3: Public Access</td>
+  <td><strong>S3 Block Public Policy disabled</strong><br><small style="color:#aaa">Disabling block_public_policy allows bucket policies granting public access to be applied.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:212<br><code style="font-size:11px">block_public_policy     = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set block_public_policy = true in aws_s3_bucket_public_access_block.</td>
+  <td style="font-size:12px">CWE-732</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-S3-TF-005</td>
+  <td>S3: Public Access</td>
+  <td><strong>S3 Ignore Public ACLs disabled</strong><br><small style="color:#aaa">Setting ignore_public_acls=false means existing public ACLs on objects remain active.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:213<br><code style="font-size:11px">ignore_public_acls      = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set ignore_public_acls = true to ignore any public ACLs on the bucket and objects.</td>
+  <td style="font-size:12px">CWE-732</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-S3-TF-006</td>
+  <td>S3: Public Access</td>
+  <td><strong>S3 Restrict Public Buckets disabled</strong><br><small style="color:#aaa">Disabling restrict_public_buckets allows cross-account policies granting public access.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:214<br><code style="font-size:11px">restrict_public_buckets = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set restrict_public_buckets = true to block public and cross-account access policies.</td>
+  <td style="font-size:12px">CWE-732</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-EC2-TF-001</td>
+  <td>EC2: Instance Metadata</td>
+  <td><strong>EC2 IMDSv1 enabled — instance metadata service token not required</strong><br><small style="color:#aaa">IMDSv1 allows any code running on the instance to access instance metadata and IAM credentials without authentication, enabling SSRF-to-credential-theft attacks.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:240<br><code style="font-size:11px">http_tokens                 = &quot;optional&quot;</code></td>
+  <td style="font-size:12px;color:#5dade2">Set http_tokens = &#x27;required&#x27; in metadata_options to enforce IMDSv2 and prevent SSRF attacks.</td>
+  <td style="font-size:12px">CWE-306</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-EC2-TF-002</td>
+  <td>EC2: Encryption</td>
+  <td><strong>EBS volume not encrypted</strong><br><small style="color:#aaa">Unencrypted EBS volumes expose data if the underlying storage is compromised or the snapshot is shared.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:250<br><code style="font-size:11px">encrypted   = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set encrypted = true on all EBS volumes. Enable account-level EBS encryption by default in AWS settings.</td>
+  <td style="font-size:12px">CWE-311</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-EC2-TF-002</td>
+  <td>EC2: Encryption</td>
+  <td><strong>EBS volume not encrypted</strong><br><small style="color:#aaa">Unencrypted EBS volumes expose data if the underlying storage is compromised or the snapshot is shared.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:273<br><code style="font-size:11px">encrypted         = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set encrypted = true on all EBS volumes. Enable account-level EBS encryption by default in AWS settings.</td>
+  <td style="font-size:12px">CWE-311</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-CRED-TF-002</td>
+  <td>Credentials: Hardcoded Secrets</td>
+  <td><strong>Hardcoded password or secret in Terraform resource</strong><br><small style="color:#aaa">Hardcoded passwords or secrets in Terraform files are exposed to anyone with access to the code repository.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:294<br><code style="font-size:11px">password               = &quot;Password123!&quot;</code></td>
+  <td style="font-size:12px;color:#5dade2">Use AWS Secrets Manager or SSM Parameter Store with data sources to inject secrets at runtime.</td>
+  <td style="font-size:12px">CWE-798</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-RDS-TF-001</td>
+  <td>RDS: Public Access</td>
+  <td><strong>RDS instance publicly accessible</strong><br><small style="color:#aaa">Making the RDS instance publicly accessible exposes the database endpoint to the internet, enabling brute-force and injection attacks.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:299<br><code style="font-size:11px">publicly_accessible = true</code></td>
+  <td style="font-size:12px;color:#5dade2">Set publicly_accessible = false. Place RDS instances in private subnets accessible only from application tier.</td>
+  <td style="font-size:12px">CWE-284</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-EC2-TF-002</td>
+  <td>EC2: Encryption</td>
+  <td><strong>EBS volume not encrypted</strong><br><small style="color:#aaa">Unencrypted EBS volumes expose data if the underlying storage is compromised or the snapshot is shared.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:302<br><code style="font-size:11px">storage_encrypted = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set encrypted = true on all EBS volumes. Enable account-level EBS encryption by default in AWS settings.</td>
+  <td style="font-size:12px">CWE-311</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-RDS-TF-002</td>
+  <td>RDS: Encryption</td>
+  <td><strong>RDS storage not encrypted</strong><br><small style="color:#aaa">Unencrypted RDS storage exposes database data if the underlying storage is compromised or snapshots are shared.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:302<br><code style="font-size:11px">storage_encrypted = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set storage_encrypted = true and specify a KMS key with kms_key_id.</td>
+  <td style="font-size:12px">CWE-311</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-CT-TF-001</td>
+  <td>CloudTrail: Audit Logging</td>
+  <td><strong>CloudTrail log file validation disabled</strong><br><small style="color:#aaa">Without log file validation, CloudTrail logs can be silently tampered with, undermining audit integrity.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:328<br><code style="font-size:11px">enable_log_file_validation = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set enable_log_file_validation = true to enable SHA-256 hash validation of log files.</td>
+  <td style="font-size:12px">CWE-345</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-KMS-TF-001</td>
+  <td>KMS: Key Management</td>
+  <td><strong>KMS key automatic rotation disabled</strong><br><small style="color:#aaa">Without automatic rotation, long-lived KMS keys increase the blast radius of key compromise.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:345<br><code style="font-size:11px">enable_key_rotation = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set enable_key_rotation = true to rotate KMS symmetric keys annually.</td>
+  <td style="font-size:12px">CWE-324</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-CF-TF-001</td>
+  <td>CloudFront: Transport Security</td>
+  <td><strong>CloudFront viewer protocol policy allows plain HTTP</strong><br><small style="color:#aaa">Allowing HTTP exposes content and cookies to interception during transit.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:369<br><code style="font-size:11px">viewer_protocol_policy = &quot;allow-all&quot;</code></td>
+  <td style="font-size:12px;color:#5dade2">Set viewer_protocol_policy = &#x27;redirect-to-https&#x27; or &#x27;https-only&#x27;.</td>
+  <td style="font-size:12px">CWE-319</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-CF-TF-002</td>
+  <td>CloudFront: Transport Security</td>
+  <td><strong>CloudFront minimum TLS version below TLSv1.2</strong><br><small style="color:#aaa">TLS 1.0 and 1.1 are deprecated with known vulnerabilities (BEAST, POODLE). Connections using old TLS versions can be attacked.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:388<br><code style="font-size:11px">minimum_protocol_version       = &quot;TLSv1&quot;</code></td>
+  <td style="font-size:12px;color:#5dade2">Set minimum_protocol_version = &#x27;TLSv1.2_2021&#x27; or higher.</td>
+  <td style="font-size:12px">CWE-326</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-ECACHE-TF-001</td>
+  <td>ElastiCache: Encryption</td>
+  <td><strong>ElastiCache at-rest encryption disabled</strong><br><small style="color:#aaa">Unencrypted ElastiCache data is exposed if the underlying storage is compromised.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:404<br><code style="font-size:11px">at_rest_encryption_enabled = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set at_rest_encryption_enabled = true for all ElastiCache replication groups.</td>
+  <td style="font-size:12px">CWE-311</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-ECACHE-TF-002</td>
+  <td>ElastiCache: Encryption</td>
+  <td><strong>ElastiCache in-transit encryption disabled</strong><br><small style="color:#aaa">Without in-transit encryption, data between application and cache is sent in plaintext over the network.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:407<br><code style="font-size:11px">transit_encryption_enabled = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set transit_encryption_enabled = true and configure auth_token for Redis clusters.</td>
+  <td style="font-size:12px">CWE-319</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-OS-TF-001</td>
+  <td>OpenSearch: Transport Security</td>
+  <td><strong>OpenSearch domain does not enforce HTTPS</strong><br><small style="color:#aaa">Allowing HTTP connections to OpenSearch exposes search queries and indexed data to interception.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:455<br><code style="font-size:11px">enforce_https = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set enforce_https = true in domain_endpoint_options.</td>
+  <td style="font-size:12px">CWE-319</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-CRED-TF-002</td>
+  <td>Credentials: Hardcoded Secrets</td>
+  <td><strong>Hardcoded password or secret in Terraform resource</strong><br><small style="color:#aaa">Hardcoded passwords or secrets in Terraform files are exposed to anyone with access to the code repository.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:476<br><code style="font-size:11px">master_password    = &quot;Redshift123!&quot;</code></td>
+  <td style="font-size:12px;color:#5dade2">Use AWS Secrets Manager or SSM Parameter Store with data sources to inject secrets at runtime.</td>
+  <td style="font-size:12px">CWE-798</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-RDS-TF-001</td>
+  <td>RDS: Public Access</td>
+  <td><strong>RDS instance publicly accessible</strong><br><small style="color:#aaa">Making the RDS instance publicly accessible exposes the database endpoint to the internet, enabling brute-force and injection attacks.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:481<br><code style="font-size:11px">publicly_accessible = true</code></td>
+  <td style="font-size:12px;color:#5dade2">Set publicly_accessible = false. Place RDS instances in private subnets accessible only from application tier.</td>
+  <td style="font-size:12px">CWE-284</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-EC2-TF-002</td>
+  <td>EC2: Encryption</td>
+  <td><strong>EBS volume not encrypted</strong><br><small style="color:#aaa">Unencrypted EBS volumes expose data if the underlying storage is compromised or the snapshot is shared.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:484<br><code style="font-size:11px">encrypted = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set encrypted = true on all EBS volumes. Enable account-level EBS encryption by default in AWS settings.</td>
+  <td style="font-size:12px">CWE-311</td>
+</tr>
+<tr>
+  <td><span style="background:#e67e22;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">HIGH</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-SM-TF-001</td>
+  <td>SageMaker: Network</td>
+  <td><strong>SageMaker notebook instance allows direct internet access</strong><br><small style="color:#aaa">Enabling direct internet access for a SageMaker notebook allows data exfiltration and bypasses VPC security controls.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:671<br><code style="font-size:11px">direct_internet_access = &quot;Enabled&quot;</code></td>
+  <td style="font-size:12px;color:#5dade2">Set direct_internet_access = &#x27;Disabled&#x27; and route traffic through a VPC with a NAT gateway.</td>
+  <td style="font-size:12px">CWE-284</td>
+</tr>
+<tr>
+  <td><span style="background:#2980b9;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">MEDIUM</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-VPC-TF-002</td>
+  <td>VPC: Public Subnet</td>
+  <td><strong>Subnet configured to assign public IP addresses automatically</strong><br><small style="color:#aaa">Subnets that auto-assign public IPs expose every launched instance to the internet by default.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:42<br><code style="font-size:11px">map_public_ip_on_launch = true</code></td>
+  <td style="font-size:12px;color:#5dade2">Set map_public_ip_on_launch = false. Explicitly assign Elastic IPs only where required.</td>
+  <td style="font-size:12px">CWE-284</td>
+</tr>
+<tr>
+  <td><span style="background:#2980b9;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">MEDIUM</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-VPC-TF-002</td>
+  <td>VPC: Public Subnet</td>
+  <td><strong>Subnet configured to assign public IP addresses automatically</strong><br><small style="color:#aaa">Subnets that auto-assign public IPs expose every launched instance to the internet by default.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:53<br><code style="font-size:11px">map_public_ip_on_launch = true</code></td>
+  <td style="font-size:12px;color:#5dade2">Set map_public_ip_on_launch = false. Explicitly assign Elastic IPs only where required.</td>
+  <td style="font-size:12px">CWE-284</td>
+</tr>
+<tr>
+  <td><span style="background:#2980b9;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">MEDIUM</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-EC2-TF-003</td>
+  <td>EC2: Public Exposure</td>
+  <td><strong>EC2 instance assigned public IP address</strong><br><small style="color:#aaa">Directly assigning a public IP increases attack surface. Instances should use NAT gateways or load balancers for outbound/inbound traffic.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:245<br><code style="font-size:11px">associate_public_ip_address = true</code></td>
+  <td style="font-size:12px;color:#5dade2">Use private subnets for EC2 instances. Route traffic through NAT gateways and application load balancers.</td>
+  <td style="font-size:12px">CWE-749</td>
+</tr>
+<tr>
+  <td><span style="background:#2980b9;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">MEDIUM</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-RDS-TF-005</td>
+  <td>RDS: Backup</td>
+  <td><strong>RDS automated backup retention disabled (0 days)</strong><br><small style="color:#aaa">Setting backup_retention_period=0 disables automated backups, preventing point-in-time recovery.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:305<br><code style="font-size:11px">backup_retention_period = 0</code></td>
+  <td style="font-size:12px;color:#5dade2">Set backup_retention_period to at least 7 days (35 for compliance-sensitive workloads).</td>
+  <td style="font-size:12px">CWE-693</td>
+</tr>
+<tr>
+  <td><span style="background:#2980b9;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">MEDIUM</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-RDS-TF-003</td>
+  <td>RDS: Availability</td>
+  <td><strong>RDS deletion protection disabled</strong><br><small style="color:#aaa">Without deletion protection, the database can be accidentally or maliciously deleted, causing data loss.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:308<br><code style="font-size:11px">deletion_protection = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set deletion_protection = true for all production RDS instances.</td>
+  <td style="font-size:12px">CWE-693</td>
+</tr>
+<tr>
+  <td><span style="background:#2980b9;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">MEDIUM</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-RDS-TF-004</td>
+  <td>RDS: Backup</td>
+  <td><strong>RDS final snapshot skipped — data loss risk on deletion</strong><br><small style="color:#aaa">Setting skip_final_snapshot=true means no backup is taken before the database is destroyed, risking permanent data loss.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:316<br><code style="font-size:11px">skip_final_snapshot = true</code></td>
+  <td style="font-size:12px;color:#5dade2">Set skip_final_snapshot = false and specify a final_snapshot_identifier.</td>
+  <td style="font-size:12px">CWE-693</td>
+</tr>
+<tr>
+  <td><span style="background:#2980b9;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">MEDIUM</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-CT-TF-002</td>
+  <td>CloudTrail: Audit Logging</td>
+  <td><strong>CloudTrail not configured as multi-region trail</strong><br><small style="color:#aaa">A single-region CloudTrail misses API activity in other regions, creating blind spots for attackers.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:331<br><code style="font-size:11px">is_multi_region_trail = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set is_multi_region_trail = true to capture API activity in all AWS regions.</td>
+  <td style="font-size:12px">CWE-778</td>
+</tr>
+<tr>
+  <td><span style="background:#2980b9;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">MEDIUM</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-CT-TF-003</td>
+  <td>CloudTrail: Audit Logging</td>
+  <td><strong>CloudTrail global service events not included</strong><br><small style="color:#aaa">Excluding global services (IAM, STS, CloudFront) from CloudTrail creates blind spots for IAM activity.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:334<br><code style="font-size:11px">include_global_service_events = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set include_global_service_events = true to capture IAM, STS, and CloudFront API calls.</td>
+  <td style="font-size:12px">CWE-778</td>
+</tr>
+<tr>
+  <td><span style="background:#2980b9;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">MEDIUM</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-ECR-TF-001</td>
+  <td>ECR: Container Registry</td>
+  <td><strong>ECR repository uses mutable image tags</strong><br><small style="color:#aaa">Mutable image tags allow container images to be silently replaced, enabling supply chain attacks.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:495<br><code style="font-size:11px">image_tag_mutability = &quot;MUTABLE&quot;</code></td>
+  <td style="font-size:12px;color:#5dade2">Set image_tag_mutability = &#x27;IMMUTABLE&#x27; to prevent image tag overwriting.</td>
+  <td style="font-size:12px">CWE-829</td>
+</tr>
+<tr>
+  <td><span style="background:#2980b9;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">MEDIUM</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-CFG-TF-001</td>
+  <td>Config: Coverage</td>
+  <td><strong>AWS Config recorder does not record all resource types</strong><br><small style="color:#aaa">Limiting Config to specific resource types creates blind spots in compliance monitoring and change tracking.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:630<br><code style="font-size:11px">all_supported = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set all_supported = true and include_global_resource_types = true inside the recording_group block.</td>
+  <td style="font-size:12px">CWE-778</td>
+</tr>
+<tr>
+  <td><span style="background:#2980b9;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">MEDIUM</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-CFG-TF-002</td>
+  <td>Config: Coverage</td>
+  <td><strong>AWS Config recorder excludes global resource types (IAM)</strong><br><small style="color:#aaa">Excluding global resources (e.g., IAM) from Config leaves critical identity changes untracked.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:633<br><code style="font-size:11px">include_global_resource_types = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set include_global_resource_types = true inside the recording_group block.</td>
+  <td style="font-size:12px">CWE-778</td>
+</tr>
+<tr>
+  <td><span style="background:#27ae60;color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:12px">LOW</span></td>
+  <td style="font-family:monospace;font-size:12px">AWS-RDS-TF-006</td>
+  <td>RDS: Availability</td>
+  <td><strong>RDS Multi-AZ not enabled — single point of failure</strong><br><small style="color:#aaa">Single-AZ RDS instances have no automatic failover, causing downtime during maintenance or AZ failures.</small></td>
+  <td style="font-size:12px">tests\samples\vulnerable_network.tf:314<br><code style="font-size:11px">multi_az = false</code></td>
+  <td style="font-size:12px;color:#5dade2">Set multi_az = true for production databases to enable automatic failover.</td>
+  <td style="font-size:12px">CWE-693</td>
+</tr></tbody>
+</table>
+<script>
+var activeSev = '';
+function setSev(s){
+  activeSev = s;
+  document.querySelectorAll('.filter-btn').forEach(function(b){b.classList.remove('active')});
+  event.target.classList.add('active');
+  filterTable();
+}
+function filterTable(){
+  var q = document.getElementById('searchBox').value.toLowerCase();
+  var rows = document.getElementById('findingsTable').getElementsByTagName('tr');
+  for(var i=1;i<rows.length;i++){
+    var t = rows[i].innerText.toLowerCase();
+    var sevCell = rows[i].cells[0]? rows[i].cells[0].innerText:'';
+    var sevMatch = activeSev==='' || sevCell.indexOf(activeSev)>=0;
+    rows[i].style.display = (sevMatch && (!q || t.indexOf(q)>=0))? '':'none';
+  }
+}
+</script>
+</body>
+</html>
