@@ -895,7 +895,13 @@ class AWSIaCScanner:
             props = resource_def.get("Properties", {}) or {}
             method_name = self.CF_DISPATCH.get(rtype)
             if method_name:
-                getattr(self, method_name)(resource_id, props, filepath)
+                try:
+                    getattr(self, method_name)(resource_id, props, filepath)
+                except AttributeError:
+                    self._warn(
+                        f"CF_DISPATCH references unknown method "
+                        f"'{method_name}' for resource type '{rtype}'"
+                    )
 
     # ----------------------------------------------------------
     # CF check methods — IAM
@@ -2102,7 +2108,11 @@ class AWSIaCScanner:
                 cwe="CWE-284",
             ))
         idle_timeout = props.get("IdleSessionTTLInSeconds")
-        if idle_timeout is None or int(idle_timeout) > 3600:
+        try:
+            ttl_val = int(idle_timeout) if idle_timeout is not None else None
+        except (TypeError, ValueError):
+            ttl_val = None
+        if ttl_val is None or ttl_val > 3600:
             self._add(Finding(
                 rule_id="AWS-BR-002",
                 name=f"Bedrock agent '{rid}' session TTL exceeds 1 hour or not set",
