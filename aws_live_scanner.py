@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
-AWS Live Security Scanner v1.0.0
+AWS Live Security Scanner v2.0.0
 Read-only live audit of AWS environments via boto3.
 
 Aligned to: CIS AWS Foundations Benchmark v3.0
             AWS Well-Architected Framework — Security Pillar
+            PCI DSS v4.0 · HIPAA · SOC 2 · NIST 800-53 Rev 5
 
-16 service domains:
+25 service domains:
   IAM · S3 · VPC/Network · Logging & Monitoring · KMS · EC2
   ECR · Backup · RDS · Glacier · SNS · SQS · CloudFront
-  Route 53 · Bedrock · Bedrock Agent Core
+  Route 53 · Bedrock · Bedrock Agents · Lambda · EKS · ECS
+  Secrets Manager · WAF · ElastiCache · OpenSearch · DynamoDB
+  Step Functions
 
 Requirements: pip install boto3
 Credentials : AWS CLI profile, environment variables, or IAM instance role
@@ -34,7 +37,7 @@ import time
 import argparse
 from datetime import datetime, timezone
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 
 try:
@@ -44,7 +47,7 @@ try:
 except ImportError:
     HAS_BOTO3 = False
 
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -62,6 +65,8 @@ SECTIONS = [
     "IAM", "S3", "VPC", "LOGGING", "KMS", "EC2",
     "ECR", "BACKUP", "RDS", "GLACIER", "SNS", "SQS",
     "CLOUDFRONT", "ROUTE53", "BEDROCK", "BEDROCK_AGENTS",
+    "LAMBDA", "EKS", "ECS", "SECRETS", "WAF",
+    "ELASTICACHE", "OPENSEARCH", "DYNAMODB", "STEPFUNCTIONS",
 ]
 
 SECTION_LABELS = {
@@ -81,6 +86,15 @@ SECTION_LABELS = {
     "ROUTE53":        "AMAZON ROUTE 53",
     "BEDROCK":        "AWS BEDROCK",
     "BEDROCK_AGENTS": "AWS BEDROCK AGENT CORE",
+    "LAMBDA":         "AWS LAMBDA",
+    "EKS":            "AMAZON EKS",
+    "ECS":            "AMAZON ECS",
+    "SECRETS":        "AWS SECRETS MANAGER",
+    "WAF":            "AWS WAF",
+    "ELASTICACHE":    "AMAZON ELASTICACHE",
+    "OPENSEARCH":     "AMAZON OPENSEARCH",
+    "DYNAMODB":       "AMAZON DYNAMODB",
+    "STEPFUNCTIONS":  "AWS STEP FUNCTIONS",
 }
 
 
@@ -92,6 +106,179 @@ class Result:
     section:  str   # e.g. IAM
     resource: str   # resource identifier
     message:  str   # human-readable finding
+    severity:       str = ""               # CRITICAL | HIGH | MEDIUM | LOW | INFO
+    compliance:     Dict = field(default_factory=dict)
+    remediation_cmd: str = ""
+
+# ─── Severity weights for risk scoring ───────────────────────────────────────
+SEVERITY_WEIGHTS = {"CRITICAL": 15, "HIGH": 5, "MEDIUM": 2, "LOW": 0.5, "INFO": 0}
+
+# Map check_id → default severity when status is FAIL
+CHECK_SEVERITY = {
+    "IAM-01": "CRITICAL", "IAM-02": "CRITICAL", "IAM-04": "HIGH",
+    "IAM-05": "MEDIUM", "IAM-06": "HIGH", "IAM-10": "MEDIUM",
+    "S3-01": "HIGH", "S3-03": "HIGH", "S3-05": "MEDIUM",
+    "VPC-01": "HIGH", "VPC-03": "MEDIUM",
+    "LOG-01": "CRITICAL", "LOG-03": "HIGH", "LOG-04": "CRITICAL", "LOG-05": "MEDIUM",
+    "ENC-03": "MEDIUM",
+    "EC2-04": "HIGH", "EC2-05": "MEDIUM", "EC2-06": "HIGH",
+    "CNT-01": "MEDIUM",
+    "BCK-01": "MEDIUM",
+    "RDS-01": "HIGH", "RDS-02": "CRITICAL", "RDS-03": "MEDIUM",
+    "RDS-04": "MEDIUM", "RDS-05": "LOW", "RDS-06": "CRITICAL",
+    "GLC-01": "CRITICAL", "GLC-02": "MEDIUM", "GLC-03": "LOW",
+    "SNS-01": "MEDIUM", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
+    "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "MEDIUM", "SQS-04": "LOW",
+    "CFN-01": "HIGH", "CFN-02": "HIGH", "CFN-03": "HIGH",
+    "CFN-04": "MEDIUM", "CFN-05": "HIGH",
+    "R53-01": "MEDIUM", "R53-02": "MEDIUM", "R53-03": "HIGH",
+    "R53-04": "LOW", "R53-05": "MEDIUM",
+    "BDR-01": "HIGH", "BDR-02": "HIGH", "BDR-03": "MEDIUM",
+    "BDR-04": "MEDIUM", "BDR-05": "HIGH",
+    "AGT-01": "MEDIUM", "AGT-02": "HIGH", "AGT-03": "MEDIUM",
+    "AGT-04": "HIGH", "AGT-05": "HIGH",
+    "LMB-01": "HIGH", "LMB-02": "MEDIUM", "LMB-03": "HIGH",
+    "LMB-04": "MEDIUM", "LMB-05": "MEDIUM",
+    "EKS-01": "HIGH", "EKS-02": "HIGH", "EKS-03": "MEDIUM",
+    "EKS-04": "MEDIUM", "EKS-05": "MEDIUM",
+    "ECS-01": "CRITICAL", "ECS-02": "HIGH", "ECS-03": "MEDIUM",
+    "ECS-04": "HIGH", "ECS-05": "MEDIUM",
+    "SEC-01": "HIGH", "SEC-02": "HIGH", "SEC-03": "MEDIUM", "SEC-04": "MEDIUM",
+    "WAF-01": "HIGH", "WAF-02": "MEDIUM", "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
+    "ELC-01": "HIGH", "ELC-02": "HIGH", "ELC-03": "HIGH", "ELC-04": "MEDIUM",
+    "OSR-01": "HIGH", "OSR-02": "HIGH", "OSR-03": "MEDIUM",
+    "OSR-04": "HIGH", "OSR-05": "HIGH",
+    "DDB-01": "HIGH", "DDB-02": "HIGH", "DDB-03": "MEDIUM", "DDB-04": "MEDIUM",
+    "SFN-01": "MEDIUM", "SFN-02": "LOW", "SFN-03": "MEDIUM",
+}
+
+# ─── Compliance mapping: check_id → { framework: control } ──────────────────
+COMPLIANCE_MAP = {
+    # IAM
+    "IAM-01": {"CIS": "1.5", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
+    "IAM-02": {"CIS": "1.4", "PCI-DSS": "8.2.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "IA-2"},
+    "IAM-04": {"CIS": "1.10", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
+    "IAM-05": {"CIS": "1.8", "PCI-DSS": "8.3.6", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "IA-5(1)"},
+    "IAM-06": {"CIS": "1.14", "PCI-DSS": "8.6.3", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.2", "NIST": "IA-5(1)"},
+    "IAM-10": {"CIS": "1.20", "PCI-DSS": "11.5", "HIPAA": "164.312(b)", "SOC2": "CC7.1", "NIST": "AC-6"},
+    # S3
+    "S3-01": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "S3-03": {"CIS": "2.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "S3-05": {"CIS": "3.6", "PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    # VPC
+    "VPC-01": {"CIS": "5.2", "PCI-DSS": "1.3.2", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "VPC-03": {"CIS": "3.7", "PCI-DSS": "10.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
+    # Logging
+    "LOG-01": {"CIS": "3.1", "PCI-DSS": "10.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "LOG-03": {"CIS": "3.5", "PCI-DSS": "10.5.3", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "CM-8"},
+    "LOG-04": {"CIS": "4.15", "PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
+    "LOG-05": {"CIS": "4.16", "PCI-DSS": "11.5", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
+    # KMS
+    "ENC-03": {"CIS": "3.8", "PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
+    # EC2
+    "EC2-04": {"CIS": "5.6", "PCI-DSS": "2.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.1", "NIST": "CM-6"},
+    "EC2-05": {"CIS": "5.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EC2-06": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    # RDS
+    "RDS-01": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "RDS-02": {"CIS": "2.3.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "RDS-03": {"CIS": "2.3.3", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "RDS-04": {"CIS": "2.3.3", "PCI-DSS": "2.2.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CM-6"},
+    "RDS-06": {"CIS": "2.3.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    # CloudFront
+    "CFN-01": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "CFN-02": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
+    "CFN-03": {"PCI-DSS": "6.6", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    # New sections
+    "LMB-01": {"CIS": "2.7.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "LMB-02": {"CIS": "2.7.2", "PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "LMB-03": {"PCI-DSS": "6.5.3", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "LMB-04": {"PCI-DSS": "6.3.2", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "EKS-01": {"CIS": "5.4.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EKS-02": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "EKS-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "ECS-01": {"PCI-DSS": "2.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "CM-7"},
+    "ECS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "ECS-03": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "SEC-01": {"PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12(1)"},
+    "SEC-02": {"PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12(1)"},
+    "WAF-01": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "WAF-02": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "ELC-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "ELC-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "ELC-03": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
+    "OSR-01": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "OSR-02": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "OSR-04": {"PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "OSR-05": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "DDB-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "DDB-02": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+}
+
+# ─── Remediation commands: check_id → AWS CLI command ────────────────────────
+REMEDIATION_MAP = {
+    "IAM-01": "Enable virtual MFA for root: aws iam create-virtual-mfa-device --virtual-mfa-device-name root-mfa && aws iam enable-mfa-device --user-name root --serial-number <MFA_ARN> --authentication-code1 <CODE1> --authentication-code2 <CODE2>",
+    "IAM-02": "Delete root access keys: aws iam delete-access-key --access-key-id <KEY_ID>",
+    "IAM-04": "Enable MFA for user: aws iam enable-mfa-device --user-name <USER> --serial-number <MFA_ARN> --authentication-code1 <CODE1> --authentication-code2 <CODE2>",
+    "IAM-05": "Update password policy: aws iam update-account-password-policy --minimum-password-length 14 --require-symbols --require-numbers --require-uppercase-characters --max-password-age 90 --password-reuse-prevention 24",
+    "IAM-06": "Deactivate stale key: aws iam update-access-key --access-key-id <KEY_ID> --status Inactive --user-name <USER>",
+    "IAM-10": "Create Access Analyzer: aws accessanalyzer create-analyzer --analyzer-name account-analyzer --type ACCOUNT --region <REGION>",
+    "S3-01": "Enable account BPA: aws s3control put-public-access-block --account-id <ACCT> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+    "S3-03": "Enable bucket encryption: aws s3api put-bucket-encryption --bucket <BUCKET> --server-side-encryption-configuration '{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\"}}]}'",
+    "S3-05": "Enable access logging: aws s3api put-bucket-logging --bucket <BUCKET> --bucket-logging-status '{\"LoggingEnabled\":{\"TargetBucket\":\"<LOG_BUCKET>\",\"TargetPrefix\":\"s3-logs/\"}}'",
+    "VPC-01": "Revoke risky SG rule: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
+    "VPC-03": "Enable VPC Flow Logs: aws ec2 create-flow-logs --resource-type VPC --resource-ids <VPC_ID> --traffic-type ALL --log-destination-type cloud-watch-logs --log-group-name vpc-flow-logs",
+    "LOG-01": "Create multi-region trail: aws cloudtrail create-trail --name org-trail --s3-bucket-name <BUCKET> --is-multi-region-trail --enable-log-file-validation && aws cloudtrail start-logging --name org-trail",
+    "LOG-03": "Start Config recorder: aws configservice start-configuration-recorder --configuration-recorder-name default",
+    "LOG-04": "Enable GuardDuty: aws guardduty create-detector --enable",
+    "LOG-05": "Enable Security Hub: aws securityhub enable-security-hub --enable-default-standards",
+    "ENC-03": "Enable key rotation: aws kms enable-key-rotation --key-id <KEY_ID>",
+    "EC2-04": "Enforce IMDSv2: aws ec2 modify-instance-metadata-options --instance-id <INSTANCE_ID> --http-tokens required --http-endpoint enabled",
+    "EC2-06": "Enable default EBS encryption: aws ec2 enable-ebs-encryption-by-default",
+    "RDS-01": "Create encrypted copy: aws rds create-db-snapshot --db-instance-identifier <DB_ID> --db-snapshot-identifier pre-encrypt-snap && aws rds copy-db-snapshot --source-db-snapshot-identifier pre-encrypt-snap --target-db-snapshot-identifier encrypted-snap --kms-key-id <KMS_KEY>",
+    "RDS-02": "Disable public access: aws rds modify-db-instance --db-instance-identifier <DB_ID> --no-publicly-accessible",
+    "RDS-04": "Enable deletion protection: aws rds modify-db-instance --db-instance-identifier <DB_ID> --deletion-protection",
+    "RDS-06": "Remove public access from snapshot: aws rds modify-db-snapshot-attribute --db-snapshot-identifier <SNAP_ID> --attribute-name restore --values-to-remove all",
+    "CFN-01": "Enforce HTTPS: aws cloudfront update-distribution --id <DIST_ID> --default-cache-behavior '{\"ViewerProtocolPolicy\":\"https-only\"}'",
+    "CFN-03": "Associate WAF: aws cloudfront update-distribution --id <DIST_ID> --web-acl-id <WAF_ACL_ARN>",
+    "LMB-01": "Remove public access: aws lambda remove-permission --function-name <FUNC> --statement-id <SID>",
+    "LMB-02": "Add VPC config: aws lambda update-function-configuration --function-name <FUNC> --vpc-config SubnetIds=<SUBNETS>,SecurityGroupIds=<SGS>",
+    "EKS-01": "Disable public endpoint: aws eks update-cluster-config --name <CLUSTER> --resources-vpc-config endpointPublicAccess=false,endpointPrivateAccess=true",
+    "EKS-02": "Enable logging: aws eks update-cluster-config --name <CLUSTER> --logging '{\"clusterLogging\":[{\"types\":[\"api\",\"audit\",\"authenticator\",\"controllerManager\",\"scheduler\"],\"enabled\":true}]}'",
+    "EKS-03": "Enable secrets encryption: aws eks associate-encryption-config --cluster-name <CLUSTER> --encryption-config '[{\"resources\":[\"secrets\"],\"provider\":{\"keyArn\":\"<KMS_ARN>\"}}]'",
+    "SEC-01": "Enable rotation: aws secretsmanager rotate-secret --secret-id <SECRET_ID> --rotation-lambda-arn <LAMBDA_ARN> --rotation-rules AutomaticallyAfterDays=30",
+    "SEC-02": "Update rotation schedule: aws secretsmanager rotate-secret --secret-id <SECRET_ID> --rotation-rules AutomaticallyAfterDays=90",
+    "ELC-01": "Enable at-rest encryption on new cluster: aws elasticache create-replication-group --replication-group-id <ID> --at-rest-encryption-enabled",
+    "ELC-02": "Enable in-transit encryption on new cluster: aws elasticache create-replication-group --replication-group-id <ID> --transit-encryption-enabled",
+    "OSR-01": "Enforce HTTPS: aws opensearch update-domain-config --domain-name <DOMAIN> --domain-endpoint-options EnforceHTTPS=true,TLSSecurityPolicy=Policy-Min-TLS-1-2-2019-07",
+    "OSR-02": "Enable encryption at rest: aws opensearch update-domain-config --domain-name <DOMAIN> --encrypt-at-rest-options Enabled=true",
+    "OSR-04": "Configure VPC: aws opensearch update-domain-config --domain-name <DOMAIN> --vpc-options SubnetIds=<SUBNETS>,SecurityGroupIds=<SGS>",
+    "DDB-01": "Enable CMK encryption: aws dynamodb update-table --table-name <TABLE> --sse-specification Enabled=true,SSEType=KMS",
+    "DDB-02": "Enable PITR: aws dynamodb update-continuous-backups --table-name <TABLE> --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true",
+    "DDB-04": "Enable deletion protection: aws dynamodb update-table --table-name <TABLE> --deletion-protection-enabled",
+    "WAF-01": "Associate WAF with ALB: aws wafv2 associate-web-acl --web-acl-arn <ACL_ARN> --resource-arn <ALB_ARN>",
+    "WAF-02": "Enable WAF logging: aws wafv2 put-logging-configuration --logging-configuration ResourceArn=<ACL_ARN>,LogDestinationConfigs=<LOG_ARN>",
+    "SFN-01": "Enable logging: aws stepfunctions update-state-machine --state-machine-arn <ARN> --logging-configuration '{\"level\":\"ALL\",\"includeExecutionData\":true,\"destinations\":[{\"cloudWatchLogsLogGroup\":{\"logGroupArn\":\"<LOG_ARN>\"}}]}'",
+}
+
+
+# ─── Risk scoring ────────────────────────────────────────────────────────────
+def compute_risk_score(results: List[Result]) -> float:
+    """Compute posture score: 100 − (CRIT×15 + HIGH×5 + MED×2 + LOW×0.5).
+    Clamped to 0–100.  Only FAIL results count as penalties."""
+    penalty = 0.0
+    for r in results:
+        if r.status == "FAIL" and r.severity:
+            penalty += SEVERITY_WEIGHTS.get(r.severity, 0)
+    return max(0.0, min(100.0, round(100 - penalty, 1)))
+
+
+def score_to_grade(score: float) -> str:
+    if score >= 90: return "A"
+    if score >= 80: return "B"
+    if score >= 70: return "C"
+    if score >= 60: return "D"
+    return "F"
 
 
 # ─── Scanner ──────────────────────────────────────────────────────────────────
@@ -129,11 +316,25 @@ class AWSLiveScanner:
     # ── Result helpers ────────────────────────────────────────────────────────
     def _add(self, status: str, check_id: str, section: str,
              resource: str, message: str):
-        self.results.append(Result(status, check_id, section, resource, message))
+        severity = ""
+        compliance = {}
+        remediation = ""
+        if status == "FAIL":
+            severity = CHECK_SEVERITY.get(check_id, "MEDIUM")
+            compliance = COMPLIANCE_MAP.get(check_id, {})
+            remediation = REMEDIATION_MAP.get(check_id, "")
+        elif status == "WARN":
+            severity = "LOW"
+            compliance = COMPLIANCE_MAP.get(check_id, {})
+        self.results.append(Result(
+            status, check_id, section, resource, message,
+            severity, compliance, remediation,
+        ))
         if self.verbose or status in ("FAIL", "WARN"):
             col = STATUS_COLOR.get(status, RESET)
             res = f" | {resource}" if resource else ""
-            print(f"  {col}{STATUS_ICON[status]}{RESET} {check_id}: {message}{res}")
+            sev_tag = f" [{severity}]" if severity else ""
+            print(f"  {col}{STATUS_ICON[status]}{RESET} {check_id}{sev_tag}: {message}{res}")
 
     def _log(self, msg: str):
         print(f"{BLUE}[*]{RESET} {msg}")
@@ -1845,6 +2046,574 @@ class AWSLiveScanner:
                 self._add("WARN", "AGT-05", "BEDROCK_AGENTS", aname, str(e))
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 17: AWS LAMBDA
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_lambda(self):
+        self._section_header("LAMBDA")
+        lmb = self._client("lambda")
+
+        try:
+            paginator = lmb.get_paginator("list_functions")
+            funcs = []
+            for page in paginator.paginate():
+                funcs.extend(page["Functions"])
+        except Exception as e:
+            self._add("FAIL", "LMB-01", "LAMBDA", "lambda", str(e))
+            return
+        if not funcs:
+            self._add("INFO", "LMB-01", "LAMBDA", "lambda",
+                      "No Lambda functions in this region")
+            return
+
+        # LMB-01 — Public access via resource policy
+        self._log("LMB-01: Lambda functions — public access check")
+        for fn in funcs:
+            fname = fn["FunctionName"]
+            try:
+                pol = json.loads(lmb.get_policy(FunctionName=fname)["Policy"])
+                for stmt in pol.get("Statement", []):
+                    p = stmt.get("Principal", {})
+                    p_val = p if isinstance(p, str) else p.get("AWS", "")
+                    if stmt.get("Effect") == "Allow" and p_val == "*" \
+                            and not stmt.get("Condition"):
+                        self._add("FAIL", "LMB-01", "LAMBDA", fname,
+                                  f"Lambda '{fname}' has public invoke access")
+            except ClientError as e:
+                if e.response["Error"]["Code"] != "ResourceNotFoundException":
+                    self._add("WARN", "LMB-01", "LAMBDA", fname, str(e))
+
+        # LMB-02 — VPC connectivity
+        self._log("LMB-02: Lambda functions — VPC configuration")
+        for fn in funcs:
+            fname = fn["FunctionName"]
+            vpc = fn.get("VpcConfig", {})
+            if not vpc or not vpc.get("SubnetIds"):
+                self._add("WARN", "LMB-02", "LAMBDA", fname,
+                          f"Lambda '{fname}' not in VPC — has public internet access")
+
+        # LMB-03 — Environment variable secrets
+        self._log("LMB-03: Lambda functions — plaintext secrets in env vars")
+        secret_patterns = ["PASSWORD", "SECRET", "API_KEY", "TOKEN",
+                           "DB_PASS", "PRIVATE_KEY", "CREDENTIALS"]
+        for fn in funcs:
+            fname = fn["FunctionName"]
+            env = fn.get("Environment", {}).get("Variables", {})
+            for k in env:
+                if any(p in k.upper() for p in secret_patterns):
+                    self._add("FAIL", "LMB-03", "LAMBDA", fname,
+                              f"Potential secret in env var '{k}' on '{fname}'"
+                              " — use Secrets Manager or SSM Parameter Store")
+                    break
+
+        # LMB-04 — Deprecated runtime
+        self._log("LMB-04: Lambda functions — deprecated runtimes")
+        deprecated = {"python2.7", "python3.6", "python3.7", "nodejs10.x",
+                      "nodejs12.x", "dotnetcore2.1", "dotnetcore3.1",
+                      "ruby2.5", "ruby2.7", "java8", "go1.x"}
+        for fn in funcs:
+            fname = fn["FunctionName"]
+            runtime = fn.get("Runtime", "")
+            if runtime in deprecated:
+                self._add("FAIL", "LMB-04", "LAMBDA", fname,
+                          f"Deprecated runtime '{runtime}' on '{fname}'")
+
+        # LMB-05 — Reserved concurrency / throttle protection
+        self._log("LMB-05: Lambda functions — reserved concurrency")
+        for fn in funcs:
+            fname = fn["FunctionName"]
+            try:
+                cc = lmb.get_function_concurrency(FunctionName=fname)
+                if not cc.get("ReservedConcurrentExecutions"):
+                    self._add("WARN", "LMB-05", "LAMBDA", fname,
+                              f"No reserved concurrency on '{fname}'")
+            except Exception:
+                pass
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 18: AMAZON EKS
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_eks(self):
+        self._section_header("EKS")
+        eks = self._client("eks")
+
+        try:
+            clusters = eks.list_clusters().get("clusters", [])
+        except Exception as e:
+            self._add("WARN", "EKS-01", "EKS", "eks", str(e))
+            return
+        if not clusters:
+            self._add("INFO", "EKS-01", "EKS", "eks",
+                      "No EKS clusters in this region")
+            return
+
+        for cname in clusters:
+            try:
+                c = eks.describe_cluster(name=cname)["cluster"]
+            except Exception as e:
+                self._add("WARN", "EKS-01", "EKS", cname, str(e))
+                continue
+
+            # EKS-01 — Public endpoint
+            vpc_cfg = c.get("resourcesVpcConfig", {})
+            if vpc_cfg.get("endpointPublicAccess", True):
+                cidrs = vpc_cfg.get("publicAccessCidrs", ["0.0.0.0/0"])
+                if "0.0.0.0/0" in cidrs:
+                    self._add("FAIL", "EKS-01", "EKS", cname,
+                              f"EKS '{cname}' API endpoint public to 0.0.0.0/0")
+                else:
+                    self._add("WARN", "EKS-01", "EKS", cname,
+                              f"EKS '{cname}' API endpoint public (restricted CIDRs)")
+
+            # EKS-02 — Control plane logging
+            logging_cfg = c.get("logging", {}).get("clusterLogging", [])
+            enabled_types = []
+            for lc in logging_cfg:
+                if lc.get("enabled"):
+                    enabled_types.extend(lc.get("types", []))
+            expected = {"api", "audit", "authenticator", "controllerManager", "scheduler"}
+            missing = expected - set(enabled_types)
+            if missing:
+                self._add("FAIL", "EKS-02", "EKS", cname,
+                          f"EKS '{cname}' missing log types: {', '.join(missing)}")
+            else:
+                self._add("PASS", "EKS-02", "EKS", cname,
+                          f"EKS '{cname}' all control plane logging enabled")
+
+            # EKS-03 — Secrets encryption
+            enc_cfg = c.get("encryptionConfig", [])
+            secrets_enc = any("secrets" in e.get("resources", [])
+                              for e in enc_cfg)
+            if secrets_enc:
+                self._add("PASS", "EKS-03", "EKS", cname,
+                          f"EKS '{cname}' Kubernetes secrets encrypted with KMS")
+            else:
+                self._add("FAIL", "EKS-03", "EKS", cname,
+                          f"EKS '{cname}' Kubernetes secrets NOT encrypted with KMS")
+
+            # EKS-04 — Platform version
+            version = c.get("version", "")
+            platform = c.get("platformVersion", "")
+            self._add("INFO", "EKS-04", "EKS", cname,
+                      f"EKS '{cname}' version={version} platform={platform}")
+
+            # EKS-05 — Security groups
+            sg_ids = vpc_cfg.get("securityGroupIds", [])
+            if not sg_ids:
+                self._add("WARN", "EKS-05", "EKS", cname,
+                          f"EKS '{cname}' no additional security groups configured")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 19: AMAZON ECS
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_ecs(self):
+        self._section_header("ECS")
+        ecs = self._client("ecs")
+
+        try:
+            cluster_arns = ecs.list_clusters().get("clusterArns", [])
+        except Exception as e:
+            self._add("WARN", "ECS-01", "ECS", "ecs", str(e))
+            return
+        if not cluster_arns:
+            self._add("INFO", "ECS-01", "ECS", "ecs",
+                      "No ECS clusters in this region")
+            return
+
+        # Check task definitions for security issues
+        self._log("ECS-01/02/03: ECS task definition security")
+        try:
+            td_arns = ecs.list_task_definitions(status="ACTIVE"
+                          ).get("taskDefinitionArns", [])
+        except Exception:
+            td_arns = []
+
+        for td_arn in td_arns[:50]:  # cap at 50 to avoid rate limits
+            try:
+                td = ecs.describe_task_definition(
+                    taskDefinition=td_arn
+                )["taskDefinition"]
+            except Exception:
+                continue
+            td_name = td.get("family", td_arn.split("/")[-1])
+            for cd in td.get("containerDefinitions", []):
+                cname = cd.get("name", "unknown")
+                # ECS-01 — Privileged mode
+                if cd.get("privileged", False):
+                    self._add("FAIL", "ECS-01", "ECS", f"{td_name}/{cname}",
+                              f"Container '{cname}' runs in privileged mode")
+                # ECS-02 — Root user
+                user = cd.get("user", "")
+                if not user or user == "root" or user == "0":
+                    self._add("WARN", "ECS-02", "ECS", f"{td_name}/{cname}",
+                              f"Container '{cname}' runs as root (no user set)")
+                # ECS-03 — Log configuration
+                if not cd.get("logConfiguration"):
+                    self._add("FAIL", "ECS-03", "ECS", f"{td_name}/{cname}",
+                              f"Container '{cname}' has no log driver configured")
+                # ECS-04 — Secrets as env vars
+                env = cd.get("environment", [])
+                secret_patterns = ["PASSWORD", "SECRET", "API_KEY", "TOKEN"]
+                for e in env:
+                    if any(p in e.get("name", "").upper() for p in secret_patterns):
+                        self._add("FAIL", "ECS-04", "ECS", f"{td_name}/{cname}",
+                                  f"Plaintext secret in env var '{e['name']}' "
+                                  f"on '{cname}' — use secrets or SSM")
+                        break
+                # ECS-05 — Read-only root filesystem
+                if not cd.get("readonlyRootFilesystem", False):
+                    self._add("WARN", "ECS-05", "ECS", f"{td_name}/{cname}",
+                              f"Container '{cname}' root filesystem is writable")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 20: AWS SECRETS MANAGER
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_secrets(self):
+        self._section_header("SECRETS")
+        sm = self._client("secretsmanager")
+
+        try:
+            paginator = sm.get_paginator("list_secrets")
+            secrets = []
+            for page in paginator.paginate():
+                secrets.extend(page["SecretList"])
+        except Exception as e:
+            self._add("FAIL", "SEC-01", "SECRETS", "secrets", str(e))
+            return
+        if not secrets:
+            self._add("INFO", "SEC-01", "SECRETS", "secrets",
+                      "No secrets found in Secrets Manager")
+            return
+
+        now = datetime.now(timezone.utc)
+        for s in secrets:
+            sname = s.get("Name", "unknown")
+            # SEC-01 — Rotation enabled
+            if not s.get("RotationEnabled", False):
+                self._add("FAIL", "SEC-01", "SECRETS", sname,
+                          f"Secret '{sname}' rotation NOT enabled")
+            else:
+                # SEC-02 — Rotation frequency
+                rules = s.get("RotationRules", {})
+                days = rules.get("AutomaticallyAfterDays", 0)
+                if days > 90:
+                    self._add("WARN", "SEC-02", "SECRETS", sname,
+                              f"Secret '{sname}' rotation interval={days}d "
+                              "(recommend ≤90)")
+                else:
+                    self._add("PASS", "SEC-02", "SECRETS", sname,
+                              f"Secret '{sname}' rotation every {days}d")
+            # SEC-03 — KMS encryption
+            kms_id = s.get("KmsKeyId", "")
+            if not kms_id or kms_id == "aws/secretsmanager":
+                self._add("WARN", "SEC-03", "SECRETS", sname,
+                          f"Secret '{sname}' uses AWS-managed KMS key "
+                          "(consider CMK)")
+            else:
+                self._add("PASS", "SEC-03", "SECRETS", sname,
+                          f"Secret '{sname}' encrypted with CMK")
+            # SEC-04 — Last accessed / unused
+            last_accessed = s.get("LastAccessedDate")
+            if last_accessed:
+                age = (now - last_accessed).days
+                if age > 90:
+                    self._add("WARN", "SEC-04", "SECRETS", sname,
+                              f"Secret '{sname}' not accessed in {age} days")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 21: AWS WAF
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_waf(self):
+        self._section_header("WAF")
+        waf = self._client("wafv2")
+
+        for scope in ("REGIONAL", "CLOUDFRONT"):
+            region = "us-east-1" if scope == "CLOUDFRONT" else None
+            client = self._client("wafv2", region=region) if region else waf
+            try:
+                acls = client.list_web_acls(Scope=scope).get("WebACLs", [])
+            except Exception as e:
+                self._add("WARN", "WAF-01", "WAF", scope, str(e))
+                continue
+
+            if not acls:
+                self._add("WARN", "WAF-01", "WAF", scope,
+                          f"No WAFv2 Web ACLs ({scope})")
+                continue
+
+            for acl in acls:
+                aname = acl.get("Name", "unknown")
+                acl_arn = acl.get("ARN", "")
+                # WAF-02 — Logging
+                try:
+                    log_cfg = client.get_logging_configuration(
+                        ResourceArn=acl_arn
+                    ).get("LoggingConfiguration", {})
+                    if log_cfg:
+                        self._add("PASS", "WAF-02", "WAF", aname,
+                                  f"WAF logging enabled | {aname}")
+                    else:
+                        self._add("FAIL", "WAF-02", "WAF", aname,
+                                  f"WAF logging NOT enabled | {aname}")
+                except ClientError:
+                    self._add("FAIL", "WAF-02", "WAF", aname,
+                              f"WAF logging NOT configured | {aname}")
+
+                # WAF-03 — Rules count
+                try:
+                    detail = client.get_web_acl(
+                        Name=aname, Scope=scope, Id=acl.get("Id", "")
+                    ).get("WebACL", {})
+                    rules = detail.get("Rules", [])
+                    if not rules:
+                        self._add("FAIL", "WAF-03", "WAF", aname,
+                                  f"WAF '{aname}' has no rules defined")
+                    else:
+                        self._add("PASS", "WAF-03", "WAF", aname,
+                                  f"WAF '{aname}' has {len(rules)} rule(s)")
+                    # WAF-04 — Default action
+                    default_action = detail.get("DefaultAction", {})
+                    if "Allow" in default_action:
+                        self._add("WARN", "WAF-04", "WAF", aname,
+                                  f"WAF '{aname}' default action is ALLOW "
+                                  "(consider BLOCK)")
+                except Exception:
+                    pass
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 22: AMAZON ELASTICACHE
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_elasticache(self):
+        self._section_header("ELASTICACHE")
+        ec = self._client("elasticache")
+
+        try:
+            clusters = ec.describe_replication_groups().get(
+                "ReplicationGroups", [])
+        except Exception as e:
+            self._add("WARN", "ELC-01", "ELASTICACHE", "elasticache", str(e))
+            return
+        if not clusters:
+            self._add("INFO", "ELC-01", "ELASTICACHE", "elasticache",
+                      "No ElastiCache replication groups found")
+            return
+
+        for rg in clusters:
+            rgid = rg.get("ReplicationGroupId", "unknown")
+            # ELC-01 — Encryption at rest
+            if rg.get("AtRestEncryptionEnabled", False):
+                self._add("PASS", "ELC-01", "ELASTICACHE", rgid,
+                          f"Encryption at rest=ON | {rgid}")
+            else:
+                self._add("FAIL", "ELC-01", "ELASTICACHE", rgid,
+                          f"Encryption at rest=OFF | {rgid}")
+            # ELC-02 — Encryption in transit
+            if rg.get("TransitEncryptionEnabled", False):
+                self._add("PASS", "ELC-02", "ELASTICACHE", rgid,
+                          f"Encryption in transit=ON | {rgid}")
+            else:
+                self._add("FAIL", "ELC-02", "ELASTICACHE", rgid,
+                          f"Encryption in transit=OFF | {rgid}")
+            # ELC-03 — Auth token (password)
+            if rg.get("AuthTokenEnabled", False):
+                self._add("PASS", "ELC-03", "ELASTICACHE", rgid,
+                          f"AUTH token=ON | {rgid}")
+            else:
+                self._add("FAIL", "ELC-03", "ELASTICACHE", rgid,
+                          f"AUTH token=OFF (unauthenticated access) | {rgid}")
+            # ELC-04 — Auto failover
+            if rg.get("AutomaticFailover", "") == "enabled":
+                self._add("PASS", "ELC-04", "ELASTICACHE", rgid,
+                          f"Auto failover=ON | {rgid}")
+            else:
+                self._add("WARN", "ELC-04", "ELASTICACHE", rgid,
+                          f"Auto failover=OFF | {rgid}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 23: AMAZON OPENSEARCH
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_opensearch(self):
+        self._section_header("OPENSEARCH")
+        osr = self._client("opensearch")
+
+        try:
+            domains = osr.list_domain_names().get("DomainNames", [])
+        except Exception as e:
+            self._add("WARN", "OSR-01", "OPENSEARCH", "opensearch", str(e))
+            return
+        if not domains:
+            self._add("INFO", "OSR-01", "OPENSEARCH", "opensearch",
+                      "No OpenSearch domains found")
+            return
+
+        for d in domains:
+            dname = d["DomainName"]
+            try:
+                cfg = osr.describe_domain(DomainName=dname)["DomainStatus"]
+            except Exception as e:
+                self._add("WARN", "OSR-01", "OPENSEARCH", dname, str(e))
+                continue
+
+            # OSR-01 — HTTPS enforcement
+            ep_opts = cfg.get("DomainEndpointOptions", {})
+            if ep_opts.get("EnforceHTTPS", False):
+                tls = ep_opts.get("TLSSecurityPolicy", "")
+                self._add("PASS", "OSR-01", "OPENSEARCH", dname,
+                          f"HTTPS enforced (TLS={tls}) | {dname}")
+            else:
+                self._add("FAIL", "OSR-01", "OPENSEARCH", dname,
+                          f"HTTPS NOT enforced | {dname}")
+            # OSR-02 — Encryption at rest
+            enc = cfg.get("EncryptionAtRestOptions", {})
+            if enc.get("Enabled", False):
+                self._add("PASS", "OSR-02", "OPENSEARCH", dname,
+                          f"Encryption at rest=ON | {dname}")
+            else:
+                self._add("FAIL", "OSR-02", "OPENSEARCH", dname,
+                          f"Encryption at rest=OFF | {dname}")
+            # OSR-03 — Node-to-node encryption
+            n2n = cfg.get("NodeToNodeEncryptionOptions", {})
+            if n2n.get("Enabled", False):
+                self._add("PASS", "OSR-03", "OPENSEARCH", dname,
+                          f"Node-to-node encryption=ON | {dname}")
+            else:
+                self._add("FAIL", "OSR-03", "OPENSEARCH", dname,
+                          f"Node-to-node encryption=OFF | {dname}")
+            # OSR-04 — VPC deployment
+            vpc_opts = cfg.get("VPCOptions", {})
+            if vpc_opts.get("SubnetIds"):
+                self._add("PASS", "OSR-04", "OPENSEARCH", dname,
+                          f"Deployed in VPC | {dname}")
+            else:
+                self._add("FAIL", "OSR-04", "OPENSEARCH", dname,
+                          f"Public endpoint (not in VPC) | {dname}")
+            # OSR-05 — Fine-grained access control
+            adv = cfg.get("AdvancedSecurityOptions", {})
+            if adv.get("Enabled", False):
+                self._add("PASS", "OSR-05", "OPENSEARCH", dname,
+                          f"Fine-grained access control=ON | {dname}")
+            else:
+                self._add("FAIL", "OSR-05", "OPENSEARCH", dname,
+                          f"Fine-grained access control=OFF | {dname}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 24: AMAZON DYNAMODB
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_dynamodb(self):
+        self._section_header("DYNAMODB")
+        ddb = self._client("dynamodb")
+
+        try:
+            tables = ddb.list_tables().get("TableNames", [])
+        except Exception as e:
+            self._add("FAIL", "DDB-01", "DYNAMODB", "dynamodb", str(e))
+            return
+        if not tables:
+            self._add("INFO", "DDB-01", "DYNAMODB", "dynamodb",
+                      "No DynamoDB tables found")
+            return
+
+        for tname in tables:
+            try:
+                t = ddb.describe_table(TableName=tname)["Table"]
+            except Exception as e:
+                self._add("WARN", "DDB-01", "DYNAMODB", tname, str(e))
+                continue
+
+            # DDB-01 — Encryption (CMK vs AWS-owned)
+            sse = t.get("SSEDescription", {})
+            sse_type = sse.get("SSEType", "")
+            if sse_type == "KMS":
+                self._add("PASS", "DDB-01", "DYNAMODB", tname,
+                          f"CMK encryption | {tname}")
+            else:
+                self._add("WARN", "DDB-01", "DYNAMODB", tname,
+                          f"AWS-owned encryption (consider CMK) | {tname}")
+            # DDB-02 — Point-in-time recovery
+            try:
+                pitr = ddb.describe_continuous_backups(TableName=tname
+                    )["ContinuousBackupsDescription"]
+                status = pitr.get("PointInTimeRecoveryDescription", {}).get(
+                    "PointInTimeRecoveryStatus", "DISABLED")
+                if status == "ENABLED":
+                    self._add("PASS", "DDB-02", "DYNAMODB", tname,
+                              f"PITR enabled | {tname}")
+                else:
+                    self._add("FAIL", "DDB-02", "DYNAMODB", tname,
+                              f"PITR disabled | {tname}")
+            except Exception:
+                self._add("WARN", "DDB-02", "DYNAMODB", tname,
+                          f"Could not check PITR for {tname}")
+            # DDB-03 — Auto scaling / on-demand
+            billing = t.get("BillingModeSummary", {}).get(
+                "BillingMode", "PROVISIONED")
+            if billing == "PAY_PER_REQUEST":
+                self._add("PASS", "DDB-03", "DYNAMODB", tname,
+                          f"On-demand billing (auto scales) | {tname}")
+            else:
+                self._add("INFO", "DDB-03", "DYNAMODB", tname,
+                          f"Provisioned billing — ensure auto scaling | {tname}")
+            # DDB-04 — Deletion protection
+            if t.get("DeletionProtectionEnabled", False):
+                self._add("PASS", "DDB-04", "DYNAMODB", tname,
+                          f"Deletion protection=ON | {tname}")
+            else:
+                self._add("FAIL", "DDB-04", "DYNAMODB", tname,
+                          f"Deletion protection=OFF | {tname}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 25: AWS STEP FUNCTIONS
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_stepfunctions(self):
+        self._section_header("STEPFUNCTIONS")
+        sfn = self._client("stepfunctions")
+
+        try:
+            machines = sfn.list_state_machines().get("stateMachines", [])
+        except Exception as e:
+            self._add("WARN", "SFN-01", "STEPFUNCTIONS", "stepfunctions", str(e))
+            return
+        if not machines:
+            self._add("INFO", "SFN-01", "STEPFUNCTIONS", "stepfunctions",
+                      "No Step Functions state machines found")
+            return
+
+        for sm in machines:
+            sname = sm.get("name", "unknown")
+            arn = sm.get("stateMachineArn", "")
+            try:
+                detail = sfn.describe_state_machine(stateMachineArn=arn)
+            except Exception as e:
+                self._add("WARN", "SFN-01", "STEPFUNCTIONS", sname, str(e))
+                continue
+
+            # SFN-01 — Logging
+            log_cfg = detail.get("loggingConfiguration", {})
+            level = log_cfg.get("level", "OFF")
+            if level == "OFF":
+                self._add("FAIL", "SFN-01", "STEPFUNCTIONS", sname,
+                          f"Logging disabled on '{sname}'")
+            else:
+                self._add("PASS", "SFN-01", "STEPFUNCTIONS", sname,
+                          f"Logging level={level} | {sname}")
+            # SFN-02 — X-Ray tracing
+            tracing = detail.get("tracingConfiguration", {})
+            if tracing.get("enabled", False):
+                self._add("PASS", "SFN-02", "STEPFUNCTIONS", sname,
+                          f"X-Ray tracing=ON | {sname}")
+            else:
+                self._add("WARN", "SFN-02", "STEPFUNCTIONS", sname,
+                          f"X-Ray tracing=OFF | {sname}")
+            # SFN-03 — Encryption
+            enc_cfg = detail.get("encryptionConfiguration", {})
+            kms = enc_cfg.get("kmsKeyId", "")
+            if kms:
+                self._add("PASS", "SFN-03", "STEPFUNCTIONS", sname,
+                          f"KMS encryption | {sname}")
+            else:
+                self._add("WARN", "SFN-03", "STEPFUNCTIONS", sname,
+                          f"AWS-managed encryption | {sname}")
+
+    # ══════════════════════════════════════════════════════════════════════════
     # ORCHESTRATION
     # ══════════════════════════════════════════════════════════════════════════
     def run(self):
@@ -1872,9 +2641,10 @@ class AWSLiveScanner:
 
         print("=" * 70)
         print(f" {BOLD}AWS Live Security Audit  v{VERSION}{RESET}")
+        print(f" Compliance: CIS · PCI-DSS · HIPAA · SOC2 · NIST 800-53")
         print(f" Account  : {self.account}")
         print(f" Region   : {self.region}")
-        print(f" Sections : {', '.join(self.sections)}")
+        print(f" Sections : {', '.join(self.sections)} ({len(self.sections)} domains)")
         print("=" * 70)
 
         CHECK_MAP = {
@@ -1894,6 +2664,15 @@ class AWSLiveScanner:
             "ROUTE53":        self._check_route53,
             "BEDROCK":        self._check_bedrock,
             "BEDROCK_AGENTS": self._check_bedrock_agents,
+            "LAMBDA":         self._check_lambda,
+            "EKS":            self._check_eks,
+            "ECS":            self._check_ecs,
+            "SECRETS":        self._check_secrets,
+            "WAF":            self._check_waf,
+            "ELASTICACHE":    self._check_elasticache,
+            "OPENSEARCH":     self._check_opensearch,
+            "DYNAMODB":       self._check_dynamodb,
+            "STEPFUNCTIONS":  self._check_stepfunctions,
         }
 
         for section in self.sections:
@@ -1915,7 +2694,11 @@ class AWSLiveScanner:
             "WARN": sum(1 for r in self.results if r.status == "WARN"),
             "INFO": sum(1 for r in self.results if r.status == "INFO"),
         }
+        score = compute_risk_score(self.results)
+        grade = score_to_grade(score)
+
         print("\n" + "=" * 70)
+        print(f" {BOLD}POSTURE SCORE: {score}/100  (Grade {grade}){RESET}")
         print(
             f" {GREEN}PASS{RESET}: {counts['PASS']}  |  "
             f"{RED}FAIL{RESET}: {counts['FAIL']}  |  "
@@ -1930,16 +2713,22 @@ class AWSLiveScanner:
             print(f"\n{BOLD}{RED}CRITICAL FINDINGS:{RESET}")
             for r in fails:
                 res = f" | {r.resource}" if r.resource else ""
-                print(f"  {RED}[FAIL]{RESET} {r.check_id}: {r.message}{res}")
+                sev = f" [{r.severity}]" if r.severity else ""
+                print(f"  {RED}[FAIL]{RESET}{sev} {r.check_id}: {r.message}{res}")
+                if r.remediation_cmd:
+                    print(f"         {BLUE}Remediation:{RESET} {r.remediation_cmd[:120]}")
 
         return counts
 
     def save_json(self, path: str):
+        score = compute_risk_score(self.results)
         data = {
             "scanner":   f"AWS Live Security Scanner v{VERSION}",
             "account":   self.account,
             "region":    self.region,
             "timestamp": datetime.utcnow().isoformat() + "Z",
+            "posture_score": score,
+            "posture_grade": score_to_grade(score),
             "summary": {
                 "PASS": sum(1 for r in self.results if r.status == "PASS"),
                 "FAIL": sum(1 for r in self.results if r.status == "FAIL"),
@@ -1948,11 +2737,14 @@ class AWSLiveScanner:
             },
             "results": [
                 {
-                    "status":   r.status,
-                    "check_id": r.check_id,
-                    "section":  r.section,
-                    "resource": r.resource,
-                    "message":  r.message,
+                    "status":          r.status,
+                    "check_id":        r.check_id,
+                    "section":         r.section,
+                    "resource":        r.resource,
+                    "message":         r.message,
+                    "severity":        r.severity,
+                    "compliance":      r.compliance,
+                    "remediation_cmd": r.remediation_cmd,
                 }
                 for r in self.results
             ],
@@ -1968,24 +2760,39 @@ class AWSLiveScanner:
             "WARN": '<span class="badge warn">WARN</span>',
             "INFO": '<span class="badge info">INFO</span>',
         }
+        SEV_BADGE = {
+            "CRITICAL": '<span class="sev crit">CRITICAL</span>',
+            "HIGH":     '<span class="sev high">HIGH</span>',
+            "MEDIUM":   '<span class="sev med">MEDIUM</span>',
+            "LOW":      '<span class="sev low">LOW</span>',
+        }
         counts = {
             "PASS": sum(1 for r in self.results if r.status == "PASS"),
             "FAIL": sum(1 for r in self.results if r.status == "FAIL"),
             "WARN": sum(1 for r in self.results if r.status == "WARN"),
             "INFO": sum(1 for r in self.results if r.status == "INFO"),
         }
+        score = compute_risk_score(self.results)
+        grade = score_to_grade(score)
 
         import html as html_mod
         rows = ""
         for r in self.results:
             badge = STATUS_BADGE.get(r.status, r.status)
+            sev = SEV_BADGE.get(r.severity, "") if r.severity else ""
+            comp = ", ".join(f"{k}:{v}" for k, v in r.compliance.items()) if r.compliance else ""
+            rem = html_mod.escape(r.remediation_cmd) if r.remediation_cmd else ""
+            rem_cell = f'<details><summary>CLI</summary><code>{rem}</code></details>' if rem else ""
             rows += (
                 f"<tr class='row-{r.status.lower()}'>"
                 f"<td>{badge}</td>"
+                f"<td>{sev}</td>"
                 f"<td>{html_mod.escape(r.check_id)}</td>"
                 f"<td>{html_mod.escape(r.section)}</td>"
                 f"<td>{html_mod.escape(r.resource)}</td>"
                 f"<td>{html_mod.escape(r.message)}</td>"
+                f"<td class='comp'>{html_mod.escape(comp)}</td>"
+                f"<td>{rem_cell}</td>"
                 f"</tr>\n"
             )
 
@@ -2021,7 +2828,19 @@ class AWSLiveScanner:
     .badge.fail {{ background:#4d1f1f; color:#f85149; }}
     .badge.warn {{ background:#3d2e00; color:#d29922; }}
     .badge.info {{ background:#1c2e46; color:#58a6ff; }}
+    .sev {{ padding:2px 6px; border-radius:3px; font-size:0.75em; font-weight:bold; }}
+    .sev.crit {{ background:#4d1f1f; color:#f85149; }}
+    .sev.high {{ background:#3d2e00; color:#d29922; }}
+    .sev.med  {{ background:#2a2a00; color:#e3b341; }}
+    .sev.low  {{ background:#1a3a1a; color:#3fb950; }}
+    .comp {{ font-size:0.75em; color:#8b949e; max-width:200px; }}
+    details summary {{ cursor:pointer; color:#58a6ff; font-size:0.8em; }}
+    details code {{ display:block; margin-top:4px; font-size:0.75em;
+                    white-space:pre-wrap; word-break:break-all; color:#c9d1d9;
+                    background:#161b22; padding:6px; border-radius:4px; }}
     .meta {{ padding:8px 30px 16px; font-size:0.82em; color:#8b949e; }}
+    .score {{ font-size:2.4em; font-weight:bold; }}
+    .grade {{ font-size:1.4em; color:#8b949e; }}
     .tbl-wrap {{ overflow-x:auto; padding:0 20px 30px; }}
   </style>
 </head>
@@ -2030,6 +2849,8 @@ class AWSLiveScanner:
     Account: {html_mod.escape(self.account)} &nbsp;·&nbsp;
     Region: {html_mod.escape(self.region)}</h1>
 <div class="summary">
+  <div class="card"><div class="score">{score}</div>
+    <div class="grade">Grade {grade}</div><div class="lbl">POSTURE</div></div>
   <div class="card"><div class="num fail-num">{counts['FAIL']}</div>
     <div class="lbl">FAIL</div></div>
   <div class="card"><div class="num warn-num">{counts['WARN']}</div>
@@ -2047,8 +2868,8 @@ class AWSLiveScanner:
 <table>
   <thead>
     <tr>
-      <th>Status</th><th>Check ID</th><th>Section</th>
-      <th>Resource</th><th>Message</th>
+      <th>Status</th><th>Severity</th><th>Check ID</th><th>Section</th>
+      <th>Resource</th><th>Message</th><th>Compliance</th><th>Remediation</th>
     </tr>
   </thead>
   <tbody>
@@ -2133,7 +2954,7 @@ def main():
         description=(
             f"AWS Live Security Scanner v{VERSION} — "
             "read-only audit of AWS environments via boto3.\n"
-            "Covers 16 service domains aligned to CIS AWS Benchmark v3.0."
+            "Covers 25 service domains aligned to CIS, PCI-DSS, HIPAA, SOC2, NIST."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
