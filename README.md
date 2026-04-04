@@ -10,7 +10,9 @@
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"/>
   <img src="https://img.shields.io/badge/license-GPL--3.0-orange?style=flat-square" alt="GPL-3.0 License"/>
   <img src="https://img.shields.io/badge/AWS-CIS%20Benchmark%20v3.0-ff9900?style=flat-square&logo=amazonaws&logoColor=white" alt="CIS AWS v3.0"/>
-  <img src="https://img.shields.io/badge/checks-160%2B-red?style=flat-square" alt="160+ Checks"/>
+  <img src="https://img.shields.io/badge/compliance-CIS%20%7C%20PCI--DSS%20%7C%20HIPAA%20%7C%20SOC2%20%7C%20NIST-purple?style=flat-square" alt="5 Compliance Frameworks"/>
+  <img src="https://img.shields.io/badge/checks-200%2B-red?style=flat-square" alt="200+ Checks"/>
+  <img src="https://img.shields.io/badge/tests-28%20passing-brightgreen?style=flat-square" alt="28 Tests"/>
 </p>
 
 ---
@@ -22,7 +24,7 @@ This repository contains **two complementary AWS security scanners**:
 | Scanner | File | Type | Input | Checks |
 |---------|------|------|-------|--------|
 | **IaC Security Scanner** | `aws_offline_scanner.py` | Static analysis | CloudFormation + Terraform files | 100+ (60+ TF regex + 42 CF structural) |
-| **Live Audit Scanner** | `aws_live_scanner.py` | Live AWS API audit | Running AWS account | 57 across 16 sections |
+| **Live Audit Scanner** | `aws_live_scanner.py` | Live AWS API audit | Running AWS account | 100+ across 25 sections |
 
 Use the **IaC scanner** to catch misconfigurations in CloudFormation templates and Terraform files before deployment. Use the **live scanner** to audit a running AWS account for CIS Benchmark compliance.
 
@@ -149,13 +151,16 @@ options:
 
 ### What It Does
 
-The live scanner connects to a running AWS account via **boto3**, performing **read-only** security checks aligned to the **CIS AWS Foundations Benchmark v3.0**. It produces colour-coded terminal output with PASS/FAIL/WARN verdicts, JSON/HTML reports, and saves evidence artefacts to a timestamped output directory.
+The live scanner connects to a running AWS account via **boto3**, performing **read-only** security checks aligned to multiple compliance frameworks. It produces colour-coded terminal output with PASS/FAIL/WARN verdicts, posture scoring, JSON/HTML reports, and saves evidence artefacts to a timestamped output directory.
 
 - **Read-only by design** -- never modifies AWS resources
-- **57+ security checks** across 16 audit sections
-- **CIS Benchmark aligned** -- AWS Foundations Benchmark v3.0
+- **100+ security checks** across 25 audit sections
+- **5 compliance frameworks** -- CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
+- **Risk scoring** -- Posture score 0-100 with letter grade (A-F), severity-weighted
+- **AWS CLI remediation** -- actionable CLI commands for every failed check
 - **3 output formats** -- coloured console, JSON report, interactive HTML report
 - **Evidence collection** -- CSV/JSON artefact files saved per check
+- **28 unit tests** -- full test suite with mock boto3, no AWS credentials needed
 
 ### Prerequisites (Live Scanner)
 
@@ -167,7 +172,7 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 ### Quick Start (Live Scanner)
 
 ```bash
-# Run full audit (all 16 sections, 57 checks)
+# Run full audit (all 25 sections, 100+ checks)
 python aws_live_scanner.py
 
 # Target a specific region
@@ -189,8 +194,10 @@ python aws_live_scanner.py --verbose
 usage: aws_live_scanner.py [-h] [--region REGION] [--json FILE] [--html FILE]
                             [--output-dir DIR]
                             [--sections {IAM,S3,VPC,LOGGING,KMS,EC2,ECR,BACKUP,
-                                         RDS,GLACIER,SNS,SQS,CLOUDFRONT,
-                                         ROUTE53,BEDROCK,BEDROCK_AGENTS} ...]
+                                         RDS,GLACIER,SNS,SQS,CLOUDFRONT,ROUTE53,
+                                         BEDROCK,BEDROCK_AGENTS,LAMBDA,EKS,ECS,
+                                         SECRETS,WAF,ELASTICACHE,OPENSEARCH,
+                                         DYNAMODB,STEPFUNCTIONS} ...]
                             [-v] [--version]
 
 options:
@@ -203,7 +210,7 @@ options:
   --version             Show scanner version
 ```
 
-### Security Checks Coverage (57 checks across 16 sections)
+### Security Checks Coverage (100+ checks across 25 sections)
 
 | Section | Check IDs | Description |
 |---------|-----------|-------------|
@@ -223,6 +230,43 @@ options:
 | **Route 53** | R53-01 to 05 | Query logging, DNSSEC, transfer lock, health checks, DNS firewall |
 | **Bedrock** | BDR-01 to 05 | Model logging, guardrails, KMS encryption, VPC endpoint, IAM least privilege |
 | **Bedrock Agents** | AGT-01 to 05 | Agent KMS encryption, execution role, KB security, Lambda security, prompt injection |
+| **Lambda** | LMB-01 to 05 | Public access, VPC config, plaintext secrets in env vars, deprecated runtimes, concurrency |
+| **EKS** | EKS-01 to 05 | Public API endpoint, control plane logging, secrets encryption, version, security groups |
+| **ECS** | ECS-01 to 05 | Privileged containers, root user, log drivers, plaintext secrets, writable rootfs |
+| **Secrets Manager** | SEC-01 to 04 | Rotation enabled, rotation frequency, KMS (CMK vs managed), unused secrets |
+| **WAF** | WAF-01 to 04 | Web ACL presence, logging, rules count, default action |
+| **ElastiCache** | ELC-01 to 04 | Encryption at rest, encryption in transit, AUTH token, auto failover |
+| **OpenSearch** | OSR-01 to 05 | HTTPS enforcement, encryption at rest, node-to-node, VPC deployment, fine-grained access |
+| **DynamoDB** | DDB-01 to 04 | CMK encryption, point-in-time recovery, billing mode, deletion protection |
+| **Step Functions** | SFN-01 to 03 | Execution logging, X-Ray tracing, KMS encryption |
+
+### Compliance Framework Mapping
+
+Every finding is tagged with applicable controls from:
+
+| Framework | Coverage |
+|-----------|----------|
+| **CIS AWS Foundations Benchmark v3.0** | IAM, S3, VPC, Logging, KMS, EC2, RDS, CloudFront, Lambda, EKS |
+| **PCI DSS v4.0** | Requirements 1, 2, 3, 4, 6, 7, 8, 10, 11, 12 |
+| **HIPAA** | 164.308, 164.312 (access control, audit, transmission, encryption) |
+| **SOC 2 Type II** | CC6 (logical access), CC7 (monitoring), A1 (availability) |
+| **NIST 800-53 Rev 5** | AC, AU, CM, CP, IA, SC, SI families |
+
+### Risk Scoring
+
+The scanner computes a **posture score** from 0-100:
+
+```
+Score = 100 − (CRITICAL × 15  +  HIGH × 5  +  MEDIUM × 2  +  LOW × 0.5)
+```
+
+| Grade | Score Range |
+|-------|-------------|
+| **A** | 90 -- 100 |
+| **B** | 80 -- 89 |
+| **C** | 70 -- 79 |
+| **D** | 60 -- 69 |
+| **F** | 0 -- 59 |
 
 ---
 
@@ -244,9 +288,13 @@ options:
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC Security Scanner (CloudFormation + Terraform, no credentials)
-├── aws_live_scanner.py      # Live Audit Scanner (boto3, CIS Benchmark v3.0)
+├── aws_live_scanner.py      # Live Audit Scanner v2.0.0 (25 sections, 5 compliance frameworks)
+├── tests/
+│   ├── test_live_scanner.py # 28 unit tests (mock boto3, no credentials needed)
+│   └── samples/             # Sample IaC files and reports
 ├── docs/
 │   └── banner.svg
+├── CLAUDE.md                # Developer documentation
 ├── LICENSE                  # GPL-3.0
 └── README.md
 ```
