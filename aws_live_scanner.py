@@ -2123,7 +2123,7 @@ class AWSLiveScanner:
             fname = fn["FunctionName"]
             try:
                 cc = lmb.get_function_concurrency(FunctionName=fname)
-                if not cc.get("ReservedConcurrentExecutions"):
+                if cc.get("ReservedConcurrentExecutions") is None:
                     self._add("WARN", "LMB-05", "LAMBDA", fname,
                               f"No reserved concurrency on '{fname}'")
             except Exception:
@@ -2503,7 +2503,10 @@ class AWSLiveScanner:
         ddb = self._client("dynamodb")
 
         try:
-            tables = ddb.list_tables().get("TableNames", [])
+            tables = []
+            paginator = ddb.get_paginator("list_tables")
+            for page in paginator.paginate():
+                tables.extend(page.get("TableNames", []))
         except Exception as e:
             self._add("FAIL", "DDB-01", "DYNAMODB", "dynamodb", str(e))
             return
@@ -2726,7 +2729,7 @@ class AWSLiveScanner:
             "scanner":   f"AWS Live Security Scanner v{VERSION}",
             "account":   self.account,
             "region":    self.region,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
             "posture_score": score,
             "posture_grade": score_to_grade(score),
             "summary": {
@@ -2862,7 +2865,7 @@ class AWSLiveScanner:
   <div class="card"><div class="num">{sum(counts.values())}</div>
     <div class="lbl">TOTAL</div></div>
 </div>
-<p class="meta">Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
+<p class="meta">Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC
   &nbsp;|&nbsp; AWS Live Security Scanner v{VERSION}</p>
 <div class="tbl-wrap">
 <table>
@@ -2926,7 +2929,7 @@ class AWSLiveScanner:
                 f.write(f"Region   : {self.region}\n")
                 f.write(
                     f"Run Time : "
-                    f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n\n"
+                    f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC\n\n"
                 )
                 f.write("Results Summary\n")
                 f.write(f"  PASS  : {counts['PASS']}\n")

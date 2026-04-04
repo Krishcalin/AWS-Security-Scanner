@@ -320,7 +320,7 @@ class TestDynamoDBChecks(unittest.TestCase):
     def test_pitr_disabled(self):
         scanner = make_scanner(["DYNAMODB"])
         ddb = MagicMock()
-        ddb.list_tables.return_value = {"TableNames": ["my-table"]}
+        ddb.get_paginator.return_value = MockPaginator("TableNames", ["my-table"])
         ddb.describe_table.return_value = {"Table": {
             "TableName": "my-table",
             "SSEDescription": {"SSEType": "KMS"},
