@@ -74,7 +74,7 @@ class TestDataStructures(unittest.TestCase):
         self.assertEqual(VERSION, "2.0.0")
 
     def test_sections_count(self):
-        self.assertEqual(len(SECTIONS), 25)
+        self.assertEqual(len(SECTIONS), 31)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:
@@ -157,7 +157,8 @@ class TestMaps(unittest.TestCase):
 
     def test_severity_map_covers_new_sections(self):
         new_checks = ["LMB-01", "EKS-01", "ECS-01", "SEC-01", "WAF-01",
-                       "ELC-01", "OSR-01", "DDB-01", "SFN-01"]
+                       "ELC-01", "OSR-01", "DDB-01", "SFN-01",
+                       "APIGW-01", "ELB-01", "EBS-01", "RS-01", "EFS-01", "ACM-01"]
         for c in new_checks:
             self.assertIn(c, CHECK_SEVERITY, f"{c} missing from CHECK_SEVERITY")
 
@@ -423,6 +424,199 @@ class TestJSONReport(unittest.TestCase):
             self.assertTrue(r["remediation_cmd"])
         finally:
             os.unlink(path)
+
+
+# ─── Test: API Gateway checks ────────────────────────────────────────────────
+class TestAPIGatewayChecks(unittest.TestCase):
+
+    def test_no_logging_no_waf(self):
+        scanner = make_scanner(["APIGATEWAY"])
+        apigw = MagicMock()
+        apigw.get_rest_apis.return_value = {
+            "items": [{"id": "abc123", "name": "my-api"}]
+        }
+        apigw.get_stages.return_value = {"item": [{
+            "stageName": "prod",
+            "methodSettings": {"*/*": {"loggingLevel": "OFF",
+                                       "cacheDataEncrypted": False}},
+            "cacheClusterEnabled": False,
+            "tracingEnabled": False,
+        }]}
+        scanner._clients = {"apigateway:us-east-1": apigw}
+
+        scanner._check_apigateway()
+
+        fails = [r.check_id for r in scanner.results if r.status == "FAIL"]
+        self.assertIn("APIGW-01", fails)
+        self.assertIn("APIGW-02", fails)
+
+    def test_logging_and_waf_pass(self):
+        scanner = make_scanner(["APIGATEWAY"])
+        apigw = MagicMock()
+        apigw.get_rest_apis.return_value = {
+            "items": [{"id": "abc123", "name": "secure-api"}]
+        }
+        apigw.get_stages.return_value = {"item": [{
+            "stageName": "prod",
+            "accessLogSettings": {"destinationArn": "arn:aws:logs:::lg"},
+            "webAclArn": "arn:aws:wafv2:::acl",
+            "methodSettings": {"*/*": {"loggingLevel": "INFO"}},
+            "cacheClusterEnabled": True,
+            "tracingEnabled": True,
+        }]}
+        scanner._clients = {"apigateway:us-east-1": apigw}
+
+        scanner._check_apigateway()
+
+        passes = [r.check_id for r in scanner.results if r.status == "PASS"]
+        self.assertIn("APIGW-01", passes)
+        self.assertIn("APIGW-02", passes)
+        # cache enabled but cacheDataEncrypted absent -> FAIL APIGW-03
+        fails = [r.check_id for r in scanner.results if r.status == "FAIL"]
+        self.assertIn("APIGW-03", fails)
+
+
+# ─── Test: ELB checks ────────────────────────────────────────────────────────
+class TestELBChecks(unittest.TestCase):
+
+    def test_no_logging_weak_tls_http_no_redirect(self):
+        scanner = make_scanner(["ELB"])
+        elb = MagicMock()
+        elb.describe_load_balancers.return_value = {"LoadBalancers": [{
+            "LoadBalancerArn": "arn:lb", "LoadBalancerName": "web-alb",
+            "Type": "application",
+        }]}
+        elb.describe_load_balancer_attributes.return_value = {"Attributes": [
+            {"Key": "access_logs.s3.enabled", "Value": "false"},
+            {"Key": "deletion_protection.enabled", "Value": "false"},
+            {"Key": "routing.http.drop_invalid_header_fields.enabled", "Value": "false"},
+        ]}
+        elb.describe_listeners.return_value = {"Listeners": [
+            {"Protocol": "HTTP", "Port": 80, "DefaultActions": [{"Type": "forward"}]},
+            {"Protocol": "HTTPS", "Port": 443,
+             "SslPolicy": "ELBSecurityPolicy-2016-08", "DefaultActions": []},
+        ]}
+        scanner._clients = {"elbv2:us-east-1": elb}
+
+        scanner._check_elb()
+
+        fails = [r.check_id for r in scanner.results if r.status == "FAIL"]
+        self.assertIn("ELB-01", fails)   # no access logging
+        self.assertIn("ELB-02", fails)   # HTTP without redirect
+        self.assertIn("ELB-03", fails)   # weak TLS policy
+        self.assertIn("ELB-05", fails)   # drop invalid headers off
+
+
+# ─── Test: EBS checks ────────────────────────────────────────────────────────
+class TestEBSChecks(unittest.TestCase):
+
+    def test_unencrypted_and_public(self):
+        scanner = make_scanner(["EBS"])
+        ec2 = MagicMock()
+        ec2.get_ebs_encryption_by_default.return_value = {
+            "EbsEncryptionByDefault": False}
+
+        def paginator_for(name):
+            if name == "describe_volumes":
+                return MockPaginator("Volumes", [
+                    {"VolumeId": "vol-1", "Encrypted": False}])
+            if name == "describe_snapshots":
+                # both describe_snapshots calls share this; first lists owned,
+                # second lists public — return based on call kwargs handled below
+                return _SnapPaginator()
+            return MockPaginator("X", [])
+
+        class _SnapPaginator:
+            def paginate(self, **kwargs):
+                if kwargs.get("RestorableByUserIds") == ["all"]:
+                    return [{"Snapshots": [{"SnapshotId": "snap-pub"}]}]
+                return [{"Snapshots": [
+                    {"SnapshotId": "snap-1", "Encrypted": False}]}]
+
+        ec2.get_paginator.side_effect = paginator_for
+        scanner._clients = {"ec2:us-east-1": ec2}
+
+        scanner._check_ebs()
+
+        fails = [r.check_id for r in scanner.results if r.status == "FAIL"]
+        self.assertIn("EBS-01", fails)   # encryption by default off
+        self.assertIn("EBS-02", fails)   # unencrypted volume
+        self.assertIn("EBS-03", fails)   # unencrypted snapshot
+        self.assertIn("EBS-04", fails)   # public snapshot
+
+
+# ─── Test: Redshift checks ───────────────────────────────────────────────────
+class TestRedshiftChecks(unittest.TestCase):
+
+    def test_unencrypted_public_cluster(self):
+        scanner = make_scanner(["REDSHIFT"])
+        rs = MagicMock()
+        rs.describe_clusters.return_value = {"Clusters": [{
+            "ClusterIdentifier": "analytics",
+            "Encrypted": False,
+            "PubliclyAccessible": True,
+            "EnhancedVpcRouting": False,
+            "MasterUsername": "awsuser",
+        }]}
+        rs.describe_logging_status.return_value = {"LoggingEnabled": False}
+        scanner._clients = {"redshift:us-east-1": rs}
+
+        scanner._check_redshift()
+
+        fails = [r.check_id for r in scanner.results if r.status == "FAIL"]
+        warns = [r.check_id for r in scanner.results if r.status == "WARN"]
+        self.assertIn("RS-01", fails)
+        self.assertIn("RS-02", fails)
+        self.assertIn("RS-03", fails)
+        self.assertIn("RS-04", fails)
+        self.assertIn("RS-05", warns)
+
+
+# ─── Test: EFS checks ────────────────────────────────────────────────────────
+class TestEFSChecks(unittest.TestCase):
+
+    def test_unencrypted_no_policy(self):
+        scanner = make_scanner(["EFS"])
+        efs = MagicMock()
+        efs.describe_file_systems.return_value = {"FileSystems": [{
+            "FileSystemId": "fs-123", "Name": "shared", "Encrypted": False,
+        }]}
+        efs.describe_file_system_policy.side_effect = Exception("no policy")
+        efs.describe_backup_policy.return_value = {
+            "BackupPolicy": {"Status": "DISABLED"}}
+        scanner._clients = {"efs:us-east-1": efs}
+
+        scanner._check_efs()
+
+        fails = [r.check_id for r in scanner.results if r.status == "FAIL"]
+        self.assertIn("EFS-01", fails)   # unencrypted
+        self.assertIn("EFS-02", fails)   # no TLS policy
+
+
+# ─── Test: ACM checks ────────────────────────────────────────────────────────
+class TestACMChecks(unittest.TestCase):
+
+    def test_expired_and_unused(self):
+        scanner = make_scanner(["ACM"])
+        acm = MagicMock()
+        acm.list_certificates.return_value = {"CertificateSummaryList": [
+            {"CertificateArn": "arn:cert1", "DomainName": "old.example.com"},
+        ]}
+        acm.describe_certificate.return_value = {"Certificate": {
+            "DomainName": "old.example.com",
+            "NotAfter": datetime.now(timezone.utc) - timedelta(days=5),
+            "KeyAlgorithm": "RSA_1024",
+            "InUseBy": [],
+        }}
+        scanner._clients = {"acm:us-east-1": acm}
+
+        scanner._check_acm()
+
+        fails = [r.check_id for r in scanner.results if r.status == "FAIL"]
+        warns = [r.check_id for r in scanner.results if r.status == "WARN"]
+        self.assertIn("ACM-01", fails)   # expired
+        self.assertIn("ACM-02", fails)   # weak key algorithm
+        self.assertIn("ACM-03", warns)   # unused
 
 
 if __name__ == "__main__":

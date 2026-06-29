@@ -67,6 +67,7 @@ SECTIONS = [
     "CLOUDFRONT", "ROUTE53", "BEDROCK", "BEDROCK_AGENTS",
     "LAMBDA", "EKS", "ECS", "SECRETS", "WAF",
     "ELASTICACHE", "OPENSEARCH", "DYNAMODB", "STEPFUNCTIONS",
+    "APIGATEWAY", "ELB", "EBS", "REDSHIFT", "EFS", "ACM",
 ]
 
 SECTION_LABELS = {
@@ -95,6 +96,12 @@ SECTION_LABELS = {
     "OPENSEARCH":     "AMAZON OPENSEARCH",
     "DYNAMODB":       "AMAZON DYNAMODB",
     "STEPFUNCTIONS":  "AWS STEP FUNCTIONS",
+    "APIGATEWAY":     "AMAZON API GATEWAY",
+    "ELB":            "ELASTIC LOAD BALANCING",
+    "EBS":            "EBS VOLUMES & SNAPSHOTS",
+    "REDSHIFT":       "AMAZON REDSHIFT",
+    "EFS":            "AMAZON EFS",
+    "ACM":            "AWS CERTIFICATE MANAGER",
 }
 
 
@@ -150,6 +157,13 @@ CHECK_SEVERITY = {
     "OSR-04": "HIGH", "OSR-05": "HIGH",
     "DDB-01": "HIGH", "DDB-02": "HIGH", "DDB-03": "MEDIUM", "DDB-04": "MEDIUM",
     "SFN-01": "MEDIUM", "SFN-02": "LOW", "SFN-03": "MEDIUM",
+    "APIGW-01": "MEDIUM", "APIGW-02": "MEDIUM", "APIGW-03": "HIGH", "APIGW-04": "LOW",
+    "ELB-01": "MEDIUM", "ELB-02": "HIGH", "ELB-03": "MEDIUM",
+    "ELB-04": "LOW", "ELB-05": "MEDIUM",
+    "EBS-01": "HIGH", "EBS-02": "HIGH", "EBS-03": "MEDIUM", "EBS-04": "CRITICAL",
+    "RS-01": "HIGH", "RS-02": "HIGH", "RS-03": "MEDIUM", "RS-04": "MEDIUM", "RS-05": "LOW",
+    "EFS-01": "HIGH", "EFS-02": "MEDIUM", "EFS-03": "LOW",
+    "ACM-01": "HIGH", "ACM-02": "MEDIUM", "ACM-03": "LOW",
 }
 
 # ─── Compliance mapping: check_id → { framework: control } ──────────────────
@@ -213,6 +227,32 @@ COMPLIANCE_MAP = {
     "OSR-05": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "DDB-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "DDB-02": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+    # API Gateway
+    "APIGW-01": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "APIGW-02": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "APIGW-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    # Elastic Load Balancing
+    "ELB-01": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "ELB-02": {"CIS": "4.10", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "ELB-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
+    "ELB-05": {"PCI-DSS": "6.6", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    # EBS
+    "EBS-01": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "EBS-02": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "EBS-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "EBS-04": {"CIS": "2.2.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    # Redshift
+    "RS-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "RS-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "RS-03": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "RS-04": {"PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    # EFS
+    "EFS-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "EFS-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "EFS-03": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+    # ACM
+    "ACM-01": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
+    "ACM-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-13"},
 }
 
 # ─── Remediation commands: check_id → AWS CLI command ────────────────────────
@@ -259,6 +299,26 @@ REMEDIATION_MAP = {
     "WAF-01": "Associate WAF with ALB: aws wafv2 associate-web-acl --web-acl-arn <ACL_ARN> --resource-arn <ALB_ARN>",
     "WAF-02": "Enable WAF logging: aws wafv2 put-logging-configuration --logging-configuration ResourceArn=<ACL_ARN>,LogDestinationConfigs=<LOG_ARN>",
     "SFN-01": "Enable logging: aws stepfunctions update-state-machine --state-machine-arn <ARN> --logging-configuration '{\"level\":\"ALL\",\"includeExecutionData\":true,\"destinations\":[{\"cloudWatchLogsLogGroup\":{\"logGroupArn\":\"<LOG_ARN>\"}}]}'",
+    "APIGW-01": "Enable stage logging: aws apigateway update-stage --rest-api-id <API_ID> --stage-name <STAGE> --patch-operations op=replace,path=/accessLogSettings/destinationArn,value=<LOG_GROUP_ARN> op=replace,path=/*/*/logging/loglevel,value=INFO",
+    "APIGW-02": "Associate WAF: aws wafv2 associate-web-acl --web-acl-arn <ACL_ARN> --resource-arn arn:aws:apigateway:<REGION>::/restapis/<API_ID>/stages/<STAGE>",
+    "APIGW-03": "Encrypt cache: aws apigateway update-stage --rest-api-id <API_ID> --stage-name <STAGE> --patch-operations op=replace,path=/*/*/caching/dataEncrypted,value=true",
+    "ELB-01": "Enable access logs: aws elbv2 modify-load-balancer-attributes --load-balancer-arn <LB_ARN> --attributes Key=access_logs.s3.enabled,Value=true Key=access_logs.s3.bucket,Value=<BUCKET>",
+    "ELB-02": "Redirect HTTP to HTTPS: aws elbv2 modify-listener --listener-arn <LISTENER_ARN> --default-actions Type=redirect,RedirectConfig='{Protocol=HTTPS,Port=443,StatusCode=HTTP_301}'",
+    "ELB-03": "Use strong TLS policy: aws elbv2 modify-listener --listener-arn <LISTENER_ARN> --ssl-policy ELBSecurityPolicy-TLS13-1-2-2021-06",
+    "ELB-05": "Drop invalid headers: aws elbv2 modify-load-balancer-attributes --load-balancer-arn <LB_ARN> --attributes Key=routing.http.drop_invalid_header_fields.enabled,Value=true",
+    "EBS-01": "Enable default encryption: aws ec2 enable-ebs-encryption-by-default",
+    "EBS-02": "Encrypt volume: aws ec2 create-snapshot --volume-id <VOL_ID> then aws ec2 copy-snapshot --source-snapshot-id <SNAP> --encrypted --kms-key-id <KMS> and restore a new encrypted volume",
+    "EBS-03": "Encrypt snapshot: aws ec2 copy-snapshot --source-snapshot-id <SNAP_ID> --source-region <REGION> --encrypted --kms-key-id <KMS_KEY>",
+    "EBS-04": "Remove public access: aws ec2 reset-snapshot-attribute --snapshot-id <SNAP_ID> --attribute createVolumePermission",
+    "RS-01": "Encrypt cluster: aws redshift modify-cluster --cluster-identifier <CLUSTER> --encrypted --kms-key-id <KMS_KEY>",
+    "RS-02": "Disable public access: aws redshift modify-cluster --cluster-identifier <CLUSTER> --no-publicly-accessible",
+    "RS-03": "Enable audit logging: aws redshift enable-logging --cluster-identifier <CLUSTER> --bucket-name <LOG_BUCKET>",
+    "RS-04": "Enable enhanced VPC routing: aws redshift modify-cluster --cluster-identifier <CLUSTER> --enhanced-vpc-routing",
+    "EFS-01": "Recreate encrypted: aws efs create-file-system --encrypted --kms-key-id <KMS_KEY> (encryption can only be set at creation; migrate data via DataSync)",
+    "EFS-02": "Enforce TLS in policy: aws efs put-file-system-policy --file-system-id <FS_ID> --policy '{\"Statement\":[{\"Effect\":\"Deny\",\"Principal\":{\"AWS\":\"*\"},\"Action\":\"*\",\"Condition\":{\"Bool\":{\"aws:SecureTransport\":\"false\"}}}]}'",
+    "EFS-03": "Enable backups: aws efs put-backup-policy --file-system-id <FS_ID> --backup-policy Status=ENABLED",
+    "ACM-01": "Renew/replace certificate before expiry: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS",
+    "ACM-02": "Reissue with strong key: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS --key-algorithm RSA_2048",
 }
 
 
@@ -2617,6 +2677,441 @@ class AWSLiveScanner:
                           f"AWS-managed encryption | {sname}")
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 26: AMAZON API GATEWAY
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_apigateway(self):
+        self._section_header("APIGATEWAY")
+        apigw = self._client("apigateway")
+
+        try:
+            apis = apigw.get_rest_apis().get("items", [])
+        except Exception as e:
+            self._add("WARN", "APIGW-01", "APIGATEWAY", "apigateway", str(e))
+            return
+        if not apis:
+            self._add("INFO", "APIGW-01", "APIGATEWAY", "apigateway",
+                      "No API Gateway REST APIs found")
+            return
+
+        for api in apis:
+            api_id = api.get("id", "unknown")
+            api_nm = api.get("name", api_id)
+            try:
+                stages = apigw.get_stages(restApiId=api_id).get("item", [])
+            except Exception as e:
+                self._add("WARN", "APIGW-01", "APIGATEWAY", api_nm, str(e))
+                continue
+            if not stages:
+                self._add("INFO", "APIGW-01", "APIGATEWAY", api_nm,
+                          f"No deployed stages | {api_nm}")
+                continue
+
+            for st in stages:
+                stage = st.get("stageName", "unknown")
+                label = f"{api_nm}/{stage}"
+                method_settings = st.get("methodSettings", {}).get("*/*", {})
+
+                # APIGW-01 — Stage logging (access logs or execution logging)
+                access_log = st.get("accessLogSettings", {}).get("destinationArn")
+                log_level  = method_settings.get("loggingLevel", "OFF")
+                if access_log or log_level not in ("OFF", ""):
+                    self._add("PASS", "APIGW-01", "APIGATEWAY", label,
+                              f"Logging enabled (level={log_level or 'access'}) | {label}")
+                else:
+                    self._add("FAIL", "APIGW-01", "APIGATEWAY", label,
+                              f"No access/execution logging | {label}")
+
+                # APIGW-02 — WAF Web ACL associated with stage
+                if st.get("webAclArn"):
+                    self._add("PASS", "APIGW-02", "APIGATEWAY", label,
+                              f"WAF Web ACL associated | {label}")
+                else:
+                    self._add("FAIL", "APIGW-02", "APIGATEWAY", label,
+                              f"No WAF Web ACL associated | {label}")
+
+                # APIGW-03 — Cache data encryption (when caching enabled)
+                if st.get("cacheClusterEnabled", False):
+                    if method_settings.get("cacheDataEncrypted", False):
+                        self._add("PASS", "APIGW-03", "APIGATEWAY", label,
+                                  f"Cache encryption=ON | {label}")
+                    else:
+                        self._add("FAIL", "APIGW-03", "APIGATEWAY", label,
+                                  f"Cache enabled but data NOT encrypted | {label}")
+                else:
+                    self._add("INFO", "APIGW-03", "APIGATEWAY", label,
+                              f"Stage caching disabled | {label}")
+
+                # APIGW-04 — X-Ray tracing
+                if st.get("tracingEnabled", False):
+                    self._add("PASS", "APIGW-04", "APIGATEWAY", label,
+                              f"X-Ray tracing=ON | {label}")
+                else:
+                    self._add("WARN", "APIGW-04", "APIGATEWAY", label,
+                              f"X-Ray tracing=OFF | {label}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 27: ELASTIC LOAD BALANCING
+    # ══════════════════════════════════════════════════════════════════════════
+    # TLS policies considered weak (allow TLS 1.0/1.1 or legacy ciphers)
+    _WEAK_TLS_POLICIES = {
+        "ELBSecurityPolicy-2015-05", "ELBSecurityPolicy-2016-08",
+        "ELBSecurityPolicy-TLS-1-0-2015-04", "ELBSecurityPolicy-TLS-1-1-2017-01",
+        "ELBSecurityPolicy-FS-2018-06", "ELBSecurityPolicy-FS-1-1-2019-08",
+    }
+
+    def _check_elb(self):
+        self._section_header("ELB")
+        elb = self._client("elbv2")
+
+        try:
+            lbs = elb.describe_load_balancers().get("LoadBalancers", [])
+        except Exception as e:
+            self._add("WARN", "ELB-01", "ELB", "elb", str(e))
+            return
+        if not lbs:
+            self._add("INFO", "ELB-01", "ELB", "elb",
+                      "No Application/Network Load Balancers found")
+            return
+
+        for lb in lbs:
+            arn   = lb.get("LoadBalancerArn", "")
+            name  = lb.get("LoadBalancerName", "unknown")
+            lbtype = lb.get("Type", "application")
+
+            # Attributes (access logs, deletion protection, drop invalid headers)
+            attrs = {}
+            try:
+                for a in elb.describe_load_balancer_attributes(
+                        LoadBalancerArn=arn).get("Attributes", []):
+                    attrs[a.get("Key")] = a.get("Value")
+            except Exception as e:
+                self._add("WARN", "ELB-01", "ELB", name, str(e))
+
+            # ELB-01 — Access logging
+            if attrs.get("access_logs.s3.enabled") == "true":
+                self._add("PASS", "ELB-01", "ELB", name,
+                          f"Access logging=ON | {name}")
+            else:
+                self._add("FAIL", "ELB-01", "ELB", name,
+                          f"Access logging=OFF | {name}")
+
+            # ELB-04 — Deletion protection
+            if attrs.get("deletion_protection.enabled") == "true":
+                self._add("PASS", "ELB-04", "ELB", name,
+                          f"Deletion protection=ON | {name}")
+            else:
+                self._add("WARN", "ELB-04", "ELB", name,
+                          f"Deletion protection=OFF | {name}")
+
+            # ELB-05 — Drop invalid HTTP headers (ALB only)
+            if lbtype == "application":
+                if attrs.get("routing.http.drop_invalid_header_fields.enabled") == "true":
+                    self._add("PASS", "ELB-05", "ELB", name,
+                              f"Drop invalid headers=ON | {name}")
+                else:
+                    self._add("FAIL", "ELB-05", "ELB", name,
+                              f"Drop invalid headers=OFF | {name}")
+
+            # Listener-level checks (TLS)
+            try:
+                listeners = elb.describe_listeners(
+                    LoadBalancerArn=arn).get("Listeners", [])
+            except Exception as e:
+                self._add("WARN", "ELB-02", "ELB", name, str(e))
+                continue
+
+            for ls in listeners:
+                proto = ls.get("Protocol", "")
+                port  = ls.get("Port", "")
+                llabel = f"{name}:{port}/{proto}"
+
+                # ELB-02 — Plaintext listener without HTTPS redirect
+                if proto == "HTTP":
+                    actions = ls.get("DefaultActions", [])
+                    redirects = any(a.get("Type") == "redirect" and
+                                    a.get("RedirectConfig", {}).get("Protocol") == "HTTPS"
+                                    for a in actions)
+                    if redirects:
+                        self._add("PASS", "ELB-02", "ELB", llabel,
+                                  f"HTTP listener redirects to HTTPS | {llabel}")
+                    else:
+                        self._add("FAIL", "ELB-02", "ELB", llabel,
+                                  f"HTTP listener does NOT redirect to HTTPS | {llabel}")
+
+                # ELB-03 — Weak TLS policy on HTTPS/TLS listeners
+                if proto in ("HTTPS", "TLS"):
+                    policy = ls.get("SslPolicy", "")
+                    if policy in self._WEAK_TLS_POLICIES:
+                        self._add("FAIL", "ELB-03", "ELB", llabel,
+                                  f"Weak TLS policy '{policy}' | {llabel}")
+                    else:
+                        self._add("PASS", "ELB-03", "ELB", llabel,
+                                  f"TLS policy '{policy}' | {llabel}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 28: EBS VOLUMES & SNAPSHOTS
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_ebs(self):
+        self._section_header("EBS")
+        ec2 = self._client("ec2")
+
+        # EBS-01 — Account-level encryption by default
+        try:
+            ebd = ec2.get_ebs_encryption_by_default().get(
+                "EbsEncryptionByDefault", False)
+            if ebd:
+                self._add("PASS", "EBS-01", "EBS", "account",
+                          "EBS encryption by default=ON")
+            else:
+                self._add("FAIL", "EBS-01", "EBS", "account",
+                          "EBS encryption by default=OFF")
+        except Exception as e:
+            self._add("WARN", "EBS-01", "EBS", "account", str(e))
+
+        # EBS-02 — Unencrypted volumes
+        try:
+            unenc = []
+            paginator = ec2.get_paginator("describe_volumes")
+            for page in paginator.paginate():
+                for vol in page.get("Volumes", []):
+                    if not vol.get("Encrypted", False):
+                        unenc.append(vol.get("VolumeId", "unknown"))
+            if unenc:
+                for vid in unenc:
+                    self._add("FAIL", "EBS-02", "EBS", vid,
+                              f"Unencrypted EBS volume | {vid}")
+            else:
+                self._add("PASS", "EBS-02", "EBS", "all-volumes",
+                          "All EBS volumes are encrypted")
+        except Exception as e:
+            self._add("WARN", "EBS-02", "EBS", "volumes", str(e))
+
+        # EBS-03 — Unencrypted owned snapshots
+        try:
+            unenc_snaps = []
+            paginator = ec2.get_paginator("describe_snapshots")
+            for page in paginator.paginate(OwnerIds=["self"]):
+                for snap in page.get("Snapshots", []):
+                    if not snap.get("Encrypted", False):
+                        unenc_snaps.append(snap.get("SnapshotId", "unknown"))
+            if unenc_snaps:
+                for sid in unenc_snaps:
+                    self._add("FAIL", "EBS-03", "EBS", sid,
+                              f"Unencrypted EBS snapshot | {sid}")
+            else:
+                self._add("PASS", "EBS-03", "EBS", "all-snapshots",
+                          "All owned EBS snapshots are encrypted")
+        except Exception as e:
+            self._add("WARN", "EBS-03", "EBS", "snapshots", str(e))
+
+        # EBS-04 — Publicly restorable snapshots
+        try:
+            public = []
+            paginator = ec2.get_paginator("describe_snapshots")
+            for page in paginator.paginate(OwnerIds=["self"],
+                                           RestorableByUserIds=["all"]):
+                for snap in page.get("Snapshots", []):
+                    public.append(snap.get("SnapshotId", "unknown"))
+            if public:
+                for sid in public:
+                    self._add("FAIL", "EBS-04", "EBS", sid,
+                              f"PUBLIC EBS snapshot (restorable by anyone) | {sid}")
+            else:
+                self._add("PASS", "EBS-04", "EBS", "all-snapshots",
+                          "No public EBS snapshots")
+        except Exception as e:
+            self._add("WARN", "EBS-04", "EBS", "snapshots", str(e))
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 29: AMAZON REDSHIFT
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_redshift(self):
+        self._section_header("REDSHIFT")
+        rs = self._client("redshift")
+
+        try:
+            clusters = rs.describe_clusters().get("Clusters", [])
+        except Exception as e:
+            self._add("WARN", "RS-01", "REDSHIFT", "redshift", str(e))
+            return
+        if not clusters:
+            self._add("INFO", "RS-01", "REDSHIFT", "redshift",
+                      "No Redshift clusters found")
+            return
+
+        for c in clusters:
+            cid = c.get("ClusterIdentifier", "unknown")
+
+            # RS-01 — Encryption at rest
+            if c.get("Encrypted", False):
+                self._add("PASS", "RS-01", "REDSHIFT", cid,
+                          f"Encryption at rest=ON | {cid}")
+            else:
+                self._add("FAIL", "RS-01", "REDSHIFT", cid,
+                          f"Encryption at rest=OFF | {cid}")
+
+            # RS-02 — Public accessibility
+            if c.get("PubliclyAccessible", False):
+                self._add("FAIL", "RS-02", "REDSHIFT", cid,
+                          f"Cluster is publicly accessible | {cid}")
+            else:
+                self._add("PASS", "RS-02", "REDSHIFT", cid,
+                          f"Not publicly accessible | {cid}")
+
+            # RS-03 — Audit logging
+            try:
+                logging = rs.describe_logging_status(ClusterIdentifier=cid)
+                if logging.get("LoggingEnabled", False):
+                    self._add("PASS", "RS-03", "REDSHIFT", cid,
+                              f"Audit logging=ON | {cid}")
+                else:
+                    self._add("FAIL", "RS-03", "REDSHIFT", cid,
+                              f"Audit logging=OFF | {cid}")
+            except Exception as e:
+                self._add("WARN", "RS-03", "REDSHIFT", cid, str(e))
+
+            # RS-04 — Enhanced VPC routing
+            if c.get("EnhancedVpcRouting", False):
+                self._add("PASS", "RS-04", "REDSHIFT", cid,
+                          f"Enhanced VPC routing=ON | {cid}")
+            else:
+                self._add("FAIL", "RS-04", "REDSHIFT", cid,
+                          f"Enhanced VPC routing=OFF | {cid}")
+
+            # RS-05 — Default admin username
+            if c.get("MasterUsername", "").lower() == "awsuser":
+                self._add("WARN", "RS-05", "REDSHIFT", cid,
+                          f"Default master username 'awsuser' in use | {cid}")
+            else:
+                self._add("PASS", "RS-05", "REDSHIFT", cid,
+                          f"Non-default master username | {cid}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 30: AMAZON EFS
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_efs(self):
+        self._section_header("EFS")
+        efs = self._client("efs")
+
+        try:
+            filesystems = efs.describe_file_systems().get("FileSystems", [])
+        except Exception as e:
+            self._add("WARN", "EFS-01", "EFS", "efs", str(e))
+            return
+        if not filesystems:
+            self._add("INFO", "EFS-01", "EFS", "efs",
+                      "No EFS file systems found")
+            return
+
+        for fs in filesystems:
+            fsid = fs.get("FileSystemId", "unknown")
+            name = fs.get("Name") or fsid
+
+            # EFS-01 — Encryption at rest
+            if fs.get("Encrypted", False):
+                self._add("PASS", "EFS-01", "EFS", name,
+                          f"Encryption at rest=ON | {name}")
+            else:
+                self._add("FAIL", "EFS-01", "EFS", name,
+                          f"Encryption at rest=OFF | {name}")
+
+            # EFS-02 — File system policy enforces in-transit encryption
+            try:
+                policy = efs.describe_file_system_policy(
+                    FileSystemId=fsid).get("Policy", "")
+                if "aws:SecureTransport" in policy:
+                    self._add("PASS", "EFS-02", "EFS", name,
+                              f"Policy enforces TLS in transit | {name}")
+                else:
+                    self._add("FAIL", "EFS-02", "EFS", name,
+                              f"Policy does NOT enforce TLS (aws:SecureTransport) | {name}")
+            except Exception:
+                self._add("FAIL", "EFS-02", "EFS", name,
+                          f"No file system policy enforcing TLS | {name}")
+
+            # EFS-03 — Automatic backups
+            try:
+                bp = efs.describe_backup_policy(
+                    FileSystemId=fsid).get("BackupPolicy", {})
+                if bp.get("Status") in ("ENABLED", "ENABLING"):
+                    self._add("PASS", "EFS-03", "EFS", name,
+                              f"Automatic backups=ON | {name}")
+                else:
+                    self._add("WARN", "EFS-03", "EFS", name,
+                              f"Automatic backups=OFF | {name}")
+            except Exception:
+                self._add("WARN", "EFS-03", "EFS", name,
+                          f"Automatic backups=OFF | {name}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 31: AWS CERTIFICATE MANAGER
+    # ══════════════════════════════════════════════════════════════════════════
+    # Key algorithms considered weak (below 2048-bit RSA strength)
+    _WEAK_KEY_ALGORITHMS = {"RSA_1024"}
+
+    def _check_acm(self):
+        self._section_header("ACM")
+        acm = self._client("acm")
+
+        try:
+            certs = acm.list_certificates().get("CertificateSummaryList", [])
+        except Exception as e:
+            self._add("WARN", "ACM-01", "ACM", "acm", str(e))
+            return
+        if not certs:
+            self._add("INFO", "ACM-01", "ACM", "acm",
+                      "No ACM certificates found")
+            return
+
+        now = datetime.now(timezone.utc)
+        for summary in certs:
+            arn = summary.get("CertificateArn", "")
+            try:
+                cert = acm.describe_certificate(
+                    CertificateArn=arn).get("Certificate", {})
+            except Exception as e:
+                self._add("WARN", "ACM-01", "ACM", arn, str(e))
+                continue
+
+            domain = cert.get("DomainName", arn)
+
+            # ACM-01 — Expiry
+            not_after = cert.get("NotAfter")
+            if not_after:
+                if getattr(not_after, "tzinfo", None) is None:
+                    not_after = not_after.replace(tzinfo=timezone.utc)
+                days_left = (not_after - now).days
+                if days_left < 0:
+                    self._add("FAIL", "ACM-01", "ACM", domain,
+                              f"Certificate EXPIRED {abs(days_left)}d ago | {domain}")
+                elif days_left <= 30:
+                    self._add("WARN", "ACM-01", "ACM", domain,
+                              f"Certificate expires in {days_left}d | {domain}")
+                else:
+                    self._add("PASS", "ACM-01", "ACM", domain,
+                              f"Certificate valid for {days_left}d | {domain}")
+            else:
+                self._add("INFO", "ACM-01", "ACM", domain,
+                          f"Certificate not yet issued | {domain}")
+
+            # ACM-02 — Key algorithm strength
+            key_algo = cert.get("KeyAlgorithm", "")
+            if key_algo in self._WEAK_KEY_ALGORITHMS:
+                self._add("FAIL", "ACM-02", "ACM", domain,
+                          f"Weak key algorithm '{key_algo}' | {domain}")
+            elif key_algo:
+                self._add("PASS", "ACM-02", "ACM", domain,
+                          f"Key algorithm '{key_algo}' | {domain}")
+
+            # ACM-03 — Unused certificate
+            if cert.get("InUseBy"):
+                self._add("PASS", "ACM-03", "ACM", domain,
+                          f"Certificate in use | {domain}")
+            else:
+                self._add("WARN", "ACM-03", "ACM", domain,
+                          f"Certificate not associated with any resource | {domain}")
+
+    # ══════════════════════════════════════════════════════════════════════════
     # ORCHESTRATION
     # ══════════════════════════════════════════════════════════════════════════
     def run(self):
@@ -2676,6 +3171,12 @@ class AWSLiveScanner:
             "OPENSEARCH":     self._check_opensearch,
             "DYNAMODB":       self._check_dynamodb,
             "STEPFUNCTIONS":  self._check_stepfunctions,
+            "APIGATEWAY":     self._check_apigateway,
+            "ELB":            self._check_elb,
+            "EBS":            self._check_ebs,
+            "REDSHIFT":       self._check_redshift,
+            "EFS":            self._check_efs,
+            "ACM":            self._check_acm,
         }
 
         for section in self.sections:

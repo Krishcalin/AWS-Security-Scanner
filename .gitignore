@@ -17,11 +17,17 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+.eggs/
 
 # Virtual environments
 .venv/
 venv/
 env/
+
+# Scanner output
+*.json.report
+reports/
+evidence/
 
 # IDE
 .vscode/
