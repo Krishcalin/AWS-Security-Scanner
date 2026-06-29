@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/AWS-CIS%20Benchmark%20v3.0-ff9900?style=flat-square&logo=amazonaws&logoColor=white" alt="CIS AWS v3.0"/>
   <img src="https://img.shields.io/badge/compliance-CIS%20%7C%20PCI--DSS%20%7C%20HIPAA%20%7C%20SOC2%20%7C%20NIST-purple?style=flat-square" alt="5 Compliance Frameworks"/>
   <img src="https://img.shields.io/badge/checks-200%2B-red?style=flat-square" alt="200+ Checks"/>
-  <img src="https://img.shields.io/badge/tests-63%20passing-brightgreen?style=flat-square" alt="63 Tests"/>
+  <img src="https://img.shields.io/badge/tests-69%20passing-brightgreen?style=flat-square" alt="69 Tests"/>
 </p>
 
 ---
@@ -155,7 +155,7 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 
 - **Read-only by design** -- never modifies AWS resources
 - **145+ security checks** across 35 audit sections
-- **IAM privilege-escalation analysis** -- builds each principal's effective permission set and detects known escalation paths (action-level), not just per-resource misconfigurations
+- **IAM privilege-escalation analysis** -- builds each principal's effective permission set and detects known escalation paths with resource-aware scoping (account-wide vs resource-scoped), not just per-resource misconfigurations
 - **5 compliance frameworks** -- CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
 - **Risk scoring** -- Posture score 0-100 with letter grade (A-F), severity-weighted
 - **AWS CLI remediation** -- actionable CLI commands for every failed check
@@ -163,7 +163,7 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 - **CI/CD gating** -- `--fail-on CRITICAL|HIGH|MEDIUM|LOW` for pipeline pass/fail control
 - **Scan diff** -- `--baseline prev.json` surfaces only what's *new* or *resolved* since a previous run
 - **Evidence collection** -- CSV/JSON artefact files saved per check
-- **63 unit tests** -- full test suite with mock boto3, no AWS credentials needed
+- **69 unit tests** -- full test suite with mock boto3, no AWS credentials needed
 
 ### Prerequisites (Live Scanner)
 
@@ -271,7 +271,7 @@ options:
 | **SageMaker** | SM-01 to 04 | Notebook direct internet access, root access, KMS volume encryption, VPC deployment |
 | **Cognito** | COG-01 to 04 | User-pool MFA enforcement, password policy strength, advanced security (threat protection), deletion protection |
 | **API Gateway v2** | AGW2-01 to 03 | HTTP API stage access logging, route authorization, default throttling |
-| **IAM Privilege Escalation** | IAMPE-01 to 19 | Action-level escalation-path analysis across all principals: policy-version/attach/inline-policy abuse, login-profile & access-key hijack, trust-policy edits, PassRole→(EC2/Lambda/Glue/CFN/SageMaker), UpdateFunctionCode, SSM, full-admin |
+| **IAM Privilege Escalation** | IAMPE-01 to 20 | Resource-aware escalation-path analysis across all principals (findings scoped account-wide vs resource-scoped): policy-version/attach/inline-policy abuse, login-profile & access-key hijack, trust-policy edits, PassRole→(EC2/Lambda/Glue/CFN/SageMaker), UpdateFunctionCode, SSM, sts:AssumeRole-on-\*, full-admin |
 
 ### Compliance Framework Mapping
 
@@ -353,13 +353,16 @@ jobs:
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC Security Scanner (CloudFormation + Terraform, no credentials)
-├── aws_live_scanner.py      # Live Audit Scanner v2.0.0 (35 sections, 5 compliance frameworks)
+├── aws_live_scanner.py      # Live Audit Scanner v2.1.0 (35 sections, 5 compliance frameworks)
 ├── tests/
-│   ├── test_live_scanner.py # 63 unit tests (mock boto3, no credentials needed)
+│   ├── test_live_scanner.py # 69 unit tests (mock boto3, no credentials needed)
 │   └── samples/             # Sample IaC files and reports
+├── scripts/
+│   └── validate_live.py     # Read-only live-account validation harness
 ├── docs/
 │   └── banner.svg
 ├── CLAUDE.md                # Developer documentation
+├── CHANGELOG.md             # Release notes
 ├── SECURITY.md              # Security policy / responsible disclosure
 ├── .gitignore
 ├── LICENSE                  # GPL-3.0

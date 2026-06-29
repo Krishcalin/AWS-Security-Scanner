@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for AWS Live Security Scanner v2.0.0.
+"""Unit tests for AWS Live Security Scanner v2.1.0.
 
 Uses unittest.mock to simulate boto3 API responses.
 No AWS credentials required.
@@ -25,6 +25,7 @@ from aws_live_scanner import (
     COMPLIANCE_MAP, REMEDIATION_MAP, CHECK_SEVERITY,
     SECTIONS, SECTION_LABELS,
     evaluate_privesc, IAM_PRIVESC_RULES,
+    evaluate_privesc_scoped, resource_scope, IAM_PRIVESC_ASSUMEROLE,
     fails_threshold, diff_findings,
 )
 
@@ -73,7 +74,7 @@ class MockPaginator:
 class TestDataStructures(unittest.TestCase):
 
     def test_version(self):
-        self.assertEqual(VERSION, "2.0.0")
+        self.assertEqual(VERSION, "2.1.0")
 
     def test_sections_count(self):
         self.assertEqual(len(SECTIONS), 35)
@@ -162,7 +163,7 @@ class TestMaps(unittest.TestCase):
                        "ELC-01", "OSR-01", "DDB-01", "SFN-01",
                        "APIGW-01", "ELB-01", "EBS-01", "RS-01", "EFS-01", "ACM-01",
                        "SM-01", "COG-01", "AGW2-01",
-                       "IAMPE-01", "IAMPE-03", "IAMPE-10", "IAMPE-19"]
+                       "IAMPE-01", "IAMPE-03", "IAMPE-10", "IAMPE-19", "IAMPE-20"]
         for c in new_checks:
             self.assertIn(c, CHECK_SEVERITY, f"{c} missing from CHECK_SEVERITY")
 
@@ -811,9 +812,66 @@ class TestIAMPrivescEngine(unittest.TestCase):
             self._ids(["s3:get*", "ec2:describe*", "cloudwatch:list*"]), [])
 
     def test_all_rules_have_severity(self):
-        ids = [r["id"] for r in IAM_PRIVESC_RULES] + ["IAMPE-19"]
+        ids = ([r["id"] for r in IAM_PRIVESC_RULES]
+               + ["IAMPE-19", IAM_PRIVESC_ASSUMEROLE["id"]])
         for cid in ids:
             self.assertIn(cid, CHECK_SEVERITY, f"{cid} missing severity")
+
+
+# ─── Test: resource-aware privesc scoping ────────────────────────────────────
+class TestPrivescResourceScoping(unittest.TestCase):
+
+    def _scoped(self, doc):
+        stmts = AWSLiveScanner._policy_to_statements(doc)
+        return {f["id"]: f.get("scope") for f in evaluate_privesc_scoped(stmts)}
+
+    def test_passrole_scope_label(self):
+        scoped = self._scoped({"Statement": [{"Effect": "Allow",
+            "Action": ["iam:PassRole", "ec2:RunInstances"],
+            "Resource": ["arn:aws:iam::123:role/app"]}]})
+        self.assertEqual(scoped.get("IAMPE-10"), "resource-scoped")
+
+        broad = self._scoped({"Statement": [{"Effect": "Allow",
+            "Action": ["iam:PassRole", "ec2:RunInstances"], "Resource": "*"}]})
+        self.assertEqual(broad.get("IAMPE-10"), "account-wide")
+
+    def test_assumerole_only_when_unrestricted(self):
+        # scoped AssumeRole -> NOT flagged (the false positive resource-awareness removes)
+        scoped = self._scoped({"Statement": [{"Effect": "Allow",
+            "Action": "sts:AssumeRole", "Resource": "arn:aws:iam::123:role/ci"}]})
+        self.assertNotIn("IAMPE-20", scoped)
+        # AssumeRole on * -> IAMPE-20
+        broad = self._scoped({"Statement": [{"Effect": "Allow",
+            "Action": "sts:AssumeRole", "Resource": "*"}]})
+        self.assertIn("IAMPE-20", broad)
+
+    def test_action_star_on_single_resource_is_not_admin(self):
+        # Action * scoped to one S3 bucket: not full admin, and IAM actions don't
+        # apply to an S3 resource -> no privesc findings at all.
+        scoped = self._scoped({"Statement": [{"Effect": "Allow",
+            "Action": "*", "Resource": "arn:aws:s3:::mybucket/*"}]})
+        self.assertEqual(scoped, {})
+
+    def test_true_full_admin(self):
+        scoped = self._scoped({"Statement": [{"Effect": "Allow",
+            "Action": "*", "Resource": "*"}]})
+        self.assertEqual(list(scoped.keys()), ["IAMPE-19"])
+
+    def test_resource_scope_service_filtering(self):
+        stmts = AWSLiveScanner._policy_to_statements({"Statement": [{"Effect": "Allow",
+            "Action": "iam:PassRole", "Resource": "arn:aws:iam::123:role/x"}]})
+        label, arns = resource_scope(stmts, "iam:passrole")
+        self.assertEqual(label, "resource-scoped")
+        self.assertEqual(arns, ["arn:aws:iam::123:role/x"])
+        # A non-iam resource is not relevant to an iam action
+        stmts2 = AWSLiveScanner._policy_to_statements({"Statement": [{"Effect": "Allow",
+            "Action": "iam:PassRole", "Resource": "arn:aws:s3:::bucket"}]})
+        self.assertEqual(resource_scope(stmts2, "iam:passrole"), ("none", None))
+
+    def test_missing_resource_treated_as_broad(self):
+        scoped = self._scoped({"Statement": [{"Effect": "Allow",
+            "Action": "iam:AttachUserPolicy"}]})
+        self.assertEqual(scoped.get("IAMPE-03"), "account-wide")
 
 
 # ─── Test: policy document parsing ───────────────────────────────────────────

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AWS Live Security Scanner v2.0.0
+AWS Live Security Scanner v2.1.0
 Read-only live audit of AWS environments via boto3.
 
 Aligned to: CIS AWS Foundations Benchmark v3.0
@@ -49,7 +49,7 @@ try:
 except ImportError:
     HAS_BOTO3 = False
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -180,7 +180,7 @@ CHECK_SEVERITY = {
     "IAMPE-07": "HIGH", "IAMPE-08": "HIGH", "IAMPE-10": "HIGH",
     "IAMPE-11": "HIGH", "IAMPE-12": "HIGH", "IAMPE-13": "HIGH",
     "IAMPE-14": "HIGH", "IAMPE-16": "HIGH", "IAMPE-18": "MEDIUM",
-    "IAMPE-19": "CRITICAL",
+    "IAMPE-19": "CRITICAL", "IAMPE-20": "MEDIUM",
 }
 
 # ─── Compliance mapping: check_id → { framework: control } ──────────────────
@@ -285,7 +285,7 @@ COMPLIANCE_MAP = {
     # IAM privilege escalation — all map to least-privilege / separation-of-duties controls
     **{f"IAMPE-{n:02d}": {"CIS": "1.16", "PCI-DSS": "7.1.1",
                           "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6(1)"}
-       for n in (1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16, 18, 19)},
+       for n in (1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16, 18, 19, 20)},
 }
 
 # ─── Remediation commands: check_id → AWS CLI command ────────────────────────
@@ -370,6 +370,7 @@ REMEDIATION_MAP = {
     "IAMPE-11": "Scope iam:PassRole to specific role ARNs and restrict lambda:CreateFunction; bound the principal: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
     "IAMPE-16": "Restrict lambda:UpdateFunctionCode to specific function ARNs and require code signing: aws lambda put-function-code-signing-config --function-name <FUNC> --code-signing-config-arn <CSC_ARN>",
     "IAMPE-19": "Remove the wildcard '*' grant and replace with least-privilege policies; as an immediate guardrail bound the principal: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
+    "IAMPE-20": "Scope sts:AssumeRole to specific trusted role ARNs instead of '*': edit the policy Resource, then bound the principal: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
 }
 
 
@@ -449,7 +450,8 @@ def _action_allowed(action: str, allow: set, deny: set) -> bool:
 
 def evaluate_privesc(allow: set, deny: set) -> List[Dict]:
     """Return the list of privesc rules a principal (given its effective allow/deny
-    action sets) can satisfy. Full-admin short-circuits to a single finding."""
+    action sets) can satisfy. Full-admin short-circuits to a single finding.
+    Action-level only — see evaluate_privesc_scoped() for resource-aware scoping."""
     # Full admin: allowed literal "*" and not explicitly denied "*"
     if "*" in allow and "*" not in deny:
         return [IAM_PRIVESC_FULL_ADMIN]
@@ -459,6 +461,113 @@ def evaluate_privesc(allow: set, deny: set) -> List[Dict]:
                for req in rule["all_of"]):
             matched.append(rule)
     return matched
+
+
+# ─── Resource-aware evaluation ───────────────────────────────────────────────
+# sts:AssumeRole is extremely common when scoped to specific roles, so it is only
+# flagged when granted account-wide (Resource "*") — exactly the false positive
+# that resource awareness removes.
+IAM_PRIVESC_ASSUMEROLE = {
+    "id": "IAMPE-20", "name": "Assume any role (sts:AssumeRole on *)",
+    "desc": "Can assume ANY role in the account (role chaining); only flagged when unrestricted",
+}
+
+
+def _stmt_actions_match(stmt: Dict, action: str) -> bool:
+    return any(fnmatch.fnmatch(action, p) for p in stmt["actions"])
+
+
+def _arn_service(arn: str) -> str:
+    """Service segment of an ARN (arn:partition:service:...), or '' if not an ARN."""
+    parts = arn.split(":")
+    return parts[2] if len(parts) >= 3 else ""
+
+
+def _resource_applies(resource: str, action_service: str) -> bool:
+    """A resource is relevant to an action only if it is '*' or an ARN of the same
+    service. This suppresses e.g. Action '*' scoped to an S3 bucket being treated as
+    granting iam:* (the action does not apply to that resource type)."""
+    if resource == "*":
+        return True
+    svc = _arn_service(resource)
+    return svc in (action_service, "*", "")
+
+
+def resource_scope(statements: List[Dict], action: str):
+    """For a concrete `action`, return (label, arns) describing the resources it is
+    allowed on, counting only resources of the action's own service (or '*'):
+    ("account-wide", None) if granted on "*", ("resource-scoped", [arns]) if only on
+    specific same-service ARNs, ("none", None) if not actually grantable.
+    A missing/empty Resource is treated as "*" (broad) to avoid under-reporting."""
+    a = action.lower()
+    svc = a.split(":")[0] if ":" in a else a
+    allow_res = set()
+    for st in statements:
+        if st["effect"] != "Allow" or not _stmt_actions_match(st, a):
+            continue
+        for r in (st["resources"] or {"*"}):
+            if _resource_applies(r, svc):
+                allow_res.add(r)
+    if not allow_res:
+        return ("none", None)
+    if "*" in allow_res:
+        return ("account-wide", None)
+    return ("resource-scoped", sorted(allow_res))
+
+
+def _has_full_admin(statements: List[Dict]) -> bool:
+    """True only for Action '*' on Resource '*' (real admin), not Action '*' scoped
+    to a single resource. An explicit Deny '*'/'*' revokes it."""
+    deny_all = any(st["effect"] == "Deny" and "*" in st["actions"]
+                   and "*" in (st["resources"] or {"*"}) for st in statements)
+    if deny_all:
+        return False
+    return any(st["effect"] == "Allow" and "*" in st["actions"]
+               and "*" in (st["resources"] or {"*"}) for st in statements)
+
+
+def _pivot_action(rule: Dict, allow: set, deny: set) -> str:
+    """The granting action of a rule that the principal actually holds — taken from
+    the rule's first requirement (e.g. iam:PassRole for the PassRole primitives)."""
+    for alt in rule["all_of"][0]:
+        if _action_allowed(alt, allow, deny):
+            return alt.lower()
+    return rule["all_of"][0][0].lower()
+
+
+def evaluate_privesc_scoped(statements: List[Dict]) -> List[Dict]:
+    """Resource-aware privesc evaluation. Returns matched rules annotated with
+    `scope` (account-wide | resource-scoped) and `scope_arns`. Reduces false
+    positives vs the action-level model: full admin requires Action '*' on
+    Resource '*', and sts:AssumeRole is only flagged when unrestricted."""
+    if _has_full_admin(statements):
+        return [{**IAM_PRIVESC_FULL_ADMIN, "scope": "account-wide",
+                 "scope_arns": None, "pivot": "*"}]
+
+    allow, deny = set(), set()
+    for st in statements:
+        if st["effect"] == "Allow":
+            allow |= st["actions"]
+        elif st["effect"] == "Deny":
+            deny |= st["actions"]
+
+    findings = []
+    for rule in IAM_PRIVESC_RULES:
+        if all(any(_action_allowed(act, allow, deny) for act in req)
+               for req in rule["all_of"]):
+            pivot = _pivot_action(rule, allow, deny)
+            label, arns = resource_scope(statements, pivot)
+            if label == "none":
+                continue  # pivot action not grantable on any compatible resource
+            findings.append({**rule, "scope": label, "scope_arns": arns, "pivot": pivot})
+
+    # IAMPE-20: only when sts:AssumeRole is granted account-wide
+    if _action_allowed("sts:assumerole", allow, deny):
+        label, arns = resource_scope(statements, "sts:assumerole")
+        if label == "account-wide":
+            findings.append({**IAM_PRIVESC_ASSUMEROLE, "scope": label,
+                             "scope_arns": None, "pivot": "sts:assumerole"})
+    return findings
 
 
 # ─── Risk scoring ────────────────────────────────────────────────────────────
@@ -3499,21 +3608,23 @@ class AWSLiveScanner:
                           f"All routes require authorization | {api_nm}")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 35: IAM PRIVILEGE ESCALATION  (action-level path analysis)
+    # SECTION 35: IAM PRIVILEGE ESCALATION  (resource-aware path analysis)
     # ══════════════════════════════════════════════════════════════════════════
     @staticmethod
-    def _policy_to_action_sets(doc) -> tuple:
-        """Parse an IAM policy document into (allow_patterns, deny_patterns).
-        Handles URL-encoded string or dict; single or list statements; Action /
-        NotAction. NotAction+Allow is over-approximated to '*' (flagged as potential)."""
-        allow, deny = set(), set()
+    def _policy_to_statements(doc) -> List[Dict]:
+        """Parse an IAM policy document into a list of statements, each
+        {effect, actions:set(lower), resources:set(lower)}. Handles URL-encoded
+        string or dict; single or list statements; Action/NotAction and
+        Resource/NotResource. NotAction+Allow -> actions {'*'}; missing Resource or
+        NotResource -> resources {'*'} (broad, to avoid under-reporting)."""
+        out: List[Dict] = []
         if not doc:
-            return allow, deny
+            return out
         if isinstance(doc, str):
             try:
                 doc = json.loads(unquote(doc))
             except Exception:
-                return allow, deny
+                return out
         statements = doc.get("Statement", [])
         if isinstance(statements, dict):
             statements = [statements]
@@ -3521,38 +3632,57 @@ class AWSLiveScanner:
             if not isinstance(stmt, dict):
                 continue
             effect = stmt.get("Effect", "")
-            target = allow if effect == "Allow" else deny if effect == "Deny" else None
-            if target is None:
+            if effect not in ("Allow", "Deny"):
                 continue
             if "Action" in stmt:
-                actions = stmt["Action"]
-                actions = [actions] if isinstance(actions, str) else list(actions)
-                for a in actions:
-                    target.add(a.lower())
+                av = stmt["Action"]
+                av = [av] if isinstance(av, str) else list(av)
+                actions = {str(a).lower() for a in av}
             elif "NotAction" in stmt and effect == "Allow":
-                # Allow on NotAction grants everything except the listed actions.
-                allow.add("*")
+                actions = {"*"}   # Allow on NotAction grants everything else
+            else:
+                continue
+            if "Resource" in stmt:
+                rv = stmt["Resource"]
+                rv = [rv] if isinstance(rv, str) else list(rv)
+                resources = {str(r).lower() for r in rv}
+            else:
+                resources = {"*"}  # missing Resource / NotResource -> broad
+            out.append({"effect": effect, "actions": actions, "resources": resources})
+        return out
+
+    @staticmethod
+    def _policy_to_action_sets(doc) -> tuple:
+        """Derive (allow_patterns, deny_patterns) action sets from a policy document
+        (action-level view; kept for backward compatibility)."""
+        allow, deny = set(), set()
+        for st in AWSLiveScanner._policy_to_statements(doc):
+            if st["effect"] == "Allow":
+                allow |= st["actions"]
+            else:
+                deny |= st["actions"]
         return allow, deny
 
-    def _get_managed_policy_actions(self, arn: str) -> tuple:
-        """Fetch and cache a managed policy's (allow, deny) action sets."""
+    def _get_managed_policy_statements(self, arn: str) -> List[Dict]:
+        """Fetch and cache a managed policy's default-version statements."""
         if arn in self._managed_policy_cache:
             return self._managed_policy_cache[arn]
-        result = (set(), set())
+        result: List[Dict] = []
         try:
             iam = self._client("iam")
             ver = iam.get_policy(PolicyArn=arn)["Policy"]["DefaultVersionId"]
             doc = iam.get_policy_version(
                 PolicyArn=arn, VersionId=ver)["PolicyVersion"]["Document"]
-            result = self._policy_to_action_sets(doc)
+            result = self._policy_to_statements(doc)
         except Exception:
             pass
         self._managed_policy_cache[arn] = result
         return result
 
     def _get_iam_principals(self) -> List[Dict]:
-        """Enumerate IAM users and roles with their effective allow/deny action
-        sets (attached managed + inline + group policies). Cached. Read-only."""
+        """Enumerate IAM users and roles with their effective policy statements
+        (attached managed + inline + group policies), plus derived allow/deny action
+        sets. Cached. Read-only."""
         if self._iam_principals is not None:
             return self._iam_principals
 
@@ -3568,79 +3698,81 @@ class AWSLiveScanner:
             except Exception:
                 return
 
-        # Pre-resolve group permissions once
-        group_perms: Dict[str, tuple] = {}
+        def _finalize(ptype, name, arn, statements):
+            allow, deny = set(), set()
+            for st in statements:
+                if st["effect"] == "Allow":
+                    allow |= st["actions"]
+                else:
+                    deny |= st["actions"]
+            principals.append({"type": ptype, "name": name, "arn": arn,
+                               "statements": statements, "allow": allow, "deny": deny})
+
+        # Pre-resolve group statements once
+        group_stmts: Dict[str, List[Dict]] = {}
         for g in _paginate("list_groups", "Groups"):
             gname = g["GroupName"]
-            allow, deny = set(), set()
+            stmts: List[Dict] = []
             try:
                 for p in iam.list_attached_group_policies(
                         GroupName=gname).get("AttachedPolicies", []):
-                    a, d = self._get_managed_policy_actions(p["PolicyArn"])
-                    allow |= a; deny |= d
+                    stmts += self._get_managed_policy_statements(p["PolicyArn"])
                 for pn in iam.list_group_policies(
                         GroupName=gname).get("PolicyNames", []):
                     doc = iam.get_group_policy(
                         GroupName=gname, PolicyName=pn).get("PolicyDocument")
-                    a, d = self._policy_to_action_sets(doc)
-                    allow |= a; deny |= d
+                    stmts += self._policy_to_statements(doc)
             except Exception:
                 pass
-            group_perms[gname] = (allow, deny)
+            group_stmts[gname] = stmts
 
         # Users
         for u in _paginate("list_users", "Users"):
             name = u["UserName"]
-            allow, deny = set(), set()
+            stmts = []
             try:
                 for p in iam.list_attached_user_policies(
                         UserName=name).get("AttachedPolicies", []):
-                    a, d = self._get_managed_policy_actions(p["PolicyArn"])
-                    allow |= a; deny |= d
+                    stmts += self._get_managed_policy_statements(p["PolicyArn"])
                 for pn in iam.list_user_policies(
                         UserName=name).get("PolicyNames", []):
                     doc = iam.get_user_policy(
                         UserName=name, PolicyName=pn).get("PolicyDocument")
-                    a, d = self._policy_to_action_sets(doc)
-                    allow |= a; deny |= d
+                    stmts += self._policy_to_statements(doc)
                 for g in iam.list_groups_for_user(
                         UserName=name).get("Groups", []):
-                    ga, gd = group_perms.get(g["GroupName"], (set(), set()))
-                    allow |= ga; deny |= gd
+                    stmts += group_stmts.get(g["GroupName"], [])
             except Exception:
                 pass
-            principals.append({"type": "user", "name": name,
-                               "arn": u.get("Arn", ""), "allow": allow, "deny": deny})
+            _finalize("user", name, u.get("Arn", ""), stmts)
 
         # Roles (skip AWS service-linked roles)
         for r in _paginate("list_roles", "Roles"):
             if r.get("Path", "").startswith("/aws-service-role/"):
                 continue
             name = r["RoleName"]
-            allow, deny = set(), set()
+            stmts = []
             try:
                 for p in iam.list_attached_role_policies(
                         RoleName=name).get("AttachedPolicies", []):
-                    a, d = self._get_managed_policy_actions(p["PolicyArn"])
-                    allow |= a; deny |= d
+                    stmts += self._get_managed_policy_statements(p["PolicyArn"])
                 for pn in iam.list_role_policies(
                         RoleName=name).get("PolicyNames", []):
                     doc = iam.get_role_policy(
                         RoleName=name, PolicyName=pn).get("PolicyDocument")
-                    a, d = self._policy_to_action_sets(doc)
-                    allow |= a; deny |= d
+                    stmts += self._policy_to_statements(doc)
             except Exception:
                 pass
-            principals.append({"type": "role", "name": name,
-                               "arn": r.get("Arn", ""), "allow": allow, "deny": deny})
+            _finalize("role", name, r.get("Arn", ""), stmts)
 
         self._iam_principals = principals
         return principals
 
     def _check_iam_privesc(self):
         self._section_header("IAMPRIVESC")
-        self._log("Action-level path analysis — findings are POTENTIAL paths "
-                  "(resource ARNs and policy conditions are not evaluated)")
+        self._log("Resource-aware path analysis — each finding shows its scope "
+                  "(account-wide vs resource-scoped); policy conditions, permission "
+                  "boundaries, and SCPs are not evaluated")
         try:
             principals = self._get_iam_principals()
         except Exception as e:
@@ -3654,11 +3786,20 @@ class AWSLiveScanner:
 
         found = False
         for p in principals:
-            for rule in evaluate_privesc(p["allow"], p["deny"]):
+            for f in evaluate_privesc_scoped(p["statements"]):
                 found = True
-                self._add("FAIL", rule["id"], "IAMPRIVESC",
+                scope = f.get("scope", "")
+                if scope == "account-wide":
+                    scope_note = " [scope: account-wide]"
+                elif scope == "resource-scoped" and f.get("scope_arns"):
+                    arns = f["scope_arns"]
+                    shown = arns[0] + (f" +{len(arns) - 1} more" if len(arns) > 1 else "")
+                    scope_note = f" [scope: {shown}]"
+                else:
+                    scope_note = ""
+                self._add("FAIL", f["id"], "IAMPRIVESC",
                           f"{p['type']}:{p['name']}",
-                          f"{rule['name']} — {rule['desc']} | {p['type']} {p['name']}")
+                          f"{f['name']} — {f['desc']}{scope_note} | {p['type']} {p['name']}")
         if not found:
             self._add("PASS", "IAMPE-00", "IAMPRIVESC", "all-principals",
                       f"No privilege-escalation paths detected across "

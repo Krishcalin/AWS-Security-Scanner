@@ -4,20 +4,23 @@
 
 Two complementary AWS security scanners:
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **Live Audit Scanner** (`aws_live_scanner.py` v2.0.0) -- live AWS account audit via boto3 (145+ checks, 35 sections, 5 compliance frameworks, risk scoring)
+- **Live Audit Scanner** (`aws_live_scanner.py` v2.1.0) -- live AWS account audit via boto3 (145+ checks, 35 sections, 5 compliance frameworks, risk scoring)
 
 ## Repository Structure
 
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.0.0 (boto3, 5 frameworks, risk scoring)
+├── aws_live_scanner.py      # Live audit scanner v2.1.0 (boto3, 5 frameworks, risk scoring)
 ├── tests/
-│   ├── test_live_scanner.py # 63 unit tests (mock boto3)
+│   ├── test_live_scanner.py # 69 unit tests (mock boto3)
 │   └── samples/             # Vulnerable IaC + sample reports
+├── scripts/
+│   └── validate_live.py     # Read-only live-account validation harness
 ├── docs/banner.svg
 ├── CLAUDE.md
 ├── SECURITY.md              # Security policy / responsible disclosure
+├── CHANGELOG.md             # Release notes
 ├── .gitignore
 ├── LICENSE                  # GPL-3.0
 └── README.md
@@ -59,7 +62,7 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.0.0)
+## Live Audit Scanner (`aws_live_scanner.py` v2.1.0)
 
 - **Type**: Live AWS account audit via boto3
 - **Lines**: ~4,046
@@ -120,21 +123,28 @@ against known escalation primitives.
 
 - **Module-level**: `IAM_PRIVESC_RULES` (declarative primitive table — each rule
   has `all_of`, a list of any-of action requirements), `IAM_PRIVESC_FULL_ADMIN`
-  sentinel, `evaluate_privesc(allow, deny)`, `_action_allowed(action, allow, deny)`
-  (fnmatch wildcard matching, Deny overrides Allow).
+  and `IAM_PRIVESC_ASSUMEROLE` sentinels, `evaluate_privesc(allow, deny)`
+  (action-level), `evaluate_privesc_scoped(statements)` (resource-aware),
+  `resource_scope()`, `_has_full_admin()`, `_resource_applies()`,
+  `_action_allowed()` (fnmatch wildcard matching, Deny overrides Allow).
 - **Collector**: `_get_iam_principals()` (cached) enumerates users + roles and
-  merges attached managed + inline + group policies into allow/deny action sets;
-  `_get_managed_policy_actions(arn)` (cached) resolves managed policy documents;
-  `_policy_to_action_sets(doc)` parses URL-encoded-string or dict documents,
-  Action/NotAction, single/list statements.
-- **Model**: action-level only — resource ARNs, conditions, permission boundaries,
-  and SCPs are NOT evaluated, so findings are *potential* paths to verify. Full
-  admin (`*`) short-circuits to a single `IAMPE-19` finding to avoid noise.
+  merges attached managed + inline + group policies into a per-principal
+  `statements` list (+ derived allow/deny); `_get_managed_policy_statements(arn)`
+  (cached) resolves managed policy documents; `_policy_to_statements(doc)` parses
+  URL-encoded-string or dict documents, Action/NotAction, Resource/NotResource,
+  single/list statements; `_policy_to_action_sets()` derives action sets from it.
+- **Resource-aware scoping** (`evaluate_privesc_scoped`): each finding is annotated
+  `account-wide` vs `resource-scoped`; full admin requires `Action:*` on
+  `Resource:*` (Action `*` scoped to one resource is not flagged as admin); an
+  action only counts against resources of its own service, suppressing
+  Action-`*`-on-foreign-resource false positives. Conditions, permission
+  boundaries, and SCPs are still not evaluated, so findings remain paths to verify.
 - **Primitives**: IAMPE-01 CreatePolicyVersion, -02 SetDefaultPolicyVersion,
   -03 Attach\*Policy, -04 Put\*Policy, -05 AddUserToGroup, -06 CreateAccessKey,
   -07 Create/UpdateLoginProfile, -08 UpdateAssumeRolePolicy, -10..14 PassRole+
   (EC2/Lambda/Glue/CloudFormation/SageMaker), -16 UpdateFunctionCode,
-  -18 SSM SendCommand/StartSession, -19 full admin.
+  -18 SSM SendCommand/StartSession, -19 full admin, -20 sts:AssumeRole on `*`
+  (flagged only when unrestricted).
 
 ### Workflow Integration (CI/CD & AWS-native)
 
@@ -166,7 +176,7 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 63 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 69 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
@@ -177,6 +187,7 @@ Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
 - SageMaker, Cognito, API Gateway v2 (HTTP APIs) check logic
 - IAM privilege-escalation engine (action-level path evaluation, policy parsing)
 - Workflow outputs: SARIF structure, ASFF fields, --fail-on gating, baseline diff
+- IAM privesc resource scoping (account-wide vs resource-scoped, service filtering)
 - JSON report with new fields
 
 ## Conventions
