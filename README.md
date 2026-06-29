@@ -179,8 +179,11 @@ python aws_live_scanner.py
 # Target a specific region
 python aws_live_scanner.py --region us-east-1
 
-# Run specific sections only
-python aws_live_scanner.py --sections IAM S3 VPC
+# Run specific sections only (comma-separated, single argument)
+python aws_live_scanner.py --sections IAM,S3,VPC
+
+# Run only the IAM privilege-escalation path analysis
+python aws_live_scanner.py --sections IAMPRIVESC
 
 # Save JSON + HTML reports and evidence artefacts
 python aws_live_scanner.py --json report.json --html report.html --output-dir ./audit_output
@@ -200,7 +203,7 @@ usage: aws_live_scanner.py [-h] [--region REGION] [--json FILE] [--html FILE]
                                          SECRETS,WAF,ELASTICACHE,OPENSEARCH,
                                          DYNAMODB,STEPFUNCTIONS,APIGATEWAY,ELB,
                                          EBS,REDSHIFT,EFS,ACM,SAGEMAKER,COGNITO,
-                                         APIGATEWAYV2,IAMPRIVESC} ...]
+                                         APIGATEWAYV2,IAMPRIVESC}]
                             [-v] [--version]
 
 options:
@@ -208,7 +211,7 @@ options:
   --json FILE           Write JSON report to FILE
   --html FILE           Write HTML report to FILE
   --output-dir DIR      Directory for evidence artefact files
-  --sections SECTION…   Run only specified sections (space-separated)
+  --sections SECTIONS   Run only the named sections (single comma-separated value)
   -v, --verbose         Print each check as it runs
   --version             Show scanner version
 ```
@@ -308,6 +311,8 @@ AWS-Security-Scanner/
 ├── docs/
 │   └── banner.svg
 ├── CLAUDE.md                # Developer documentation
+├── SECURITY.md              # Security policy / responsible disclosure
+├── .gitignore
 ├── LICENSE                  # GPL-3.0
 └── README.md
 ```

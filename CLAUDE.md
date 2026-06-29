@@ -17,6 +17,8 @@ AWS-Security-Scanner/
 │   └── samples/             # Vulnerable IaC + sample reports
 ├── docs/banner.svg
 ├── CLAUDE.md
+├── SECURITY.md              # Security policy / responsible disclosure
+├── .gitignore
 ├── LICENSE                  # GPL-3.0
 └── README.md
 ```
@@ -24,7 +26,7 @@ AWS-Security-Scanner/
 ## IaC Scanner (`aws_offline_scanner.py` v1.1.0)
 
 - **Type**: Static analysis of AWS IaC files (no AWS credentials needed)
-- **Lines**: ~2,469
+- **Lines**: ~2,473
 - **Dependencies**: Optional `pyyaml` for CloudFormation YAML
 - **Python**: 3.10+
 
@@ -60,7 +62,7 @@ python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FI
 ## Live Audit Scanner (`aws_live_scanner.py` v2.0.0)
 
 - **Type**: Live AWS account audit via boto3
-- **Lines**: ~3,035
+- **Lines**: ~4,046
 - **Dependencies**: `boto3` (required), Python 3.10+
 - **IAM permissions**: `SecurityAudit` AWS-managed policy (read-only)
 - **Compliance**: CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
@@ -132,7 +134,8 @@ against known escalation primitives.
 ### CLI
 ```bash
 python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
-    [--output-dir DIR] [--sections SECTION ...] [-v] [--version]
+    [--output-dir DIR] [--sections SEC1,SEC2,...] [-v] [--version]
+# Note: --sections takes a single COMMA-separated value (e.g. --sections IAM,S3,IAMPRIVESC)
 ```
 
 ## Tests
