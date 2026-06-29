@@ -4,7 +4,7 @@
 
 Two complementary AWS security scanners:
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **Live Audit Scanner** (`aws_live_scanner.py` v2.0.0) -- live AWS account audit via boto3 (130+ checks, 34 sections, 5 compliance frameworks, risk scoring)
+- **Live Audit Scanner** (`aws_live_scanner.py` v2.0.0) -- live AWS account audit via boto3 (145+ checks, 35 sections, 5 compliance frameworks, risk scoring)
 
 ## Repository Structure
 
@@ -13,7 +13,7 @@ AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
 ├── aws_live_scanner.py      # Live audit scanner v2.0.0 (boto3, 5 frameworks, risk scoring)
 ├── tests/
-│   ├── test_live_scanner.py # 41 unit tests (mock boto3)
+│   ├── test_live_scanner.py # 56 unit tests (mock boto3)
 │   └── samples/             # Vulnerable IaC + sample reports
 ├── docs/banner.svg
 ├── CLAUDE.md
@@ -97,13 +97,37 @@ compute_risk_score(results) -> float   # 100 - weighted penalties
 score_to_grade(score) -> str           # A/B/C/D/F
 ```
 
-- **CHECK_MAP**: Dict mapping 34 section names -> bound check methods
-- **34 sections**: IAM, S3, VPC, LOGGING, KMS, EC2, ECR, BACKUP, RDS, GLACIER, SNS, SQS, CLOUDFRONT, ROUTE53, BEDROCK, BEDROCK_AGENTS, LAMBDA, EKS, ECS, SECRETS, WAF, ELASTICACHE, OPENSEARCH, DYNAMODB, STEPFUNCTIONS, APIGATEWAY, ELB, EBS, REDSHIFT, EFS, ACM, SAGEMAKER, COGNITO, APIGATEWAYV2
-- **130+ checks** total; severity auto-assigned per check_id on FAIL
+- **CHECK_MAP**: Dict mapping 35 section names -> bound check methods
+- **35 sections**: IAM, S3, VPC, LOGGING, KMS, EC2, ECR, BACKUP, RDS, GLACIER, SNS, SQS, CLOUDFRONT, ROUTE53, BEDROCK, BEDROCK_AGENTS, LAMBDA, EKS, ECS, SECRETS, WAF, ELASTICACHE, OPENSEARCH, DYNAMODB, STEPFUNCTIONS, APIGATEWAY, ELB, EBS, REDSHIFT, EFS, ACM, SAGEMAKER, COGNITO, APIGATEWAYV2, IAMPRIVESC
+- **145+ checks** total; severity auto-assigned per check_id on FAIL
 - **Risk scoring**: Score = 100 - (CRIT×15 + HIGH×5 + MED×2 + LOW×0.5), Grade A-F
 
 ### Check ID Prefixes
-IAM-XX, S3-XX, VPC-XX, LOG-XX, ENC-XX, EC2-XX, CNT-XX, BCK-XX, RDS-XX, GLC-XX, SNS-XX, SQS-XX, CFN-XX, R53-XX, BDR-XX, AGT-XX, LMB-XX, EKS-XX, ECS-XX, SEC-XX, WAF-XX, ELC-XX, OSR-XX, DDB-XX, SFN-XX, APIGW-XX, ELB-XX, EBS-XX, RS-XX, EFS-XX, ACM-XX, SM-XX, COG-XX, AGW2-XX
+IAM-XX, S3-XX, VPC-XX, LOG-XX, ENC-XX, EC2-XX, CNT-XX, BCK-XX, RDS-XX, GLC-XX, SNS-XX, SQS-XX, CFN-XX, R53-XX, BDR-XX, AGT-XX, LMB-XX, EKS-XX, ECS-XX, SEC-XX, WAF-XX, ELC-XX, OSR-XX, DDB-XX, SFN-XX, APIGW-XX, ELB-XX, EBS-XX, RS-XX, EFS-XX, ACM-XX, SM-XX, COG-XX, AGW2-XX, IAMPE-XX
+
+### IAM Privilege-Escalation Engine (`IAMPRIVESC` section, `IAMPE-XX`)
+
+Distinct from the per-resource checks: instead of inspecting one resource at a
+time, it builds each principal's **effective permission set** and matches it
+against known escalation primitives.
+
+- **Module-level**: `IAM_PRIVESC_RULES` (declarative primitive table — each rule
+  has `all_of`, a list of any-of action requirements), `IAM_PRIVESC_FULL_ADMIN`
+  sentinel, `evaluate_privesc(allow, deny)`, `_action_allowed(action, allow, deny)`
+  (fnmatch wildcard matching, Deny overrides Allow).
+- **Collector**: `_get_iam_principals()` (cached) enumerates users + roles and
+  merges attached managed + inline + group policies into allow/deny action sets;
+  `_get_managed_policy_actions(arn)` (cached) resolves managed policy documents;
+  `_policy_to_action_sets(doc)` parses URL-encoded-string or dict documents,
+  Action/NotAction, single/list statements.
+- **Model**: action-level only — resource ARNs, conditions, permission boundaries,
+  and SCPs are NOT evaluated, so findings are *potential* paths to verify. Full
+  admin (`*`) short-circuits to a single `IAMPE-19` finding to avoid noise.
+- **Primitives**: IAMPE-01 CreatePolicyVersion, -02 SetDefaultPolicyVersion,
+  -03 Attach\*Policy, -04 Put\*Policy, -05 AddUserToGroup, -06 CreateAccessKey,
+  -07 Create/UpdateLoginProfile, -08 UpdateAssumeRolePolicy, -10..14 PassRole+
+  (EC2/Lambda/Glue/CloudFormation/SageMaker), -16 UpdateFunctionCode,
+  -18 SSM SendCommand/StartSession, -19 full admin.
 
 ### CLI
 ```bash
@@ -114,7 +138,7 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 41 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 56 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
@@ -123,6 +147,7 @@ Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
 - IAM, S3, Lambda, EKS, DynamoDB, ElastiCache check logic
 - API Gateway, ELB, EBS, Redshift, EFS, ACM check logic
 - SageMaker, Cognito, API Gateway v2 (HTTP APIs) check logic
+- IAM privilege-escalation engine (action-level path evaluation, policy parsing)
 - JSON report with new fields
 
 ## Conventions

@@ -34,7 +34,9 @@ import csv
 import io
 import base64
 import time
+import fnmatch
 import argparse
+from urllib.parse import unquote
 from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -68,7 +70,7 @@ SECTIONS = [
     "LAMBDA", "EKS", "ECS", "SECRETS", "WAF",
     "ELASTICACHE", "OPENSEARCH", "DYNAMODB", "STEPFUNCTIONS",
     "APIGATEWAY", "ELB", "EBS", "REDSHIFT", "EFS", "ACM",
-    "SAGEMAKER", "COGNITO", "APIGATEWAYV2",
+    "SAGEMAKER", "COGNITO", "APIGATEWAYV2", "IAMPRIVESC",
 ]
 
 SECTION_LABELS = {
@@ -106,6 +108,7 @@ SECTION_LABELS = {
     "SAGEMAKER":      "AMAZON SAGEMAKER",
     "COGNITO":        "AMAZON COGNITO",
     "APIGATEWAYV2":   "API GATEWAY (HTTP APIs)",
+    "IAMPRIVESC":     "IAM PRIVILEGE ESCALATION",
 }
 
 
@@ -171,6 +174,13 @@ CHECK_SEVERITY = {
     "SM-01": "HIGH", "SM-02": "MEDIUM", "SM-03": "MEDIUM", "SM-04": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
     "AGW2-01": "MEDIUM", "AGW2-02": "HIGH", "AGW2-03": "LOW",
+    # IAM privilege-escalation primitives
+    "IAMPE-01": "CRITICAL", "IAMPE-02": "HIGH", "IAMPE-03": "CRITICAL",
+    "IAMPE-04": "CRITICAL", "IAMPE-05": "HIGH", "IAMPE-06": "HIGH",
+    "IAMPE-07": "HIGH", "IAMPE-08": "HIGH", "IAMPE-10": "HIGH",
+    "IAMPE-11": "HIGH", "IAMPE-12": "HIGH", "IAMPE-13": "HIGH",
+    "IAMPE-14": "HIGH", "IAMPE-16": "HIGH", "IAMPE-18": "MEDIUM",
+    "IAMPE-19": "CRITICAL",
 }
 
 # ─── Compliance mapping: check_id → { framework: control } ──────────────────
@@ -272,6 +282,10 @@ COMPLIANCE_MAP = {
     # API Gateway v2 (HTTP APIs)
     "AGW2-01": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "AGW2-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    # IAM privilege escalation — all map to least-privilege / separation-of-duties controls
+    **{f"IAMPE-{n:02d}": {"CIS": "1.16", "PCI-DSS": "7.1.1",
+                          "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6(1)"}
+       for n in (1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16, 18, 19)},
 }
 
 # ─── Remediation commands: check_id → AWS CLI command ────────────────────────
@@ -347,7 +361,104 @@ REMEDIATION_MAP = {
     "COG-03": "Enable threat protection: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --user-pool-add-ons AdvancedSecurityMode=ENFORCED",
     "AGW2-01": "Enable access logging: aws apigatewayv2 update-stage --api-id <API_ID> --stage-name <STAGE> --access-log-settings DestinationArn=<LOG_GROUP_ARN>,Format='$context.requestId'",
     "AGW2-02": "Add an authorizer to routes: aws apigatewayv2 update-route --api-id <API_ID> --route-key '<ROUTE>' --authorization-type JWT --authorizer-id <AUTHORIZER_ID>",
+    "IAMPE-01": "Find where the grant lives (aws iam list-entities-for-policy --policy-arn <ARN>), remove iam:CreatePolicyVersion, and constrain the principal: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
+    "IAMPE-03": "Remove iam:Attach*Policy from the principal and apply a permissions boundary: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
+    "IAMPE-04": "Remove the inline grant (aws iam delete-user-policy --user-name <USER> --policy-name <INLINE>) and apply a permissions boundary",
+    "IAMPE-07": "Remove iam:CreateLoginProfile/UpdateLoginProfile and bound the principal: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
+    "IAMPE-08": "Remove iam:UpdateAssumeRolePolicy and bound the principal: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
+    "IAMPE-10": "Scope iam:PassRole to specific role ARNs with an iam:PassedToService condition, then bound the principal: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
+    "IAMPE-11": "Scope iam:PassRole to specific role ARNs and restrict lambda:CreateFunction; bound the principal: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
+    "IAMPE-16": "Restrict lambda:UpdateFunctionCode to specific function ARNs and require code signing: aws lambda put-function-code-signing-config --function-name <FUNC> --code-signing-config-arn <CSC_ARN>",
+    "IAMPE-19": "Remove the wildcard '*' grant and replace with least-privilege policies; as an immediate guardrail bound the principal: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
 }
+
+
+# ─── IAM privilege-escalation primitives ─────────────────────────────────────
+# Action-level model (Rhino Security Labs / PMapper technique set). Each rule's
+# `all_of` is a list of requirements; a requirement is satisfied if the principal
+# is allowed ANY of its alternative actions. A rule fires when EVERY requirement
+# is satisfied. Matching is at the action level only — resource ARNs and policy
+# conditions are NOT evaluated, so findings are *potential* paths to verify.
+IAM_PRIVESC_RULES = [
+    {"id": "IAMPE-01", "name": "Modify a managed policy version",
+     "all_of": [["iam:CreatePolicyVersion"]],
+     "desc": "Can create a new default version of an attached managed policy and grant itself admin"},
+    {"id": "IAMPE-02", "name": "Set default policy version",
+     "all_of": [["iam:SetDefaultPolicyVersion"]],
+     "desc": "Can roll a managed policy back to a more permissive existing version"},
+    {"id": "IAMPE-03", "name": "Attach an administrator policy",
+     "all_of": [["iam:AttachUserPolicy", "iam:AttachGroupPolicy", "iam:AttachRolePolicy"]],
+     "desc": "Can attach AdministratorAccess to a user/group/role it controls"},
+    {"id": "IAMPE-04", "name": "Inline an administrator policy",
+     "all_of": [["iam:PutUserPolicy", "iam:PutGroupPolicy", "iam:PutRolePolicy"]],
+     "desc": "Can write an inline admin policy onto a user/group/role"},
+    {"id": "IAMPE-05", "name": "Add user to a privileged group",
+     "all_of": [["iam:AddUserToGroup"]],
+     "desc": "Can add itself to a group that has elevated permissions"},
+    {"id": "IAMPE-06", "name": "Create access keys for another user",
+     "all_of": [["iam:CreateAccessKey"]],
+     "desc": "Can mint API keys for a more privileged user"},
+    {"id": "IAMPE-07", "name": "Set a console password for another user",
+     "all_of": [["iam:CreateLoginProfile", "iam:UpdateLoginProfile"]],
+     "desc": "Can set/replace the console login profile of a privileged user"},
+    {"id": "IAMPE-08", "name": "Modify a role trust policy",
+     "all_of": [["iam:UpdateAssumeRolePolicy"]],
+     "desc": "Can rewrite a role's trust policy to assume it, then sts:AssumeRole"},
+    {"id": "IAMPE-10", "name": "PassRole to a new EC2 instance",
+     "all_of": [["iam:PassRole"], ["ec2:RunInstances"]],
+     "desc": "Can launch an EC2 instance with a privileged instance profile"},
+    {"id": "IAMPE-11", "name": "PassRole to a new Lambda function",
+     "all_of": [["iam:PassRole"], ["lambda:CreateFunction"],
+                ["lambda:InvokeFunction", "lambda:AddPermission",
+                 "lambda:CreateEventSourceMapping"]],
+     "desc": "Can create and invoke a Lambda running a privileged execution role"},
+    {"id": "IAMPE-12", "name": "PassRole to a Glue dev endpoint",
+     "all_of": [["iam:PassRole"], ["glue:CreateDevEndpoint"]],
+     "desc": "Can create a Glue dev endpoint with a privileged role"},
+    {"id": "IAMPE-13", "name": "PassRole to a CloudFormation stack",
+     "all_of": [["iam:PassRole"], ["cloudformation:CreateStack"]],
+     "desc": "Can deploy a CloudFormation stack with a privileged role"},
+    {"id": "IAMPE-14", "name": "PassRole to a SageMaker resource",
+     "all_of": [["iam:PassRole"],
+                ["sagemaker:CreateNotebookInstance", "sagemaker:CreateTrainingJob",
+                 "sagemaker:CreateProcessingJob"]],
+     "desc": "Can run a SageMaker notebook/job with a privileged role"},
+    {"id": "IAMPE-16", "name": "Overwrite a privileged Lambda's code",
+     "all_of": [["lambda:UpdateFunctionCode"]],
+     "desc": "Can replace the code of an existing function that runs a privileged role"},
+    {"id": "IAMPE-18", "name": "Run commands on EC2 via SSM",
+     "all_of": [["ssm:SendCommand", "ssm:StartSession"]],
+     "desc": "Can execute commands on instances that carry privileged roles"},
+]
+
+# Sentinel rule applied first: principal already holds full admin (*)
+IAM_PRIVESC_FULL_ADMIN = {
+    "id": "IAMPE-19", "name": "Full administrative access",
+    "desc": "Principal is allowed Action '*' on all resources (effective administrator)",
+}
+
+
+def _action_allowed(action: str, allow: set, deny: set) -> bool:
+    """True if `action` is matched by an allow pattern and not by a deny pattern.
+    Wildcards (*, ?) in policy patterns are honoured; matching is case-insensitive."""
+    a = action.lower()
+    allowed = any(fnmatch.fnmatch(a, p) for p in allow)
+    denied = any(fnmatch.fnmatch(a, p) for p in deny)
+    return allowed and not denied
+
+
+def evaluate_privesc(allow: set, deny: set) -> List[Dict]:
+    """Return the list of privesc rules a principal (given its effective allow/deny
+    action sets) can satisfy. Full-admin short-circuits to a single finding."""
+    # Full admin: allowed literal "*" and not explicitly denied "*"
+    if "*" in allow and "*" not in deny:
+        return [IAM_PRIVESC_FULL_ADMIN]
+    matched = []
+    for rule in IAM_PRIVESC_RULES:
+        if all(any(_action_allowed(act, allow, deny) for act in req)
+               for req in rule["all_of"]):
+            matched.append(rule)
+    return matched
 
 
 # ─── Risk scoring ────────────────────────────────────────────────────────────
@@ -387,6 +498,8 @@ class AWSLiveScanner:
         self._clients: Dict[str, object] = {}
         self._cred_report:  Optional[List[Dict]] = None
         self._all_regions:  Optional[List[str]]  = None
+        self._iam_principals: Optional[List[Dict]] = None
+        self._managed_policy_cache: Dict[str, tuple] = {}
 
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
@@ -3336,6 +3449,172 @@ class AWSLiveScanner:
                           f"All routes require authorization | {api_nm}")
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 35: IAM PRIVILEGE ESCALATION  (action-level path analysis)
+    # ══════════════════════════════════════════════════════════════════════════
+    @staticmethod
+    def _policy_to_action_sets(doc) -> tuple:
+        """Parse an IAM policy document into (allow_patterns, deny_patterns).
+        Handles URL-encoded string or dict; single or list statements; Action /
+        NotAction. NotAction+Allow is over-approximated to '*' (flagged as potential)."""
+        allow, deny = set(), set()
+        if not doc:
+            return allow, deny
+        if isinstance(doc, str):
+            try:
+                doc = json.loads(unquote(doc))
+            except Exception:
+                return allow, deny
+        statements = doc.get("Statement", [])
+        if isinstance(statements, dict):
+            statements = [statements]
+        for stmt in statements:
+            if not isinstance(stmt, dict):
+                continue
+            effect = stmt.get("Effect", "")
+            target = allow if effect == "Allow" else deny if effect == "Deny" else None
+            if target is None:
+                continue
+            if "Action" in stmt:
+                actions = stmt["Action"]
+                actions = [actions] if isinstance(actions, str) else list(actions)
+                for a in actions:
+                    target.add(a.lower())
+            elif "NotAction" in stmt and effect == "Allow":
+                # Allow on NotAction grants everything except the listed actions.
+                allow.add("*")
+        return allow, deny
+
+    def _get_managed_policy_actions(self, arn: str) -> tuple:
+        """Fetch and cache a managed policy's (allow, deny) action sets."""
+        if arn in self._managed_policy_cache:
+            return self._managed_policy_cache[arn]
+        result = (set(), set())
+        try:
+            iam = self._client("iam")
+            ver = iam.get_policy(PolicyArn=arn)["Policy"]["DefaultVersionId"]
+            doc = iam.get_policy_version(
+                PolicyArn=arn, VersionId=ver)["PolicyVersion"]["Document"]
+            result = self._policy_to_action_sets(doc)
+        except Exception:
+            pass
+        self._managed_policy_cache[arn] = result
+        return result
+
+    def _get_iam_principals(self) -> List[Dict]:
+        """Enumerate IAM users and roles with their effective allow/deny action
+        sets (attached managed + inline + group policies). Cached. Read-only."""
+        if self._iam_principals is not None:
+            return self._iam_principals
+
+        iam = self._client("iam")
+        principals: List[Dict] = []
+
+        def _paginate(method, key, **kwargs):
+            try:
+                paginator = iam.get_paginator(method)
+                for page in paginator.paginate(**kwargs):
+                    for item in page.get(key, []):
+                        yield item
+            except Exception:
+                return
+
+        # Pre-resolve group permissions once
+        group_perms: Dict[str, tuple] = {}
+        for g in _paginate("list_groups", "Groups"):
+            gname = g["GroupName"]
+            allow, deny = set(), set()
+            try:
+                for p in iam.list_attached_group_policies(
+                        GroupName=gname).get("AttachedPolicies", []):
+                    a, d = self._get_managed_policy_actions(p["PolicyArn"])
+                    allow |= a; deny |= d
+                for pn in iam.list_group_policies(
+                        GroupName=gname).get("PolicyNames", []):
+                    doc = iam.get_group_policy(
+                        GroupName=gname, PolicyName=pn).get("PolicyDocument")
+                    a, d = self._policy_to_action_sets(doc)
+                    allow |= a; deny |= d
+            except Exception:
+                pass
+            group_perms[gname] = (allow, deny)
+
+        # Users
+        for u in _paginate("list_users", "Users"):
+            name = u["UserName"]
+            allow, deny = set(), set()
+            try:
+                for p in iam.list_attached_user_policies(
+                        UserName=name).get("AttachedPolicies", []):
+                    a, d = self._get_managed_policy_actions(p["PolicyArn"])
+                    allow |= a; deny |= d
+                for pn in iam.list_user_policies(
+                        UserName=name).get("PolicyNames", []):
+                    doc = iam.get_user_policy(
+                        UserName=name, PolicyName=pn).get("PolicyDocument")
+                    a, d = self._policy_to_action_sets(doc)
+                    allow |= a; deny |= d
+                for g in iam.list_groups_for_user(
+                        UserName=name).get("Groups", []):
+                    ga, gd = group_perms.get(g["GroupName"], (set(), set()))
+                    allow |= ga; deny |= gd
+            except Exception:
+                pass
+            principals.append({"type": "user", "name": name,
+                               "arn": u.get("Arn", ""), "allow": allow, "deny": deny})
+
+        # Roles (skip AWS service-linked roles)
+        for r in _paginate("list_roles", "Roles"):
+            if r.get("Path", "").startswith("/aws-service-role/"):
+                continue
+            name = r["RoleName"]
+            allow, deny = set(), set()
+            try:
+                for p in iam.list_attached_role_policies(
+                        RoleName=name).get("AttachedPolicies", []):
+                    a, d = self._get_managed_policy_actions(p["PolicyArn"])
+                    allow |= a; deny |= d
+                for pn in iam.list_role_policies(
+                        RoleName=name).get("PolicyNames", []):
+                    doc = iam.get_role_policy(
+                        RoleName=name, PolicyName=pn).get("PolicyDocument")
+                    a, d = self._policy_to_action_sets(doc)
+                    allow |= a; deny |= d
+            except Exception:
+                pass
+            principals.append({"type": "role", "name": name,
+                               "arn": r.get("Arn", ""), "allow": allow, "deny": deny})
+
+        self._iam_principals = principals
+        return principals
+
+    def _check_iam_privesc(self):
+        self._section_header("IAMPRIVESC")
+        self._log("Action-level path analysis — findings are POTENTIAL paths "
+                  "(resource ARNs and policy conditions are not evaluated)")
+        try:
+            principals = self._get_iam_principals()
+        except Exception as e:
+            self._add("WARN", "IAMPE-01", "IAMPRIVESC", "iam",
+                      f"Could not enumerate IAM principals: {e}")
+            return
+        if not principals:
+            self._add("INFO", "IAMPE-01", "IAMPRIVESC", "iam",
+                      "No IAM users or roles found")
+            return
+
+        found = False
+        for p in principals:
+            for rule in evaluate_privesc(p["allow"], p["deny"]):
+                found = True
+                self._add("FAIL", rule["id"], "IAMPRIVESC",
+                          f"{p['type']}:{p['name']}",
+                          f"{rule['name']} — {rule['desc']} | {p['type']} {p['name']}")
+        if not found:
+            self._add("PASS", "IAMPE-00", "IAMPRIVESC", "all-principals",
+                      f"No privilege-escalation paths detected across "
+                      f"{len(principals)} principals")
+
+    # ══════════════════════════════════════════════════════════════════════════
     # ORCHESTRATION
     # ══════════════════════════════════════════════════════════════════════════
     def run(self):
@@ -3404,6 +3683,7 @@ class AWSLiveScanner:
             "SAGEMAKER":      self._check_sagemaker,
             "COGNITO":        self._check_cognito,
             "APIGATEWAYV2":   self._check_apigatewayv2,
+            "IAMPRIVESC":     self._check_iam_privesc,
         }
 
         for section in self.sections:

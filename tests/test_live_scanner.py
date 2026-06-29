@@ -24,6 +24,7 @@ from aws_live_scanner import (
     compute_risk_score, score_to_grade,
     COMPLIANCE_MAP, REMEDIATION_MAP, CHECK_SEVERITY,
     SECTIONS, SECTION_LABELS,
+    evaluate_privesc, IAM_PRIVESC_RULES,
 )
 
 # Mock ClientError for tests (boto3 may not be installed)
@@ -74,7 +75,7 @@ class TestDataStructures(unittest.TestCase):
         self.assertEqual(VERSION, "2.0.0")
 
     def test_sections_count(self):
-        self.assertEqual(len(SECTIONS), 34)
+        self.assertEqual(len(SECTIONS), 35)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:
@@ -159,7 +160,8 @@ class TestMaps(unittest.TestCase):
         new_checks = ["LMB-01", "EKS-01", "ECS-01", "SEC-01", "WAF-01",
                        "ELC-01", "OSR-01", "DDB-01", "SFN-01",
                        "APIGW-01", "ELB-01", "EBS-01", "RS-01", "EFS-01", "ACM-01",
-                       "SM-01", "COG-01", "AGW2-01"]
+                       "SM-01", "COG-01", "AGW2-01",
+                       "IAMPE-01", "IAMPE-03", "IAMPE-10", "IAMPE-19"]
         for c in new_checks:
             self.assertIn(c, CHECK_SEVERITY, f"{c} missing from CHECK_SEVERITY")
 
@@ -759,6 +761,152 @@ class TestAPIGatewayV2Checks(unittest.TestCase):
         self.assertIn("AGW2-01", passes)
         self.assertIn("AGW2-02", passes)
         self.assertIn("AGW2-03", passes)
+
+
+# ─── Test: IAM privilege-escalation engine (pure evaluator) ──────────────────
+class TestIAMPrivescEngine(unittest.TestCase):
+
+    def _ids(self, allow, deny=None):
+        return [r["id"] for r in evaluate_privesc(set(allow), set(deny or []))]
+
+    def test_full_admin_short_circuits(self):
+        # Literal "*" -> only IAMPE-19, not every rule
+        self.assertEqual(self._ids(["*"]), ["IAMPE-19"])
+
+    def test_create_policy_version(self):
+        self.assertIn("IAMPE-01", self._ids(["iam:createpolicyversion"]))
+
+    def test_iam_wildcard_surfaces_iam_paths(self):
+        ids = self._ids(["iam:*"])
+        for cid in ("IAMPE-01", "IAMPE-03", "IAMPE-04", "IAMPE-08"):
+            self.assertIn(cid, ids)
+        self.assertNotIn("IAMPE-19", ids)   # iam:* is not full admin
+
+    def test_attach_policy_wildcard_match(self):
+        # "iam:Attach*" should cover iam:AttachUserPolicy
+        self.assertIn("IAMPE-03", self._ids(["iam:attach*"]))
+
+    def test_passrole_requires_second_action(self):
+        self.assertEqual(self._ids(["iam:passrole"]), [])
+        self.assertIn("IAMPE-10",
+                      self._ids(["iam:passrole", "ec2:runinstances"]))
+
+    def test_lambda_requires_create_and_invoke(self):
+        # create without invoke -> no path
+        self.assertEqual(
+            self._ids(["iam:passrole", "lambda:createfunction"]), [])
+        # create + invoke -> IAMPE-11
+        self.assertIn("IAMPE-11", self._ids(
+            ["iam:passrole", "lambda:createfunction", "lambda:invokefunction"]))
+
+    def test_explicit_deny_overrides_allow(self):
+        self.assertEqual(
+            self._ids(["iam:attachuserpolicy"], ["iam:attachuserpolicy"]), [])
+        # deny by wildcard also blocks
+        self.assertEqual(self._ids(["iam:attachuserpolicy"], ["iam:*"]), [])
+
+    def test_readonly_principal_no_paths(self):
+        self.assertEqual(
+            self._ids(["s3:get*", "ec2:describe*", "cloudwatch:list*"]), [])
+
+    def test_all_rules_have_severity(self):
+        ids = [r["id"] for r in IAM_PRIVESC_RULES] + ["IAMPE-19"]
+        for cid in ids:
+            self.assertIn(cid, CHECK_SEVERITY, f"{cid} missing severity")
+
+
+# ─── Test: policy document parsing ───────────────────────────────────────────
+class TestPolicyParsing(unittest.TestCase):
+
+    def test_dict_document(self):
+        doc = {"Statement": [
+            {"Effect": "Allow", "Action": ["iam:PassRole", "ec2:RunInstances"],
+             "Resource": "*"},
+            {"Effect": "Deny", "Action": "s3:DeleteBucket", "Resource": "*"},
+        ]}
+        allow, deny = AWSLiveScanner._policy_to_action_sets(doc)
+        self.assertIn("iam:passrole", allow)
+        self.assertIn("ec2:runinstances", allow)
+        self.assertIn("s3:deletebucket", deny)
+
+    def test_url_encoded_string_document(self):
+        import urllib.parse
+        raw = json.dumps({"Statement": {
+            "Effect": "Allow", "Action": "iam:*", "Resource": "*"}})
+        encoded = urllib.parse.quote(raw)
+        allow, deny = AWSLiveScanner._policy_to_action_sets(encoded)
+        self.assertIn("iam:*", allow)
+
+    def test_notaction_allow_over_approximates(self):
+        doc = {"Statement": [
+            {"Effect": "Allow", "NotAction": "s3:*", "Resource": "*"}]}
+        allow, _ = AWSLiveScanner._policy_to_action_sets(doc)
+        self.assertIn("*", allow)
+
+
+# ─── Test: IAM privesc section (mocked IAM client) ───────────────────────────
+class TestIAMPrivescSection(unittest.TestCase):
+
+    def _iam_with_user(self, policy_doc):
+        """Build a mock IAM client: one user 'alice' with an inline policy."""
+        iam = MagicMock()
+
+        def get_paginator(method):
+            data = {
+                "list_groups": ("Groups", []),
+                "list_users": ("Users", [{"UserName": "alice",
+                                          "Arn": "arn:aws:iam::123:user/alice"}]),
+                "list_roles": ("Roles", []),
+            }[method]
+            return MockPaginator(*data)
+
+        iam.get_paginator.side_effect = get_paginator
+        iam.list_attached_user_policies.return_value = {"AttachedPolicies": []}
+        iam.list_user_policies.return_value = {"PolicyNames": ["inline"]}
+        iam.get_user_policy.return_value = {"PolicyDocument": policy_doc}
+        iam.list_groups_for_user.return_value = {"Groups": []}
+        return iam
+
+    def test_attach_policy_path_detected(self):
+        scanner = make_scanner(["IAMPRIVESC"])
+        iam = self._iam_with_user({"Statement": [
+            {"Effect": "Allow", "Action": "iam:AttachUserPolicy",
+             "Resource": "*"}]})
+        scanner._clients = {"iam:us-east-1": iam}
+
+        scanner._check_iam_privesc()
+
+        fails = [r for r in scanner.results
+                 if r.status == "FAIL" and r.check_id == "IAMPE-03"]
+        self.assertTrue(fails)
+        self.assertEqual(fails[0].severity, "CRITICAL")
+        self.assertIn("alice", fails[0].resource)
+
+    def test_full_admin_user_reports_only_19(self):
+        scanner = make_scanner(["IAMPRIVESC"])
+        iam = self._iam_with_user({"Statement": [
+            {"Effect": "Allow", "Action": "*", "Resource": "*"}]})
+        scanner._clients = {"iam:us-east-1": iam}
+
+        scanner._check_iam_privesc()
+
+        fail_ids = [r.check_id for r in scanner.results if r.status == "FAIL"]
+        self.assertEqual(fail_ids, ["IAMPE-19"])
+
+    def test_readonly_user_passes(self):
+        scanner = make_scanner(["IAMPRIVESC"])
+        iam = self._iam_with_user({"Statement": [
+            {"Effect": "Allow", "Action": ["s3:GetObject", "ec2:DescribeInstances"],
+             "Resource": "*"}]})
+        scanner._clients = {"iam:us-east-1": iam}
+
+        scanner._check_iam_privesc()
+
+        fails = [r for r in scanner.results if r.status == "FAIL"]
+        passes = [r for r in scanner.results
+                  if r.status == "PASS" and r.check_id == "IAMPE-00"]
+        self.assertEqual(fails, [])
+        self.assertTrue(passes)
 
 
 if __name__ == "__main__":
