@@ -4,7 +4,7 @@
 
 Two complementary AWS security scanners:
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **Live Audit Scanner** (`aws_live_scanner.py` v2.0.0) -- live AWS account audit via boto3 (120+ checks, 31 sections, 5 compliance frameworks, risk scoring)
+- **Live Audit Scanner** (`aws_live_scanner.py` v2.0.0) -- live AWS account audit via boto3 (130+ checks, 34 sections, 5 compliance frameworks, risk scoring)
 
 ## Repository Structure
 
@@ -13,7 +13,7 @@ AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
 ├── aws_live_scanner.py      # Live audit scanner v2.0.0 (boto3, 5 frameworks, risk scoring)
 ├── tests/
-│   ├── test_live_scanner.py # 35 unit tests (mock boto3)
+│   ├── test_live_scanner.py # 41 unit tests (mock boto3)
 │   └── samples/             # Vulnerable IaC + sample reports
 ├── docs/banner.svg
 ├── CLAUDE.md
@@ -97,13 +97,13 @@ compute_risk_score(results) -> float   # 100 - weighted penalties
 score_to_grade(score) -> str           # A/B/C/D/F
 ```
 
-- **CHECK_MAP**: Dict mapping 31 section names -> bound check methods
-- **31 sections**: IAM, S3, VPC, LOGGING, KMS, EC2, ECR, BACKUP, RDS, GLACIER, SNS, SQS, CLOUDFRONT, ROUTE53, BEDROCK, BEDROCK_AGENTS, LAMBDA, EKS, ECS, SECRETS, WAF, ELASTICACHE, OPENSEARCH, DYNAMODB, STEPFUNCTIONS, APIGATEWAY, ELB, EBS, REDSHIFT, EFS, ACM
-- **120+ checks** total; severity auto-assigned per check_id on FAIL
+- **CHECK_MAP**: Dict mapping 34 section names -> bound check methods
+- **34 sections**: IAM, S3, VPC, LOGGING, KMS, EC2, ECR, BACKUP, RDS, GLACIER, SNS, SQS, CLOUDFRONT, ROUTE53, BEDROCK, BEDROCK_AGENTS, LAMBDA, EKS, ECS, SECRETS, WAF, ELASTICACHE, OPENSEARCH, DYNAMODB, STEPFUNCTIONS, APIGATEWAY, ELB, EBS, REDSHIFT, EFS, ACM, SAGEMAKER, COGNITO, APIGATEWAYV2
+- **130+ checks** total; severity auto-assigned per check_id on FAIL
 - **Risk scoring**: Score = 100 - (CRIT×15 + HIGH×5 + MED×2 + LOW×0.5), Grade A-F
 
 ### Check ID Prefixes
-IAM-XX, S3-XX, VPC-XX, LOG-XX, ENC-XX, EC2-XX, CNT-XX, BCK-XX, RDS-XX, GLC-XX, SNS-XX, SQS-XX, CFN-XX, R53-XX, BDR-XX, AGT-XX, LMB-XX, EKS-XX, ECS-XX, SEC-XX, WAF-XX, ELC-XX, OSR-XX, DDB-XX, SFN-XX, APIGW-XX, ELB-XX, EBS-XX, RS-XX, EFS-XX, ACM-XX
+IAM-XX, S3-XX, VPC-XX, LOG-XX, ENC-XX, EC2-XX, CNT-XX, BCK-XX, RDS-XX, GLC-XX, SNS-XX, SQS-XX, CFN-XX, R53-XX, BDR-XX, AGT-XX, LMB-XX, EKS-XX, ECS-XX, SEC-XX, WAF-XX, ELC-XX, OSR-XX, DDB-XX, SFN-XX, APIGW-XX, ELB-XX, EBS-XX, RS-XX, EFS-XX, ACM-XX, SM-XX, COG-XX, AGW2-XX
 
 ### CLI
 ```bash
@@ -114,7 +114,7 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 35 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 41 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
@@ -122,6 +122,7 @@ Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
 - _add() method auto-population of severity/compliance
 - IAM, S3, Lambda, EKS, DynamoDB, ElastiCache check logic
 - API Gateway, ELB, EBS, Redshift, EFS, ACM check logic
+- SageMaker, Cognito, API Gateway v2 (HTTP APIs) check logic
 - JSON report with new fields
 
 ## Conventions

@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/AWS-CIS%20Benchmark%20v3.0-ff9900?style=flat-square&logo=amazonaws&logoColor=white" alt="CIS AWS v3.0"/>
   <img src="https://img.shields.io/badge/compliance-CIS%20%7C%20PCI--DSS%20%7C%20HIPAA%20%7C%20SOC2%20%7C%20NIST-purple?style=flat-square" alt="5 Compliance Frameworks"/>
   <img src="https://img.shields.io/badge/checks-200%2B-red?style=flat-square" alt="200+ Checks"/>
-  <img src="https://img.shields.io/badge/tests-35%20passing-brightgreen?style=flat-square" alt="35 Tests"/>
+  <img src="https://img.shields.io/badge/tests-41%20passing-brightgreen?style=flat-square" alt="41 Tests"/>
 </p>
 
 ---
@@ -24,7 +24,7 @@ This repository contains **two complementary AWS security scanners**:
 | Scanner | File | Type | Input | Checks |
 |---------|------|------|-------|--------|
 | **IaC Security Scanner** | `aws_offline_scanner.py` | Static analysis | CloudFormation + Terraform files | 100+ (60+ TF regex + 42 CF structural) |
-| **Live Audit Scanner** | `aws_live_scanner.py` | Live AWS API audit | Running AWS account | 120+ across 31 sections |
+| **Live Audit Scanner** | `aws_live_scanner.py` | Live AWS API audit | Running AWS account | 130+ across 34 sections |
 
 Use the **IaC scanner** to catch misconfigurations in CloudFormation templates and Terraform files before deployment. Use the **live scanner** to audit a running AWS account for CIS Benchmark compliance.
 
@@ -154,13 +154,13 @@ options:
 The live scanner connects to a running AWS account via **boto3**, performing **read-only** security checks aligned to multiple compliance frameworks. It produces colour-coded terminal output with PASS/FAIL/WARN verdicts, posture scoring, JSON/HTML reports, and saves evidence artefacts to a timestamped output directory.
 
 - **Read-only by design** -- never modifies AWS resources
-- **120+ security checks** across 31 audit sections
+- **130+ security checks** across 34 audit sections
 - **5 compliance frameworks** -- CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
 - **Risk scoring** -- Posture score 0-100 with letter grade (A-F), severity-weighted
 - **AWS CLI remediation** -- actionable CLI commands for every failed check
 - **3 output formats** -- coloured console, JSON report, interactive HTML report
 - **Evidence collection** -- CSV/JSON artefact files saved per check
-- **35 unit tests** -- full test suite with mock boto3, no AWS credentials needed
+- **41 unit tests** -- full test suite with mock boto3, no AWS credentials needed
 
 ### Prerequisites (Live Scanner)
 
@@ -172,7 +172,7 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 ### Quick Start (Live Scanner)
 
 ```bash
-# Run full audit (all 31 sections, 120+ checks)
+# Run full audit (all 34 sections, 130+ checks)
 python aws_live_scanner.py
 
 # Target a specific region
@@ -198,7 +198,8 @@ usage: aws_live_scanner.py [-h] [--region REGION] [--json FILE] [--html FILE]
                                          BEDROCK,BEDROCK_AGENTS,LAMBDA,EKS,ECS,
                                          SECRETS,WAF,ELASTICACHE,OPENSEARCH,
                                          DYNAMODB,STEPFUNCTIONS,APIGATEWAY,ELB,
-                                         EBS,REDSHIFT,EFS,ACM} ...]
+                                         EBS,REDSHIFT,EFS,ACM,SAGEMAKER,COGNITO,
+                                         APIGATEWAYV2} ...]
                             [-v] [--version]
 
 options:
@@ -211,7 +212,7 @@ options:
   --version             Show scanner version
 ```
 
-### Security Checks Coverage (120+ checks across 31 sections)
+### Security Checks Coverage (130+ checks across 34 sections)
 
 | Section | Check IDs | Description |
 |---------|-----------|-------------|
@@ -246,6 +247,9 @@ options:
 | **Redshift** | RS-01 to 05 | Encryption at rest, public access, audit logging, enhanced VPC routing, default admin username |
 | **EFS** | EFS-01 to 03 | Encryption at rest, in-transit TLS policy, automatic backups |
 | **Certificate Manager** | ACM-01 to 03 | Certificate expiry, key algorithm strength, unused certificates |
+| **SageMaker** | SM-01 to 04 | Notebook direct internet access, root access, KMS volume encryption, VPC deployment |
+| **Cognito** | COG-01 to 04 | User-pool MFA enforcement, password policy strength, advanced security (threat protection), deletion protection |
+| **API Gateway v2** | AGW2-01 to 03 | HTTP API stage access logging, route authorization, default throttling |
 
 ### Compliance Framework Mapping
 
@@ -295,9 +299,9 @@ Score = 100 − (CRITICAL × 15  +  HIGH × 5  +  MEDIUM × 2  +  LOW × 0.5)
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC Security Scanner (CloudFormation + Terraform, no credentials)
-├── aws_live_scanner.py      # Live Audit Scanner v2.0.0 (31 sections, 5 compliance frameworks)
+├── aws_live_scanner.py      # Live Audit Scanner v2.0.0 (34 sections, 5 compliance frameworks)
 ├── tests/
-│   ├── test_live_scanner.py # 35 unit tests (mock boto3, no credentials needed)
+│   ├── test_live_scanner.py # 41 unit tests (mock boto3, no credentials needed)
 │   └── samples/             # Sample IaC files and reports
 ├── docs/
 │   └── banner.svg

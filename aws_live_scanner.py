@@ -68,6 +68,7 @@ SECTIONS = [
     "LAMBDA", "EKS", "ECS", "SECRETS", "WAF",
     "ELASTICACHE", "OPENSEARCH", "DYNAMODB", "STEPFUNCTIONS",
     "APIGATEWAY", "ELB", "EBS", "REDSHIFT", "EFS", "ACM",
+    "SAGEMAKER", "COGNITO", "APIGATEWAYV2",
 ]
 
 SECTION_LABELS = {
@@ -102,6 +103,9 @@ SECTION_LABELS = {
     "REDSHIFT":       "AMAZON REDSHIFT",
     "EFS":            "AMAZON EFS",
     "ACM":            "AWS CERTIFICATE MANAGER",
+    "SAGEMAKER":      "AMAZON SAGEMAKER",
+    "COGNITO":        "AMAZON COGNITO",
+    "APIGATEWAYV2":   "API GATEWAY (HTTP APIs)",
 }
 
 
@@ -164,6 +168,9 @@ CHECK_SEVERITY = {
     "RS-01": "HIGH", "RS-02": "HIGH", "RS-03": "MEDIUM", "RS-04": "MEDIUM", "RS-05": "LOW",
     "EFS-01": "HIGH", "EFS-02": "MEDIUM", "EFS-03": "LOW",
     "ACM-01": "HIGH", "ACM-02": "MEDIUM", "ACM-03": "LOW",
+    "SM-01": "HIGH", "SM-02": "MEDIUM", "SM-03": "MEDIUM", "SM-04": "MEDIUM",
+    "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
+    "AGW2-01": "MEDIUM", "AGW2-02": "HIGH", "AGW2-03": "LOW",
 }
 
 # ─── Compliance mapping: check_id → { framework: control } ──────────────────
@@ -253,6 +260,18 @@ COMPLIANCE_MAP = {
     # ACM
     "ACM-01": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
     "ACM-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-13"},
+    # SageMaker
+    "SM-01": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SM-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "SM-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "SM-04": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    # Cognito
+    "COG-01": {"CIS": "1.5", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
+    "COG-02": {"PCI-DSS": "8.3.6", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "IA-5(1)"},
+    "COG-03": {"PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.1", "NIST": "SI-4"},
+    # API Gateway v2 (HTTP APIs)
+    "AGW2-01": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "AGW2-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
 }
 
 # ─── Remediation commands: check_id → AWS CLI command ────────────────────────
@@ -319,6 +338,15 @@ REMEDIATION_MAP = {
     "EFS-03": "Enable backups: aws efs put-backup-policy --file-system-id <FS_ID> --backup-policy Status=ENABLED",
     "ACM-01": "Renew/replace certificate before expiry: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS",
     "ACM-02": "Reissue with strong key: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS --key-algorithm RSA_2048",
+    "SM-01": "Disable direct internet: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --direct-internet-access Disabled (recreate may be required; attach to a private subnet)",
+    "SM-02": "Disable root access: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --root-access Disabled",
+    "SM-03": "Set KMS key at creation: aws sagemaker create-notebook-instance --notebook-instance-name <NB> --kms-key-id <KMS_KEY> --instance-type ml.t3.medium --role-arn <ROLE>",
+    "SM-04": "Attach to VPC subnet: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --subnet-id <SUBNET> (recreate if subnet not set)",
+    "COG-01": "Require MFA: aws cognito-idp set-user-pool-mfa-config --user-pool-id <POOL_ID> --mfa-configuration ON --software-token-mfa-configuration Enabled=true",
+    "COG-02": "Strengthen password policy: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --policies PasswordPolicy='{MinimumLength=12,RequireUppercase=true,RequireLowercase=true,RequireNumbers=true,RequireSymbols=true}'",
+    "COG-03": "Enable threat protection: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --user-pool-add-ons AdvancedSecurityMode=ENFORCED",
+    "AGW2-01": "Enable access logging: aws apigatewayv2 update-stage --api-id <API_ID> --stage-name <STAGE> --access-log-settings DestinationArn=<LOG_GROUP_ARN>,Format='$context.requestId'",
+    "AGW2-02": "Add an authorizer to routes: aws apigatewayv2 update-route --api-id <API_ID> --route-key '<ROUTE>' --authorization-type JWT --authorizer-id <AUTHORIZER_ID>",
 }
 
 
@@ -3112,6 +3140,202 @@ class AWSLiveScanner:
                           f"Certificate not associated with any resource | {domain}")
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 32: AMAZON SAGEMAKER
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_sagemaker(self):
+        self._section_header("SAGEMAKER")
+        sm = self._client("sagemaker")
+
+        try:
+            notebooks = sm.list_notebook_instances().get(
+                "NotebookInstances", [])
+        except Exception as e:
+            self._add("WARN", "SM-01", "SAGEMAKER", "sagemaker", str(e))
+            return
+        if not notebooks:
+            self._add("INFO", "SM-01", "SAGEMAKER", "sagemaker",
+                      "No SageMaker notebook instances found")
+            return
+
+        for nb in notebooks:
+            name = nb.get("NotebookInstanceName", "unknown")
+            try:
+                detail = sm.describe_notebook_instance(
+                    NotebookInstanceName=name)
+            except Exception as e:
+                self._add("WARN", "SM-01", "SAGEMAKER", name, str(e))
+                continue
+
+            # SM-01 — Direct internet access
+            if detail.get("DirectInternetAccess", "Enabled") == "Disabled":
+                self._add("PASS", "SM-01", "SAGEMAKER", name,
+                          f"Direct internet access=Disabled | {name}")
+            else:
+                self._add("FAIL", "SM-01", "SAGEMAKER", name,
+                          f"Direct internet access=Enabled | {name}")
+
+            # SM-02 — Root access
+            if detail.get("RootAccess", "Enabled") == "Disabled":
+                self._add("PASS", "SM-02", "SAGEMAKER", name,
+                          f"Root access=Disabled | {name}")
+            else:
+                self._add("FAIL", "SM-02", "SAGEMAKER", name,
+                          f"Root access=Enabled | {name}")
+
+            # SM-03 — KMS encryption of the storage volume
+            if detail.get("KmsKeyId"):
+                self._add("PASS", "SM-03", "SAGEMAKER", name,
+                          f"KMS-encrypted volume | {name}")
+            else:
+                self._add("FAIL", "SM-03", "SAGEMAKER", name,
+                          f"No KMS key (AWS-managed encryption only) | {name}")
+
+            # SM-04 — VPC deployment
+            if detail.get("SubnetId"):
+                self._add("PASS", "SM-04", "SAGEMAKER", name,
+                          f"Deployed in VPC | {name}")
+            else:
+                self._add("FAIL", "SM-04", "SAGEMAKER", name,
+                          f"Not attached to a VPC subnet | {name}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 33: AMAZON COGNITO
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_cognito(self):
+        self._section_header("COGNITO")
+        cog = self._client("cognito-idp")
+
+        try:
+            pools = cog.list_user_pools(MaxResults=60).get("UserPools", [])
+        except Exception as e:
+            self._add("WARN", "COG-01", "COGNITO", "cognito", str(e))
+            return
+        if not pools:
+            self._add("INFO", "COG-01", "COGNITO", "cognito",
+                      "No Cognito user pools found")
+            return
+
+        for pool in pools:
+            pid  = pool.get("Id", "unknown")
+            name = pool.get("Name", pid)
+            try:
+                detail = cog.describe_user_pool(
+                    UserPoolId=pid).get("UserPool", {})
+            except Exception as e:
+                self._add("WARN", "COG-01", "COGNITO", name, str(e))
+                continue
+
+            # COG-01 — MFA configuration
+            mfa = detail.get("MfaConfiguration", "OFF")
+            if mfa == "ON":
+                self._add("PASS", "COG-01", "COGNITO", name,
+                          f"MFA=ON (required) | {name}")
+            elif mfa == "OPTIONAL":
+                self._add("WARN", "COG-01", "COGNITO", name,
+                          f"MFA=OPTIONAL (not enforced) | {name}")
+            else:
+                self._add("FAIL", "COG-01", "COGNITO", name,
+                          f"MFA=OFF | {name}")
+
+            # COG-02 — Password policy strength
+            pw = detail.get("Policies", {}).get("PasswordPolicy", {})
+            min_len = pw.get("MinimumLength", 0)
+            complex_ok = all([
+                pw.get("RequireUppercase", False),
+                pw.get("RequireLowercase", False),
+                pw.get("RequireNumbers", False),
+                pw.get("RequireSymbols", False),
+            ])
+            if min_len >= 8 and complex_ok:
+                self._add("PASS", "COG-02", "COGNITO", name,
+                          f"Strong password policy (len>={min_len}) | {name}")
+            else:
+                self._add("FAIL", "COG-02", "COGNITO", name,
+                          f"Weak password policy (len={min_len}, complexity={complex_ok}) | {name}")
+
+            # COG-03 — Advanced security (threat protection)
+            adv = detail.get("UserPoolAddOns", {}).get(
+                "AdvancedSecurityMode", "OFF")
+            if adv in ("ENFORCED", "AUDIT"):
+                self._add("PASS", "COG-03", "COGNITO", name,
+                          f"Advanced security={adv} | {name}")
+            else:
+                self._add("FAIL", "COG-03", "COGNITO", name,
+                          f"Advanced security=OFF (no threat protection) | {name}")
+
+            # COG-04 — Deletion protection
+            if detail.get("DeletionProtection", "INACTIVE") == "ACTIVE":
+                self._add("PASS", "COG-04", "COGNITO", name,
+                          f"Deletion protection=ON | {name}")
+            else:
+                self._add("WARN", "COG-04", "COGNITO", name,
+                          f"Deletion protection=OFF | {name}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 34: API GATEWAY (HTTP APIs / v2)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_apigatewayv2(self):
+        self._section_header("APIGATEWAYV2")
+        api2 = self._client("apigatewayv2")
+
+        try:
+            apis = api2.get_apis().get("Items", [])
+        except Exception as e:
+            self._add("WARN", "AGW2-01", "APIGATEWAYV2", "apigatewayv2", str(e))
+            return
+        if not apis:
+            self._add("INFO", "AGW2-01", "APIGATEWAYV2", "apigatewayv2",
+                      "No API Gateway v2 (HTTP/WebSocket) APIs found")
+            return
+
+        for api in apis:
+            api_id = api.get("ApiId", "unknown")
+            api_nm = api.get("Name", api_id)
+
+            # AGW2-01 — Stage access logging
+            try:
+                stages = api2.get_stages(ApiId=api_id).get("Items", [])
+            except Exception as e:
+                self._add("WARN", "AGW2-01", "APIGATEWAYV2", api_nm, str(e))
+                stages = []
+            if not stages:
+                self._add("INFO", "AGW2-01", "APIGATEWAYV2", api_nm,
+                          f"No stages deployed | {api_nm}")
+            for st in stages:
+                stage = st.get("StageName", "unknown")
+                label = f"{api_nm}/{stage}"
+                if st.get("AccessLogSettings", {}).get("DestinationArn"):
+                    self._add("PASS", "AGW2-01", "APIGATEWAYV2", label,
+                              f"Access logging enabled | {label}")
+                else:
+                    self._add("FAIL", "AGW2-01", "APIGATEWAYV2", label,
+                              f"No access logging | {label}")
+                # AGW2-03 — Default route throttling
+                drs = st.get("DefaultRouteSettings", {})
+                if drs.get("ThrottlingBurstLimit") or drs.get("ThrottlingRateLimit"):
+                    self._add("PASS", "AGW2-03", "APIGATEWAYV2", label,
+                              f"Default throttling configured | {label}")
+                else:
+                    self._add("WARN", "AGW2-03", "APIGATEWAYV2", label,
+                              f"No default throttling limits | {label}")
+
+            # AGW2-02 — Route authorization
+            try:
+                routes = api2.get_routes(ApiId=api_id).get("Items", [])
+            except Exception as e:
+                self._add("WARN", "AGW2-02", "APIGATEWAYV2", api_nm, str(e))
+                continue
+            open_routes = [r.get("RouteKey", "?") for r in routes
+                           if r.get("AuthorizationType", "NONE") == "NONE"]
+            if open_routes:
+                self._add("FAIL", "AGW2-02", "APIGATEWAYV2", api_nm,
+                          f"{len(open_routes)} route(s) with no authorization: "
+                          f"{', '.join(open_routes[:5])} | {api_nm}")
+            elif routes:
+                self._add("PASS", "AGW2-02", "APIGATEWAYV2", api_nm,
+                          f"All routes require authorization | {api_nm}")
+
+    # ══════════════════════════════════════════════════════════════════════════
     # ORCHESTRATION
     # ══════════════════════════════════════════════════════════════════════════
     def run(self):
@@ -3177,6 +3401,9 @@ class AWSLiveScanner:
             "REDSHIFT":       self._check_redshift,
             "EFS":            self._check_efs,
             "ACM":            self._check_acm,
+            "SAGEMAKER":      self._check_sagemaker,
+            "COGNITO":        self._check_cognito,
+            "APIGATEWAYV2":   self._check_apigatewayv2,
         }
 
         for section in self.sections:

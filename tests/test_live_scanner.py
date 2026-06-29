@@ -74,7 +74,7 @@ class TestDataStructures(unittest.TestCase):
         self.assertEqual(VERSION, "2.0.0")
 
     def test_sections_count(self):
-        self.assertEqual(len(SECTIONS), 31)
+        self.assertEqual(len(SECTIONS), 34)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:
@@ -158,7 +158,8 @@ class TestMaps(unittest.TestCase):
     def test_severity_map_covers_new_sections(self):
         new_checks = ["LMB-01", "EKS-01", "ECS-01", "SEC-01", "WAF-01",
                        "ELC-01", "OSR-01", "DDB-01", "SFN-01",
-                       "APIGW-01", "ELB-01", "EBS-01", "RS-01", "EFS-01", "ACM-01"]
+                       "APIGW-01", "ELB-01", "EBS-01", "RS-01", "EFS-01", "ACM-01",
+                       "SM-01", "COG-01", "AGW2-01"]
         for c in new_checks:
             self.assertIn(c, CHECK_SEVERITY, f"{c} missing from CHECK_SEVERITY")
 
@@ -617,6 +618,147 @@ class TestACMChecks(unittest.TestCase):
         self.assertIn("ACM-01", fails)   # expired
         self.assertIn("ACM-02", fails)   # weak key algorithm
         self.assertIn("ACM-03", warns)   # unused
+
+
+# ─── Test: SageMaker checks ──────────────────────────────────────────────────
+class TestSageMakerChecks(unittest.TestCase):
+
+    def test_insecure_notebook(self):
+        scanner = make_scanner(["SAGEMAKER"])
+        sm = MagicMock()
+        sm.list_notebook_instances.return_value = {
+            "NotebookInstances": [{"NotebookInstanceName": "nb-1"}]}
+        sm.describe_notebook_instance.return_value = {
+            "DirectInternetAccess": "Enabled",
+            "RootAccess": "Enabled",
+            # no KmsKeyId, no SubnetId
+        }
+        scanner._clients = {"sagemaker:us-east-1": sm}
+
+        scanner._check_sagemaker()
+
+        fails = [r.check_id for r in scanner.results if r.status == "FAIL"]
+        self.assertIn("SM-01", fails)   # direct internet
+        self.assertIn("SM-02", fails)   # root access
+        self.assertIn("SM-03", fails)   # no KMS
+        self.assertIn("SM-04", fails)   # not in VPC
+
+    def test_hardened_notebook(self):
+        scanner = make_scanner(["SAGEMAKER"])
+        sm = MagicMock()
+        sm.list_notebook_instances.return_value = {
+            "NotebookInstances": [{"NotebookInstanceName": "nb-secure"}]}
+        sm.describe_notebook_instance.return_value = {
+            "DirectInternetAccess": "Disabled",
+            "RootAccess": "Disabled",
+            "KmsKeyId": "arn:aws:kms:::key/abc",
+            "SubnetId": "subnet-123",
+        }
+        scanner._clients = {"sagemaker:us-east-1": sm}
+
+        scanner._check_sagemaker()
+
+        self.assertEqual([r for r in scanner.results if r.status == "FAIL"], [])
+
+
+# ─── Test: Cognito checks ────────────────────────────────────────────────────
+class TestCognitoChecks(unittest.TestCase):
+
+    def test_weak_pool(self):
+        scanner = make_scanner(["COGNITO"])
+        cog = MagicMock()
+        cog.list_user_pools.return_value = {
+            "UserPools": [{"Id": "pool-1", "Name": "users"}]}
+        cog.describe_user_pool.return_value = {"UserPool": {
+            "MfaConfiguration": "OFF",
+            "Policies": {"PasswordPolicy": {
+                "MinimumLength": 6, "RequireUppercase": False,
+                "RequireLowercase": True, "RequireNumbers": False,
+                "RequireSymbols": False}},
+            "UserPoolAddOns": {"AdvancedSecurityMode": "OFF"},
+            "DeletionProtection": "INACTIVE",
+        }}
+        scanner._clients = {"cognito-idp:us-east-1": cog}
+
+        scanner._check_cognito()
+
+        fails = [r.check_id for r in scanner.results if r.status == "FAIL"]
+        warns = [r.check_id for r in scanner.results if r.status == "WARN"]
+        self.assertIn("COG-01", fails)   # MFA off
+        self.assertIn("COG-02", fails)   # weak password policy
+        self.assertIn("COG-03", fails)   # advanced security off
+        self.assertIn("COG-04", warns)   # deletion protection off
+
+    def test_optional_mfa_warns(self):
+        scanner = make_scanner(["COGNITO"])
+        cog = MagicMock()
+        cog.list_user_pools.return_value = {
+            "UserPools": [{"Id": "pool-2", "Name": "opt"}]}
+        cog.describe_user_pool.return_value = {"UserPool": {
+            "MfaConfiguration": "OPTIONAL",
+            "Policies": {"PasswordPolicy": {
+                "MinimumLength": 12, "RequireUppercase": True,
+                "RequireLowercase": True, "RequireNumbers": True,
+                "RequireSymbols": True}},
+            "UserPoolAddOns": {"AdvancedSecurityMode": "ENFORCED"},
+            "DeletionProtection": "ACTIVE",
+        }}
+        scanner._clients = {"cognito-idp:us-east-1": cog}
+
+        scanner._check_cognito()
+
+        warns = [r.check_id for r in scanner.results if r.status == "WARN"]
+        self.assertIn("COG-01", warns)
+
+
+# ─── Test: API Gateway v2 (HTTP APIs) checks ─────────────────────────────────
+class TestAPIGatewayV2Checks(unittest.TestCase):
+
+    def test_no_logging_open_route(self):
+        scanner = make_scanner(["APIGATEWAYV2"])
+        api2 = MagicMock()
+        api2.get_apis.return_value = {
+            "Items": [{"ApiId": "h1", "Name": "http-api", "ProtocolType": "HTTP"}]}
+        api2.get_stages.return_value = {"Items": [{
+            "StageName": "$default",
+            "DefaultRouteSettings": {},
+        }]}
+        api2.get_routes.return_value = {"Items": [
+            {"RouteKey": "GET /public", "AuthorizationType": "NONE"},
+            {"RouteKey": "GET /private", "AuthorizationType": "JWT"},
+        ]}
+        scanner._clients = {"apigatewayv2:us-east-1": api2}
+
+        scanner._check_apigatewayv2()
+
+        fails = [r.check_id for r in scanner.results if r.status == "FAIL"]
+        warns = [r.check_id for r in scanner.results if r.status == "WARN"]
+        self.assertIn("AGW2-01", fails)   # no access logging
+        self.assertIn("AGW2-02", fails)   # open route
+        self.assertIn("AGW2-03", warns)   # no throttling
+
+    def test_secure_api(self):
+        scanner = make_scanner(["APIGATEWAYV2"])
+        api2 = MagicMock()
+        api2.get_apis.return_value = {
+            "Items": [{"ApiId": "h2", "Name": "secure-http"}]}
+        api2.get_stages.return_value = {"Items": [{
+            "StageName": "prod",
+            "AccessLogSettings": {"DestinationArn": "arn:aws:logs:::lg"},
+            "DefaultRouteSettings": {"ThrottlingBurstLimit": 100,
+                                     "ThrottlingRateLimit": 50},
+        }]}
+        api2.get_routes.return_value = {"Items": [
+            {"RouteKey": "GET /data", "AuthorizationType": "AWS_IAM"},
+        ]}
+        scanner._clients = {"apigatewayv2:us-east-1": api2}
+
+        scanner._check_apigatewayv2()
+
+        passes = [r.check_id for r in scanner.results if r.status == "PASS"]
+        self.assertIn("AGW2-01", passes)
+        self.assertIn("AGW2-02", passes)
+        self.assertIn("AGW2-03", passes)
 
 
 if __name__ == "__main__":
