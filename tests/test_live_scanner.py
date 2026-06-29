@@ -25,6 +25,7 @@ from aws_live_scanner import (
     COMPLIANCE_MAP, REMEDIATION_MAP, CHECK_SEVERITY,
     SECTIONS, SECTION_LABELS,
     evaluate_privesc, IAM_PRIVESC_RULES,
+    fails_threshold, diff_findings,
 )
 
 # Mock ClientError for tests (boto3 may not be installed)
@@ -907,6 +908,120 @@ class TestIAMPrivescSection(unittest.TestCase):
                   if r.status == "PASS" and r.check_id == "IAMPE-00"]
         self.assertEqual(fails, [])
         self.assertTrue(passes)
+
+
+# ─── Test: workflow integration (SARIF / ASFF / fail-on / diff) ──────────────
+class TestFailOnThreshold(unittest.TestCase):
+
+    def _results(self, *sevs):
+        return [Result("FAIL", f"X-{i}", "X", "r", "m", severity=s)
+                for i, s in enumerate(sevs)]
+
+    def test_fail_on_triggers_at_or_above(self):
+        results = self._results("MEDIUM", "LOW")
+        self.assertTrue(fails_threshold(results, "MEDIUM"))
+        self.assertTrue(fails_threshold(results, "LOW"))
+        self.assertFalse(fails_threshold(results, "HIGH"))
+        self.assertFalse(fails_threshold(results, "CRITICAL"))
+
+    def test_fail_on_ignores_warn_and_pass(self):
+        results = [
+            Result("WARN", "X-1", "X", "r", "m", severity="LOW"),
+            Result("PASS", "X-2", "X", "r", "m", severity="CRITICAL"),
+        ]
+        self.assertFalse(fails_threshold(results, "LOW"))
+
+    def test_critical_fail_trips_high_threshold(self):
+        self.assertTrue(fails_threshold(self._results("CRITICAL"), "HIGH"))
+
+
+class TestDiffFindings(unittest.TestCase):
+
+    def test_new_and_resolved(self):
+        current = [
+            Result("FAIL", "IAM-01", "IAM", "root", "still bad", severity="CRITICAL"),
+            Result("FAIL", "S3-03", "S3", "bucket-x", "newly bad", severity="HIGH"),
+            Result("PASS", "S3-01", "S3", "bucket-y", "ok"),
+        ]
+        baseline = [
+            {"status": "FAIL", "check_id": "IAM-01", "resource": "root", "message": "x"},
+            {"status": "FAIL", "check_id": "VPC-01", "resource": "sg-1", "message": "fixed now"},
+        ]
+        d = diff_findings(current, baseline)
+        new_keys = {(r.check_id, r.resource) for r in d["new"]}
+        resolved_keys = {(x["check_id"], x["resource"]) for x in d["resolved"]}
+        self.assertEqual(new_keys, {("S3-03", "bucket-x")})
+        self.assertEqual(resolved_keys, {("VPC-01", "sg-1")})
+
+    def test_pass_results_are_not_findings(self):
+        current = [Result("PASS", "X-1", "X", "r", "ok")]
+        d = diff_findings(current, [])
+        self.assertEqual(d["new"], [])
+
+
+class TestSarifOutput(unittest.TestCase):
+
+    def _scanner_with_findings(self):
+        scanner = make_scanner()
+        scanner.account = "123456789012"
+        scanner.results = [
+            Result("FAIL", "IAMPE-19", "IAMPRIVESC", "user:bob",
+                   "Full administrative access", severity="CRITICAL",
+                   compliance={"CIS": "1.16"}, remediation_cmd="aws iam ..."),
+            Result("WARN", "ACM-03", "ACM", "old.example.com",
+                   "Certificate not associated", severity="LOW"),
+            Result("PASS", "S3-01", "S3", "bucket", "BPA enabled"),
+        ]
+        return scanner
+
+    def test_sarif_structure(self):
+        import tempfile
+        scanner = self._scanner_with_findings()
+        path = tempfile.mktemp(suffix=".sarif")
+        try:
+            scanner.save_sarif(path)
+            with open(path) as f:
+                doc = json.load(f)
+            self.assertEqual(doc["version"], "2.1.0")
+            run = doc["runs"][0]
+            # only FAIL + WARN become findings (PASS excluded)
+            self.assertEqual(len(run["results"]), 2)
+            self.assertEqual(len(run["tool"]["driver"]["rules"]), 2)
+            # CRITICAL maps to error level
+            crit = [r for r in run["results"] if r["ruleId"] == "IAMPE-19"][0]
+            self.assertEqual(crit["level"], "error")
+            self.assertIn("partialFingerprints", crit)
+        finally:
+            os.unlink(path)
+
+
+class TestAsffOutput(unittest.TestCase):
+
+    def test_asff_fields(self):
+        import tempfile
+        scanner = make_scanner()
+        scanner.account = "123456789012"
+        scanner.results = [
+            Result("FAIL", "IAM-01", "IAM", "root", "Root MFA missing",
+                   severity="CRITICAL", compliance={"CIS": "1.5", "NIST": "IA-2(1)"},
+                   remediation_cmd="aws iam enable-mfa-device ..."),
+            Result("PASS", "S3-01", "S3", "bucket", "ok"),
+        ]
+        path = tempfile.mktemp(suffix=".json")
+        try:
+            scanner.save_asff(path)
+            with open(path) as f:
+                findings = json.load(f)
+            self.assertEqual(len(findings), 1)   # PASS excluded
+            f0 = findings[0]
+            self.assertEqual(f0["SchemaVersion"], "2018-10-08")
+            self.assertEqual(f0["AwsAccountId"], "123456789012")
+            self.assertEqual(f0["Severity"]["Label"], "CRITICAL")
+            self.assertEqual(f0["Compliance"]["Status"], "FAILED")
+            self.assertIn("CIS 1.5", f0["Compliance"]["RelatedRequirements"])
+            self.assertTrue(f0["Remediation"]["Recommendation"]["Text"])
+        finally:
+            os.unlink(path)
 
 
 if __name__ == "__main__":

@@ -480,6 +480,56 @@ def score_to_grade(score: float) -> str:
     return "F"
 
 
+# ─── Workflow-integration helpers (SARIF / ASFF / gating / diff) ─────────────
+# Ordinal ranking so we can compare severities for --fail-on thresholds.
+SEVERITY_ORDER = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1, "": 0}
+
+# Map internal severity → SARIF result level.
+SARIF_LEVEL = {"CRITICAL": "error", "HIGH": "error", "MEDIUM": "warning",
+               "LOW": "note", "INFO": "none", "": "warning"}
+
+# Map internal severity → AWS Security Finding Format (ASFF) severity label.
+ASFF_SEVERITY = {"CRITICAL": "CRITICAL", "HIGH": "HIGH", "MEDIUM": "MEDIUM",
+                 "LOW": "LOW", "INFO": "INFORMATIONAL", "": "INFORMATIONAL"}
+
+# Map status → ASFF Compliance.Status.
+ASFF_COMPLIANCE_STATUS = {"FAIL": "FAILED", "WARN": "WARNING",
+                          "PASS": "PASSED", "INFO": "NOT_AVAILABLE"}
+
+
+def finding_key(check_id: str, resource: str) -> str:
+    """Stable identity for a finding, used for diffing and fingerprints."""
+    return f"{check_id}|{resource}"
+
+
+def fails_threshold(results: List[Result], threshold: str) -> bool:
+    """True if any FAIL result is at or above `threshold` severity."""
+    floor = SEVERITY_ORDER.get(threshold.upper(), 0)
+    return any(r.status == "FAIL"
+               and SEVERITY_ORDER.get(r.severity, 0) >= floor
+               for r in results)
+
+
+def diff_findings(current: List[Result], baseline_results: List[Dict]) -> Dict:
+    """Compare current findings against a previously-saved JSON report's results.
+    Only FAIL/WARN entries are treated as findings. Returns new + resolved lists
+    keyed by (check_id, resource)."""
+    def _key_set(items, getter):
+        return {finding_key(getter(i, "check_id"), getter(i, "resource")): i
+                for i in items
+                if getter(i, "status") in ("FAIL", "WARN")}
+
+    cur = _key_set(current, lambda r, a: getattr(r, a))
+    base = _key_set(baseline_results, lambda d, a: d.get(a, ""))
+
+    new_keys = cur.keys() - base.keys()
+    resolved_keys = base.keys() - cur.keys()
+    return {
+        "new": [cur[k] for k in sorted(new_keys)],
+        "resolved": [base[k] for k in sorted(resolved_keys)],
+    }
+
+
 # ─── Scanner ──────────────────────────────────────────────────────────────────
 class AWSLiveScanner:
     """Live, read-only AWS security audit scanner."""
@@ -3764,6 +3814,169 @@ class AWSLiveScanner:
             json.dump(data, f, indent=2, default=str)
         print(f"{BLUE}[*]{RESET} JSON report saved: {path}")
 
+    # ── Human-readable rule title for a check_id (used by SARIF) ──────────────
+    @staticmethod
+    def _rule_title(check_id: str) -> str:
+        for rule in IAM_PRIVESC_RULES:
+            if rule["id"] == check_id:
+                return rule["name"]
+        if check_id == IAM_PRIVESC_FULL_ADMIN["id"]:
+            return IAM_PRIVESC_FULL_ADMIN["name"]
+        return check_id
+
+    def save_sarif(self, path: str):
+        """Write a SARIF 2.1.0 report (FAIL + WARN findings) for GitHub code
+        scanning and other SARIF consumers."""
+        findings = [r for r in self.results if r.status in ("FAIL", "WARN")]
+
+        # Build a unique rule per check_id that appears in findings.
+        rules, rule_index = [], {}
+        for r in findings:
+            if r.check_id in rule_index:
+                continue
+            rule_index[r.check_id] = len(rules)
+            tags = ["security", r.section.lower()]
+            tags += [f"{fw}:{ctrl}" for fw, ctrl in (r.compliance or {}).items()]
+            rules.append({
+                "id": r.check_id,
+                "name": self._rule_title(r.check_id).replace(" ", ""),
+                "shortDescription": {"text": f"{r.check_id}: {self._rule_title(r.check_id)}"},
+                "fullDescription": {"text": r.message},
+                "helpUri": "https://github.com/Krishcalin/AWS-Security-Scanner",
+                "defaultConfiguration": {
+                    "level": SARIF_LEVEL.get(r.severity, "warning")},
+                "properties": {
+                    "tags": tags,
+                    "security-severity": {
+                        "CRITICAL": "9.5", "HIGH": "8.0", "MEDIUM": "5.5",
+                        "LOW": "3.0", "INFO": "0.0"}.get(r.severity, "5.5"),
+                },
+            })
+
+        results_json = []
+        for r in findings:
+            loc = f"{r.section}/{r.check_id}"
+            results_json.append({
+                "ruleId": r.check_id,
+                "ruleIndex": rule_index[r.check_id],
+                "level": SARIF_LEVEL.get(r.severity, "warning"),
+                "message": {"text": f"{r.message}"
+                            + (f" [resource: {r.resource}]" if r.resource else "")},
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": loc},
+                        "region": {"startLine": 1, "startColumn": 1},
+                    },
+                    "logicalLocations": [{
+                        "name": r.resource or r.section,
+                        "fullyQualifiedName": f"{self.account}/{self.region}/"
+                                              f"{r.section}/{r.resource}",
+                        "kind": "resource",
+                    }],
+                }],
+                "partialFingerprints": {
+                    "awsFinding": finding_key(r.check_id, r.resource)},
+                "properties": {
+                    "severity": r.severity,
+                    "section": r.section,
+                    "compliance": r.compliance,
+                    "remediation": r.remediation_cmd,
+                },
+            })
+
+        sarif = {
+            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+            "version": "2.1.0",
+            "runs": [{
+                "tool": {"driver": {
+                    "name": "AWS Live Security Scanner",
+                    "version": VERSION,
+                    "informationUri": "https://github.com/Krishcalin/AWS-Security-Scanner",
+                    "rules": rules,
+                }},
+                "automationDetails": {
+                    "id": f"aws-live-scanner/{self.account}/{self.region}"},
+                "results": results_json,
+            }],
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(sarif, f, indent=2, default=str)
+        print(f"{BLUE}[*]{RESET} SARIF report saved: {path} "
+              f"({len(results_json)} findings)")
+
+    def save_asff(self, path: str):
+        """Write AWS Security Finding Format (ASFF) findings for import into
+        Security Hub via:  aws securityhub batch-import-findings --findings file://<path>
+        (BatchImportFindings accepts max 100 findings per call — chunk if needed)."""
+        now = datetime.now(timezone.utc).isoformat()
+        product_arn = (f"arn:aws:securityhub:{self.region}:{self.account}:"
+                       f"product/{self.account}/default")
+        findings = []
+        for r in self.results:
+            if r.status not in ("FAIL", "WARN"):
+                continue
+            related = [f"{fw} {ctrl}" for fw, ctrl in (r.compliance or {}).items()]
+            findings.append({
+                "SchemaVersion": "2018-10-08",
+                "Id": f"{self.region}/{r.check_id}/{r.resource or 'account'}",
+                "ProductArn": product_arn,
+                "GeneratorId": f"aws-live-scanner/{r.check_id}",
+                "AwsAccountId": self.account,
+                "Types": ["Software and Configuration Checks/AWS Security Best Practices"],
+                "CreatedAt": now,
+                "UpdatedAt": now,
+                "Severity": {"Label": ASFF_SEVERITY.get(r.severity, "INFORMATIONAL")},
+                "Title": f"{r.check_id}: {self._rule_title(r.check_id)}"[:256],
+                "Description": r.message[:1024],
+                "Resources": [{
+                    "Type": "Other",
+                    "Id": r.resource or f"{self.account}",
+                    "Region": self.region,
+                }],
+                "Compliance": {
+                    "Status": ASFF_COMPLIANCE_STATUS.get(r.status, "NOT_AVAILABLE"),
+                    **({"RelatedRequirements": related} if related else {}),
+                },
+                "Remediation": {"Recommendation": {
+                    "Text": (r.remediation_cmd or "Review and apply least privilege")[:512],
+                    "Url": "https://github.com/Krishcalin/AWS-Security-Scanner",
+                }},
+                "ProductFields": {"Section": r.section, "CheckId": r.check_id},
+                "RecordState": "ACTIVE",
+            })
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(findings, f, indent=2, default=str)
+        print(f"{BLUE}[*]{RESET} ASFF findings saved: {path} "
+              f"({len(findings)} findings)")
+
+    def print_diff(self, baseline_path: str):
+        """Compare this scan against a previously-saved JSON report and print
+        new + resolved findings."""
+        try:
+            with open(baseline_path, "r", encoding="utf-8") as f:
+                baseline = json.load(f)
+        except Exception as e:
+            print(f"{YELLOW}[!]{RESET} Could not read baseline {baseline_path}: {e}")
+            return
+        d = diff_findings(self.results, baseline.get("results", []))
+        new, resolved = d["new"], d["resolved"]
+
+        print("\n" + "=" * 70)
+        print(f" {BOLD}CHANGES SINCE BASELINE{RESET}  ({baseline_path})")
+        print(f" {RED}NEW{RESET}: {len(new)}   |   {GREEN}RESOLVED{RESET}: {len(resolved)}")
+        print("=" * 70)
+        if new:
+            print(f"\n{BOLD}{RED}NEW findings:{RESET}")
+            for r in new:
+                res = f" | {r.resource}" if r.resource else ""
+                sev = f" [{r.severity}]" if r.severity else ""
+                print(f"  {RED}+{RESET}{sev} {r.check_id}: {r.message}{res}")
+        if resolved:
+            print(f"\n{BOLD}{GREEN}RESOLVED findings:{RESET}")
+            for d_ in resolved:
+                res = f" | {d_.get('resource')}" if d_.get("resource") else ""
+                print(f"  {GREEN}-{RESET} {d_.get('check_id')}: {d_.get('message')}{res}")
+
     def save_html(self, path: str):
         STATUS_BADGE = {
             "PASS": '<span class="badge pass">PASS</span>',
@@ -3965,7 +4178,7 @@ def main():
         description=(
             f"AWS Live Security Scanner v{VERSION} — "
             "read-only audit of AWS environments via boto3.\n"
-            "Covers 25 service domains aligned to CIS, PCI-DSS, HIPAA, SOC2, NIST."
+            f"Covers {len(SECTIONS)} service domains aligned to CIS, PCI-DSS, HIPAA, SOC2, NIST."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
@@ -3976,8 +4189,10 @@ examples:
   python aws_live_scanner.py
   python aws_live_scanner.py --region us-east-1
   python aws_live_scanner.py --region eu-west-1 --json out.json --html out.html
-  python aws_live_scanner.py --sections IAM,S3,RDS --output-dir evidence/
-  python aws_live_scanner.py --verbose
+  python aws_live_scanner.py --sections IAM,S3,IAMPRIVESC --output-dir evidence/
+  python aws_live_scanner.py --sarif results.sarif --fail-on HIGH
+  python aws_live_scanner.py --asff findings.asff.json
+  python aws_live_scanner.py --json today.json --baseline yesterday.json
 """,
     )
     parser.add_argument(
@@ -3992,6 +4207,26 @@ examples:
     parser.add_argument(
         "--html", metavar="FILE",
         help="Save results as HTML report to FILE",
+    )
+    parser.add_argument(
+        "--sarif", metavar="FILE",
+        help="Save findings as SARIF 2.1.0 to FILE (GitHub code scanning)",
+    )
+    parser.add_argument(
+        "--asff", metavar="FILE",
+        help="Save findings as AWS Security Finding Format (ASFF) JSON to FILE "
+             "for Security Hub batch-import-findings",
+    )
+    parser.add_argument(
+        "--baseline", metavar="FILE",
+        help="Compare this scan against a previous JSON report and print "
+             "new/resolved findings",
+    )
+    parser.add_argument(
+        "--fail-on", metavar="SEVERITY", dest="fail_on",
+        choices=["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+        help="Exit non-zero only if a FAIL at or above this severity exists "
+             "(default: exit 1 on any FAIL)",
     )
     parser.add_argument(
         "--output-dir", metavar="DIR",
@@ -4033,13 +4268,24 @@ examples:
         scanner.save_json(args.json)
     if args.html:
         scanner.save_html(args.html)
+    if args.sarif:
+        scanner.save_sarif(args.sarif)
+    if args.asff:
+        scanner.save_asff(args.asff)
+    if args.baseline:
+        scanner.print_diff(args.baseline)
 
     # Always save evidence (auto-name dir if not specified)
     ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = args.output_dir or f"aws_audit_{scanner.account}_{ts}"
     scanner.save_evidence(out_dir)
 
-    sys.exit(1 if counts.get("FAIL", 0) > 0 else 0)
+    # Exit code: gate on --fail-on threshold if given, else any FAIL.
+    if args.fail_on:
+        failed = fails_threshold(scanner.results, args.fail_on)
+    else:
+        failed = counts.get("FAIL", 0) > 0
+    sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":

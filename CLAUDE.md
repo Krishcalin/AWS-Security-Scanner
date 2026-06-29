@@ -13,7 +13,7 @@ AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
 ├── aws_live_scanner.py      # Live audit scanner v2.0.0 (boto3, 5 frameworks, risk scoring)
 ├── tests/
-│   ├── test_live_scanner.py # 56 unit tests (mock boto3)
+│   ├── test_live_scanner.py # 63 unit tests (mock boto3)
 │   └── samples/             # Vulnerable IaC + sample reports
 ├── docs/banner.svg
 ├── CLAUDE.md
@@ -88,6 +88,9 @@ class AWSLiveScanner:
     def run(self): ...
     def save_json(self, path): ...   # includes posture_score, compliance, remediation
     def save_html(self, path): ...   # severity badges, compliance tags, CLI accordions
+    def save_sarif(self, path): ...  # SARIF 2.1.0 (FAIL+WARN) for GitHub code scanning
+    def save_asff(self, path): ...   # AWS Security Finding Format for Security Hub import
+    def print_diff(self, baseline): ...  # new/resolved vs a prior JSON report
     def save_evidence(self, output_dir): ...
     def print_report(self): ...      # posture score + grade
 
@@ -97,6 +100,8 @@ COMPLIANCE_MAP = {...}    # check_id -> {CIS, PCI-DSS, HIPAA, SOC2, NIST}
 REMEDIATION_MAP = {...}   # check_id -> AWS CLI command
 compute_risk_score(results) -> float   # 100 - weighted penalties
 score_to_grade(score) -> str           # A/B/C/D/F
+fails_threshold(results, severity) -> bool   # --fail-on gating
+diff_findings(current, baseline_results) -> {new, resolved}
 ```
 
 - **CHECK_MAP**: Dict mapping 35 section names -> bound check methods
@@ -131,9 +136,29 @@ against known escalation primitives.
   (EC2/Lambda/Glue/CloudFormation/SageMaker), -16 UpdateFunctionCode,
   -18 SSM SendCommand/StartSession, -19 full admin.
 
+### Workflow Integration (CI/CD & AWS-native)
+
+Findings can be emitted in machine formats and used to gate pipelines:
+
+- **SARIF 2.1.0** (`--sarif FILE`): one rule per `check_id`, FAIL+WARN as results,
+  severity → SARIF level (CRITICAL/HIGH→error, MEDIUM→warning, LOW→note),
+  `security-severity` property for GitHub code-scanning severity, stable
+  `partialFingerprints`. PASS/INFO are excluded.
+- **ASFF** (`--asff FILE`): AWS Security Finding Format JSON list for
+  `aws securityhub batch-import-findings --findings file://FILE` (cap 100/call).
+  Maps severity → ASFF label, status → Compliance.Status, compliance map →
+  RelatedRequirements, remediation_cmd → Remediation.Recommendation.
+- **CI gating** (`--fail-on CRITICAL|HIGH|MEDIUM|LOW`): exit 1 only if a FAIL at
+  or above the threshold exists; default exits 1 on any FAIL. Uses
+  `SEVERITY_ORDER` + `fails_threshold()`.
+- **Scan diff** (`--baseline prev.json`): prints NEW and RESOLVED findings vs a
+  previously-saved JSON report; findings keyed by `(check_id, resource)`,
+  FAIL/WARN only.
+
 ### CLI
 ```bash
 python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
+    [--sarif FILE] [--asff FILE] [--baseline FILE] [--fail-on SEVERITY] \
     [--output-dir DIR] [--sections SEC1,SEC2,...] [-v] [--version]
 # Note: --sections takes a single COMMA-separated value (e.g. --sections IAM,S3,IAMPRIVESC)
 ```
@@ -141,7 +166,7 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 56 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 63 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
@@ -151,6 +176,7 @@ Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
 - API Gateway, ELB, EBS, Redshift, EFS, ACM check logic
 - SageMaker, Cognito, API Gateway v2 (HTTP APIs) check logic
 - IAM privilege-escalation engine (action-level path evaluation, policy parsing)
+- Workflow outputs: SARIF structure, ASFF fields, --fail-on gating, baseline diff
 - JSON report with new fields
 
 ## Conventions

@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/AWS-CIS%20Benchmark%20v3.0-ff9900?style=flat-square&logo=amazonaws&logoColor=white" alt="CIS AWS v3.0"/>
   <img src="https://img.shields.io/badge/compliance-CIS%20%7C%20PCI--DSS%20%7C%20HIPAA%20%7C%20SOC2%20%7C%20NIST-purple?style=flat-square" alt="5 Compliance Frameworks"/>
   <img src="https://img.shields.io/badge/checks-200%2B-red?style=flat-square" alt="200+ Checks"/>
-  <img src="https://img.shields.io/badge/tests-56%20passing-brightgreen?style=flat-square" alt="56 Tests"/>
+  <img src="https://img.shields.io/badge/tests-63%20passing-brightgreen?style=flat-square" alt="63 Tests"/>
 </p>
 
 ---
@@ -159,9 +159,11 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 - **5 compliance frameworks** -- CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
 - **Risk scoring** -- Posture score 0-100 with letter grade (A-F), severity-weighted
 - **AWS CLI remediation** -- actionable CLI commands for every failed check
-- **3 output formats** -- coloured console, JSON report, interactive HTML report
+- **5 output formats** -- coloured console, JSON, interactive HTML, **SARIF 2.1.0** (GitHub code scanning), **ASFF** (AWS Security Hub)
+- **CI/CD gating** -- `--fail-on CRITICAL|HIGH|MEDIUM|LOW` for pipeline pass/fail control
+- **Scan diff** -- `--baseline prev.json` surfaces only what's *new* or *resolved* since a previous run
 - **Evidence collection** -- CSV/JSON artefact files saved per check
-- **56 unit tests** -- full test suite with mock boto3, no AWS credentials needed
+- **63 unit tests** -- full test suite with mock boto3, no AWS credentials needed
 
 ### Prerequisites (Live Scanner)
 
@@ -188,6 +190,16 @@ python aws_live_scanner.py --sections IAMPRIVESC
 # Save JSON + HTML reports and evidence artefacts
 python aws_live_scanner.py --json report.json --html report.html --output-dir ./audit_output
 
+# CI/CD: emit SARIF for GitHub code scanning and fail the build on HIGH+ findings
+python aws_live_scanner.py --sarif results.sarif --fail-on HIGH
+
+# Push findings into AWS Security Hub (ASFF)
+python aws_live_scanner.py --asff findings.asff.json
+aws securityhub batch-import-findings --findings file://findings.asff.json
+
+# Show only what changed since the last scan
+python aws_live_scanner.py --json today.json --baseline yesterday.json
+
 # Verbose mode
 python aws_live_scanner.py --verbose
 ```
@@ -196,7 +208,8 @@ python aws_live_scanner.py --verbose
 
 ```
 usage: aws_live_scanner.py [-h] [--region REGION] [--json FILE] [--html FILE]
-                            [--output-dir DIR]
+                            [--sarif FILE] [--asff FILE] [--baseline FILE]
+                            [--fail-on {CRITICAL,HIGH,MEDIUM,LOW}] [--output-dir DIR]
                             [--sections {IAM,S3,VPC,LOGGING,KMS,EC2,ECR,BACKUP,
                                          RDS,GLACIER,SNS,SQS,CLOUDFRONT,ROUTE53,
                                          BEDROCK,BEDROCK_AGENTS,LAMBDA,EKS,ECS,
@@ -210,6 +223,10 @@ options:
   --region REGION       AWS region to audit (default: eu-west-1)
   --json FILE           Write JSON report to FILE
   --html FILE           Write HTML report to FILE
+  --sarif FILE          Write SARIF 2.1.0 findings to FILE (GitHub code scanning)
+  --asff FILE           Write ASFF findings to FILE (AWS Security Hub import)
+  --baseline FILE       Diff against a previous JSON report (new/resolved)
+  --fail-on SEVERITY    Exit 1 only on a FAIL at/above this severity
   --output-dir DIR      Directory for evidence artefact files
   --sections SECTIONS   Run only the named sections (single comma-separated value)
   -v, --verbose         Print each check as it runs
@@ -284,6 +301,38 @@ Score = 100 − (CRITICAL × 15  +  HIGH × 5  +  MEDIUM × 2  +  LOW × 0.5)
 | **D** | 60 -- 69 |
 | **F** | 0 -- 59 |
 
+### CI/CD & AWS Security Hub Integration
+
+The live scanner emits **SARIF 2.1.0** (GitHub code scanning) and **ASFF** (AWS
+Security Hub), and gates pipelines via `--fail-on`:
+
+```yaml
+# .github/workflows/aws-audit.yml
+jobs:
+  aws-security-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write          # required to upload SARIF
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::<ACCOUNT>:role/security-audit
+          aws-region: eu-west-1
+      - run: pip install boto3
+      - run: python aws_live_scanner.py --sarif results.sarif --fail-on HIGH
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+```
+
+- **SARIF** maps severity → level (CRITICAL/HIGH → `error`) and sets
+  `security-severity` so findings surface in the GitHub Security tab.
+- **ASFF** imports into Security Hub: `python aws_live_scanner.py --asff f.json &&
+  aws securityhub batch-import-findings --findings file://f.json` (≤100/call).
+- **Drift tracking**: `--baseline prev.json` prints only NEW and RESOLVED findings.
+
 ---
 
 ## When to Use Which Scanner
@@ -306,7 +355,7 @@ AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC Security Scanner (CloudFormation + Terraform, no credentials)
 ├── aws_live_scanner.py      # Live Audit Scanner v2.0.0 (35 sections, 5 compliance frameworks)
 ├── tests/
-│   ├── test_live_scanner.py # 56 unit tests (mock boto3, no credentials needed)
+│   ├── test_live_scanner.py # 63 unit tests (mock boto3, no credentials needed)
 │   └── samples/             # Sample IaC files and reports
 ├── docs/
 │   └── banner.svg
