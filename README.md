@@ -24,7 +24,7 @@ This repository contains **two complementary AWS security scanners**:
 | Scanner | File | Type | Input | Checks |
 |---------|------|------|-------|--------|
 | **IaC Security Scanner** | `aws_offline_scanner.py` | Static analysis | CloudFormation + Terraform files | 100+ (60+ TF regex + 42 CF structural) |
-| **Live Audit Scanner** | `aws_live_scanner.py` | Live AWS API audit | Running AWS account | 145+ across 35 sections |
+| **Live Audit Scanner** | `aws_live_scanner.py` | Live AWS API audit + security graph | Running AWS account (multi-account via AssumeRole) | 150+ across 35 sections |
 
 Use the **IaC scanner** to catch misconfigurations in CloudFormation templates and Terraform files before deployment. Use the **live scanner** to audit a running AWS account for CIS Benchmark compliance.
 
@@ -154,8 +154,11 @@ options:
 The live scanner connects to a running AWS account via **boto3**, performing **read-only** security checks aligned to multiple compliance frameworks. It produces colour-coded terminal output with PASS/FAIL/WARN verdicts, posture scoring, JSON/HTML reports, and saves evidence artefacts to a timestamped output directory.
 
 - **Read-only by design** -- never modifies AWS resources
-- **145+ security checks** across 35 audit sections
-- **IAM privilege-escalation analysis** -- builds each principal's effective permission set and detects known escalation paths with resource-aware scoping (account-wide vs resource-scoped), not just per-resource misconfigurations
+- **150+ security checks** across 35 audit sections
+- **Security graph & attack-path chains** (CNAPP Phase 1) -- projects findings onto an ARN-keyed graph (`aws_graph.py`), builds `CAN_ASSUME` (trust) + `CAN_PRIVESC_TO` (privesc) edges, and surfaces **transitive privilege-escalation chains** (`user → assume role → escalate to admin`) plus roles assumable by *any* principal. Serialize with `--graph graph.json` (Neptune migration seed)
+- **IAM privilege-escalation analysis** -- builds each principal's effective permission set (via `GetAccountAuthorizationDetails`) and detects known escalation paths with resource-aware scoping; condition-guarded paths are downgraded to WARN
+- **Multi-account & multi-region** -- `--org` / `--accounts` fan out across an AWS Organization via `--assume-role`; `--all-regions` sweeps every enabled region for regional sections
+- **Compliance scorecard** -- `--compliance` prints a per-framework control pass/fail rollup (CIS/PCI/HIPAA/SOC2/NIST), also embedded in the JSON report
 - **5 compliance frameworks** -- CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
 - **Risk scoring** -- Posture score 0-100 with letter grade (A-F), severity-weighted
 - **AWS CLI remediation** -- actionable CLI commands for every failed check
@@ -163,7 +166,7 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 - **CI/CD gating** -- `--fail-on CRITICAL|HIGH|MEDIUM|LOW` for pipeline pass/fail control
 - **Scan diff** -- `--baseline prev.json` surfaces only what's *new* or *resolved* since a previous run
 - **Evidence collection** -- CSV/JSON artefact files saved per check
-- **69 unit tests** -- full test suite with mock boto3, no AWS credentials needed
+- **101 unit tests** -- full test suite with mock boto3, no AWS credentials needed
 
 ### Prerequisites (Live Scanner)
 
@@ -197,6 +200,15 @@ python aws_live_scanner.py --sarif results.sarif --fail-on HIGH
 python aws_live_scanner.py --asff findings.asff.json
 aws securityhub batch-import-findings --findings file://findings.asff.json
 
+# CNAPP: all regions, compliance scorecard, and export the identity security graph
+python aws_live_scanner.py --all-regions --compliance --graph graph.json
+
+# Multi-account: scan every account in the Organization via an assumable read-only role
+python aws_live_scanner.py --org --assume-role OrganizationAccountAccessRole --json org.json
+
+# Multi-account: scan an explicit account list with an ExternalId
+python aws_live_scanner.py --accounts 111122223333,444455556666 --assume-role AuditRole --external-id my-id
+
 # Show only what changed since the last scan
 python aws_live_scanner.py --json today.json --baseline yesterday.json
 
@@ -217,7 +229,9 @@ usage: aws_live_scanner.py [-h] [--region REGION] [--json FILE] [--html FILE]
                                          DYNAMODB,STEPFUNCTIONS,APIGATEWAY,ELB,
                                          EBS,REDSHIFT,EFS,ACM,SAGEMAKER,COGNITO,
                                          APIGATEWAYV2,IAMPRIVESC}]
-                            [-v] [--version]
+                            [--all-regions] [--compliance] [--graph FILE]
+                            [--org] [--accounts IDS] [--assume-role ROLE]
+                            [--external-id ID] [-v] [--version]
 
 options:
   --region REGION       AWS region to audit (default: eu-west-1)
@@ -229,6 +243,13 @@ options:
   --fail-on SEVERITY    Exit 1 only on a FAIL at/above this severity
   --output-dir DIR      Directory for evidence artefact files
   --sections SECTIONS   Run only the named sections (single comma-separated value)
+  --all-regions         Sweep every enabled region for regional sections
+  --compliance          Print the per-framework compliance scorecard
+  --graph FILE          Write the identity security graph to FILE (graph.json)
+  --org                 Scan every ACTIVE account in the AWS Organization (needs --assume-role)
+  --accounts IDS        Comma-separated account IDs to scan (needs --assume-role)
+  --assume-role ROLE    Role name/ARN to assume in each target account
+  --external-id ID      STS ExternalId for the assumed role
   -v, --verbose         Print each check as it runs
   --version             Show scanner version
 ```
@@ -353,9 +374,11 @@ jobs:
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC Security Scanner (CloudFormation + Terraform, no credentials)
-├── aws_live_scanner.py      # Live Audit Scanner v2.1.0 (35 sections, 5 compliance frameworks)
+├── aws_live_scanner.py      # Live Audit Scanner v2.2.0 (35 sections, graph, multi-account)
+├── aws_graph.py             # SecurityGraph — nodes/edges, bounded traversal, graph.json (stdlib)
 ├── tests/
 │   ├── test_live_scanner.py # 69 unit tests (mock boto3, no credentials needed)
+│   ├── test_cnapp_phase1.py # 32 unit tests (graph, chains, trust, org fan-out, compliance)
 │   └── samples/             # Sample IaC files and reports
 ├── scripts/
 │   └── validate_live.py     # Read-only live-account validation harness

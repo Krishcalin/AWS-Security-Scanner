@@ -70,11 +70,35 @@ class MockPaginator:
         return [{self._key: self._items}]
 
 
+class _GAADPaginator:
+    """Mock GetAccountAuthorizationDetails paginator — yields one page holding
+    UserDetailList / GroupDetailList / RoleDetailList / Policies."""
+    def __init__(self, page):
+        self._page = page
+
+    def paginate(self, **kwargs):
+        return [self._page]
+
+
+def _gaad_iam(users=None, roles=None, groups=None, policies=None):
+    """Return a MagicMock IAM client whose only configured paginator is
+    get_account_authorization_details (the single call _get_iam_principals now uses)."""
+    page = {
+        "UserDetailList":  users or [],
+        "GroupDetailList": groups or [],
+        "RoleDetailList":  roles or [],
+        "Policies":        policies or [],
+    }
+    iam = MagicMock()
+    iam.get_paginator.side_effect = lambda name: _GAADPaginator(page)
+    return iam
+
+
 # ─── Test: Core data structures ──────────────────────────────────────────────
 class TestDataStructures(unittest.TestCase):
 
     def test_version(self):
-        self.assertEqual(VERSION, "2.1.0")
+        self.assertEqual(VERSION, "2.2.0")
 
     def test_sections_count(self):
         self.assertEqual(len(SECTIONS), 35)
@@ -907,24 +931,15 @@ class TestPolicyParsing(unittest.TestCase):
 class TestIAMPrivescSection(unittest.TestCase):
 
     def _iam_with_user(self, policy_doc):
-        """Build a mock IAM client: one user 'alice' with an inline policy."""
-        iam = MagicMock()
-
-        def get_paginator(method):
-            data = {
-                "list_groups": ("Groups", []),
-                "list_users": ("Users", [{"UserName": "alice",
-                                          "Arn": "arn:aws:iam::123:user/alice"}]),
-                "list_roles": ("Roles", []),
-            }[method]
-            return MockPaginator(*data)
-
-        iam.get_paginator.side_effect = get_paginator
-        iam.list_attached_user_policies.return_value = {"AttachedPolicies": []}
-        iam.list_user_policies.return_value = {"PolicyNames": ["inline"]}
-        iam.get_user_policy.return_value = {"PolicyDocument": policy_doc}
-        iam.list_groups_for_user.return_value = {"Groups": []}
-        return iam
+        """Build a mock IAM client exposing GetAccountAuthorizationDetails: one
+        user 'alice' with a single inline policy."""
+        return _gaad_iam(users=[{
+            "UserName": "alice",
+            "Arn": "arn:aws:iam::123456789012:user/alice",
+            "UserPolicyList": [{"PolicyName": "inline", "PolicyDocument": policy_doc}],
+            "AttachedManagedPolicies": [],
+            "GroupList": [],
+        }])
 
     def test_attach_policy_path_detected(self):
         scanner = make_scanner(["IAMPRIVESC"])

@@ -2,18 +2,24 @@
 
 ## Project Overview
 
-Two complementary AWS security scanners:
+Two complementary AWS security scanners, with the live scanner evolving toward a
+full **CNAPP** (Cloud-Native Application Protection Platform) — see the CNAPP
+blueprint/roadmap: the north star is AWS-deep **toxic-combination attack paths**
+computed over a unified security graph.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **Live Audit Scanner** (`aws_live_scanner.py` v2.1.0) -- live AWS account audit via boto3 (145+ checks, 35 sections, 5 compliance frameworks, risk scoring)
+- **Live Audit Scanner** (`aws_live_scanner.py` v2.2.0) -- live AWS account audit via boto3 (150+ checks, 35 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph + attack-path chains**)
+- **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
 
 ## Repository Structure
 
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.1.0 (boto3, 5 frameworks, risk scoring)
+├── aws_live_scanner.py      # Live audit scanner v2.2.0 (boto3, 5 frameworks, graph, multi-account)
+├── aws_graph.py             # SecurityGraph — nodes/edges, bounded traversal, graph.json (stdlib)
 ├── tests/
 │   ├── test_live_scanner.py # 69 unit tests (mock boto3)
+│   ├── test_cnapp_phase1.py # 32 unit tests (graph, chains, trust, org fan-out, compliance rollup)
 │   └── samples/             # Vulnerable IaC + sample reports
 ├── scripts/
 │   └── validate_live.py     # Read-only live-account validation harness
@@ -62,13 +68,35 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.1.0)
+## Live Audit Scanner (`aws_live_scanner.py` v2.2.0)
 
-- **Type**: Live AWS account audit via boto3
-- **Lines**: ~4,046
-- **Dependencies**: `boto3` (required), Python 3.10+
-- **IAM permissions**: `SecurityAudit` AWS-managed policy (read-only)
+- **Type**: Live AWS account audit via boto3 (evolving toward CNAPP)
+- **Lines**: ~4,700
+- **Dependencies**: `boto3` (required), `aws_graph.py` (bundled, stdlib), Python 3.10+
+- **IAM permissions**: `SecurityAudit` AWS-managed policy (read-only); multi-account adds `sts:AssumeRole` into a read-only role per target account, and `organizations:ListAccounts` for `--org`
 - **Compliance**: CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
+
+### CNAPP Phase 0/1 additions (v2.2.0)
+
+- **Multi-account fan-out** — `--org` (AWS Organizations `list_accounts`) or `--accounts`
+  + `--assume-role` (+ `--external-id`) assume a read-only role per account; each account
+  scanned via its own `boto3.Session` (`AWSLiveScanner(session=...)`); results + graphs
+  aggregate into one org-wide report via `aggregate_results()` (resources prefixed by
+  account id). Module fns: `assume_role_session()`, `list_org_accounts()`.
+- **Multi-region sweep** — `--all-regions` runs regional sections in every enabled region
+  (`_regions_for_section()`); `GLOBAL_SECTIONS` (IAM/S3/ROUTE53/CLOUDFRONT/IAMPRIVESC) run once.
+- **Compliance scorecard** — `compliance_scorecard(results)` + `--compliance` + JSON
+  `compliance_scorecard` block: per-framework control pass/fail (universe = full
+  `COMPLIANCE_MAP`; a control fails if any FAIL/WARN references it).
+- **Security graph (`aws_graph.SecurityGraph`)** — `_build_identity_graph()` emits
+  `CAN_ASSUME` (trust-policy) and `CAN_PRIVESC_TO` (privesc) edges over ARN-keyed nodes;
+  `--graph FILE` writes node-link `graph.json` (Neptune seed). New findings:
+  `IAMPE-21` (transitive escalation chains via bounded `graph.reachable()`),
+  `IAMPE-22` (role assumable by any principal). Conditioned privesc/trust → WARN.
+- **CIEM collection** — `_get_iam_principals()` now uses one `iam:GetAccountAuthorizationDetails`
+  paginated call (principals + policy docs + trust docs); roles carry `trust` + `instance_profiles`.
+  `parse_trust_policy()` normalizes AssumeRolePolicyDocument; `_policy_to_statements` captures
+  `Condition`; `evaluate_privesc_scoped` annotates `conditioned`.
 
 ### Architecture
 
@@ -144,7 +172,8 @@ against known escalation primitives.
   -07 Create/UpdateLoginProfile, -08 UpdateAssumeRolePolicy, -10..14 PassRole+
   (EC2/Lambda/Glue/CloudFormation/SageMaker), -16 UpdateFunctionCode,
   -18 SSM SendCommand/StartSession, -19 full admin, -20 sts:AssumeRole on `*`
-  (flagged only when unrestricted).
+  (flagged only when unrestricted). **Graph-derived (v2.2.0)**: -21 transitive
+  escalation chains (assume → … → escalate), -22 role assumable by any principal.
 
 ### Workflow Integration (CI/CD & AWS-native)
 
@@ -169,14 +198,18 @@ Findings can be emitted in machine formats and used to gate pipelines:
 ```bash
 python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
     [--sarif FILE] [--asff FILE] [--baseline FILE] [--fail-on SEVERITY] \
-    [--output-dir DIR] [--sections SEC1,SEC2,...] [-v] [--version]
+    [--output-dir DIR] [--sections SEC1,SEC2,...] \
+    [--all-regions] [--compliance] [--graph FILE] \
+    [--org | --accounts ID1,ID2] [--assume-role ROLE] [--external-id ID] \
+    [-v] [--version]
 # Note: --sections takes a single COMMA-separated value (e.g. --sections IAM,S3,IAMPRIVESC)
+# --org/--accounts require --assume-role (a read-only role assumable in each target account)
 ```
 
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 69 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 101 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:

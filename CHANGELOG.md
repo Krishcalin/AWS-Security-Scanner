@@ -4,6 +4,51 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] — 2026
+
+**CNAPP Phase 0/1** — the first step from a single-account CSPM toward a
+Cloud-Native Application Protection Platform: enterprise-scale collection plus
+the foundation of the security graph and attack-path correlation. A new
+`aws_graph.py` module (zero dependencies) holds an ARN-keyed property graph that
+the scanner projects findings onto.
+
+### Added — security graph & CIEM depth (`aws_graph.SecurityGraph`)
+- **Identity graph** built during the IAMPRIVESC section: IAM principal nodes, an
+  AdminCapability node, `CAN_PRIVESC_TO` edges (each escalating principal → admin),
+  and `CAN_ASSUME` edges parsed from every role's trust policy.
+- **`IAMPE-21` transitive privilege-escalation chains** — bounded, cycle-safe graph
+  traversal surfaces `userA → assume roleB → escalate to admin` paths that
+  per-principal analysis misses.
+- **`IAMPE-22` dangerous role trust** — flags roles assumable by *any* AWS principal
+  (`Principal: "*"`); downgraded to WARN when a Condition (ExternalId/OrgID) guards it.
+- **Condition-aware privesc** — escalation paths whose granting statement carries a
+  policy Condition are downgraded from FAIL to WARN ("verify the condition").
+- `_get_iam_principals` now uses a single **`iam:GetAccountAuthorizationDetails`**
+  call (principals + inline/managed policy docs + role trust docs in one paginated
+  pull) instead of N per-principal calls.
+- **`--graph FILE`** serializes the graph to node-link `graph.json` — the Neptune
+  migration seed. Graph stats are embedded in the JSON report.
+
+### Added — multi-account & multi-region (agentless scale)
+- **`--org`** enumerates all ACTIVE accounts via AWS Organizations and scans each;
+  **`--accounts`** scans an explicit list. Both use **`--assume-role`** (+ optional
+  **`--external-id`**) to assume a read-only role per target account. Per-account
+  results/graphs aggregate into one org-wide report (every existing emitter reused).
+- **`--all-regions`** sweeps every enabled region for regional sections while global
+  sections (IAM/S3/Route53/CloudFront/IAMPRIVESC) run once.
+
+### Added — compliance rollup
+- **`compliance_scorecard()`** + **`--compliance`**: per-framework control pass/fail
+  rollup (CIS/PCI-DSS/HIPAA/SOC2/NIST), embedded in the JSON report. The control
+  universe is the full `COMPLIANCE_MAP`; a control fails if any FAIL/WARN references it.
+- Backfilled ~40 previously-unmapped FAIL-capable checks in `COMPLIANCE_MAP` and
+  filled `CHECK_SEVERITY` gaps.
+
+### Testing
+- 69 → 101 unit tests (new `tests/test_cnapp_phase1.py`: graph, trust parsing,
+  chains, wildcard trust, condition downgrade, GAAD collection, compliance rollup,
+  Organizations fan-out, region iterator — all mocked, no AWS/boto3 required).
+
 ## [2.1.0] — 2026
 
 A large feature release: broader service coverage, a new IAM attack-path engine

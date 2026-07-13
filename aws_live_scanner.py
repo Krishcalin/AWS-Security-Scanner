@@ -1,27 +1,37 @@
 #!/usr/bin/env python3
 """
-AWS Live Security Scanner v2.1.0
-Read-only live audit of AWS environments via boto3.
+AWS Live Security Scanner v2.2.0
+Read-only live audit of AWS environments via boto3, evolving toward a CNAPP.
 
 Aligned to: CIS AWS Foundations Benchmark v3.0
             AWS Well-Architected Framework — Security Pillar
             PCI DSS v4.0 · HIPAA · SOC 2 · NIST 800-53 Rev 5
 
-25 service domains:
-  IAM · S3 · VPC/Network · Logging & Monitoring · KMS · EC2
-  ECR · Backup · RDS · Glacier · SNS · SQS · CloudFront
-  Route 53 · Bedrock · Bedrock Agents · Lambda · EKS · ECS
-  Secrets Manager · WAF · ElastiCache · OpenSearch · DynamoDB
-  Step Functions
+35 service domains across IAM · S3 · VPC · Logging · KMS · EC2 · ECR · Backup ·
+RDS · Glacier · SNS · SQS · CloudFront · Route 53 · Bedrock · Lambda · EKS · ECS ·
+Secrets · WAF · ElastiCache · OpenSearch · DynamoDB · Step Functions · API Gateway ·
+ELB · EBS · Redshift · EFS · ACM · SageMaker · Cognito · HTTP APIs — plus an IAM
+privilege-escalation / attack-path engine.
+
+CNAPP Phase 0/1 (v2.2.0):
+  * Multi-account fan-out via AWS Organizations + STS AssumeRole (--org / --accounts)
+  * Multi-region sweep for regional sections (--all-regions)
+  * Per-framework compliance scorecard (control-level pass/fail rollup)
+  * Security graph (aws_graph.SecurityGraph): CAN_ASSUME + CAN_PRIVESC_TO edges,
+    transitive privilege-escalation chains, dangerous-trust detection, serialized
+    to graph.json (--graph) as the Neptune migration seed.
 
 Requirements: pip install boto3
 Credentials : AWS CLI profile, environment variables, or IAM instance role
               Minimum permission: SecurityAudit managed policy
+              Multi-account: sts:AssumeRole into a read-only role per target account
 
 Usage:
   python aws_live_scanner.py [--region eu-west-1]
   python aws_live_scanner.py --region us-east-1 --json report.json --html report.html
   python aws_live_scanner.py --sections IAM,S3,RDS --output-dir evidence/
+  python aws_live_scanner.py --all-regions --compliance --graph graph.json
+  python aws_live_scanner.py --org --assume-role OrganizationAccountAccessRole --json org.json
   python aws_live_scanner.py --verbose
 
 Author: Krishnendu De with support from Claude.AI
@@ -37,6 +47,7 @@ import time
 import fnmatch
 import argparse
 from urllib.parse import unquote
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -49,7 +60,9 @@ try:
 except ImportError:
     HAS_BOTO3 = False
 
-VERSION = "2.1.0"
+from aws_graph import SecurityGraph
+
+VERSION = "2.2.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -181,6 +194,24 @@ CHECK_SEVERITY = {
     "IAMPE-11": "HIGH", "IAMPE-12": "HIGH", "IAMPE-13": "HIGH",
     "IAMPE-14": "HIGH", "IAMPE-16": "HIGH", "IAMPE-18": "MEDIUM",
     "IAMPE-19": "CRITICAL", "IAMPE-20": "MEDIUM",
+    # Graph-derived (Phase 1): transitive chains + dangerous trust
+    "IAMPE-21": "HIGH", "IAMPE-22": "HIGH",
+    # Backfilled service checks (previously severity-less on FAIL)
+    "CNT-01": "MEDIUM", "BCK-01": "MEDIUM",
+    "SNS-01": "MEDIUM", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
+    "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "MEDIUM", "SQS-04": "LOW",
+    "GLC-01": "CRITICAL", "GLC-02": "MEDIUM", "GLC-03": "LOW",
+    "R53-01": "MEDIUM", "R53-02": "MEDIUM", "R53-03": "HIGH", "R53-04": "LOW", "R53-05": "MEDIUM",
+    "DDB-03": "MEDIUM", "DDB-04": "MEDIUM",
+    "EKS-04": "MEDIUM", "EKS-05": "MEDIUM",
+    "ECS-04": "HIGH", "ECS-05": "MEDIUM",
+    "SEC-03": "MEDIUM", "SEC-04": "MEDIUM",
+    "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
+    "ELC-04": "MEDIUM", "OSR-03": "MEDIUM",
+    "SFN-01": "MEDIUM", "SFN-02": "LOW", "SFN-03": "MEDIUM",
+    "APIGW-04": "LOW", "ELB-04": "LOW", "RS-05": "LOW",
+    "ACM-03": "LOW", "COG-04": "LOW", "AGW2-03": "LOW",
+    "LMB-05": "MEDIUM",
 }
 
 # ─── Compliance mapping: check_id → { framework: control } ──────────────────
@@ -285,7 +316,44 @@ COMPLIANCE_MAP = {
     # IAM privilege escalation — all map to least-privilege / separation-of-duties controls
     **{f"IAMPE-{n:02d}": {"CIS": "1.16", "PCI-DSS": "7.1.1",
                           "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6(1)"}
-       for n in (1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16, 18, 19, 20)},
+       for n in (1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16, 18, 19, 20, 21, 22)},
+    # ── Backfill: FAIL-capable checks previously missing a compliance mapping ──
+    "CNT-01": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5"},
+    "BCK-01": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "SNS-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "SNS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "SNS-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "SNS-04": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "SQS-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "SQS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "SQS-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "GLC-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "GLC-02": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "R53-01": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "R53-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-20"},
+    "R53-03": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-20"},
+    "R53-05": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "DDB-03": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "DDB-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "EKS-04": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "EKS-05": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "ECS-04": {"PCI-DSS": "2.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "CM-7"},
+    "ECS-05": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "SEC-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "SEC-04": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "WAF-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "WAF-04": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "ELC-04": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
+    "OSR-03": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "SFN-01": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "SFN-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "APIGW-04": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
+    "ELB-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CM-6"},
+    "RS-05": {"PCI-DSS": "8.2.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "IA-2"},
+    "ACM-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
+    "COG-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CM-6"},
+    "AGW2-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SC-5"},
+    "LMB-05": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
 }
 
 # ─── Remediation commands: check_id → AWS CLI command ────────────────────────
@@ -371,6 +439,14 @@ REMEDIATION_MAP = {
     "IAMPE-16": "Restrict lambda:UpdateFunctionCode to specific function ARNs and require code signing: aws lambda put-function-code-signing-config --function-name <FUNC> --code-signing-config-arn <CSC_ARN>",
     "IAMPE-19": "Remove the wildcard '*' grant and replace with least-privilege policies; as an immediate guardrail bound the principal: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
     "IAMPE-20": "Scope sts:AssumeRole to specific trusted role ARNs instead of '*': edit the policy Resource, then bound the principal: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
+    "IAMPE-21": "Break the escalation chain at its weakest hop: remove the privesc-granting permission from the assumable target role, OR restrict who can assume it (aws iam update-assume-role-policy --role-name <ROLE> --policy-document <TIGHTER_TRUST>). Apply a permissions boundary to the chain's entry principal.",
+    "IAMPE-22": "Restrict the role trust policy to specific principal ARNs (remove Principal '*'): aws iam update-assume-role-policy --role-name <ROLE> --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"<TRUSTED_ARN>\"},\"Action\":\"sts:AssumeRole\",\"Condition\":{\"StringEquals\":{\"sts:ExternalId\":\"<ID>\"}}}]}'",
+    "CNT-01": "Enable scan-on-push and pull existing findings: aws ecr put-image-scanning-configuration --repository-name <REPO> --image-scanning-configuration scanOnPush=true",
+    "GLC-01": "Remove public Glacier vault access policy: aws glacier set-vault-access-policy --vault-name <VAULT> --policy '{\"Policy\":\"<LEAST_PRIVILEGE_POLICY>\"}'",
+    "SQS-02": "Restrict the queue policy to trusted principals: aws sqs set-queue-attributes --queue-url <URL> --attributes Policy='<LEAST_PRIVILEGE_POLICY>'",
+    "R53-03": "Enable DNSSEC signing: aws route53 enable-hosted-zone-dnssec --hosted-zone-id <ZONE_ID>",
+    "DDB-04": "Enable deletion protection: aws dynamodb update-table --table-name <TABLE> --deletion-protection-enabled",
+    "ECS-04": "Recreate the task definition with awsvpc network mode (drop host mode): aws ecs register-task-definition --network-mode awsvpc --cli-input-json file://taskdef.json",
 }
 
 
@@ -535,6 +611,72 @@ def _pivot_action(rule: Dict, allow: set, deny: set) -> str:
     return rule["all_of"][0][0].lower()
 
 
+def _pivot_conditioned(statements: List[Dict], pivot: str) -> bool:
+    """True when EVERY Allow statement that grants the pivot action carries a
+    policy Condition. Such a path is only exploitable if the caller can satisfy
+    the condition (MFA, tag, SourceIp, ExternalId…), so it is downgraded from a
+    hard FAIL to a WARN ('verify the condition') rather than dropped."""
+    granting = [st for st in statements
+                if st["effect"] == "Allow" and _stmt_actions_match(st, pivot)]
+    return bool(granting) and all(st.get("condition") for st in granting)
+
+
+def parse_trust_policy(doc) -> List[Dict]:
+    """Parse a role's AssumeRolePolicyDocument into normalized trust statements:
+    ``[{effect, aws:[arns], service:[svcs], federated:[...], wildcard:bool,
+    actions:set, has_condition:bool}]``. Accepts a URL-encoded string or a dict;
+    ``Principal`` may be ``"*"``, a dict of AWS/Service/Federated, or a
+    single/list value. Used to build CAN_ASSUME graph edges."""
+    out: List[Dict] = []
+    if not doc:
+        return out
+    if isinstance(doc, str):
+        try:
+            doc = json.loads(unquote(doc))
+        except Exception:
+            return out
+    stmts = doc.get("Statement", [])
+    if isinstance(stmts, dict):
+        stmts = [stmts]
+
+    def _as_list(v):
+        return [v] if isinstance(v, str) else list(v)
+
+    for st in stmts:
+        if not isinstance(st, dict):
+            continue
+        eff = st.get("Effect", "")
+        if eff not in ("Allow", "Deny"):
+            continue
+        pr = st.get("Principal", "")
+        aws, svc, fed, wildcard = [], [], [], False
+        if pr == "*":
+            wildcard = True
+        elif isinstance(pr, dict):
+            if "AWS" in pr:
+                for v in _as_list(pr["AWS"]):
+                    if v == "*":
+                        wildcard = True
+                    else:
+                        aws.append(v)
+            if "Service" in pr:
+                svc = _as_list(pr["Service"])
+            if "Federated" in pr:
+                fed = _as_list(pr["Federated"])
+        av = st.get("Action", [])
+        actions = {str(a).lower() for a in _as_list(av)} if av else set()
+        out.append({"effect": eff, "aws": aws, "service": svc, "federated": fed,
+                    "wildcard": wildcard, "actions": actions,
+                    "has_condition": bool(st.get("Condition"))})
+    return out
+
+
+def _account_of(arn: str) -> str:
+    """Account id segment of an ARN (arn:partition:service:region:account:...)."""
+    parts = arn.split(":")
+    return parts[4] if len(parts) >= 5 else ""
+
+
 def evaluate_privesc_scoped(statements: List[Dict]) -> List[Dict]:
     """Resource-aware privesc evaluation. Returns matched rules annotated with
     `scope` (account-wide | resource-scoped) and `scope_arns`. Reduces false
@@ -542,7 +684,8 @@ def evaluate_privesc_scoped(statements: List[Dict]) -> List[Dict]:
     Resource '*', and sts:AssumeRole is only flagged when unrestricted."""
     if _has_full_admin(statements):
         return [{**IAM_PRIVESC_FULL_ADMIN, "scope": "account-wide",
-                 "scope_arns": None, "pivot": "*"}]
+                 "scope_arns": None, "pivot": "*",
+                 "conditioned": _pivot_conditioned(statements, "*")}]
 
     allow, deny = set(), set()
     for st in statements:
@@ -559,14 +702,17 @@ def evaluate_privesc_scoped(statements: List[Dict]) -> List[Dict]:
             label, arns = resource_scope(statements, pivot)
             if label == "none":
                 continue  # pivot action not grantable on any compatible resource
-            findings.append({**rule, "scope": label, "scope_arns": arns, "pivot": pivot})
+            findings.append({**rule, "scope": label, "scope_arns": arns,
+                             "pivot": pivot,
+                             "conditioned": _pivot_conditioned(statements, pivot)})
 
     # IAMPE-20: only when sts:AssumeRole is granted account-wide
     if _action_allowed("sts:assumerole", allow, deny):
         label, arns = resource_scope(statements, "sts:assumerole")
         if label == "account-wide":
             findings.append({**IAM_PRIVESC_ASSUMEROLE, "scope": label,
-                             "scope_arns": None, "pivot": "sts:assumerole"})
+                             "scope_arns": None, "pivot": "sts:assumerole",
+                             "conditioned": _pivot_conditioned(statements, "sts:assumerole")})
     return findings
 
 
@@ -587,6 +733,50 @@ def score_to_grade(score: float) -> str:
     if score >= 70: return "C"
     if score >= 60: return "D"
     return "F"
+
+
+# ─── Compliance rollup (per-framework control pass/fail) ─────────────────────
+COMPLIANCE_FRAMEWORKS = ["CIS", "PCI-DSS", "HIPAA", "SOC2", "NIST"]
+
+
+def compliance_scorecard(results: List[Result],
+                         compliance_map: Optional[Dict] = None) -> Dict[str, Dict]:
+    """Aggregate per-finding compliance tags into a per-framework control rollup.
+
+    The control *universe* is every control declared in ``COMPLIANCE_MAP`` (so
+    coverage is stable regardless of which checks fired). A control is marked
+    FAILED if any FAIL or WARN result references it, otherwise PASSED. Returns
+    ``{framework: {controls_total, controls_passed, controls_failed, pass_rate,
+    failed_controls}}``.
+    """
+    cmap = compliance_map if compliance_map is not None else COMPLIANCE_MAP
+    universe = {f: set() for f in COMPLIANCE_FRAMEWORKS}
+    for comp in cmap.values():
+        for f, ctrl in (comp or {}).items():
+            if f in universe and ctrl:
+                universe[f].add(ctrl)
+
+    failed = {f: set() for f in COMPLIANCE_FRAMEWORKS}
+    for r in results:
+        if r.status in ("FAIL", "WARN"):
+            for f, ctrl in (r.compliance or {}).items():
+                if f in failed and ctrl:
+                    failed[f].add(ctrl)
+
+    out: Dict[str, Dict] = {}
+    for f in COMPLIANCE_FRAMEWORKS:
+        controls = universe[f] | failed[f]        # a stray tag still counts
+        fail = failed[f] & controls
+        total = len(controls)
+        passed = total - len(fail)
+        out[f] = {
+            "controls_total":   total,
+            "controls_passed":  passed,
+            "controls_failed":  len(fail),
+            "pass_rate":        round(100 * passed / total, 1) if total else 100.0,
+            "failed_controls":  sorted(fail),
+        }
+    return out
 
 
 # ─── Workflow-integration helpers (SARIF / ASFF / gating / diff) ─────────────
@@ -643,17 +833,26 @@ def diff_findings(current: List[Result], baseline_results: List[Dict]) -> Dict:
 class AWSLiveScanner:
     """Live, read-only AWS security audit scanner."""
 
+    # Sections that enumerate global (region-agnostic) resources — run once even
+    # when --all-regions sweeps every enabled region for the rest.
+    GLOBAL_SECTIONS = {"IAM", "S3", "ROUTE53", "CLOUDFRONT", "IAMPRIVESC"}
+
     def __init__(
         self,
         region:   str = "eu-west-1",
         verbose:  bool = False,
         sections: Optional[List[str]] = None,
+        session:  object = None,
+        all_regions: bool = False,
     ):
         self.region   = region
         self.verbose  = verbose
         self.sections = [s.upper() for s in sections] if sections else list(SECTIONS)
         self.results:  List[Result] = []
         self.account   = ""
+        self._session  = session          # boto3.Session for assumed-role scans; None = ambient creds
+        self.all_regions_scan = all_regions
+        self.graph: Optional[SecurityGraph] = None
         self._clients: Dict[str, object] = {}
         self._cred_report:  Optional[List[Dict]] = None
         self._all_regions:  Optional[List[str]]  = None
@@ -668,7 +867,8 @@ class AWSLiveScanner:
             )
         key = f"{service}:{region or self.region}"
         if key not in self._clients:
-            self._clients[key] = boto3.client(  # type: ignore[name-defined]
+            factory = self._session or boto3  # assumed-role session or ambient creds
+            self._clients[key] = factory.client(  # type: ignore[name-defined]
                 service, region_name=region or self.region
             )
         return self._clients[key]
@@ -3648,7 +3848,8 @@ class AWSLiveScanner:
                 resources = {str(r).lower() for r in rv}
             else:
                 resources = {"*"}  # missing Resource / NotResource -> broad
-            out.append({"effect": effect, "actions": actions, "resources": resources})
+            out.append({"effect": effect, "actions": actions, "resources": resources,
+                        "condition": stmt.get("Condition") or None})
         return out
 
     @staticmethod
@@ -3681,24 +3882,57 @@ class AWSLiveScanner:
 
     def _get_iam_principals(self) -> List[Dict]:
         """Enumerate IAM users and roles with their effective policy statements
-        (attached managed + inline + group policies), plus derived allow/deny action
-        sets. Cached. Read-only."""
+        (attached managed + inline + group policies) via a single paginated
+        ``iam:GetAccountAuthorizationDetails`` call — which also returns managed
+        policy documents inline and each role's trust policy, so trust edges and
+        the identity graph are built with no extra API surface. Roles additionally
+        carry ``trust`` (parsed AssumeRolePolicyDocument) and ``instance_profiles``.
+        Cached. Read-only.
+        """
         if self._iam_principals is not None:
             return self._iam_principals
 
         iam = self._client("iam")
+        users: List[Dict] = []
+        groups: List[Dict] = []
+        roles: List[Dict] = []
+        policy_stmts: Dict[str, List[Dict]] = {}   # managed policy ARN -> statements
+
+        try:
+            paginator = iam.get_paginator("get_account_authorization_details")
+            for page in paginator.paginate():
+                users  += page.get("UserDetailList", [])
+                groups += page.get("GroupDetailList", [])
+                roles  += page.get("RoleDetailList", [])
+                for pol in page.get("Policies", []):
+                    arn = pol.get("Arn", "")
+                    default_ver = pol.get("DefaultVersionId")
+                    doc = None
+                    for v in pol.get("PolicyVersionList", []):
+                        if v.get("IsDefaultVersion") or v.get("VersionId") == default_ver:
+                            doc = v.get("Document")
+                            break
+                    if doc is not None:
+                        policy_stmts[arn] = self._policy_to_statements(doc)
+        except Exception:
+            self._iam_principals = []
+            return []
+
         principals: List[Dict] = []
 
-        def _paginate(method, key, **kwargs):
-            try:
-                paginator = iam.get_paginator(method)
-                for page in paginator.paginate(**kwargs):
-                    for item in page.get(key, []):
-                        yield item
-            except Exception:
-                return
+        def _managed(attached):
+            stmts: List[Dict] = []
+            for ap in attached or []:
+                stmts += policy_stmts.get(ap.get("PolicyArn", ""), [])
+            return stmts
 
-        def _finalize(ptype, name, arn, statements):
+        def _inline(policy_list):
+            stmts: List[Dict] = []
+            for ip in policy_list or []:
+                stmts += self._policy_to_statements(ip.get("PolicyDocument"))
+            return stmts
+
+        def _finalize(ptype, name, arn, statements, **extra):
             allow, deny = set(), set()
             for st in statements:
                 if st["effect"] == "Allow":
@@ -3706,73 +3940,97 @@ class AWSLiveScanner:
                 else:
                     deny |= st["actions"]
             principals.append({"type": ptype, "name": name, "arn": arn,
-                               "statements": statements, "allow": allow, "deny": deny})
+                               "statements": statements, "allow": allow,
+                               "deny": deny, **extra})
 
-        # Pre-resolve group statements once
+        # Pre-resolve group statements once (users inherit them)
         group_stmts: Dict[str, List[Dict]] = {}
-        for g in _paginate("list_groups", "Groups"):
-            gname = g["GroupName"]
-            stmts: List[Dict] = []
-            try:
-                for p in iam.list_attached_group_policies(
-                        GroupName=gname).get("AttachedPolicies", []):
-                    stmts += self._get_managed_policy_statements(p["PolicyArn"])
-                for pn in iam.list_group_policies(
-                        GroupName=gname).get("PolicyNames", []):
-                    doc = iam.get_group_policy(
-                        GroupName=gname, PolicyName=pn).get("PolicyDocument")
-                    stmts += self._policy_to_statements(doc)
-            except Exception:
-                pass
-            group_stmts[gname] = stmts
+        for g in groups:
+            group_stmts[g.get("GroupName", "")] = (
+                _managed(g.get("AttachedManagedPolicies"))
+                + _inline(g.get("GroupPolicyList"))
+            )
 
-        # Users
-        for u in _paginate("list_users", "Users"):
-            name = u["UserName"]
-            stmts = []
-            try:
-                for p in iam.list_attached_user_policies(
-                        UserName=name).get("AttachedPolicies", []):
-                    stmts += self._get_managed_policy_statements(p["PolicyArn"])
-                for pn in iam.list_user_policies(
-                        UserName=name).get("PolicyNames", []):
-                    doc = iam.get_user_policy(
-                        UserName=name, PolicyName=pn).get("PolicyDocument")
-                    stmts += self._policy_to_statements(doc)
-                for g in iam.list_groups_for_user(
-                        UserName=name).get("Groups", []):
-                    stmts += group_stmts.get(g["GroupName"], [])
-            except Exception:
-                pass
-            _finalize("user", name, u.get("Arn", ""), stmts)
+        for u in users:
+            stmts = _managed(u.get("AttachedManagedPolicies")) + _inline(u.get("UserPolicyList"))
+            for gname in u.get("GroupList", []):
+                stmts += group_stmts.get(gname, [])
+            _finalize("user", u.get("UserName", ""), u.get("Arn", ""), stmts,
+                      groups=list(u.get("GroupList", [])))
 
-        # Roles (skip AWS service-linked roles)
-        for r in _paginate("list_roles", "Roles"):
+        for r in roles:
             if r.get("Path", "").startswith("/aws-service-role/"):
                 continue
-            name = r["RoleName"]
-            stmts = []
-            try:
-                for p in iam.list_attached_role_policies(
-                        RoleName=name).get("AttachedPolicies", []):
-                    stmts += self._get_managed_policy_statements(p["PolicyArn"])
-                for pn in iam.list_role_policies(
-                        RoleName=name).get("PolicyNames", []):
-                    doc = iam.get_role_policy(
-                        RoleName=name, PolicyName=pn).get("PolicyDocument")
-                    stmts += self._policy_to_statements(doc)
-            except Exception:
-                pass
-            _finalize("role", name, r.get("Arn", ""), stmts)
+            stmts = _managed(r.get("AttachedManagedPolicies")) + _inline(r.get("RolePolicyList"))
+            trust = parse_trust_policy(r.get("AssumeRolePolicyDocument"))
+            inst_profiles = [ip.get("Arn", "") for ip in r.get("InstanceProfileList", [])]
+            _finalize("role", r.get("RoleName", ""), r.get("Arn", ""), stmts,
+                      trust=trust, instance_profiles=inst_profiles,
+                      path=r.get("Path", ""))
 
         self._iam_principals = principals
         return principals
 
+    def _admin_cap_id(self) -> str:
+        return f"capability:admin:{self.account or 'account'}"
+
+    def _build_identity_graph(self, principals: List[Dict]) -> SecurityGraph:
+        """Project principals + their trust and privesc facts onto a graph:
+        IAM principal nodes, an AdminCapability node, ``CAN_PRIVESC_TO`` edges
+        (principal → admin capability, one per principal that can escalate), and
+        ``CAN_ASSUME`` edges (trusting-principal → role) parsed from each role's
+        trust policy. Returns the graph (also stored on ``self.graph``)."""
+        g = SecurityGraph()
+        admin = self._admin_cap_id()
+        g.add_node(admin, "AdminCapability", account=self.account)
+
+        # Nodes + privesc edges
+        for p in principals:
+            arn = p["arn"] or f"{p['type']}:{p['name']}"
+            p["_node"] = arn
+            kind = "IAMUser" if p["type"] == "user" else "IAMRole"
+            g.add_node(arn, kind, name=p["name"], account=self.account)
+            findings = evaluate_privesc_scoped(p["statements"])
+            p["_privesc"] = findings
+            if findings:
+                unconditioned = [f for f in findings if not f.get("conditioned")]
+                rules = sorted({f["id"] for f in findings})
+                g.add_edge(arn, admin, "CAN_PRIVESC_TO",
+                           rules=rules, conditioned=(not unconditioned))
+
+        # Trust → CAN_ASSUME edges
+        for p in principals:
+            if p["type"] != "role":
+                continue
+            role_arn = p["_node"]
+            for st in p.get("trust", []):
+                if st["effect"] != "Allow":
+                    continue
+                cond = st["has_condition"]
+                if st["wildcard"]:
+                    any_id = "principal:*"
+                    g.add_node(any_id, "AnyPrincipal")
+                    g.add_edge(any_id, role_arn, "CAN_ASSUME",
+                               has_condition=cond, wildcard=True)
+                for src_arn in st["aws"]:
+                    acct = _account_of(src_arn)
+                    external = bool(acct) and bool(self.account) and acct != self.account
+                    node_kind = "AWSAccount" if src_arn.endswith(":root") else "IAMPrincipalRef"
+                    g.add_node(src_arn, node_kind, account=acct, external=external or None)
+                    g.add_edge(src_arn, role_arn, "CAN_ASSUME",
+                               has_condition=cond, external=external or None)
+                for svc in st["service"]:
+                    g.add_node(f"service:{svc}", "ServicePrincipal", service=svc)
+                    g.add_edge(f"service:{svc}", role_arn, "SERVICE_CAN_ASSUME",
+                               has_condition=cond)
+        self.graph = g
+        return g
+
     def _check_iam_privesc(self):
         self._section_header("IAMPRIVESC")
-        self._log("Resource-aware path analysis — each finding shows its scope "
-                  "(account-wide vs resource-scoped); policy conditions, permission "
-                  "boundaries, and SCPs are not evaluated")
+        self._log("Resource-aware path analysis + identity graph (CAN_ASSUME / "
+                  "CAN_PRIVESC_TO edges, transitive chains). Conditioned paths are "
+                  "downgraded to WARN; permission boundaries and SCPs are not evaluated")
         try:
             principals = self._get_iam_principals()
         except Exception as e:
@@ -3784,9 +4042,12 @@ class AWSLiveScanner:
                       "No IAM users or roles found")
             return
 
+        g = self._build_identity_graph(principals)
         found = False
+
+        # 1) Per-principal privilege-escalation primitives (condition-aware)
         for p in principals:
-            for f in evaluate_privesc_scoped(p["statements"]):
+            for f in p.get("_privesc", []):
                 found = True
                 scope = f.get("scope", "")
                 if scope == "account-wide":
@@ -3797,9 +4058,62 @@ class AWSLiveScanner:
                     scope_note = f" [scope: {shown}]"
                 else:
                     scope_note = ""
-                self._add("FAIL", f["id"], "IAMPRIVESC",
+                if f.get("conditioned"):
+                    self._add("WARN", f["id"], "IAMPRIVESC",
+                              f"{p['type']}:{p['name']}",
+                              f"{f['name']} — {f['desc']}{scope_note} "
+                              f"[conditioned: exploitable only if the policy Condition "
+                              f"is satisfiable] | {p['type']} {p['name']}")
+                else:
+                    self._add("FAIL", f["id"], "IAMPRIVESC",
+                              f"{p['type']}:{p['name']}",
+                              f"{f['name']} — {f['desc']}{scope_note} | {p['type']} {p['name']}")
+
+        # 2) Dangerous role trust — assumable by ANY AWS principal (IAMPE-22)
+        for p in principals:
+            if p["type"] != "role":
+                continue
+            for st in p.get("trust", []):
+                if st["effect"] == "Allow" and st["wildcard"]:
+                    found = True
+                    if st["has_condition"]:
+                        self._add("WARN", "IAMPE-22", "IAMPRIVESC",
+                                  f"role:{p['name']}",
+                                  f"Role trust allows ANY AWS principal (Principal '*') "
+                                  f"but is Condition-guarded — verify the condition "
+                                  f"(ExternalId/OrgID/SourceArn) | role {p['name']}")
+                    else:
+                        self._add("FAIL", "IAMPE-22", "IAMPRIVESC",
+                                  f"role:{p['name']}",
+                                  f"Role trust policy allows ANY AWS principal "
+                                  f"(Principal '*') to assume it with no condition — "
+                                  f"account takeover risk | role {p['name']}")
+
+        # 3) Transitive escalation chains: principal → assume → … → can escalate (IAMPE-21)
+        admin = self._admin_cap_id()
+        for p in principals:
+            start = p["_node"]
+            reachable = g.reachable(start, {"CAN_ASSUME"}, max_hops=4)
+            seen_targets = set()
+            for target, path in reachable.items():
+                if target in seen_targets or target == start:
+                    continue
+                if not g.has_out_edge(target, "CAN_PRIVESC_TO"):
+                    continue
+                seen_targets.add(target)
+                found = True
+                tnode = g.node(target) or {}
+                tname = (tnode.get("props") or {}).get("name", target)
+                hops = " → ".join(
+                    (g.node(n) or {}).get("props", {}).get("name", n.split("/")[-1])
+                    for n in path
+                )
+                self._add("FAIL", "IAMPE-21", "IAMPRIVESC",
                           f"{p['type']}:{p['name']}",
-                          f"{f['name']} — {f['desc']}{scope_note} | {p['type']} {p['name']}")
+                          f"Transitive privilege-escalation chain: {hops} → (admin) — "
+                          f"{p['type']} {p['name']} can reach escalation via role "
+                          f"{tname} | {p['type']} {p['name']}")
+
         if not found:
             self._add("PASS", "IAMPE-00", "IAMPRIVESC", "all-principals",
                       f"No privilege-escalation paths detected across "
@@ -3817,7 +4131,7 @@ class AWSLiveScanner:
             sys.exit(2)
 
         try:
-            sts          = boto3.client("sts", region_name=self.region)
+            sts          = (self._session or boto3).client("sts", region_name=self.region)
             identity     = sts.get_caller_identity()
             self.account = identity["Account"]
         except NoCredentialsError:
@@ -3877,14 +4191,28 @@ class AWSLiveScanner:
             "IAMPRIVESC":     self._check_iam_privesc,
         }
 
+        base_region = self.region
         for section in self.sections:
             fn = CHECK_MAP.get(section)
-            if fn:
+            if not fn:
+                continue
+            for reg in self._regions_for_section(section):
+                self.region = reg
                 try:
                     fn()
                 except Exception as e:
                     self._add("FAIL", section, section, section,
-                              f"Unhandled error in section {section}: {e}")
+                              f"Unhandled error in section {section}"
+                              f"{f' ({reg})' if reg != base_region else ''}: {e}")
+            self.region = base_region
+
+    def _regions_for_section(self, section: str) -> List[str]:
+        """Regions to run a section in. Single-region by default; with
+        --all-regions, regional sections sweep every enabled region while global
+        sections (IAM/S3/Route53/CloudFront/IAMPRIVESC) still run once."""
+        if not self.all_regions_scan or section in self.GLOBAL_SECTIONS:
+            return [self.region]
+        return self._get_all_regions()
 
     # ══════════════════════════════════════════════════════════════════════════
     # REPORTING
@@ -3922,6 +4250,27 @@ class AWSLiveScanner:
 
         return counts
 
+    def print_compliance_rollup(self):
+        """Per-framework control pass/fail scorecard (aggregates the compliance
+        tags carried by every finding)."""
+        card = compliance_scorecard(self.results)
+        print(f"\n{BOLD}{BLUE}══ COMPLIANCE SCORECARD ══{RESET}")
+        print(f"  {'Framework':<10} {'Pass':>5} {'Fail':>5} {'Total':>6} {'Rate':>7}")
+        print(f"  {'-'*10} {'-'*5} {'-'*5} {'-'*6} {'-'*7}")
+        for f in COMPLIANCE_FRAMEWORKS:
+            c = card[f]
+            rate = c["pass_rate"]
+            col = GREEN if rate >= 80 else (YELLOW if rate >= 50 else RED)
+            print(f"  {f:<10} {c['controls_passed']:>5} {c['controls_failed']:>5} "
+                  f"{c['controls_total']:>6} {col}{rate:>6}%{RESET}")
+        # Show the failed controls for the most-referenced framework (CIS/PCI)
+        for f in ("CIS", "PCI-DSS"):
+            failed = card[f]["failed_controls"]
+            if failed:
+                print(f"  {YELLOW}{f} failed controls:{RESET} {', '.join(failed[:12])}"
+                      f"{f' +{len(failed)-12} more' if len(failed) > 12 else ''}")
+        return card
+
     def save_json(self, path: str):
         score = compute_risk_score(self.results)
         data = {
@@ -3937,6 +4286,8 @@ class AWSLiveScanner:
                 "WARN": sum(1 for r in self.results if r.status == "WARN"),
                 "INFO": sum(1 for r in self.results if r.status == "INFO"),
             },
+            "compliance_scorecard": compliance_scorecard(self.results),
+            "graph": self.graph.stats() if self.graph else None,
             "results": [
                 {
                     "status":          r.status,
@@ -4313,6 +4664,62 @@ class AWSLiveScanner:
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────
+# ─── Multi-account (AWS Organizations) orchestration ─────────────────────────
+def assume_role_session(account_id: str, role: str, external_id: Optional[str] = None,
+                        region: str = "us-east-1", base_session=None):
+    """Assume ``role`` in ``account_id`` and return a boto3.Session with the
+    temporary credentials. ``role`` may be a bare role name (resolved to
+    ``arn:aws:iam::<account>:role/<role>``) or a full ARN. Read-only apart from
+    the sts:AssumeRole itself."""
+    base = base_session or boto3
+    sts = base.client("sts", region_name=region)
+    role_arn = role if role.startswith("arn:") else f"arn:aws:iam::{account_id}:role/{role}"
+    kwargs = {"RoleArn": role_arn, "RoleSessionName": "cnapp-scan"}
+    if external_id:
+        kwargs["ExternalId"] = external_id
+    creds = sts.assume_role(**kwargs)["Credentials"]
+    return boto3.Session(
+        aws_access_key_id=creds["AccessKeyId"],
+        aws_secret_access_key=creds["SecretAccessKey"],
+        aws_session_token=creds["SessionToken"],
+        region_name=region,
+    )
+
+
+def list_org_accounts(base_session=None, region: str = "us-east-1") -> List[str]:
+    """Return the IDs of all ACTIVE accounts in the AWS Organization. Requires
+    ``organizations:ListAccounts`` from the management or a delegated-admin account."""
+    base = base_session or boto3
+    org = base.client("organizations", region_name=region)
+    ids: List[str] = []
+    for page in org.get_paginator("list_accounts").paginate():
+        for a in page.get("Accounts", []):
+            if a.get("Status") == "ACTIVE":
+                ids.append(a["Id"])
+    return ids
+
+
+def aggregate_results(scanners: List["AWSLiveScanner"]) -> "AWSLiveScanner":
+    """Fold N per-account scanners into one aggregate scanner whose ``results``
+    are all findings with each ``resource`` prefixed by its account id, and whose
+    ``graph`` is the union of the per-account identity graphs. Lets every existing
+    emitter (JSON/SARIF/ASFF/HTML/scorecard) work unchanged across a whole org."""
+    agg = AWSLiveScanner(region=scanners[0].region if scanners else "us-east-1",
+                         sections=scanners[0].sections if scanners else None)
+    merged = SecurityGraph()
+    for sc in scanners:
+        for r in sc.results:
+            resource = f"{sc.account}/{r.resource}" if r.resource else sc.account
+            agg.results.append(Result(r.status, r.check_id, r.section, resource,
+                                      r.message, r.severity, r.compliance,
+                                      r.remediation_cmd))
+        if sc.graph:
+            merged.merge(sc.graph)
+    agg.graph = merged if len(merged) else None
+    agg.account = f"org:{len(scanners)}-accounts"
+    return agg
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="aws_live_scanner",
@@ -4334,6 +4741,9 @@ examples:
   python aws_live_scanner.py --sarif results.sarif --fail-on HIGH
   python aws_live_scanner.py --asff findings.asff.json
   python aws_live_scanner.py --json today.json --baseline yesterday.json
+  python aws_live_scanner.py --all-regions --compliance --graph graph.json
+  python aws_live_scanner.py --org --assume-role OrganizationAccountAccessRole --json org.json
+  python aws_live_scanner.py --accounts 111122223333,444455556666 --assume-role AuditRole --external-id abc
 """,
     )
     parser.add_argument(
@@ -4381,6 +4791,39 @@ examples:
         ),
     )
     parser.add_argument(
+        "--all-regions", dest="all_regions", action="store_true",
+        help="Sweep every enabled region for regional sections "
+             "(global sections still run once)",
+    )
+    parser.add_argument(
+        "--assume-role", metavar="ROLE", dest="assume_role",
+        help="Role name (or ARN) to assume in each target account for "
+             "multi-account scanning (e.g. OrganizationAccountAccessRole)",
+    )
+    parser.add_argument(
+        "--org", action="store_true",
+        help="Enumerate all ACTIVE accounts via AWS Organizations and scan each "
+             "(requires --assume-role)",
+    )
+    parser.add_argument(
+        "--accounts", metavar="IDS",
+        help="Comma-separated account IDs to scan (requires --assume-role); "
+             "alternative to --org",
+    )
+    parser.add_argument(
+        "--external-id", metavar="ID", dest="external_id",
+        help="STS ExternalId to use when assuming the target role",
+    )
+    parser.add_argument(
+        "--graph", metavar="FILE",
+        help="Save the identity security graph (nodes/edges) as JSON to FILE "
+             "— the Neptune migration seed",
+    )
+    parser.add_argument(
+        "--compliance", action="store_true",
+        help="Print the per-framework compliance scorecard (CIS/PCI/HIPAA/SOC2/NIST)",
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Print all findings including PASS",
@@ -4397,13 +4840,55 @@ examples:
         if args.sections else None
     )
 
-    scanner = AWSLiveScanner(
-        region=args.region,
-        verbose=args.verbose,
-        sections=sections,
-    )
-    scanner.run()
-    counts = scanner.print_report()
+    # ── Multi-account (Organizations / explicit accounts) vs single-account ──
+    if args.org or args.accounts:
+        if not args.assume_role:
+            print(f"{RED}[ERROR]{RESET} --org/--accounts require --assume-role "
+                  "<role-name> to assume in each target account.")
+            sys.exit(2)
+        try:
+            account_ids = (
+                list_org_accounts(region=args.region) if args.org
+                else [a.strip() for a in args.accounts.split(",") if a.strip()]
+            )
+        except Exception as e:
+            print(f"{RED}[ERROR]{RESET} Could not enumerate target accounts: {e}")
+            sys.exit(2)
+
+        scanners: List[AWSLiveScanner] = []
+        for acct in account_ids:
+            try:
+                sess = assume_role_session(acct, args.assume_role,
+                                           args.external_id, args.region)
+            except Exception as e:
+                print(f"{YELLOW}[WARN]{RESET} Skipping {acct}: could not assume "
+                      f"{args.assume_role} ({e})")
+                continue
+            sc = AWSLiveScanner(region=args.region, verbose=args.verbose,
+                                sections=sections, session=sess,
+                                all_regions=args.all_regions)
+            sc.run()
+            sc.print_report()
+            scanners.append(sc)
+
+        if not scanners:
+            print(f"{RED}[ERROR]{RESET} No accounts could be scanned.")
+            sys.exit(2)
+        scanner = aggregate_results(scanners)
+        print(f"\n{BOLD}{BLUE}══ ORG-WIDE AGGREGATE ({len(scanners)} accounts) ══{RESET}")
+        counts = scanner.print_report()
+    else:
+        scanner = AWSLiveScanner(
+            region=args.region,
+            verbose=args.verbose,
+            sections=sections,
+            all_regions=args.all_regions,
+        )
+        scanner.run()
+        counts = scanner.print_report()
+
+    if args.compliance:
+        scanner.print_compliance_rollup()
 
     if args.json:
         scanner.save_json(args.json)
@@ -4415,6 +4900,15 @@ examples:
         scanner.save_asff(args.asff)
     if args.baseline:
         scanner.print_diff(args.baseline)
+    if args.graph:
+        if scanner.graph:
+            scanner.graph.save_json(args.graph)
+            print(f"{BLUE}[*]{RESET} Security graph saved: {args.graph} "
+                  f"({scanner.graph.stats()['nodes']} nodes, "
+                  f"{scanner.graph.stats()['edges']} edges)")
+        else:
+            print(f"{YELLOW}[WARN]{RESET} No graph built — include the IAMPRIVESC "
+                  "section (it is in the default set) to populate the identity graph.")
 
     # Always save evidence (auto-name dir if not specified)
     ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
