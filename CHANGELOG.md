@@ -4,6 +4,51 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.3.0] — 2026
+
+**CNAPP Phase 2 — Effective Network Exposure Engine.** Computes *true* internet
+reachability instead of "a security group allows 0.0.0.0/0", and fires the first
+end-to-end **attack path**. New `aws_exposure.py` module (zero dependencies) is a
+pure, fully unit-tested reachability oracle; the whole false-positive/false-negative
+catalog runs without AWS.
+
+### Added — the exposure oracle (`aws_exposure.py`)
+- An ENI is judged internet-reachable only when the **4-gate AND** holds, per
+  address family (IPv4 + IPv6), per ENI:
+  1. **Public entry point** — auto-assigned public IPv4, an EIP, or a global IPv6.
+  2. **IGW default route** — the subnet's *effective* route table (explicit
+     association, else VPC main-table fallback) has an active `0.0.0.0/0`/`::/0`
+     route to a real `igw-…` — not NAT / egress-only-IGW / blackhole.
+  3. **SG public ports** — union of ingress rules open to `0.0.0.0/0` / `::/0`.
+     `UserIdGroupPairs` (sg-references) and prefix-lists are **not** public (the
+     #1 false positive); `IpProtocol='-1'` expands to all tcp+udp (the #1 FN).
+  4. **Stateless NACL** — ordered first-match evaluation allows the inbound
+     service port **AND** the outbound **ephemeral return** (1024-65535); a
+     stateless NACL that blocks the return path is not reachable.
+- L7 (ALB/NLB/CloudFront) and narrower-than-`/0` public CIDRs are deliberately
+  deferred and **fail closed** (never emit a false positive).
+
+### Added — exposure section + first attack path (`EXPOSURE`, 36th section)
+- **`EXPOSURE-01`** internet-reachable *sensitive* port (SSH/RDP/DB/etc.),
+  **`EXPOSURE-02`** internet-reachable service — emitted only when all four gates pass.
+- **`ATTACK-01`** — the flagship toxic combination:
+  `Internet → EXPOSED_TO → EC2 → instance-profile role → CAN_PRIVESC_TO admin`.
+  Chains the exposure subgraph into the Phase 1 identity graph and fires when an
+  exposed host's instance-profile role can reach `AdminCapability` (directly or via
+  transitive assume/privesc). **Condition-aware**: CRITICAL/FAIL only when admin is
+  reachable over *unconditioned* edges; if every path to admin crosses a
+  Condition-guarded privesc/trust (MFA/ExternalId/tag/SourceIp) it is reported as
+  WARN — consistent with the Phase-1 conditioned-privesc model.
+- New graph node kinds (InternetSource, NetworkInterface, EC2Instance,
+  InstanceProfile) and edges (`EXPOSED_TO`, `ATTACHED_TO`, `HAS_INSTANCE_PROFILE`,
+  `HAS_ROLE`) added to `aws_graph`; serialized by `--graph`.
+
+### Testing
+- 101 → **136** unit tests: the full 14-case FP/FN catalog (`tests/test_exposure.py`)
+  plus collector integration + attack-path tests, all mocked (no AWS/boto3).
+- Grounded in a verified AWS-semantics research pass and hardened by an adversarial
+  false-positive/false-negative sweep of the real code.
+
 ## [2.2.0] — 2026
 
 **CNAPP Phase 0/1** — the first step from a single-account CSPM toward a

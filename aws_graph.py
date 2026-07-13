@@ -101,11 +101,13 @@ class SecurityGraph:
         return any(e["kind"] == kind for e in self._out.get(node_id, []))
 
     def reachable(self, start: str, edge_kinds: Optional[Iterable[str]],
-                  max_hops: int = 4) -> Dict[str, List[str]]:
+                  max_hops: int = 4, edge_filter=None) -> Dict[str, List[str]]:
         """Bounded BFS from ``start`` over edges whose kind is in ``edge_kinds``
-        (all kinds if None). Returns ``{node_id: shortest_path}`` where each path
-        is the list of node ids ``start .. node`` inclusive. ``start`` is excluded
-        from the result. Cycle-safe and capped at ``max_hops`` edges."""
+        (all kinds if None). ``edge_filter``, if given, is called with each edge
+        dict and must return truthy for the edge to be traversed — used to walk
+        only *unconditioned* edges (ignoring condition-guarded privesc/trust).
+        Returns ``{node_id: shortest_path}`` (list of node ids ``start .. node``
+        inclusive); ``start`` is excluded. Cycle-safe, capped at ``max_hops`` edges."""
         ks = set(edge_kinds) if edge_kinds else None
         seen = {start}
         out: Dict[str, List[str]] = {}
@@ -116,6 +118,8 @@ class SecurityGraph:
                 continue
             for e in self._out.get(cur, []):
                 if ks is not None and e["kind"] not in ks:
+                    continue
+                if edge_filter is not None and not edge_filter(e):
                     continue
                 nxt = e["dst"]
                 if nxt in seen:

@@ -7,19 +7,22 @@ full **CNAPP** (Cloud-Native Application Protection Platform) — see the CNAPP
 blueprint/roadmap: the north star is AWS-deep **toxic-combination attack paths**
 computed over a unified security graph.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **Live Audit Scanner** (`aws_live_scanner.py` v2.2.0) -- live AWS account audit via boto3 (150+ checks, 35 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph + attack-path chains**)
+- **Live Audit Scanner** (`aws_live_scanner.py` v2.3.0) -- live AWS account audit via boto3 (150+ checks, 36 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph + attack-path chains**, **effective internet-exposure engine**)
 - **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
+- **Exposure Oracle** (`aws_exposure.py`) -- pure, dependency-free internet-reachability core (SG ∩ stateless NACL ∩ IGW route ∩ public-IP)
 
 ## Repository Structure
 
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.2.0 (boto3, 5 frameworks, graph, multi-account)
+├── aws_live_scanner.py      # Live audit scanner v2.3.0 (boto3, graph, multi-account, exposure)
 ├── aws_graph.py             # SecurityGraph — nodes/edges, bounded traversal, graph.json (stdlib)
+├── aws_exposure.py          # Internet-reachability oracle — 4-gate AND, pure/testable (stdlib)
 ├── tests/
 │   ├── test_live_scanner.py # 69 unit tests (mock boto3)
 │   ├── test_cnapp_phase1.py # 32 unit tests (graph, chains, trust, org fan-out, compliance rollup)
+│   ├── test_exposure.py     # 35 unit tests (14-case FP/FN catalog + collector + attack path)
 │   └── samples/             # Vulnerable IaC + sample reports
 ├── scripts/
 │   └── validate_live.py     # Read-only live-account validation harness
@@ -68,11 +71,11 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.2.0)
+## Live Audit Scanner (`aws_live_scanner.py` v2.3.0)
 
 - **Type**: Live AWS account audit via boto3 (evolving toward CNAPP)
-- **Lines**: ~4,700
-- **Dependencies**: `boto3` (required), `aws_graph.py` (bundled, stdlib), Python 3.10+
+- **Lines**: ~5,000
+- **Dependencies**: `boto3` (required), `aws_graph.py` + `aws_exposure.py` (bundled, stdlib), Python 3.10+
 - **IAM permissions**: `SecurityAudit` AWS-managed policy (read-only); multi-account adds `sts:AssumeRole` into a read-only role per target account, and `organizations:ListAccounts` for `--org`
 - **Compliance**: CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
 
@@ -97,6 +100,29 @@ python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FI
   paginated call (principals + policy docs + trust docs); roles carry `trust` + `instance_profiles`.
   `parse_trust_policy()` normalizes AssumeRolePolicyDocument; `_policy_to_statements` captures
   `Condition`; `evaluate_privesc_scoped` annotates `conditioned`.
+
+### CNAPP Phase 2 additions (v2.3.0) — effective internet exposure
+
+- **Exposure oracle (`aws_exposure.py`, pure/stdlib)** — an ENI is internet-reachable
+  only when the **4-gate AND** holds, per family (IPv4+IPv6): (1) public entry point
+  (`classify_public_ip`), (2) active IGW default route (`find_effective_route_table`
+  with VPC main-table fallback → `has_igw_default_route`, rejecting nat-/eigw-/blackhole),
+  (3) SG public ports (`sg_public_ports`, excludes sg-refs/prefix-lists, expands proto
+  `-1`, IPv6 `::/0`), (4) stateless NACL (`find_governing_nacl` → `nacl_permits_service`:
+  ordered first-match inbound + full outbound ephemeral-return 1024-65535, via the
+  `nacl_allowed_subranges` interval sweep). L7 (ALB/NLB/CloudFront) and sub-`/0` CIDRs
+  are **deferred and fail closed** (never a false positive).
+- **`EXPOSURE` section (36th)** — `_check_exposure` collects ENIs/instances/route-tables/
+  NACLs/SGs (`_paginate_all`), computes exposure per ENI, and emits `EXPOSURE-01`
+  (sensitive port, HIGH), `EXPOSURE-02` (service, MEDIUM). Regional (not global) — swept
+  by `--all-regions`.
+- **First attack path (`ATTACK-01`, CRITICAL)** — chains the exposure subgraph into the
+  Phase 1 identity graph: `Internet → EXPOSED_TO → EC2 → HAS_INSTANCE_PROFILE →
+  HAS_ROLE → (CAN_PRIVESC_TO / CAN_ASSUME)* → AdminCapability`. Instance-profile→role
+  mapping reuses the GAAD-collected `role.instance_profiles`; fired via
+  `graph.reachable(role, {CAN_PRIVESC_TO, CAN_ASSUME})`.
+- New graph node kinds (InternetSource / NetworkInterface / EC2Instance / InstanceProfile)
+  and edges (`EXPOSED_TO` / `ATTACHED_TO` / `HAS_INSTANCE_PROFILE` / `HAS_ROLE`).
 
 ### Architecture
 
@@ -209,7 +235,7 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 101 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 136 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:

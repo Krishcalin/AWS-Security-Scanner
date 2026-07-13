@@ -61,8 +61,9 @@ except ImportError:
     HAS_BOTO3 = False
 
 from aws_graph import SecurityGraph
+import aws_exposure
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -83,7 +84,7 @@ SECTIONS = [
     "LAMBDA", "EKS", "ECS", "SECRETS", "WAF",
     "ELASTICACHE", "OPENSEARCH", "DYNAMODB", "STEPFUNCTIONS",
     "APIGATEWAY", "ELB", "EBS", "REDSHIFT", "EFS", "ACM",
-    "SAGEMAKER", "COGNITO", "APIGATEWAYV2", "IAMPRIVESC",
+    "SAGEMAKER", "COGNITO", "APIGATEWAYV2", "IAMPRIVESC", "EXPOSURE",
 ]
 
 SECTION_LABELS = {
@@ -122,6 +123,7 @@ SECTION_LABELS = {
     "COGNITO":        "AMAZON COGNITO",
     "APIGATEWAYV2":   "API GATEWAY (HTTP APIs)",
     "IAMPRIVESC":     "IAM PRIVILEGE ESCALATION",
+    "EXPOSURE":       "INTERNET EXPOSURE & ATTACK PATHS",
 }
 
 
@@ -196,6 +198,8 @@ CHECK_SEVERITY = {
     "IAMPE-19": "CRITICAL", "IAMPE-20": "MEDIUM",
     # Graph-derived (Phase 1): transitive chains + dangerous trust
     "IAMPE-21": "HIGH", "IAMPE-22": "HIGH",
+    # Phase 2: effective internet exposure + attack paths
+    "EXPOSURE-01": "HIGH", "EXPOSURE-02": "MEDIUM", "ATTACK-01": "CRITICAL",
     # Backfilled service checks (previously severity-less on FAIL)
     "CNT-01": "MEDIUM", "BCK-01": "MEDIUM",
     "SNS-01": "MEDIUM", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
@@ -317,6 +321,10 @@ COMPLIANCE_MAP = {
     **{f"IAMPE-{n:02d}": {"CIS": "1.16", "PCI-DSS": "7.1.1",
                           "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6(1)"}
        for n in (1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16, 18, 19, 20, 21, 22)},
+    # Phase 2 exposure / attack path
+    "EXPOSURE-01": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EXPOSURE-02": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "ATTACK-01":   {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     # ── Backfill: FAIL-capable checks previously missing a compliance mapping ──
     "CNT-01": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5"},
     "BCK-01": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
@@ -447,6 +455,9 @@ REMEDIATION_MAP = {
     "R53-03": "Enable DNSSEC signing: aws route53 enable-hosted-zone-dnssec --hosted-zone-id <ZONE_ID>",
     "DDB-04": "Enable deletion protection: aws dynamodb update-table --table-name <TABLE> --deletion-protection-enabled",
     "ECS-04": "Recreate the task definition with awsvpc network mode (drop host mode): aws ecs register-task-definition --network-mode awsvpc --cli-input-json file://taskdef.json",
+    "EXPOSURE-01": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0  (then re-add a scoped CIDR)",
+    "EXPOSURE-02": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges or place the workload behind a load balancer/WAF: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
+    "ATTACK-01": "Break the path at the exposure or the privilege: remove the public ingress (aws ec2 revoke-security-group-ingress ...) AND scope the instance-profile role to least privilege / apply a permissions boundary: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>",
 }
 
 
@@ -4120,6 +4131,180 @@ class AWSLiveScanner:
                       f"{len(principals)} principals")
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 36: INTERNET EXPOSURE & ATTACK PATHS  (Phase 2)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _paginate_all(self, client, method: str, key: str, **kwargs) -> List[Dict]:
+        """Collect all items for a paginated (or single) describe call. Read-only."""
+        out: List[Dict] = []
+        try:
+            paginator = client.get_paginator(method)
+            for page in paginator.paginate(**kwargs):
+                out += page.get(key, [])
+            return out
+        except Exception:
+            try:
+                out += getattr(client, method)(**kwargs).get(key, [])
+            except Exception:
+                pass
+        return out
+
+    def _instance_arn(self, instance_id: str) -> str:
+        return f"arn:aws:ec2:{self.region}:{self.account}:instance/{instance_id}"
+
+    # Managed ENIs whose exposure belongs to their service, not a customer workload.
+    # NB: the EC2 API is inconsistent — NAT gateways report the camelCase
+    # "natGateway" while most managed types are snake_case; include both forms.
+    _MANAGED_IFACE = {
+        "nat_gateway", "natGateway", "load_balancer", "vpc_endpoint",
+        "transit_gateway", "global_accelerator_managed", "api_gateway_managed",
+        "lambda", "gateway_load_balancer", "gateway_load_balancer_endpoint",
+        "network_load_balancer", "aws_codestar_connections_managed",
+    }
+
+    @staticmethod
+    def _edge_unconditioned(e: Dict) -> bool:
+        """An escalation edge is only 'confirmed' if it is not gated by a policy
+        Condition (privesc) or a trust Condition (assume-role)."""
+        pr = e.get("props", {})
+        return not pr.get("conditioned") and not pr.get("has_condition")
+
+    def _check_exposure(self):
+        self._section_header("EXPOSURE")
+        self._log("Effective internet reachability (public IP AND igw route AND SG "
+                  "ingress AND stateless NACL both directions) + Internet->EC2->role->admin "
+                  "attack paths. L7 (ALB/NLB/CloudFront) deferred; direct-EC2 only.")
+        ec2 = self._client("ec2")
+
+        enis  = self._paginate_all(ec2, "describe_network_interfaces", "NetworkInterfaces")
+        rtbs  = self._paginate_all(ec2, "describe_route_tables", "RouteTables")
+        nacls = self._paginate_all(ec2, "describe_network_acls", "NetworkAcls")
+        sgs   = self._paginate_all(ec2, "describe_security_groups", "SecurityGroups")
+        instances: List[Dict] = []
+        for r in self._paginate_all(ec2, "describe_instances", "Reservations"):
+            instances += r.get("Instances", [])
+
+        if not enis:
+            self._add("INFO", "EXPOSURE-02", "EXPOSURE", "network",
+                      "No elastic network interfaces found in this region")
+            return
+
+        sg_perms = {s.get("GroupId"): s.get("IpPermissions", []) for s in sgs}
+        inst_by_id = {i.get("InstanceId"): i for i in instances}
+
+        # Ensure the identity subgraph exists (so attack paths can chain into it)
+        try:
+            principals = self._get_iam_principals()
+        except Exception:
+            principals = []
+        if self.graph is None:
+            self._build_identity_graph(principals)
+        g = self.graph
+        internet = "internet"
+        g.add_node(internet, "InternetSource", cidr="0.0.0.0/0")
+
+        # instance-profile ARN -> role ARN (from GAAD-collected role.instance_profiles)
+        profile_to_role = {}
+        for p in principals:
+            if p["type"] == "role":
+                for prof in p.get("instance_profiles", []):
+                    if prof:
+                        profile_to_role[prof.lower()] = p["arn"]
+
+        exposed_instances: set = set()
+        any_finding = False
+
+        for eni in enis:
+            if eni.get("InterfaceType", "interface") in self._MANAGED_IFACE:
+                continue
+            subnet_id = eni.get("SubnetId", "")
+            vpc_id = eni.get("VpcId", "")
+            ipkind = aws_exposure.classify_public_ip(
+                eni.get("Association"),
+                [a.get("Ipv6Address") for a in eni.get("Ipv6Addresses", [])])
+            if ipkind["ipv4"] is None and not ipkind["ipv6"]:
+                continue                                # no public entry point at all
+            rt   = aws_exposure.find_effective_route_table(subnet_id, vpc_id, rtbs)
+            nacl = aws_exposure.find_governing_nacl(subnet_id, vpc_id, nacls)
+            perms: List[Dict] = []
+            for grp in eni.get("Groups", []):
+                perms += sg_perms.get(grp.get("GroupId"), [])
+            exposure = aws_exposure.compute_exposure(
+                {"ipv4_public": ipkind["ipv4"], "ipv6_public": ipkind["ipv6"]},
+                rt, nacl, perms)
+            if not exposure:
+                continue
+
+            eni_id = eni.get("NetworkInterfaceId", "eni-?")
+            instance_id = (eni.get("Attachment") or {}).get("InstanceId", "")
+            g.add_node(eni_id, "NetworkInterface", subnet_id=subnet_id,
+                       vpc_id=vpc_id, ipv4_kind=ipkind["ipv4"])
+            if instance_id:
+                target_arn = self._instance_arn(instance_id)
+                g.add_node(target_arn, "EC2Instance", instance_id=instance_id, vpc_id=vpc_id)
+                g.add_edge(eni_id, target_arn, "ATTACHED_TO")
+                exposed_instances.add(instance_id)
+
+            for family, ports in exposure.items():
+                summary, hits = aws_exposure.iter_exposed_ports(ports)
+                ipk = ipkind["ipv4"] if family == "ipv4" else "ipv6"
+                g.add_edge(internet, eni_id, "EXPOSED_TO", family=family,
+                           ports=summary, ip_kind=ipk, stable=(ipk == "eip"))
+                res = instance_id or eni_id
+                any_finding = True
+                if hits:
+                    sens = ", ".join(sorted({f"{name}({proto}/{port})"
+                                             for proto, port, name in hits}))
+                    self._add("FAIL", "EXPOSURE-01", "EXPOSURE", res,
+                              f"Internet-reachable sensitive port(s) {sens} over "
+                              f"{family} [{summary}] (public IP: {ipk}) | {res}")
+                else:
+                    self._add("FAIL", "EXPOSURE-02", "EXPOSURE", res,
+                              f"Internet-reachable on {family} [{summary}] "
+                              f"(public IP: {ipk}) | {res}")
+
+        # Fire the first end-to-end attack paths: exposed EC2 -> instance role -> admin
+        admin = self._admin_cap_id()
+        for instance_id in sorted(exposed_instances):
+            inst = inst_by_id.get(instance_id, {})
+            prof_arn = (inst.get("IamInstanceProfile") or {}).get("Arn", "")
+            if not prof_arn:
+                continue
+            target_arn = self._instance_arn(instance_id)
+            g.add_node(prof_arn, "InstanceProfile", arn=prof_arn)
+            g.add_edge(target_arn, prof_arn, "HAS_INSTANCE_PROFILE")
+            role_arn = profile_to_role.get(prof_arn.lower())
+            if not role_arn:
+                continue
+            g.add_edge(prof_arn, role_arn, "HAS_ROLE")
+            # Condition-aware: CRITICAL only when admin is reachable over edges that
+            # carry no policy/trust Condition; otherwise the path is exploitable only
+            # if the attacker can satisfy the condition -> WARN (matches _check_iam_privesc).
+            kinds = {"CAN_PRIVESC_TO", "CAN_ASSUME"}
+            reach_confirmed = g.reachable(role_arn, kinds, max_hops=6,
+                                          edge_filter=self._edge_unconditioned)
+            rname = (g.node(role_arn) or {}).get("props", {}).get("name",
+                                                                  role_arn.split("/")[-1])
+            if admin in reach_confirmed:
+                any_finding = True
+                self._add("FAIL", "ATTACK-01", "EXPOSURE", instance_id,
+                          f"ATTACK PATH: Internet -> exposed EC2 {instance_id} -> "
+                          f"instance-profile role {rname} -> privilege escalation to admin. "
+                          f"An attacker reaching this host inherits a role that can become "
+                          f"account administrator. | {instance_id}")
+            elif admin in g.reachable(role_arn, kinds, max_hops=6):
+                any_finding = True
+                self._add("WARN", "ATTACK-01", "EXPOSURE", instance_id,
+                          f"ATTACK PATH (conditioned): Internet -> exposed EC2 {instance_id} "
+                          f"-> instance-profile role {rname} -> admin is reachable ONLY via a "
+                          f"Condition-guarded privesc/trust (MFA/ExternalId/tag/SourceIp) — "
+                          f"exploitable only if the attacker can satisfy the condition. Verify. "
+                          f"| {instance_id}")
+
+        if not any_finding:
+            self._add("PASS", "EXPOSURE-02", "EXPOSURE", "all-enis",
+                      f"No internet-reachable workloads across {len(enis)} interface(s)")
+
+    # ══════════════════════════════════════════════════════════════════════════
     # ORCHESTRATION
     # ══════════════════════════════════════════════════════════════════════════
     def run(self):
@@ -4189,6 +4374,7 @@ class AWSLiveScanner:
             "COGNITO":        self._check_cognito,
             "APIGATEWAYV2":   self._check_apigatewayv2,
             "IAMPRIVESC":     self._check_iam_privesc,
+            "EXPOSURE":       self._check_exposure,
         }
 
         base_region = self.region
