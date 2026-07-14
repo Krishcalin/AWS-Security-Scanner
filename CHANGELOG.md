@@ -4,6 +4,54 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.4.0] — 2026
+
+**CNAPP Phase 3 — Deep-Plane Ingestion (buy-not-build) + the flagship attack path.**
+Rather than building agent-based scanning, this release BUYS commodity deep-plane
+signal from AWS-native services and ingests it as graph edges, then materializes the
+full flagship toxic combination. New `aws_deepplane.py` module (zero dependencies) is
+a pure, fully unit-tested parsing/classification core.
+
+**Correctness backbone:** these services (Inspector, Macie, GuardDuty, Access
+Analyzer) are opt-in and frequently disabled. Every collector is enablement-gated and
+**degrades to a graceful INFO no-op when its service is off — never a FAIL, crash, or
+phantom edge**. That "service-disabled → no false positive" behavior heads the FP/FN
+catalog and was adversarially verified.
+
+### Added — deep-plane collectors (3 new sections: VULN · THREAT · DATA)
+- **VULN — Amazon Inspector v2** (`inspector2`): active high/critical
+  `PACKAGE_VULNERABILITY` findings become **`HAS_VULN`** edges on EC2/ECR nodes,
+  carrying native **EPSS** + `exploitAvailable`, and the authoritative **CISA-KEV**
+  flag via a cached `batch_get_finding_details` second hop. Findings `VULN-01`
+  (exploitable high/crit), `VULN-02` (KEV / in-the-wild → CRITICAL), `VULN-03` (ECR image).
+- **THREAT — GuardDuty**: active (non-archived, severity≥4) detector findings become
+  **`THREAT_ON`** edges mapped onto EC2/S3/IAM nodes (`THREAT-01`); `[SAMPLE]` and
+  archived findings filtered. Boosts the priority of any attack path they land on.
+- **DATA — Macie + IAM Access Analyzer + CAN_READ_DATA**:
+  - Macie automated `sensitivityScore` (score-trap-aware: -1/1/50-default and
+    `classifiableObjectCount==0` are never crown-jewel) labels S3 **crown-jewel
+    DataStore** nodes (`DATA-01/02/03`).
+  - Access Analyzer external-access findings add **authoritative** `EXPOSED_TO`
+    edges on public buckets (`EXTACCESS-01/02`), overriding heuristics.
+  - **`CAN_READ_DATA`** edges (`EXTACCESS-03`) computed from each role's effective
+    identity statements via a wildcard-free **object-probe** — so `s3:ListBucket`
+    (bucket-scoped) can never masquerade as object read, with Deny precedence and
+    condition-awareness. No API cost.
+
+### Added — flagship attack path (`ATTACK-02`, CRITICAL)
+- The full toxic combination: **`Internet → exposed EC2 → exploitable/KEV CVE →
+  over-privileged instance-profile role → crown-jewel S3 data`**. Composes the Phase 1
+  identity graph + Phase 2 exposure graph + the new vuln/data edges; requires all
+  three hops (fails closed when a source service is off). Condition-aware (CRITICAL
+  over unconditioned edges, else WARN) and escalated to TOP priority when a live
+  GuardDuty `THREAT_ON` sits on the chain. `SecurityGraph.reachable` already supports
+  the condition-aware `edge_filter` from Phase 2.
+
+### Testing
+- 136 → **180** unit tests (new `tests/test_deepplane.py`: pure FP/FN catalog +
+  enablement/degradation no-op tests + flagship ATTACK-02, all mocked, no AWS/boto3).
+- Grounded in a verified AWS-API research pass; hardened by an adversarial FP/FN sweep.
+
 ## [2.3.0] — 2026
 
 **CNAPP Phase 2 — Effective Network Exposure Engine.** Computes *true* internet

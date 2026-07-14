@@ -7,22 +7,25 @@ full **CNAPP** (Cloud-Native Application Protection Platform) — see the CNAPP
 blueprint/roadmap: the north star is AWS-deep **toxic-combination attack paths**
 computed over a unified security graph.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **Live Audit Scanner** (`aws_live_scanner.py` v2.3.0) -- live AWS account audit via boto3 (150+ checks, 36 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph + attack-path chains**, **effective internet-exposure engine**)
+- **Live Audit Scanner** (`aws_live_scanner.py` v2.4.0) -- live AWS account audit via boto3 (160+ checks, 39 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph + attack-path chains**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**)
 - **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
 - **Exposure Oracle** (`aws_exposure.py`) -- pure, dependency-free internet-reachability core (SG ∩ stateless NACL ∩ IGW route ∩ public-IP)
+- **Deep-Plane Core** (`aws_deepplane.py`) -- pure Inspector/Macie/GuardDuty/Access-Analyzer parsers + the CAN_READ_DATA object-probe matcher
 
 ## Repository Structure
 
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.3.0 (boto3, graph, multi-account, exposure)
+├── aws_live_scanner.py      # Live audit scanner v2.4.0 (boto3, graph, exposure, deep-plane)
 ├── aws_graph.py             # SecurityGraph — nodes/edges, bounded traversal, graph.json (stdlib)
 ├── aws_exposure.py          # Internet-reachability oracle — 4-gate AND, pure/testable (stdlib)
+├── aws_deepplane.py         # Deep-plane parsers/classifiers (Inspector/Macie/GuardDuty/AA), pure (stdlib)
 ├── tests/
 │   ├── test_live_scanner.py # 69 unit tests (mock boto3)
 │   ├── test_cnapp_phase1.py # 32 unit tests (graph, chains, trust, org fan-out, compliance rollup)
 │   ├── test_exposure.py     # 35 unit tests (14-case FP/FN catalog + collector + attack path)
+│   ├── test_deepplane.py    # 44 unit tests (deep-plane FP/FN catalog + collectors + flagship ATTACK-02)
 │   └── samples/             # Vulnerable IaC + sample reports
 ├── scripts/
 │   └── validate_live.py     # Read-only live-account validation harness
@@ -71,12 +74,12 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.3.0)
+## Live Audit Scanner (`aws_live_scanner.py` v2.4.0)
 
 - **Type**: Live AWS account audit via boto3 (evolving toward CNAPP)
-- **Lines**: ~5,000
-- **Dependencies**: `boto3` (required), `aws_graph.py` + `aws_exposure.py` (bundled, stdlib), Python 3.10+
-- **IAM permissions**: `SecurityAudit` AWS-managed policy (read-only); multi-account adds `sts:AssumeRole` into a read-only role per target account, and `organizations:ListAccounts` for `--org`
+- **Lines**: ~5,400
+- **Dependencies**: `boto3` (required), `aws_graph.py` + `aws_exposure.py` + `aws_deepplane.py` (bundled, stdlib), Python 3.10+
+- **IAM permissions**: `SecurityAudit` AWS-managed policy (read-only) covers the deep-plane reads (Inspector2/Macie/GuardDuty/Access Analyzer); multi-account adds `sts:AssumeRole` into a read-only role per target account, and `organizations:ListAccounts` for `--org`
 - **Compliance**: CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
 
 ### CNAPP Phase 0/1 additions (v2.2.0)
@@ -123,6 +126,38 @@ python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FI
   `graph.reachable(role, {CAN_PRIVESC_TO, CAN_ASSUME})`.
 - New graph node kinds (InternetSource / NetworkInterface / EC2Instance / InstanceProfile)
   and edges (`EXPOSED_TO` / `ATTACHED_TO` / `HAS_INSTANCE_PROFILE` / `HAS_ROLE`).
+
+### CNAPP Phase 3 additions (v2.4.0) — deep-plane ingestion (buy-not-build)
+
+Three new sections BUY deep-plane signal from AWS-native services as graph edges;
+each is **enablement-gated** and degrades to a graceful INFO no-op when its service is
+off (never a FAIL/crash/phantom edge). Pure parsers live in `aws_deepplane.py`.
+
+- **VULN (`_check_vuln`)** — Amazon Inspector v2. `batch_get_account_status` gate →
+  `list_findings` (ACTIVE high/crit `PACKAGE_VULNERABILITY`) → `HAS_VULN` edges on
+  EC2Instance (keyed via `_instance_arn`) / ECRImage nodes, with native EPSS +
+  `exploitAvailable` and KEV via a cached `batch_get_finding_details` second hop
+  (`_inspector_kev`). `VULN-01/02/03`.
+- **THREAT (`_check_threat`)** — GuardDuty. `list_detectors`/`get_detector` gate →
+  `list_findings`(non-archived, sev≥4)/`get_findings` → `THREAT_ON` edges via
+  `aws_deepplane.map_guardduty_finding` (SAMPLE/archived filtered, ResourceType
+  branch). `THREAT-01`.
+- **DATA (`_check_data`)** — Macie + Access Analyzer + CAN_READ_DATA + flagship:
+  - `_collect_macie` → `aws_deepplane.is_crown_jewel` (score-trap aware) → crown-jewel
+    S3 nodes (`DATA-01/02/03`).
+  - `_collect_access_analyzer` → authoritative external-access → `EXPOSED_TO` on public
+    buckets (`EXTACCESS-01/02`).
+  - `_build_can_read_data` → `aws_deepplane.role_can_read_bucket` (wildcard-free
+    object-probe, Deny precedence, condition-aware) → `CAN_READ_DATA` edges (`EXTACCESS-03`).
+  - `_correlate_flagship` → **`ATTACK-02`** (CRITICAL): `Internet → exposed EC2 →
+    exploitable/KEV CVE → role → crown-jewel data`; requires all three hops,
+    condition-aware, THREAT_ON boost. Runs last (in DATA) so all subgraphs exist.
+- New node kinds (Vulnerability/CVE, ECRImage, S3Bucket/DataStore, ThreatFinding) and
+  edges (`HAS_VULN`, `CAN_READ_DATA`, `THREAT_ON`). `_ensure_graph()` builds the
+  identity subgraph if IAMPRIVESC hasn't run.
+- **Deferred** (fail closed to no-signal): Lambda/EKS vuln planes, CloudTrail CDR-lite,
+  unused-access down-ranking, ECR Basic-scan fallback, bucket-policy/SCP evaluation,
+  external KEV/EPSS feeds.
 
 ### Architecture
 
@@ -235,7 +270,7 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 136 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 180 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
