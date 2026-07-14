@@ -7,25 +7,28 @@ full **CNAPP** (Cloud-Native Application Protection Platform) — see the CNAPP
 blueprint/roadmap: the north star is AWS-deep **toxic-combination attack paths**
 computed over a unified security graph.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **Live Audit Scanner** (`aws_live_scanner.py` v2.4.0) -- live AWS account audit via boto3 (160+ checks, 39 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph + attack-path chains**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**)
+- **Live Audit Scanner** (`aws_live_scanner.py` v2.5.0) -- live AWS account audit via boto3 (160+ checks, 40 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**, **attack-path correlation + choke points**)
 - **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
 - **Exposure Oracle** (`aws_exposure.py`) -- pure, dependency-free internet-reachability core (SG ∩ stateless NACL ∩ IGW route ∩ public-IP)
 - **Deep-Plane Core** (`aws_deepplane.py`) -- pure Inspector/Macie/GuardDuty/Access-Analyzer parsers + the CAN_READ_DATA object-probe matcher
+- **Correlation Engine** (`aws_correlate.py`) -- pure attack-path enumeration + gated-multiplicative scoring + choke-point ranking
 
 ## Repository Structure
 
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.4.0 (boto3, graph, exposure, deep-plane)
+├── aws_live_scanner.py      # Live audit scanner v2.5.0 (boto3, graph, exposure, deep-plane, correlate)
 ├── aws_graph.py             # SecurityGraph — nodes/edges, bounded traversal, graph.json (stdlib)
 ├── aws_exposure.py          # Internet-reachability oracle — 4-gate AND, pure/testable (stdlib)
 ├── aws_deepplane.py         # Deep-plane parsers/classifiers (Inspector/Macie/GuardDuty/AA), pure (stdlib)
+├── aws_correlate.py         # Attack-path correlation engine — enumerate/score/rank/choke-points, pure (stdlib)
 ├── tests/
 │   ├── test_live_scanner.py # 69 unit tests (mock boto3)
 │   ├── test_cnapp_phase1.py # 32 unit tests (graph, chains, trust, org fan-out, compliance rollup)
 │   ├── test_exposure.py     # 35 unit tests (14-case FP/FN catalog + collector + attack path)
 │   ├── test_deepplane.py    # 44 unit tests (deep-plane FP/FN catalog + collectors + flagship ATTACK-02)
+│   ├── test_correlate.py    # 22 unit tests (path enumeration + scoring + choke points + section)
 │   └── samples/             # Vulnerable IaC + sample reports
 ├── scripts/
 │   └── validate_live.py     # Read-only live-account validation harness
@@ -74,11 +77,11 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.4.0)
+## Live Audit Scanner (`aws_live_scanner.py` v2.5.0)
 
 - **Type**: Live AWS account audit via boto3 (evolving toward CNAPP)
-- **Lines**: ~5,400
-- **Dependencies**: `boto3` (required), `aws_graph.py` + `aws_exposure.py` + `aws_deepplane.py` (bundled, stdlib), Python 3.10+
+- **Lines**: ~5,600
+- **Dependencies**: `boto3` (required), `aws_graph.py` + `aws_exposure.py` + `aws_deepplane.py` + `aws_correlate.py` (bundled, stdlib), Python 3.10+
 - **IAM permissions**: `SecurityAudit` AWS-managed policy (read-only) covers the deep-plane reads (Inspector2/Macie/GuardDuty/Access Analyzer); multi-account adds `sts:AssumeRole` into a read-only role per target account, and `organizations:ListAccounts` for `--org`
 - **Compliance**: CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
 
@@ -158,6 +161,29 @@ off (never a FAIL/crash/phantom edge). Pure parsers live in `aws_deepplane.py`.
 - **Deferred** (fail closed to no-signal): Lambda/EKS vuln planes, CloudTrail CDR-lite,
   unused-access down-ranking, ECR Basic-scan fallback, bucket-policy/SCP evaluation,
   external KEV/EPSS feeds.
+
+### CNAPP Phase 4 additions (v2.5.0) — attack-path correlation & choke points
+
+- **Correlation engine (`aws_correlate.py`, pure/stdlib)** — reads the graph and produces
+  ranked attack paths + choke points. Predicates (`_edge_unconditioned`,
+  `aws_deepplane.is_exploitable`, `_node_has_threat`) are INJECTED so it can never
+  diverge from the ATTACK-01/02 emitters:
+  - `enumerate_paths` — bounded simple-path DFS from `internet` to sinks (crown-jewel
+    S3 + admin capability) over `E_PATH` edges; preserves the **ATTACK-02 vuln-pivot
+    gate**; bounded by `MAX_HOPS`/`PER_PAIR_CAP`/`ENUM_BUDGET`; deterministic.
+  - `_make_path` — **gated-multiplicative** score `E × X × max(P,I) × reach × T` with a
+    conditioned cap(55)/unconditioned floor(80) that reproduces ATTACK-01/02's
+    CRITICAL-vs-WARN, plus a KEV+data hard floor(90). Every score carries a `rationale`.
+  - `choke_points` — severity-weighted path-frequency + `is_true_choke` dominator flag;
+    `EXCLUDE_KINDS` structurally bars the internet/crown/admin nodes. `minimal_cut`
+    greedy set-cover. `WEIGHTS` dict is tunable.
+- **`CORRELATE` section (40th, in `GLOBAL_SECTIONS` so it runs ONCE, last)** —
+  `_check_correlate` calls the engine, stores `self.attack_paths`/`self.choke_points`,
+  emits `CHOKEPOINT-01` (HIGH, top≤3 chokes that sever a CRITICAL/HIGH path) + `PATHS-01`
+  (INFO rollup), and annotates choke nodes on the graph. `save_json` gains ranked
+  `attack_paths` + `choke_points` blocks (`self.attack_paths=[]` seeded in `__init__`).
+- **ATTACK-01/ATTACK-02 stay byte-for-byte** in `_check_exposure`/`_correlate_flagship` —
+  the engine is a read-only post-processor (no test edits to exposure/deep-plane).
 
 ### Architecture
 
@@ -270,7 +296,7 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 180 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 202 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:

@@ -63,8 +63,9 @@ except ImportError:
 from aws_graph import SecurityGraph
 import aws_exposure
 import aws_deepplane
+import aws_correlate
 
-VERSION = "2.4.0"
+VERSION = "2.5.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -86,7 +87,7 @@ SECTIONS = [
     "ELASTICACHE", "OPENSEARCH", "DYNAMODB", "STEPFUNCTIONS",
     "APIGATEWAY", "ELB", "EBS", "REDSHIFT", "EFS", "ACM",
     "SAGEMAKER", "COGNITO", "APIGATEWAYV2", "IAMPRIVESC", "EXPOSURE",
-    "VULN", "THREAT", "DATA",
+    "VULN", "THREAT", "DATA", "CORRELATE",
 ]
 
 SECTION_LABELS = {
@@ -129,6 +130,7 @@ SECTION_LABELS = {
     "VULN":           "WORKLOAD VULNERABILITIES (INSPECTOR)",
     "THREAT":         "LIVE THREAT DETECTIONS (GUARDDUTY)",
     "DATA":           "DATA SECURITY & FLAGSHIP ATTACK PATHS",
+    "CORRELATE":      "ATTACK-PATH CORRELATION & CHOKE POINTS",
 }
 
 
@@ -210,6 +212,9 @@ CHECK_SEVERITY = {
     "DATA-01": "MEDIUM", "DATA-02": "HIGH", "DATA-03": "MEDIUM",
     "EXTACCESS-01": "HIGH", "EXTACCESS-02": "MEDIUM", "EXTACCESS-03": "MEDIUM",
     "THREAT-01": "HIGH", "THREAT-02": "MEDIUM", "ATTACK-02": "CRITICAL",
+    # Phase 4: correlation & choke points (HIGH — the toxic combos already carry
+    # CRITICAL via ATTACK-01/02; CHOKEPOINT avoids double-weighting the same risk)
+    "CHOKEPOINT-01": "HIGH",
     # Backfilled service checks (previously severity-less on FAIL)
     "CNT-01": "MEDIUM", "BCK-01": "MEDIUM",
     "SNS-01": "MEDIUM", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
@@ -348,6 +353,7 @@ COMPLIANCE_MAP = {
     "THREAT-01": {"CIS": "4.15", "PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
     "THREAT-02": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
     "ATTACK-02": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "CHOKEPOINT-01": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "CA-8"},
     # ── Backfill: FAIL-capable checks previously missing a compliance mapping ──
     "CNT-01": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5"},
     "BCK-01": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
@@ -493,6 +499,7 @@ REMEDIATION_MAP = {
     "THREAT-01": "Triage the GuardDuty finding, then isolate/rotate as needed: aws guardduty get-findings --detector-id <DETECTOR_ID> --finding-ids <FINDING_ID>; if confirmed, quarantine the resource and rotate exposed credentials. Do not archive without triage.",
     "THREAT-02": "Confirm whether the control-plane event was authorized (aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=<EVENT>), and enable continuous detection: aws guardduty create-detector --enable",
     "ATTACK-02": "Sever the flagship chain at ANY hop: patch the exploitable CVE, remove the public ingress (aws ec2 revoke-security-group-ingress --group-id <SG> --protocol tcp --port <PORT> --cidr 0.0.0.0/0), and scope the instance-profile role's data access (aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>). Fixing the choke-point node breaks the whole path.",
+    "CHOKEPOINT-01": "Remediate this single node to sever multiple attack paths at once: for an over-privileged role, aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>; for an exposed host, patch the exploitable CVE or aws ec2 revoke-security-group-ingress ...; see the finding for the node kind and the count of paths/crown-jewels it severs.",
 }
 
 
@@ -881,7 +888,7 @@ class AWSLiveScanner:
 
     # Sections that enumerate global (region-agnostic) resources — run once even
     # when --all-regions sweeps every enabled region for the rest.
-    GLOBAL_SECTIONS = {"IAM", "S3", "ROUTE53", "CLOUDFRONT", "IAMPRIVESC"}
+    GLOBAL_SECTIONS = {"IAM", "S3", "ROUTE53", "CLOUDFRONT", "IAMPRIVESC", "CORRELATE"}
 
     def __init__(
         self,
@@ -899,6 +906,8 @@ class AWSLiveScanner:
         self._session  = session          # boto3.Session for assumed-role scans; None = ambient creds
         self.all_regions_scan = all_regions
         self.graph: Optional[SecurityGraph] = None
+        self.attack_paths: List = []       # ranked AttackPath objects (Phase 4 correlate)
+        self.choke_points: List = []       # ranked ChokePoint objects
         self._clients: Dict[str, object] = {}
         self._cred_report:  Optional[List[Dict]] = None
         self._all_regions:  Optional[List[str]]  = None
@@ -4710,6 +4719,72 @@ class AWSLiveScanner:
                           f"reachable only via a Condition-guarded hop; verify.{boost} | {iid}")
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 40: ATTACK-PATH CORRELATION & CHOKE POINTS (Phase 4)
+    # Read-only post-processor over the graph Phases 1-3 built. Ranks the graph
+    # into the handful of scored, explainable attack paths and computes choke
+    # points. ATTACK-01/ATTACK-02 emission stays in the exposure/data sections
+    # (byte-for-byte) — this section only adds CHOKEPOINT-01 + a PATHS-01 rollup.
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_correlate(self):
+        self._section_header("CORRELATE")
+        self._log("Ranking attack paths (gated-multiplicative scoring) + choke-point "
+                  "analysis ('fix one node -> sever N paths to M crown jewels').")
+        g = self._ensure_graph()
+        if g is None or g.node("internet") is None:
+            self._add("INFO", "PATHS-01", "CORRELATE", "graph",
+                      "No internet-facing attack surface in the graph; nothing to correlate")
+            return
+        crown = {n["id"] for n in g.nodes("S3Bucket")
+                 if (n["props"] or {}).get("crown_jewel")}
+        # Precompute the threat set ONCE — the enumerator calls node_has_threat per
+        # edge expansion, so it must be O(1), not an O(E) scan of every graph edge.
+        threatened = {e["dst"] for e in g.edges("THREAT_ON")}
+        paths = aws_correlate.enumerate_paths(
+            g, {"internet"}, self._admin_cap_id(), crown,
+            self._edge_unconditioned, aws_deepplane.is_exploitable,
+            lambda nid: nid in threatened)
+        node_kind = lambda nid: (g.node(nid) or {}).get("kind")
+
+        def _dominates(node, terminal):
+            # Authoritative: is `terminal` unreachable from the internet once `node`
+            # is removed? (Bounded enumeration alone can't certify a true dominator.)
+            reach = g.reachable("internet", aws_correlate.E_PATH, max_hops=64,
+                                edge_filter=lambda e: e["src"] != node and e["dst"] != node)
+            return terminal not in reach
+
+        chokes = aws_correlate.choke_points(
+            paths, node_kind=node_kind,
+            label_of=lambda nid: aws_correlate._label(g, nid), dominates=_dominates)
+        self.attack_paths, self.choke_points = paths, chokes
+
+        if not paths:
+            self._add("PASS", "PATHS-01", "CORRELATE", "all",
+                      "No end-to-end attack paths (internet -> crown-jewel/admin) found")
+            return
+
+        summ = aws_correlate.summarize(paths)
+        self._add("INFO", "PATHS-01", "CORRELATE", "summary",
+                  f"{summ['total']} attack path(s) ranked "
+                  f"({summ['n_critical']} CRITICAL, {summ['n_conditioned']} conditioned); "
+                  f"top score {summ['top_score']}: {summ['top_chain']}")
+
+        # Emit the top choke points that sever at least one CRITICAL/HIGH path.
+        for c in chokes[:3]:
+            crit_hi = [p for p in paths if c.node_id in set(p.nodes[1:-1])
+                       and p.severity in ("CRITICAL", "HIGH")]
+            if not crit_hi:
+                continue
+            g.add_node(c.node_id, node_kind(c.node_id) or "Unknown",
+                       choke_point=True, paths_severed=c.paths_severed)
+            blocked = (f"; removes EVERY known path to {len(c.targets_fully_blocked)} "
+                       f"target(s)" if c.is_true_choke else "")
+            self._add("FAIL", "CHOKEPOINT-01", "CORRELATE", c.label,
+                      f"CHOKE POINT: fixing {c.node_kind or 'node'} {c.label} severs "
+                      f"{c.paths_severed}/{c.total_paths} attack path(s) "
+                      f"({len(crit_hi)} CRITICAL/HIGH){blocked}. {c.remediation_hint} "
+                      f"| {c.label}")
+
+    # ══════════════════════════════════════════════════════════════════════════
     # ORCHESTRATION
     # ══════════════════════════════════════════════════════════════════════════
     def run(self):
@@ -4783,6 +4858,7 @@ class AWSLiveScanner:
             "VULN":           self._check_vuln,
             "THREAT":         self._check_threat,
             "DATA":           self._check_data,
+            "CORRELATE":      self._check_correlate,
         }
 
         base_region = self.region
@@ -4882,6 +4958,8 @@ class AWSLiveScanner:
             },
             "compliance_scorecard": compliance_scorecard(self.results),
             "graph": self.graph.stats() if self.graph else None,
+            "attack_paths": [p.to_dict() for p in self.attack_paths],
+            "choke_points": [c.to_dict() for c in self.choke_points],
             "results": [
                 {
                     "status":          r.status,

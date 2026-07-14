@@ -4,6 +4,52 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.5.0] — 2026
+
+**CNAPP Phase 4 — Attack-Path Correlation & Prioritization ("ship the product").**
+Reads the security graph Phases 1-3 built and collapses it into the ranked handful
+of scored, explainable attack paths that matter, then computes **choke points** —
+"remediate this one node and sever N attack paths to M crown jewels." New
+`aws_correlate.py` module (zero dependencies) is a pure, fully unit-tested engine.
+
+### Added — the correlation engine (`aws_correlate.py`)
+- **Score the PATH, not the finding** — the unit of ranking is an end-to-end
+  entry→target chain, which is what collapses thousands of flat findings into a few.
+- **Gated-multiplicative scoring** — a toxic combination is a CONJUNCTION, so the
+  score multiplies across dimensions (exposure × exploitability[KEV/EPSS/exploit] ×
+  privilege-blast-radius × data-sensitivity) with a conditioned/compensating-control
+  penalty and a bounded GuardDuty-threat amplifier. Any missing factor collapses the
+  path — this kills the classic "high-CVSS but unexposed, no data path" false
+  positive a weighted sum would surface as critical.
+- **MAX-per-jewel aggregation** (never SUM) — the environment number is max-per-crown-jewel
+  then summed across distinct jewels; prevents score inflation from shared hops.
+- **Fully explainable** — every 0-100 score decomposes into its hop factors and the
+  driving findings (`rationale` + `driving_findings` on each path).
+- **Bounded, deterministic enumeration** — simple-path DFS with hop cap, per-pair
+  cap, and an enumeration budget to prevent combinatorial blowup on dense IAM cliques.
+- **Choke points** — severity-weighted path-frequency with an `is_true_choke`
+  dominator flag (every path to a target passes through the node); `minimal_cut`
+  greedy set-cover for the "fix these few nodes" follow-up. Entry/target node kinds
+  are structurally excluded (never picks the internet/crown/admin node as the choke).
+
+### Added — CORRELATE section (40th, runs last, once) + findings
+- **`CHOKEPOINT-01`** (HIGH) — "fixing {node} severs N/M attack path(s) … removes
+  EVERY known path to K crown jewels/admin." Emitted for the top choke points that
+  sever a CRITICAL/HIGH path. HIGH (not CRITICAL) so it doesn't double-weight the
+  toxic combo already scored CRITICAL by ATTACK-01/02.
+- **`PATHS-01`** (INFO) — ranked-path rollup.
+- Ranked `attack_paths` + `choke_points` blocks added to the JSON report.
+- **ATTACK-01/ATTACK-02 emission is unchanged** — the engine is a read-only
+  post-processor that only adds the new ids and re-expresses the same condition-aware
+  and exploitable-pivot semantics for ranking (zero edits to the Phase 2/3 tests).
+
+### Testing
+- 180 → **202** unit tests (new `tests/test_correlate.py`: enumeration + ATTACK-02
+  gate + direct-public-crown + conditioned floor/cap + KEV hard floor + additive-combiner
+  regression + choke-point diamond/exclude + minimal_cut + empty-graph no-op +
+  determinism + the CORRELATE section integration; all pure, no AWS/boto3).
+- Grounded in a verified methodology research pass; hardened by an adversarial sweep.
+
 ## [2.4.0] — 2026
 
 **CNAPP Phase 3 — Deep-Plane Ingestion (buy-not-build) + the flagship attack path.**
