@@ -4,6 +4,100 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.5.0] — 2026
+
+**CNAPP Phase 4 — Attack-Path Correlation & Prioritization ("ship the product").**
+Reads the security graph Phases 1-3 built and collapses it into the ranked handful
+of scored, explainable attack paths that matter, then computes **choke points** —
+"remediate this one node and sever N attack paths to M crown jewels." New
+`aws_correlate.py` module (zero dependencies) is a pure, fully unit-tested engine.
+
+### Added — the correlation engine (`aws_correlate.py`)
+- **Score the PATH, not the finding** — the unit of ranking is an end-to-end
+  entry→target chain, which is what collapses thousands of flat findings into a few.
+- **Gated-multiplicative scoring** — a toxic combination is a CONJUNCTION, so the
+  score multiplies across dimensions (exposure × exploitability[KEV/EPSS/exploit] ×
+  privilege-blast-radius × data-sensitivity) with a conditioned/compensating-control
+  penalty and a bounded GuardDuty-threat amplifier. Any missing factor collapses the
+  path — this kills the classic "high-CVSS but unexposed, no data path" false
+  positive a weighted sum would surface as critical.
+- **MAX-per-jewel aggregation** (never SUM) — the environment number is max-per-crown-jewel
+  then summed across distinct jewels; prevents score inflation from shared hops.
+- **Fully explainable** — every 0-100 score decomposes into its hop factors and the
+  driving findings (`rationale` + `driving_findings` on each path).
+- **Bounded, deterministic enumeration** — simple-path DFS with hop cap, per-pair
+  cap, and an enumeration budget to prevent combinatorial blowup on dense IAM cliques.
+- **Choke points** — severity-weighted path-frequency with an `is_true_choke`
+  dominator flag (every path to a target passes through the node); `minimal_cut`
+  greedy set-cover for the "fix these few nodes" follow-up. Entry/target node kinds
+  are structurally excluded (never picks the internet/crown/admin node as the choke).
+
+### Added — CORRELATE section (40th, runs last, once) + findings
+- **`CHOKEPOINT-01`** (HIGH) — "fixing {node} severs N/M attack path(s) … removes
+  EVERY known path to K crown jewels/admin." Emitted for the top choke points that
+  sever a CRITICAL/HIGH path. HIGH (not CRITICAL) so it doesn't double-weight the
+  toxic combo already scored CRITICAL by ATTACK-01/02.
+- **`PATHS-01`** (INFO) — ranked-path rollup.
+- Ranked `attack_paths` + `choke_points` blocks added to the JSON report.
+- **ATTACK-01/ATTACK-02 emission is unchanged** — the engine is a read-only
+  post-processor that only adds the new ids and re-expresses the same condition-aware
+  and exploitable-pivot semantics for ranking (zero edits to the Phase 2/3 tests).
+
+### Testing
+- 180 → **202** unit tests (new `tests/test_correlate.py`: enumeration + ATTACK-02
+  gate + direct-public-crown + conditioned floor/cap + KEV hard floor + additive-combiner
+  regression + choke-point diamond/exclude + minimal_cut + empty-graph no-op +
+  determinism + the CORRELATE section integration; all pure, no AWS/boto3).
+- Grounded in a verified methodology research pass; hardened by an adversarial sweep.
+
+## [2.4.0] — 2026
+
+**CNAPP Phase 3 — Deep-Plane Ingestion (buy-not-build) + the flagship attack path.**
+Rather than building agent-based scanning, this release BUYS commodity deep-plane
+signal from AWS-native services and ingests it as graph edges, then materializes the
+full flagship toxic combination. New `aws_deepplane.py` module (zero dependencies) is
+a pure, fully unit-tested parsing/classification core.
+
+**Correctness backbone:** these services (Inspector, Macie, GuardDuty, Access
+Analyzer) are opt-in and frequently disabled. Every collector is enablement-gated and
+**degrades to a graceful INFO no-op when its service is off — never a FAIL, crash, or
+phantom edge**. That "service-disabled → no false positive" behavior heads the FP/FN
+catalog and was adversarially verified.
+
+### Added — deep-plane collectors (3 new sections: VULN · THREAT · DATA)
+- **VULN — Amazon Inspector v2** (`inspector2`): active high/critical
+  `PACKAGE_VULNERABILITY` findings become **`HAS_VULN`** edges on EC2/ECR nodes,
+  carrying native **EPSS** + `exploitAvailable`, and the authoritative **CISA-KEV**
+  flag via a cached `batch_get_finding_details` second hop. Findings `VULN-01`
+  (exploitable high/crit), `VULN-02` (KEV / in-the-wild → CRITICAL), `VULN-03` (ECR image).
+- **THREAT — GuardDuty**: active (non-archived, severity≥4) detector findings become
+  **`THREAT_ON`** edges mapped onto EC2/S3/IAM nodes (`THREAT-01`); `[SAMPLE]` and
+  archived findings filtered. Boosts the priority of any attack path they land on.
+- **DATA — Macie + IAM Access Analyzer + CAN_READ_DATA**:
+  - Macie automated `sensitivityScore` (score-trap-aware: -1/1/50-default and
+    `classifiableObjectCount==0` are never crown-jewel) labels S3 **crown-jewel
+    DataStore** nodes (`DATA-01/02/03`).
+  - Access Analyzer external-access findings add **authoritative** `EXPOSED_TO`
+    edges on public buckets (`EXTACCESS-01/02`), overriding heuristics.
+  - **`CAN_READ_DATA`** edges (`EXTACCESS-03`) computed from each role's effective
+    identity statements via a wildcard-free **object-probe** — so `s3:ListBucket`
+    (bucket-scoped) can never masquerade as object read, with Deny precedence and
+    condition-awareness. No API cost.
+
+### Added — flagship attack path (`ATTACK-02`, CRITICAL)
+- The full toxic combination: **`Internet → exposed EC2 → exploitable/KEV CVE →
+  over-privileged instance-profile role → crown-jewel S3 data`**. Composes the Phase 1
+  identity graph + Phase 2 exposure graph + the new vuln/data edges; requires all
+  three hops (fails closed when a source service is off). Condition-aware (CRITICAL
+  over unconditioned edges, else WARN) and escalated to TOP priority when a live
+  GuardDuty `THREAT_ON` sits on the chain. `SecurityGraph.reachable` already supports
+  the condition-aware `edge_filter` from Phase 2.
+
+### Testing
+- 136 → **180** unit tests (new `tests/test_deepplane.py`: pure FP/FN catalog +
+  enablement/degradation no-op tests + flagship ATTACK-02, all mocked, no AWS/boto3).
+- Grounded in a verified AWS-API research pass; hardened by an adversarial FP/FN sweep.
+
 ## [2.3.0] — 2026
 
 **CNAPP Phase 2 — Effective Network Exposure Engine.** Computes *true* internet

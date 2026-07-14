@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/AWS-CIS%20Benchmark%20v3.0-ff9900?style=flat-square&logo=amazonaws&logoColor=white" alt="CIS AWS v3.0"/>
   <img src="https://img.shields.io/badge/compliance-CIS%20%7C%20PCI--DSS%20%7C%20HIPAA%20%7C%20SOC2%20%7C%20NIST-purple?style=flat-square" alt="5 Compliance Frameworks"/>
   <img src="https://img.shields.io/badge/checks-200%2B-red?style=flat-square" alt="200+ Checks"/>
-  <img src="https://img.shields.io/badge/tests-136%20passing-brightgreen?style=flat-square" alt="136 Tests"/>
+  <img src="https://img.shields.io/badge/tests-202%20passing-brightgreen?style=flat-square" alt="202 Tests"/>
 </p>
 
 ---
@@ -24,7 +24,7 @@ This repository contains **two complementary AWS security scanners**:
 | Scanner | File | Type | Input | Checks |
 |---------|------|------|-------|--------|
 | **IaC Security Scanner** | `aws_offline_scanner.py` | Static analysis | CloudFormation + Terraform files | 100+ (60+ TF regex + 42 CF structural) |
-| **Live Audit Scanner** | `aws_live_scanner.py` | Live AWS API audit + security graph | Running AWS account (multi-account via AssumeRole) | 150+ across 36 sections |
+| **Live Audit Scanner** | `aws_live_scanner.py` | Live AWS API audit + security graph + CNAPP | Running AWS account (multi-account via AssumeRole) | 160+ across 40 sections |
 
 Use the **IaC scanner** to catch misconfigurations in CloudFormation templates and Terraform files before deployment. Use the **live scanner** to audit a running AWS account for CIS Benchmark compliance.
 
@@ -154,9 +154,12 @@ options:
 The live scanner connects to a running AWS account via **boto3**, performing **read-only** security checks aligned to multiple compliance frameworks. It produces colour-coded terminal output with PASS/FAIL/WARN verdicts, posture scoring, JSON/HTML reports, and saves evidence artefacts to a timestamped output directory.
 
 - **Read-only by design** -- never modifies AWS resources
-- **150+ security checks** across 36 audit sections
+- **160+ security checks** across 40 audit sections
 - **Effective internet-exposure engine** (CNAPP Phase 2) -- computes *true* reachability (`aws_exposure.py`): a workload is flagged internet-exposed only when a public IP/EIP/IPv6 **and** an active IGW route **and** open security-group ingress **and** a permissive stateless NACL (inbound + ephemeral return) all line up — killing the "SG allows 0.0.0.0/0" false positive. sg-references, NAT routes, private subnets and blocked-return NACLs are correctly *not* exposed
 - **First attack path** -- `ATTACK-01` chains it end-to-end: `Internet → exposed EC2 → instance-profile role → privilege escalation to admin` (CRITICAL)
+- **Deep-plane ingestion** (CNAPP Phase 3, buy-not-build) -- BUYS signal from AWS-native services as graph edges: **Amazon Inspector** CVEs with EPSS + CISA-KEV (`HAS_VULN`), **Macie** crown-jewel S3 classification, **IAM Access Analyzer** authoritative external access, **GuardDuty** live detections (`THREAT_ON`). Every collector degrades to a graceful no-op when its service is disabled -- never a false positive
+- **Flagship attack path** -- `ATTACK-02` (CRITICAL): `Internet → exposed EC2 → exploitable/KEV CVE → over-privileged role → crown-jewel S3 data` -- the full toxic combination, condition-aware, escalated when a live GuardDuty threat sits on the chain
+- **Attack-path correlation & choke points** (CNAPP Phase 4) -- collapses the whole graph into a *ranked handful* of scored, explainable attack paths (gated-multiplicative scoring: any missing factor collapses the path, killing the "high-CVSS but unexposed" false positive), then computes **choke points**: `CHOKEPOINT-01` names the single node whose fix severs the most paths to the most crown jewels. Ranked `attack_paths` + `choke_points` in the JSON report
 - **Security graph & attack-path chains** (CNAPP Phase 1) -- projects findings onto an ARN-keyed graph (`aws_graph.py`), builds `CAN_ASSUME` (trust) + `CAN_PRIVESC_TO` (privesc) edges, and surfaces **transitive privilege-escalation chains** (`user → assume role → escalate to admin`) plus roles assumable by *any* principal. Serialize with `--graph graph.json` (Neptune migration seed)
 - **IAM privilege-escalation analysis** -- builds each principal's effective permission set (via `GetAccountAuthorizationDetails`) and detects known escalation paths with resource-aware scoping; condition-guarded paths are downgraded to WARN
 - **Multi-account & multi-region** -- `--org` / `--accounts` fan out across an AWS Organization via `--assume-role`; `--all-regions` sweeps every enabled region for regional sections
@@ -168,7 +171,7 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 - **CI/CD gating** -- `--fail-on CRITICAL|HIGH|MEDIUM|LOW` for pipeline pass/fail control
 - **Scan diff** -- `--baseline prev.json` surfaces only what's *new* or *resolved* since a previous run
 - **Evidence collection** -- CSV/JSON artefact files saved per check
-- **136 unit tests** -- full test suite with mock boto3, no AWS credentials needed (incl. a 14-case internet-exposure false-positive/false-negative catalog)
+- **202 unit tests** -- full test suite with mock boto3, no AWS credentials needed (incl. exposure, deep-plane, and attack-path-scoring false-positive/false-negative catalogs)
 
 ### Prerequisites (Live Scanner)
 
@@ -180,7 +183,7 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 ### Quick Start (Live Scanner)
 
 ```bash
-# Run full audit (all 36 sections, 150+ checks)
+# Run full audit (all 40 sections, 160+ checks)
 python aws_live_scanner.py
 
 # Target a specific region
@@ -230,7 +233,7 @@ usage: aws_live_scanner.py [-h] [--region REGION] [--json FILE] [--html FILE]
                                          SECRETS,WAF,ELASTICACHE,OPENSEARCH,
                                          DYNAMODB,STEPFUNCTIONS,APIGATEWAY,ELB,
                                          EBS,REDSHIFT,EFS,ACM,SAGEMAKER,COGNITO,
-                                         APIGATEWAYV2,IAMPRIVESC,EXPOSURE}]
+                                         APIGATEWAYV2,IAMPRIVESC,EXPOSURE,VULN,THREAT,DATA,CORRELATE}]
                             [--all-regions] [--compliance] [--graph FILE]
                             [--org] [--accounts IDS] [--assume-role ROLE]
                             [--external-id ID] [-v] [--version]
@@ -256,7 +259,7 @@ options:
   --version             Show scanner version
 ```
 
-### Security Checks Coverage (150+ checks across 36 sections)
+### Security Checks Coverage (160+ checks across 40 sections)
 
 | Section | Check IDs | Description |
 |---------|-----------|-------------|
@@ -376,13 +379,17 @@ jobs:
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC Security Scanner (CloudFormation + Terraform, no credentials)
-├── aws_live_scanner.py      # Live Audit Scanner v2.3.0 (36 sections, graph, exposure, multi-account)
+├── aws_live_scanner.py      # Live Audit Scanner v2.5.0 (40 sections, graph, exposure, deep-plane, correlate)
 ├── aws_exposure.py          # Internet-reachability oracle — 4-gate AND, pure/testable (stdlib)
+├── aws_deepplane.py         # Deep-plane parsers (Inspector/Macie/GuardDuty/AA) + CAN_READ_DATA (stdlib)
+├── aws_correlate.py         # Attack-path correlation engine — enumerate/score/rank/choke (stdlib)
 ├── aws_graph.py             # SecurityGraph — nodes/edges, bounded traversal, graph.json (stdlib)
 ├── tests/
 │   ├── test_live_scanner.py # 69 unit tests (mock boto3, no credentials needed)
 │   ├── test_cnapp_phase1.py # 32 unit tests (graph, chains, trust, org fan-out, compliance)
 │   ├── test_exposure.py     # 35 unit tests (internet-exposure FP/FN catalog + attack path)
+│   ├── test_deepplane.py    # 44 unit tests (deep-plane FP/FN catalog + collectors + flagship)
+│   ├── test_correlate.py    # 22 unit tests (path enumeration + scoring + choke points)
 │   └── samples/             # Sample IaC files and reports
 ├── scripts/
 │   └── validate_live.py     # Read-only live-account validation harness

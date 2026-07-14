@@ -62,8 +62,10 @@ except ImportError:
 
 from aws_graph import SecurityGraph
 import aws_exposure
+import aws_deepplane
+import aws_correlate
 
-VERSION = "2.3.0"
+VERSION = "2.5.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -85,6 +87,7 @@ SECTIONS = [
     "ELASTICACHE", "OPENSEARCH", "DYNAMODB", "STEPFUNCTIONS",
     "APIGATEWAY", "ELB", "EBS", "REDSHIFT", "EFS", "ACM",
     "SAGEMAKER", "COGNITO", "APIGATEWAYV2", "IAMPRIVESC", "EXPOSURE",
+    "VULN", "THREAT", "DATA", "CORRELATE",
 ]
 
 SECTION_LABELS = {
@@ -124,6 +127,10 @@ SECTION_LABELS = {
     "APIGATEWAYV2":   "API GATEWAY (HTTP APIs)",
     "IAMPRIVESC":     "IAM PRIVILEGE ESCALATION",
     "EXPOSURE":       "INTERNET EXPOSURE & ATTACK PATHS",
+    "VULN":           "WORKLOAD VULNERABILITIES (INSPECTOR)",
+    "THREAT":         "LIVE THREAT DETECTIONS (GUARDDUTY)",
+    "DATA":           "DATA SECURITY & FLAGSHIP ATTACK PATHS",
+    "CORRELATE":      "ATTACK-PATH CORRELATION & CHOKE POINTS",
 }
 
 
@@ -200,6 +207,14 @@ CHECK_SEVERITY = {
     "IAMPE-21": "HIGH", "IAMPE-22": "HIGH",
     # Phase 2: effective internet exposure + attack paths
     "EXPOSURE-01": "HIGH", "EXPOSURE-02": "MEDIUM", "ATTACK-01": "CRITICAL",
+    # Phase 3: deep-plane ingestion (vuln / data / threat) + flagship attack path
+    "VULN-01": "HIGH", "VULN-02": "CRITICAL", "VULN-03": "HIGH",
+    "DATA-01": "MEDIUM", "DATA-02": "HIGH", "DATA-03": "MEDIUM",
+    "EXTACCESS-01": "HIGH", "EXTACCESS-02": "MEDIUM", "EXTACCESS-03": "MEDIUM",
+    "THREAT-01": "HIGH", "THREAT-02": "MEDIUM", "ATTACK-02": "CRITICAL",
+    # Phase 4: correlation & choke points (HIGH — the toxic combos already carry
+    # CRITICAL via ATTACK-01/02; CHOKEPOINT avoids double-weighting the same risk)
+    "CHOKEPOINT-01": "HIGH",
     # Backfilled service checks (previously severity-less on FAIL)
     "CNT-01": "MEDIUM", "BCK-01": "MEDIUM",
     "SNS-01": "MEDIUM", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
@@ -325,6 +340,20 @@ COMPLIANCE_MAP = {
     "EXPOSURE-01": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EXPOSURE-02": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "ATTACK-01":   {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    # Phase 3 deep-plane
+    "VULN-01": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "VULN-02": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5(2)"},
+    "VULN-03": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "DATA-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "DATA-02": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "DATA-03": {"CIS": "2.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "EXTACCESS-01": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "AC-3"},
+    "EXTACCESS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "EXTACCESS-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "THREAT-01": {"CIS": "4.15", "PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
+    "THREAT-02": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "ATTACK-02": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "CHOKEPOINT-01": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "CA-8"},
     # ── Backfill: FAIL-capable checks previously missing a compliance mapping ──
     "CNT-01": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5"},
     "BCK-01": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
@@ -458,6 +487,19 @@ REMEDIATION_MAP = {
     "EXPOSURE-01": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0  (then re-add a scoped CIDR)",
     "EXPOSURE-02": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges or place the workload behind a load balancer/WAF: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
     "ATTACK-01": "Break the path at the exposure or the privilege: remove the public ingress (aws ec2 revoke-security-group-ingress ...) AND scope the instance-profile role to least privilege / apply a permissions boundary: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>",
+    "VULN-01": "Patch the affected package to fixedInVersion, e.g. run the patch baseline: aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install, then re-scan in Inspector.",
+    "VULN-02": "PRIORITIZE — this CVE is on the CISA KEV catalog (actively exploited). Patch immediately (aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install), and if internet-exposed isolate the host: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --groups <QUARANTINE_SG>",
+    "VULN-03": "Rebuild the container image on a patched base and push; enable Inspector enhanced ECR scanning: aws inspector2 enable --resource-types ECR",
+    "DATA-01": "Confirm the sensitive data is intended here; restrict access, enable default encryption with a CMK, and enable S3 Block Public Access on the bucket: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+    "DATA-02": "Remove public/external access from the crown-jewel bucket: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+    "DATA-03": "Enable default encryption on the crown-jewel bucket: aws s3api put-bucket-encryption --bucket <BUCKET> --server-side-encryption-configuration '{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\"}}]}'",
+    "EXTACCESS-01": "Remove the public bucket policy / ACL grant (Access Analyzer confirmed public): aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+    "EXTACCESS-02": "Scope the bucket policy to remove the cross-account principal (or add an aws:PrincipalOrgID condition): aws s3api put-bucket-policy --bucket <BUCKET> --policy <SCOPED_POLICY_JSON>",
+    "EXTACCESS-03": "Scope the role's S3 permissions to specific buckets/prefixes instead of s3:GetObject on '*' or 'bucket/*', and bound the role: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN> (identity-policy only — also verify the bucket policy / SCP).",
+    "THREAT-01": "Triage the GuardDuty finding, then isolate/rotate as needed: aws guardduty get-findings --detector-id <DETECTOR_ID> --finding-ids <FINDING_ID>; if confirmed, quarantine the resource and rotate exposed credentials. Do not archive without triage.",
+    "THREAT-02": "Confirm whether the control-plane event was authorized (aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=<EVENT>), and enable continuous detection: aws guardduty create-detector --enable",
+    "ATTACK-02": "Sever the flagship chain at ANY hop: patch the exploitable CVE, remove the public ingress (aws ec2 revoke-security-group-ingress --group-id <SG> --protocol tcp --port <PORT> --cidr 0.0.0.0/0), and scope the instance-profile role's data access (aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>). Fixing the choke-point node breaks the whole path.",
+    "CHOKEPOINT-01": "Remediate this single node to sever multiple attack paths at once: for an over-privileged role, aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>; for an exposed host, patch the exploitable CVE or aws ec2 revoke-security-group-ingress ...; see the finding for the node kind and the count of paths/crown-jewels it severs.",
 }
 
 
@@ -846,7 +888,7 @@ class AWSLiveScanner:
 
     # Sections that enumerate global (region-agnostic) resources — run once even
     # when --all-regions sweeps every enabled region for the rest.
-    GLOBAL_SECTIONS = {"IAM", "S3", "ROUTE53", "CLOUDFRONT", "IAMPRIVESC"}
+    GLOBAL_SECTIONS = {"IAM", "S3", "ROUTE53", "CLOUDFRONT", "IAMPRIVESC", "CORRELATE"}
 
     def __init__(
         self,
@@ -864,6 +906,8 @@ class AWSLiveScanner:
         self._session  = session          # boto3.Session for assumed-role scans; None = ambient creds
         self.all_regions_scan = all_regions
         self.graph: Optional[SecurityGraph] = None
+        self.attack_paths: List = []       # ranked AttackPath objects (Phase 4 correlate)
+        self.choke_points: List = []       # ranked ChokePoint objects
         self._clients: Dict[str, object] = {}
         self._cred_report:  Optional[List[Dict]] = None
         self._all_regions:  Optional[List[str]]  = None
@@ -3853,13 +3897,20 @@ class AWSLiveScanner:
                 actions = {"*"}   # Allow on NotAction grants everything else
             else:
                 continue
+            not_resources: set = set()
             if "Resource" in stmt:
                 rv = stmt["Resource"]
                 rv = [rv] if isinstance(rv, str) else list(rv)
                 resources = {str(r).lower() for r in rv}
+            elif "NotResource" in stmt:
+                nrv = stmt["NotResource"]
+                nrv = [nrv] if isinstance(nrv, str) else list(nrv)
+                not_resources = {str(r).lower() for r in nrv}
+                resources = {"*"}   # broad for privesc reachability; NotResource captured separately
             else:
-                resources = {"*"}  # missing Resource / NotResource -> broad
+                resources = {"*"}   # truly missing Resource -> broad (avoid privesc under-reporting)
             out.append({"effect": effect, "actions": actions, "resources": resources,
+                        "not_resources": not_resources,
                         "condition": stmt.get("Condition") or None})
         return out
 
@@ -4305,6 +4356,435 @@ class AWSLiveScanner:
                       f"No internet-reachable workloads across {len(enis)} interface(s)")
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SECTIONS 37-39: DEEP-PLANE INGESTION (Phase 3, buy-not-build)
+    #   VULN (Inspector2) · THREAT (GuardDuty) · DATA (Macie + Access Analyzer +
+    #   CAN_READ_DATA + the flagship ATTACK-02). Every collector is enablement-gated
+    #   and degrades to a graceful INFO no-op when its AWS service is disabled —
+    #   never a FAIL, crash, or phantom edge.
+    # ══════════════════════════════════════════════════════════════════════════
+    def _ensure_graph(self) -> SecurityGraph:
+        """Ensure the identity subgraph exists (build it from principals if the
+        IAMPRIVESC section hasn't run yet), so deep-plane edges can chain into it."""
+        if self.graph is None:
+            try:
+                principals = self._get_iam_principals()
+            except Exception:
+                principals = []
+            self._build_identity_graph(principals)
+        return self.graph
+
+    def _node_has_threat(self, node_id: str) -> bool:
+        return any(e["dst"] == node_id for e in self.graph.edges("THREAT_ON"))
+
+    # ── VULN: Amazon Inspector v2 → HAS_VULN ──────────────────────────────────
+    def _inspector_kev(self, insp, finding_arns: List[str]) -> Dict[str, bool]:
+        """Second hop for the authoritative CISA-KEV flag (not on list_findings).
+        Batched (<=10/call) and capped to bound cost/throttling."""
+        out: Dict[str, bool] = {}
+        arns = [a for a in finding_arns if a][:300]
+        for i in range(0, len(arns), 10):
+            try:
+                resp = insp.batch_get_finding_details(findingArns=arns[i:i + 10])
+                for d in resp.get("findingDetails", []):
+                    out[d.get("findingArn")] = aws_deepplane.finding_kev(d)
+            except Exception:
+                pass
+        return out
+
+    def _check_vuln(self):
+        self._section_header("VULN")
+        self._log("Amazon Inspector v2 package vulnerabilities -> HAS_VULN edges "
+                  "(EPSS native; KEV via batch_get_finding_details). INFO no-op if disabled.")
+        try:
+            insp = self._client("inspector2")
+        except Exception as e:
+            self._add("INFO", "VULN-01", "VULN", "inspector2", f"Inspector2 unavailable: {e}")
+            return
+        try:
+            st = (insp.batch_get_account_status(accountIds=[self.account]) if self.account
+                  else insp.batch_get_account_status())
+            rs = ((st.get("accounts") or [{}])[0]).get("resourceState") or {}
+            ec2_on = (rs.get("ec2") or {}).get("status") == "ENABLED"
+            ecr_on = (rs.get("ecr") or {}).get("status") == "ENABLED"
+        except Exception as e:
+            self._add("INFO", "VULN-01", "VULN", "inspector2",
+                      f"Amazon Inspector not enabled/accessible in {self.region}: {e}")
+            return
+        if not (ec2_on or ecr_on):
+            self._add("INFO", "VULN-01", "VULN", "inspector2",
+                      f"Amazon Inspector disabled in {self.region} (ec2/ecr not ENABLED) "
+                      "— no vulnerability signal")
+            return
+
+        g = self._ensure_graph()
+        fc = {"findingType":   [{"comparison": "EQUALS", "value": "PACKAGE_VULNERABILITY"}],
+              "findingStatus": [{"comparison": "EQUALS", "value": "ACTIVE"}],
+              "severity":      [{"comparison": "EQUALS", "value": "CRITICAL"},
+                                {"comparison": "EQUALS", "value": "HIGH"}]}
+        findings: List[Dict] = []
+        try:
+            for page in insp.get_paginator("list_findings").paginate(filterCriteria=fc):
+                findings += page.get("findings", [])
+        except Exception as e:
+            self._add("INFO", "VULN-01", "VULN", "inspector2",
+                      f"Inspector list_findings failed: {e}")
+            return
+
+        kev_map = self._inspector_kev(insp, [f.get("findingArn") for f in findings])
+        count = 0
+        for f in findings:
+            v = aws_deepplane.parse_inspector_finding(f)
+            if not v:
+                continue
+            v["kev"] = bool(kev_map.get(v["finding_arn"]))
+            rtype, rid = v["resource_type"], v["resource_id"]
+            if rtype == "AWS_EC2_INSTANCE" and rid:
+                node = self._instance_arn(rid)
+                g.add_node(node, "EC2Instance", instance_id=rid)
+            elif rtype == "AWS_ECR_CONTAINER_IMAGE" and rid:
+                node = rid
+                g.add_node(node, "ECRImage")
+            else:
+                continue                                    # defer Lambda plane
+            g.add_node(v["cve"], "Vulnerability", severity=v["severity"], epss=v["epss"],
+                       kev=v["kev"], exploit_available=v["exploit_available"],
+                       fix_available=v["fix_available"])
+            g.add_edge(node, v["cve"], "HAS_VULN", cve=v["cve"], severity=v["severity"],
+                       epss=v["epss"], kev=v["kev"], exploit_available=v["exploit_available"],
+                       fix_available=v["fix_available"], finding_arn=v["finding_arn"])
+            count += 1
+            if v["kev"]:
+                fid, tag = "VULN-02", "KEV/in-the-wild"
+            elif rtype == "AWS_ECR_CONTAINER_IMAGE":
+                fid, tag = "VULN-03", "container-image"
+            else:
+                fid, tag = "VULN-01", "exploitable" if aws_deepplane.is_exploitable(v) else "high/critical"
+            self._add("FAIL", fid, "VULN", rid,
+                      f"{tag} {v['severity']} {v['cve']} (EPSS {v['epss']}, "
+                      f"exploit={v['exploit_available']}, fix={v['fix_available']}) on "
+                      f"{(rtype or '').replace('AWS_', '').lower()} {rid} | {rid}")
+        if count == 0:
+            self._add("PASS", "VULN-01", "VULN", "all",
+                      "Inspector enabled; no active high/critical package vulnerabilities")
+
+    # ── THREAT: GuardDuty → THREAT_ON ─────────────────────────────────────────
+    def _check_threat(self):
+        self._section_header("THREAT")
+        self._log("GuardDuty active detector findings -> THREAT_ON edges (boost path "
+                  "priority). INFO no-op if GuardDuty is disabled.")
+        try:
+            gd = self._client("guardduty")
+            detectors = gd.list_detectors().get("DetectorIds", [])
+        except Exception as e:
+            self._add("INFO", "THREAT-01", "THREAT", "guardduty",
+                      f"GuardDuty not accessible in {self.region}: {e}")
+            return
+        if not detectors:
+            self._add("INFO", "THREAT-01", "THREAT", "guardduty",
+                      f"GuardDuty not enabled in {self.region} — no live threat signal")
+            return
+        det = detectors[0]
+        try:
+            if gd.get_detector(DetectorId=det).get("Status") != "ENABLED":
+                self._add("INFO", "THREAT-01", "THREAT", "guardduty",
+                          f"GuardDuty detector not ENABLED in {self.region}")
+                return
+        except Exception:
+            pass
+
+        g = self._ensure_graph()
+        crit = {"Criterion": {"service.archived": {"Eq": ["false"]},
+                              "severity": {"GreaterThanOrEqual": 4}}}
+        ids: List[str] = []
+        try:
+            for page in gd.get_paginator("list_findings").paginate(DetectorId=det,
+                                                                   FindingCriteria=crit):
+                ids += page.get("FindingIds", [])
+        except Exception as e:
+            self._add("INFO", "THREAT-01", "THREAT", "guardduty",
+                      f"GuardDuty list_findings failed: {e}")
+            return
+
+        count = 0
+        for i in range(0, len(ids), 50):
+            try:
+                resp = gd.get_findings(DetectorId=det, FindingIds=ids[i:i + 50])
+            except Exception:
+                continue
+            for f in resp.get("Findings", []):
+                m = aws_deepplane.map_guardduty_finding(f)
+                if not m:
+                    continue
+                tnode = f"threat:{m['id']}"
+                g.add_node(tnode, "ThreatFinding", type=m["type"], severity=m["severity"],
+                           band=m["band"])
+                target = None
+                if m["node_kind"] == "EC2Instance":
+                    target = self._instance_arn(m["node_key"])
+                elif m["node_kind"] == "S3Bucket":
+                    target = ("arn:aws:s3:::" + m["node_key"]).lower()
+                if target:
+                    g.add_node(target, m["node_kind"])
+                    g.add_edge(tnode, target, "THREAT_ON", type=m["type"],
+                               severity=m["severity"], band=m["band"])
+                self._add("FAIL", "THREAT-01", "THREAT", m["node_key"] or m["id"],
+                          f"Active GuardDuty finding {m['type']} (severity {m['severity']}, "
+                          f"{m['band']}) on {m['node_kind'] or 'account'} "
+                          f"{m['node_key'] or ''} | {m['id']}")
+                count += 1
+        if count == 0:
+            self._add("PASS", "THREAT-01", "THREAT", "all",
+                      "GuardDuty enabled; no active findings (severity >= 4)")
+
+    # ── DATA: Macie crown jewels + Access Analyzer + CAN_READ_DATA + ATTACK-02 ─
+    def _check_data(self):
+        self._section_header("DATA")
+        self._log("Macie crown-jewel classification + Access Analyzer authoritative "
+                  "exposure + CAN_READ_DATA edges + flagship ATTACK-02. INFO no-op when "
+                  "Macie/Analyzer are disabled.")
+        g = self._ensure_graph()
+        crown = self._collect_macie(g)
+        self._collect_access_analyzer(g)
+        self._build_can_read_data(g, crown)
+        self._correlate_flagship(g)
+
+    def _collect_macie(self, g) -> set:
+        crown: set = set()
+        try:
+            mac = self._client("macie2")
+            sess = mac.get_macie_session()
+        except Exception as e:
+            self._add("INFO", "DATA-01", "DATA", "macie",
+                      f"Macie not enabled in {self.region}: {e}")
+            return crown
+        if sess.get("status") != "ENABLED":
+            self._add("INFO", "DATA-01", "DATA", "macie",
+                      f"Macie not active (status={sess.get('status')}) in {self.region} "
+                      "— no crown-jewel signal")
+            return crown
+        buckets: List[Dict] = []
+        try:
+            for page in mac.get_paginator("describe_buckets").paginate():
+                buckets += page.get("buckets", [])
+        except Exception as e:
+            self._add("INFO", "DATA-01", "DATA", "macie",
+                      f"Macie describe_buckets failed: {e}")
+            return crown
+        for b in buckets:
+            cj = aws_deepplane.is_crown_jewel(b)
+            if not cj:
+                continue
+            name = b.get("bucketName", "")
+            arn = ("arn:aws:s3:::" + name).lower()
+            crown.add(arn)
+            g.add_node(arn, "S3Bucket", name=name, DataStore=True, crown_jewel=True,
+                       sensitivity=cj["sensitivity"], public=cj["public"],
+                       encrypted=cj["encrypted"])
+            self._add("FAIL", "DATA-01", "DATA", name,
+                      f"Crown-jewel S3 bucket (Macie sensitivity {cj['sensitivity']}) "
+                      f"holds sensitive data | {name}")
+            if cj["public"] or cj["shared"]:
+                self._add("FAIL", "DATA-02", "DATA", name,
+                          f"Crown-jewel bucket {name} is "
+                          f"{'PUBLIC' if cj['public'] else 'externally shared'} | {name}")
+            if not cj["encrypted"]:
+                self._add("FAIL", "DATA-03", "DATA", name,
+                          f"Crown-jewel bucket {name} is unencrypted | {name}")
+        if not crown:
+            self._add("INFO", "DATA-01", "DATA", "all",
+                      "Macie enabled; no crown-jewel buckets identified")
+        return crown
+
+    def _collect_access_analyzer(self, g):
+        try:
+            aa = self._client("accessanalyzer")
+            analyzers = aa.list_analyzers().get("analyzers", [])
+        except Exception as e:
+            self._add("INFO", "EXTACCESS-01", "DATA", "accessanalyzer",
+                      f"Access Analyzer not accessible in {self.region}: {e}")
+            return
+        ext = [a for a in analyzers if a.get("status") == "ACTIVE"
+               and a.get("type") in ("ACCOUNT", "ORGANIZATION")]
+        if not ext:
+            self._add("INFO", "EXTACCESS-01", "DATA", "accessanalyzer",
+                      f"IAM Access Analyzer (external access) not enabled in {self.region}")
+            return
+        arn = ext[0].get("arn")
+        if not arn:
+            self._add("INFO", "EXTACCESS-01", "DATA", "accessanalyzer",
+                      f"Access Analyzer analyzer has no ARN in {self.region}; skipping")
+            return
+        findings: List[Dict] = []
+        try:
+            for page in aa.get_paginator("list_findings_v2").paginate(
+                    analyzerArn=arn, filter={"status": {"eq": ["ACTIVE"]}}):
+                findings += page.get("findings", [])
+        except Exception as e:
+            self._add("INFO", "EXTACCESS-01", "DATA", "accessanalyzer",
+                      f"Access Analyzer list_findings_v2 failed: {e}")
+            return
+        for f in findings:
+            if f.get("resourceType") != "AWS::S3::Bucket":
+                continue
+            res = f.get("resource", "")
+            detail = None
+            try:
+                detail = aa.get_finding_v2(analyzerArn=arn, id=f.get("id"))
+            except Exception:
+                pass
+            cls = aws_deepplane.classify_external_access(detail) if detail else \
+                {"is_public": f.get("isPublic", False), "principal": {}, "action": None}
+            barn = res.lower() if res.startswith("arn:") else ("arn:aws:s3:::" + res).lower()
+            g.add_node(barn, "S3Bucket", name=res.split(":::")[-1])
+            if cls and cls.get("is_public"):
+                g.add_edge("internet", barn, "EXPOSED_TO", basis="access-analyzer",
+                           authoritative=True, confidence="confirmed")
+                self._add("FAIL", "EXTACCESS-01", "DATA", res,
+                          f"Access Analyzer: S3 bucket {res} is PUBLICLY accessible "
+                          f"(authoritative) | {res}")
+            else:
+                self._add("FAIL", "EXTACCESS-02", "DATA", res,
+                          f"Access Analyzer: S3 bucket {res} reachable by an external "
+                          f"principal | {res}")
+
+    def _build_can_read_data(self, g, crown: set):
+        if not crown:
+            return
+        try:
+            principals = self._get_iam_principals()
+        except Exception:
+            principals = []
+        for p in principals:
+            if p["type"] != "role":
+                continue
+            for barn in crown:
+                r = aws_deepplane.role_can_read_bucket(p["statements"], barn)
+                if r is None:
+                    continue
+                g.add_edge(p["arn"], barn, "CAN_READ_DATA", basis="identity-policy",
+                           confidence="paths-to-verify", conditioned=r["conditioned"])
+                bname = barn.split(":::")[-1]
+                self._add("WARN" if r["conditioned"] else "FAIL", "EXTACCESS-03", "DATA",
+                          f"role:{p['name']}",
+                          f"Role {p['name']} can read crown-jewel data in {bname} "
+                          f"(identity policy, paths-to-verify)"
+                          f"{' [conditioned]' if r['conditioned'] else ''} | {p['name']}")
+
+    def _correlate_flagship(self, g):
+        """ATTACK-02 — the full flagship toxic combination: Internet → exposed EC2 →
+        exploitable/KEV CVE → over-privileged instance-profile role → crown-jewel data.
+        Requires the exposure (Phase 2), vuln (Inspector), and data (Macie) subgraphs
+        to all have contributed; if any is absent (service off) it simply does not fire."""
+        if g is None or g.node("internet") is None:
+            return
+        crown = {n["id"] for n in g.nodes("S3Bucket") if (n["props"] or {}).get("crown_jewel")}
+        if not crown:
+            return                                          # no data terminal (Macie off)
+        reach = g.reachable("internet", {"EXPOSED_TO", "ATTACHED_TO"}, max_hops=3)
+        exposed = [nid for nid in reach if (g.node(nid) or {}).get("kind") == "EC2Instance"]
+        kinds = {"CAN_ASSUME", "CAN_PRIVESC_TO", "CAN_READ_DATA"}
+        for inst in exposed:
+            # Pivot on the SAME exploitability definition the VULN section uses
+            # (KEV OR exploit-available OR high EPSS) — is_exploitable reads the edge props.
+            vulns = [e for e in g.out_edges(inst, {"HAS_VULN"})
+                     if aws_deepplane.is_exploitable(e["props"])]
+            if not vulns:
+                continue                                    # no compromise pivot
+            role = None
+            for e in g.out_edges(inst, {"HAS_INSTANCE_PROFILE"}):
+                for e2 in g.out_edges(e["dst"], {"HAS_ROLE"}):
+                    role = e2["dst"]
+            if not role:
+                continue
+            conf = crown & set(g.reachable(role, kinds, max_hops=7,
+                                           edge_filter=self._edge_unconditioned))
+            anyb = crown & set(g.reachable(role, kinds, max_hops=7))
+            if not anyb:
+                continue
+            cve = vulns[0]["props"].get("cve", "?")
+            kev = any(v["props"].get("kev") for v in vulns)
+            iid = (g.node(inst) or {}).get("props", {}).get("instance_id", inst)
+            bucket = sorted(conf or anyb)[0].split(":::")[-1]
+            boost = (" [ACTIVE THREAT on the path — TOP priority]"
+                     if self._node_has_threat(inst) or self._node_has_threat(role) else "")
+            if conf:
+                self._add("FAIL", "ATTACK-02", "DATA", iid,
+                          f"FLAGSHIP ATTACK PATH: Internet -> exposed EC2 {iid} -> "
+                          f"exploitable{'/KEV' if kev else ''} {cve} -> instance-profile "
+                          f"role -> reads crown-jewel data {bucket}.{boost} | {iid}")
+            else:
+                self._add("WARN", "ATTACK-02", "DATA", iid,
+                          f"FLAGSHIP ATTACK PATH (conditioned): Internet -> exposed EC2 "
+                          f"{iid} -> exploitable {cve} -> role -> crown-jewel data {bucket} "
+                          f"reachable only via a Condition-guarded hop; verify.{boost} | {iid}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 40: ATTACK-PATH CORRELATION & CHOKE POINTS (Phase 4)
+    # Read-only post-processor over the graph Phases 1-3 built. Ranks the graph
+    # into the handful of scored, explainable attack paths and computes choke
+    # points. ATTACK-01/ATTACK-02 emission stays in the exposure/data sections
+    # (byte-for-byte) — this section only adds CHOKEPOINT-01 + a PATHS-01 rollup.
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_correlate(self):
+        self._section_header("CORRELATE")
+        self._log("Ranking attack paths (gated-multiplicative scoring) + choke-point "
+                  "analysis ('fix one node -> sever N paths to M crown jewels').")
+        g = self._ensure_graph()
+        if g is None or g.node("internet") is None:
+            self._add("INFO", "PATHS-01", "CORRELATE", "graph",
+                      "No internet-facing attack surface in the graph; nothing to correlate")
+            return
+        crown = {n["id"] for n in g.nodes("S3Bucket")
+                 if (n["props"] or {}).get("crown_jewel")}
+        # Precompute the threat set ONCE — the enumerator calls node_has_threat per
+        # edge expansion, so it must be O(1), not an O(E) scan of every graph edge.
+        threatened = {e["dst"] for e in g.edges("THREAT_ON")}
+        paths = aws_correlate.enumerate_paths(
+            g, {"internet"}, self._admin_cap_id(), crown,
+            self._edge_unconditioned, aws_deepplane.is_exploitable,
+            lambda nid: nid in threatened)
+        node_kind = lambda nid: (g.node(nid) or {}).get("kind")
+
+        def _dominates(node, terminal):
+            # Authoritative: is `terminal` unreachable from the internet once `node`
+            # is removed? (Bounded enumeration alone can't certify a true dominator.)
+            reach = g.reachable("internet", aws_correlate.E_PATH, max_hops=64,
+                                edge_filter=lambda e: e["src"] != node and e["dst"] != node)
+            return terminal not in reach
+
+        chokes = aws_correlate.choke_points(
+            paths, node_kind=node_kind,
+            label_of=lambda nid: aws_correlate._label(g, nid), dominates=_dominates)
+        self.attack_paths, self.choke_points = paths, chokes
+
+        if not paths:
+            self._add("PASS", "PATHS-01", "CORRELATE", "all",
+                      "No end-to-end attack paths (internet -> crown-jewel/admin) found")
+            return
+
+        summ = aws_correlate.summarize(paths)
+        self._add("INFO", "PATHS-01", "CORRELATE", "summary",
+                  f"{summ['total']} attack path(s) ranked "
+                  f"({summ['n_critical']} CRITICAL, {summ['n_conditioned']} conditioned); "
+                  f"top score {summ['top_score']}: {summ['top_chain']}")
+
+        # Emit the top choke points that sever at least one CRITICAL/HIGH path.
+        for c in chokes[:3]:
+            crit_hi = [p for p in paths if c.node_id in set(p.nodes[1:-1])
+                       and p.severity in ("CRITICAL", "HIGH")]
+            if not crit_hi:
+                continue
+            g.add_node(c.node_id, node_kind(c.node_id) or "Unknown",
+                       choke_point=True, paths_severed=c.paths_severed)
+            blocked = (f"; removes EVERY known path to {len(c.targets_fully_blocked)} "
+                       f"target(s)" if c.is_true_choke else "")
+            self._add("FAIL", "CHOKEPOINT-01", "CORRELATE", c.label,
+                      f"CHOKE POINT: fixing {c.node_kind or 'node'} {c.label} severs "
+                      f"{c.paths_severed}/{c.total_paths} attack path(s) "
+                      f"({len(crit_hi)} CRITICAL/HIGH){blocked}. {c.remediation_hint} "
+                      f"| {c.label}")
+
+    # ══════════════════════════════════════════════════════════════════════════
     # ORCHESTRATION
     # ══════════════════════════════════════════════════════════════════════════
     def run(self):
@@ -4375,6 +4855,10 @@ class AWSLiveScanner:
             "APIGATEWAYV2":   self._check_apigatewayv2,
             "IAMPRIVESC":     self._check_iam_privesc,
             "EXPOSURE":       self._check_exposure,
+            "VULN":           self._check_vuln,
+            "THREAT":         self._check_threat,
+            "DATA":           self._check_data,
+            "CORRELATE":      self._check_correlate,
         }
 
         base_region = self.region
@@ -4474,6 +4958,8 @@ class AWSLiveScanner:
             },
             "compliance_scorecard": compliance_scorecard(self.results),
             "graph": self.graph.stats() if self.graph else None,
+            "attack_paths": [p.to_dict() for p in self.attack_paths],
+            "choke_points": [c.to_dict() for c in self.choke_points],
             "results": [
                 {
                     "status":          r.status,
