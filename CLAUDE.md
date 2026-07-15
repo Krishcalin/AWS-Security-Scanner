@@ -7,28 +7,38 @@ full **CNAPP** (Cloud-Native Application Protection Platform) — see the CNAPP
 blueprint/roadmap: the north star is AWS-deep **toxic-combination attack paths**
 computed over a unified security graph.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **Live Audit Scanner** (`aws_live_scanner.py` v2.5.0) -- live AWS account audit via boto3 (160+ checks, 40 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**, **attack-path correlation + choke points**)
+- **Live Audit Scanner** (`aws_live_scanner.py` v2.6.0) -- live AWS account audit via boto3 (160+ checks, 40 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing**)
 - **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
 - **Exposure Oracle** (`aws_exposure.py`) -- pure, dependency-free internet-reachability core (SG ∩ stateless NACL ∩ IGW route ∩ public-IP)
 - **Deep-Plane Core** (`aws_deepplane.py`) -- pure Inspector/Macie/GuardDuty/Access-Analyzer parsers + the CAN_READ_DATA object-probe matcher
 - **Correlation Engine** (`aws_correlate.py`) -- pure attack-path enumeration + gated-multiplicative scoring + choke-point ranking
+- **Effective-Permissions Solver** (`aws_effperm.py`) -- pure identity ∩ permission-boundary ∩ SCP evaluator (explicit-deny-wins, condition-aware, fail-open) that refines/drops escalation edges
+- **State Store** (`aws_state.py`) -- pure stdlib-sqlite3 finding lifecycle / drift / MTTR / posture-trend / waivers (the scanner's memory)
+- **CIEM Right-Sizing** (`aws_unused.py`) -- pure unused-access classification (Access Analyzer + SLAD) + dormancy down-rank overlay
 
 ## Repository Structure
 
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.5.0 (boto3, graph, exposure, deep-plane, correlate)
+├── aws_live_scanner.py      # Live audit scanner v2.6.0 (boto3, graph, exposure, deep-plane, correlate, effperm, state, ciem)
 ├── aws_graph.py             # SecurityGraph — nodes/edges, bounded traversal, graph.json (stdlib)
 ├── aws_exposure.py          # Internet-reachability oracle — 4-gate AND, pure/testable (stdlib)
 ├── aws_deepplane.py         # Deep-plane parsers/classifiers (Inspector/Macie/GuardDuty/AA), pure (stdlib)
 ├── aws_correlate.py         # Attack-path correlation engine — enumerate/score/rank/choke-points, pure (stdlib)
+├── aws_effperm.py           # Effective-permissions solver — identity∩boundary∩SCP, deny-wins, pure (stdlib)
+├── aws_state.py             # Persistent state store — lifecycle/drift/MTTR/waivers, pure sqlite3
+├── aws_unused.py            # CIEM unused-access/right-sizing — Access-Analyzer+SLAD, dormancy down-rank, pure
 ├── tests/
 │   ├── test_live_scanner.py # 69 unit tests (mock boto3)
 │   ├── test_cnapp_phase1.py # 32 unit tests (graph, chains, trust, org fan-out, compliance rollup)
 │   ├── test_exposure.py     # 35 unit tests (14-case FP/FN catalog + collector + attack path)
 │   ├── test_deepplane.py    # 44 unit tests (deep-plane FP/FN catalog + collectors + flagship ATTACK-02)
 │   ├── test_correlate.py    # 22 unit tests (path enumeration + scoring + choke points + section)
+│   ├── test_effperm.py      # 32 unit tests (eval-order truth table, SCP scenarios, boundary cases)
+│   ├── test_state.py        # 22 unit tests (lifecycle/coverage-gated resolve/waivers/MTTR/trend)
+│   ├── test_unused.py       # 21 unit tests (dormancy/factor/right-sizing/down-rank/collection)
+│   ├── test_phase5_integration.py # 17 tests (ceiling prunes edges end-to-end + defect regressions)
 │   └── samples/             # Vulnerable IaC + sample reports
 ├── scripts/
 │   └── validate_live.py     # Read-only live-account validation harness
@@ -77,12 +87,12 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.5.0)
+## Live Audit Scanner (`aws_live_scanner.py` v2.6.0)
 
 - **Type**: Live AWS account audit via boto3 (evolving toward CNAPP)
-- **Lines**: ~5,600
-- **Dependencies**: `boto3` (required), `aws_graph.py` + `aws_exposure.py` + `aws_deepplane.py` + `aws_correlate.py` (bundled, stdlib), Python 3.10+
-- **IAM permissions**: `SecurityAudit` AWS-managed policy (read-only) covers the deep-plane reads (Inspector2/Macie/GuardDuty/Access Analyzer); multi-account adds `sts:AssumeRole` into a read-only role per target account, and `organizations:ListAccounts` for `--org`
+- **Lines**: ~6,100
+- **Dependencies**: `boto3` (required), `aws_graph.py` + `aws_exposure.py` + `aws_deepplane.py` + `aws_correlate.py` + `aws_effperm.py` + `aws_state.py` + `aws_unused.py` (bundled, stdlib), Python 3.10+
+- **IAM permissions**: `SecurityAudit` AWS-managed policy (read-only) covers the deep-plane reads (Inspector2/Macie/GuardDuty/Access Analyzer) and the effective-permissions reads (`iam:GetAccountAuthorizationDetails` for boundaries, `organizations:Describe*/List*` for SCPs — all degrade gracefully); multi-account adds `sts:AssumeRole` into a read-only role per target account, and `organizations:ListAccounts` for `--org`. `--ciem` additionally uses `iam:GenerateServiceLastAccessedDetails` and `access-analyzer:ListFindingsV2`
 - **Compliance**: CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
 
 ### CNAPP Phase 0/1 additions (v2.2.0)
@@ -185,6 +195,38 @@ off (never a FAIL/crash/phantom edge). Pure parsers live in `aws_deepplane.py`.
 - **ATTACK-01/ATTACK-02 stay byte-for-byte** in `_check_exposure`/`_correlate_flagship` —
   the engine is a read-only post-processor (no test edits to exposure/deep-plane).
 
+### CNAPP Phase 5 additions (v2.6.0) — effective-permissions depth + persistent state
+
+- **Effective-permissions solver (`aws_effperm.py`, pure/stdlib)** — models the AWS
+  single-account decision chain so the identity graph reflects *effective* (not merely
+  granted) escalation. `pivot_effective(action, identity, boundary, scp_levels)` →
+  `KEEP`/`CONDITIONED`/`DROP`: unconditional explicit Deny wins everywhere; the
+  permission boundary is a ceiling (intersection); SCP levels are AND-ed root→account
+  (OR within a level). Only a *provable unconditional* denial prunes — a Condition-gated
+  allow/deny downgrades to CONDITIONED, never a silent drop. **Fail-open**: `boundary=None`
+  AND `scp_levels=None` can never DROP (graph identical to Phase 4).
+- **Ceiling collection + edge refinement (`aws_live_scanner.py`)** — boundaries resolved
+  per-principal from GAAD (`_resolve_boundary`, unresolvable/empty → None); `_get_scp_context`
+  walks Organizations account→root and **fails the whole SCP layer open** on the mgmt
+  account, non-ALL org, or ANY unreadable node (an unreadable ceiling must never read as
+  deny-all). `evaluate_privesc_scoped(statements, boundary, scp_levels, pruned)` and the
+  `CAN_ASSUME` gate drop/downgrade edges; a boundary/SCP-capped full-admin still enumerates
+  the granular pivots that survive. `save_json` gains an `effective_permissions` audit block.
+- **Persistent state store (`aws_state.py`, pure sqlite3)** — the scanner's memory:
+  finding lifecycle (`open`/`resolved`/`reopened`), **NEW** as a read-time projection,
+  **MUTATED** config-drift, **coverage-gated resolve** (a partial scan never mass-resolves
+  what it didn't run; global-service findings use a stable `global` region), episode-based
+  **MTTR**, **posture trend**, and **waivers** (approver/expiry as a live overlay →
+  auto-reactivation on expiry, zero DB mutation). Wired via `_process_state` behind `--state`;
+  suppressed findings leave `--fail-on` gating but stay in the posture score and the report.
+- **CIEM right-sizing (`aws_unused.py`, opt-in `--ciem`)** — Access Analyzer unused-access →
+  SLAD fallback → dormancy; emits LOW `CIEM-01` review-candidate findings and a bounded,
+  non-mutating exploit-likelihood down-rank overlay for paths through dormant principals
+  (impact untouched; unknown/stuck-job → no down-rank).
+- **Verification** — an 18-agent adversarial FP/FN/scale hunt ran the real code and found
+  9 defects (incl. 2 CRITICAL over-prunes: an unreadable-SCP deny-all and a full-admin
+  short-circuit); all fixed and regression-tested before commit.
+
 ### Architecture
 
 ```python
@@ -279,7 +321,14 @@ Findings can be emitted in machine formats and used to gate pipelines:
   `SEVERITY_ORDER` + `fails_threshold()`.
 - **Scan diff** (`--baseline prev.json`): prints NEW and RESOLVED findings vs a
   previously-saved JSON report; findings keyed by `(check_id, resource)`,
-  FAIL/WARN only.
+  FAIL/WARN only. Superseded by `--state` (DB-backed lifecycle) when both given.
+- **Persistent state** (`--state cnapp.db`): SQLite finding lifecycle across scans —
+  NEW/RESOLVED/REOPENED/MUTATED drift, MTTR, posture trend; `--sla-days N` reports
+  findings open past the SLA. Prints a per-account drift summary.
+- **Waivers** (`--suppress KEY --approver NAME [--reason T] [--expires 30d]`, needs
+  `--state`): waive a finding out of `--fail-on` gating (stays open/tracked/scored);
+  `--list-waivers` prints active/expired/revoked. A malformed `--expires` is rejected
+  (exit 2), never a silent permanent waiver.
 
 ### CLI
 ```bash
@@ -288,15 +337,18 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
     [--output-dir DIR] [--sections SEC1,SEC2,...] \
     [--all-regions] [--compliance] [--graph FILE] \
     [--org | --accounts ID1,ID2] [--assume-role ROLE] [--external-id ID] \
+    [--state FILE] [--suppress KEY --approver NAME [--reason T] [--expires WHEN]] \
+    [--list-waivers] [--sla-days N] [--ciem] \
     [-v] [--version]
 # Note: --sections takes a single COMMA-separated value (e.g. --sections IAM,S3,IAMPRIVESC)
 # --org/--accounts require --assume-role (a read-only role assumable in each target account)
+# --suppress requires --approver and --state; --list-waivers requires --state
 ```
 
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 202 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 294 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
@@ -309,6 +361,10 @@ Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
 - Workflow outputs: SARIF structure, ASFF fields, --fail-on gating, baseline diff
 - IAM privesc resource scoping (account-wide vs resource-scoped, service filtering)
 - JSON report with new fields
+- **Phase 5**: effective-permissions eval-order truth table + SCP/boundary scenarios;
+  state lifecycle (coverage-gated resolve, MUTATED, REOPENED, idempotency), waiver
+  suppression + expiry re-gating, MTTR/trend; CIEM dormancy/right-sizing/down-rank;
+  end-to-end ceiling edge-pruning; and a regression test per adversarial-verify defect
 
 ## Conventions
 

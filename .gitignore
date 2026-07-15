@@ -13,6 +13,13 @@ __pycache__/
 .coverage.*
 htmlcov/
 
+# CNAPP persistent-state store (Phase 5)
+.cnapp/
+*.db
+*.db-wal
+*.db-shm
+phase5_spec.json
+
 # Build artifacts
 build/
 dist/

@@ -64,8 +64,11 @@ from aws_graph import SecurityGraph
 import aws_exposure
 import aws_deepplane
 import aws_correlate
+import aws_effperm
+import aws_state
+import aws_unused
 
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -730,15 +733,45 @@ def _account_of(arn: str) -> str:
     return parts[4] if len(parts) >= 5 else ""
 
 
-def evaluate_privesc_scoped(statements: List[Dict]) -> List[Dict]:
+def evaluate_privesc_scoped(statements: List[Dict], boundary: Optional[List[Dict]] = None,
+                            scp_levels: Optional[List] = None,
+                            pruned: Optional[List[Dict]] = None) -> List[Dict]:
     """Resource-aware privesc evaluation. Returns matched rules annotated with
     `scope` (account-wide | resource-scoped) and `scope_arns`. Reduces false
     positives vs the action-level model: full admin requires Action '*' on
-    Resource '*', and sts:AssumeRole is only flagged when unrestricted."""
+    Resource '*', and sts:AssumeRole is only flagged when unrestricted.
+
+    Phase 5: when a permission `boundary` and/or `scp_levels` ceiling is supplied,
+    each matched pivot is passed through the effective-permissions solver:
+    a pivot the ceiling provably neutralizes (unconditional deny / not-allowed) is
+    DROPPED (and recorded in `pruned` if given); a pivot gated only by a Condition
+    on the boundary/SCP is downgraded to `conditioned`. With both ceilings None
+    (the default), no pivot is ever dropped -> byte-for-byte identical to before.
+
+    NB: when the '*' megapivot of a full-admin identity is itself capped by the
+    ceiling, we do NOT return []; we fall through and enumerate the granular IAM
+    pivots that survive the ceiling — otherwise a boundary/SCP-capped admin would
+    hide every real escalation it still holds (the dangerous over-prune)."""
+
+    def _verdict(pivot: str) -> str:
+        return aws_effperm.pivot_effective(pivot, statements, boundary, scp_levels)
+
+    def _record_drop(pivot: str, rule_id: str) -> None:
+        if pruned is not None:
+            pruned.append({"pivot": pivot, "rule": rule_id,
+                           "reason": aws_effperm.drop_reason(
+                               pivot, statements, boundary, scp_levels)})
+
     if _has_full_admin(statements):
-        return [{**IAM_PRIVESC_FULL_ADMIN, "scope": "account-wide",
-                 "scope_arns": None, "pivot": "*",
-                 "conditioned": _pivot_conditioned(statements, "*")}]
+        v = _verdict("*")
+        if v != aws_effperm.DROP:
+            return [{**IAM_PRIVESC_FULL_ADMIN, "scope": "account-wide",
+                     "scope_arns": None, "pivot": "*",
+                     "conditioned": _pivot_conditioned(statements, "*") or v == aws_effperm.CONDITIONED,
+                     "effperm": v}]
+        # Ceiling caps the '*' megapivot — record it, then fall through to find
+        # the granular pivots (iam:AttachUserPolicy, PassRole, …) that survive.
+        _record_drop("*", IAM_PRIVESC_FULL_ADMIN["id"])
 
     allow, deny = set(), set()
     for st in statements:
@@ -755,17 +788,29 @@ def evaluate_privesc_scoped(statements: List[Dict]) -> List[Dict]:
             label, arns = resource_scope(statements, pivot)
             if label == "none":
                 continue  # pivot action not grantable on any compatible resource
+            v = _verdict(pivot)
+            if v == aws_effperm.DROP:
+                _record_drop(pivot, rule["id"])   # ceiling neutralizes it
+                continue
             findings.append({**rule, "scope": label, "scope_arns": arns,
                              "pivot": pivot,
-                             "conditioned": _pivot_conditioned(statements, pivot)})
+                             "conditioned": _pivot_conditioned(statements, pivot)
+                             or v == aws_effperm.CONDITIONED,
+                             "effperm": v})
 
     # IAMPE-20: only when sts:AssumeRole is granted account-wide
     if _action_allowed("sts:assumerole", allow, deny):
         label, arns = resource_scope(statements, "sts:assumerole")
         if label == "account-wide":
-            findings.append({**IAM_PRIVESC_ASSUMEROLE, "scope": label,
-                             "scope_arns": None, "pivot": "sts:assumerole",
-                             "conditioned": _pivot_conditioned(statements, "sts:assumerole")})
+            v = _verdict("sts:assumerole")
+            if v == aws_effperm.DROP:
+                _record_drop("sts:assumerole", IAM_PRIVESC_ASSUMEROLE["id"])
+            else:
+                findings.append({**IAM_PRIVESC_ASSUMEROLE, "scope": label,
+                                 "scope_arns": None, "pivot": "sts:assumerole",
+                                 "conditioned": _pivot_conditioned(statements, "sts:assumerole")
+                                 or v == aws_effperm.CONDITIONED,
+                                 "effperm": v})
     return findings
 
 
@@ -913,6 +958,15 @@ class AWSLiveScanner:
         self._all_regions:  Optional[List[str]]  = None
         self._iam_principals: Optional[List[Dict]] = None
         self._managed_policy_cache: Dict[str, tuple] = {}
+        # ── Phase 5: effective-permissions ceiling refinement ────────────────
+        self._scp_context: Optional[List] = None    # ordered SCP levels root->acct
+        self._scp_fetched = False                   # None is a valid result -> sentinel
+        self._boundary_evaluated = False            # a boundary doc was resolved
+        self._scp_evaluated = False                 # SCP layer was evaluated
+        self._pruned_edges: List[Dict] = []         # edges dropped by the ceiling
+        self._downgraded_edges: List[Dict] = []     # edges downgraded to conditioned
+        self._state_report: Optional[Dict] = None   # lifecycle/drift/trend/mttr (if --state)
+        self._unused_report: Optional[List] = None  # CIEM right-sizing signals
 
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
@@ -2789,7 +2843,7 @@ class AWSLiveScanner:
             missing = expected - set(enabled_types)
             if missing:
                 self._add("FAIL", "EKS-02", "EKS", cname,
-                          f"EKS '{cname}' missing log types: {', '.join(missing)}")
+                          f"EKS '{cname}' missing log types: {', '.join(sorted(missing))}")
             else:
                 self._add("PASS", "EKS-02", "EKS", cname,
                           f"EKS '{cname}' all control plane logging enabled")
@@ -3889,12 +3943,21 @@ class AWSLiveScanner:
             effect = stmt.get("Effect", "")
             if effect not in ("Allow", "Deny"):
                 continue
+            not_actions: set = set()
             if "Action" in stmt:
                 av = stmt["Action"]
                 av = [av] if isinstance(av, str) else list(av)
                 actions = {str(a).lower() for a in av}
-            elif "NotAction" in stmt and effect == "Allow":
-                actions = {"*"}   # Allow on NotAction grants everything else
+            elif "NotAction" in stmt:
+                nav = stmt["NotAction"]
+                nav = [nav] if isinstance(nav, str) else list(nav)
+                not_actions = {str(a).lower() for a in nav}
+                # Backward-compat: Allow+NotAction stays over-approximated to
+                # actions={'*'} for the action-set/privesc consumers (unchanged);
+                # Deny+NotAction (previously dropped) gets actions=set() so the
+                # existing deny-building is unaffected. The effective-permissions
+                # solver reads `not_actions` for correct inverse matching in both.
+                actions = {"*"} if effect == "Allow" else set()
             else:
                 continue
             not_resources: set = set()
@@ -3910,7 +3973,7 @@ class AWSLiveScanner:
             else:
                 resources = {"*"}   # truly missing Resource -> broad (avoid privesc under-reporting)
             out.append({"effect": effect, "actions": actions, "resources": resources,
-                        "not_resources": not_resources,
+                        "not_actions": not_actions, "not_resources": not_resources,
                         "condition": stmt.get("Condition") or None})
         return out
 
@@ -3941,6 +4004,96 @@ class AWSLiveScanner:
             pass
         self._managed_policy_cache[arn] = result
         return result
+
+    def _get_scp_context(self) -> Optional[List]:
+        """Build the ordered SCP levels (root -> ... -> account) that apply to
+        THIS account, each level a list of that node's SCP statement-lists — the
+        `scp_levels` the effective-permissions solver ANDs across.
+
+        Read-only, cached, and *fail-open*: returns None (SCP layer not evaluated)
+        for the management account, a non-ALL-features org, an org that is not in
+        use, or ANY API/permission error. None => the solver can never prune on
+        SCP grounds => prior behavior.
+
+        Critically, if ANY level resolves to zero readable SCP docs (a
+        list/describe call was denied or throttled), the WHOLE layer fails open
+        (returns None) rather than treating that level as deny-all. In a
+        FeatureSet=ALL org every node always carries at least the undetachable
+        AWS-managed `FullAWSAccess`, so an empty resolved level can only mean
+        'unreadable', never 'the action was carved out' — treating it as deny-all
+        would mass-drop every escalation edge account-wide (the worst over-prune)."""
+        if self._scp_fetched:
+            return self._scp_context
+        self._scp_fetched = True
+        self._scp_context = None
+        try:
+            org = self._client("organizations")
+        except Exception:
+            return None
+        try:
+            info = org.describe_organization().get("Organization", {})
+            master = info.get("MasterAccountId")
+            if info.get("FeatureSet") != "ALL":
+                self._log("SCP layer not evaluated (org FeatureSet != ALL)")
+                return None
+            if master and self.account and master == self.account:
+                self._log("SCP layer not evaluated (management account is exempt)")
+                return None
+        except Exception:
+            self._log("SCP layer not evaluated (Organizations not in use or access denied)")
+            return None
+
+        # Walk parents from the account up to the root.
+        nodes: List[str] = [self.account]
+        child = self.account
+        guard = 0
+        try:
+            while guard < 20:
+                guard += 1
+                parents = org.list_parents(ChildId=child).get("Parents", [])
+                if not parents:
+                    break
+                pid = parents[0].get("Id")
+                ptype = parents[0].get("Type")
+                if not pid:
+                    break
+                nodes.append(pid)
+                if ptype == "ROOT":
+                    break
+                child = pid
+        except Exception:
+            return None
+
+        # Resolve each node's SCPs (root first for evidence ordering). An empty
+        # readable level (should be impossible with FullAWSAccess present) is
+        # treated as UNREADABLE and fails the whole layer open.
+        levels: List[List[List[Dict]]] = []
+        try:
+            for node in reversed(nodes):        # root -> ... -> account
+                pols = self._paginate_all(
+                    org, "list_policies_for_target", "Policies",
+                    TargetId=node, Filter="SERVICE_CONTROL_POLICY")
+                level_docs: List[List[Dict]] = []
+                for pol in pols:
+                    pid = pol.get("Id")
+                    if not pid:
+                        continue
+                    try:
+                        content = org.describe_policy(PolicyId=pid)["Policy"]["Content"]
+                        level_docs.append(self._policy_to_statements(json.loads(content)))
+                    except Exception:
+                        continue
+                if not level_docs:
+                    # No readable SCP at this node -> cannot trust the ceiling.
+                    self._log("SCP layer not evaluated (a node's policies were unreadable)")
+                    return None
+                levels.append(level_docs)
+        except Exception:
+            return None
+
+        self._scp_context = levels
+        self._scp_evaluated = True
+        return levels
 
     def _get_iam_principals(self) -> List[Dict]:
         """Enumerate IAM users and roles with their effective policy statements
@@ -3994,6 +4147,21 @@ class AWSLiveScanner:
                 stmts += self._policy_to_statements(ip.get("PolicyDocument"))
             return stmts
 
+        def _resolve_boundary(pb):
+            """Resolve a principal's PermissionsBoundary to its statements, or
+            None. An unresolvable/empty boundary returns None (fail open) — never
+            an empty list, which the solver would read as deny-all and over-prune."""
+            if not pb:
+                return None
+            barn = pb.get("PermissionsBoundaryArn")
+            if not barn:
+                return None
+            stmts = policy_stmts.get(barn) or self._get_managed_policy_statements(barn)
+            if not stmts:
+                return None
+            self._boundary_evaluated = True
+            return stmts
+
         def _finalize(ptype, name, arn, statements, **extra):
             allow, deny = set(), set()
             for st in statements:
@@ -4018,7 +4186,8 @@ class AWSLiveScanner:
             for gname in u.get("GroupList", []):
                 stmts += group_stmts.get(gname, [])
             _finalize("user", u.get("UserName", ""), u.get("Arn", ""), stmts,
-                      groups=list(u.get("GroupList", [])))
+                      groups=list(u.get("GroupList", [])),
+                      boundary=_resolve_boundary(u.get("PermissionsBoundary")))
 
         for r in roles:
             if r.get("Path", "").startswith("/aws-service-role/"):
@@ -4028,7 +4197,8 @@ class AWSLiveScanner:
             inst_profiles = [ip.get("Arn", "") for ip in r.get("InstanceProfileList", [])]
             _finalize("role", r.get("RoleName", ""), r.get("Arn", ""), stmts,
                       trust=trust, instance_profiles=inst_profiles,
-                      path=r.get("Path", ""))
+                      path=r.get("Path", ""),
+                      boundary=_resolve_boundary(r.get("PermissionsBoundary")))
 
         self._iam_principals = principals
         return principals
@@ -4045,22 +4215,51 @@ class AWSLiveScanner:
         g = SecurityGraph()
         admin = self._admin_cap_id()
         g.add_node(admin, "AdminCapability", account=self.account)
+        # Reset so a rebuild (e.g. graph requested before IAMPRIVESC ran) does not
+        # double-count ceiling-pruned/downgraded edges.
+        self._pruned_edges = []
+        self._downgraded_edges = []
 
-        # Nodes + privesc edges
+        # Phase 5: the SCP ceiling that applies to this account (None => fail open).
+        scp = self._get_scp_context()
+        arn_map = {p["arn"]: p for p in principals if p.get("arn")}
+
+        # Nodes + privesc edges (ceiling-refined: a boundary/SCP-neutralized pivot
+        # is dropped, a Condition-gated one downgraded to conditioned).
         for p in principals:
             arn = p["arn"] or f"{p['type']}:{p['name']}"
             p["_node"] = arn
             kind = "IAMUser" if p["type"] == "user" else "IAMRole"
             g.add_node(arn, kind, name=p["name"], account=self.account)
-            findings = evaluate_privesc_scoped(p["statements"])
+            pruned: List[Dict] = []
+            findings = evaluate_privesc_scoped(
+                p["statements"], boundary=p.get("boundary"),
+                scp_levels=scp, pruned=pruned)
             p["_privesc"] = findings
+            for pr in pruned:
+                self._pruned_edges.append({"principal": arn, "edge": "CAN_PRIVESC_TO", **pr})
             if findings:
                 unconditioned = [f for f in findings if not f.get("conditioned")]
                 rules = sorted({f["id"] for f in findings})
+                conditioned = not unconditioned
                 g.add_edge(arn, admin, "CAN_PRIVESC_TO",
-                           rules=rules, conditioned=(not unconditioned))
+                           rules=rules, conditioned=conditioned)
+                if conditioned:
+                    self._downgraded_edges.append(
+                        {"principal": arn, "edge": "CAN_PRIVESC_TO", "rules": rules})
 
-        # Trust → CAN_ASSUME edges
+        # Trust → CAN_ASSUME edges (a source principal whose own boundary/SCP
+        # provably denies sts:AssumeRole cannot actually assume, so its edge is
+        # dropped; a Condition-gated one is marked has_condition).
+        def _assume_verdict(src_arn: str):
+            """Ceiling verdict for an ENUMERATED in-account source principal, else
+            None (external/wildcard/service/:root -> we lack its policy -> keep)."""
+            src = arn_map.get(src_arn)
+            if src is None:
+                return None
+            return aws_effperm.pivot_effective(
+                "sts:assumerole", src["statements"], src.get("boundary"), scp)
+
         for p in principals:
             if p["type"] != "role":
                 continue
@@ -4078,9 +4277,22 @@ class AWSLiveScanner:
                     acct = _account_of(src_arn)
                     external = bool(acct) and bool(self.account) and acct != self.account
                     node_kind = "AWSAccount" if src_arn.endswith(":root") else "IAMPrincipalRef"
+                    verdict = _assume_verdict(src_arn)
+                    if verdict == aws_effperm.DROP:
+                        self._pruned_edges.append(
+                            {"principal": src_arn, "edge": "CAN_ASSUME",
+                             "target": role_arn, "pivot": "sts:assumerole",
+                             "reason": aws_effperm.drop_reason(
+                                 "sts:assumerole", arn_map[src_arn]["statements"],
+                                 arn_map[src_arn].get("boundary"), scp)})
+                        continue
+                    edge_cond = cond or verdict == aws_effperm.CONDITIONED
                     g.add_node(src_arn, node_kind, account=acct, external=external or None)
                     g.add_edge(src_arn, role_arn, "CAN_ASSUME",
-                               has_condition=cond, external=external or None)
+                               has_condition=edge_cond, external=external or None)
+                    if verdict == aws_effperm.CONDITIONED and not cond:
+                        self._downgraded_edges.append(
+                            {"principal": src_arn, "edge": "CAN_ASSUME", "target": role_arn})
                 for svc in st["service"]:
                     g.add_node(f"service:{svc}", "ServicePrincipal", service=svc)
                     g.add_edge(f"service:{svc}", role_arn, "SERVICE_CAN_ASSUME",
@@ -4092,7 +4304,8 @@ class AWSLiveScanner:
         self._section_header("IAMPRIVESC")
         self._log("Resource-aware path analysis + identity graph (CAN_ASSUME / "
                   "CAN_PRIVESC_TO edges, transitive chains). Conditioned paths are "
-                  "downgraded to WARN; permission boundaries and SCPs are not evaluated")
+                  "downgraded to WARN; permission boundaries and SCPs are evaluated as "
+                  "a ceiling (a provably-neutralized escalation edge is dropped)")
         try:
             principals = self._get_iam_principals()
         except Exception as e:
@@ -4960,6 +5173,14 @@ class AWSLiveScanner:
             "graph": self.graph.stats() if self.graph else None,
             "attack_paths": [p.to_dict() for p in self.attack_paths],
             "choke_points": [c.to_dict() for c in self.choke_points],
+            # Phase 5: effective-permissions ceiling audit — always present so the
+            # 'effective' verdicts never over-claim when the ceiling was unreadable.
+            "effective_permissions": {
+                "boundary_evaluated": self._boundary_evaluated,
+                "scp_evaluated": self._scp_evaluated,
+                "pruned_edges": self._pruned_edges,
+                "downgraded_edges": self._downgraded_edges,
+            },
             "results": [
                 {
                     "status":          r.status,
@@ -4974,6 +5195,12 @@ class AWSLiveScanner:
                 for r in self.results
             ],
         }
+        # Phase 5: persistent-state blocks — only when a --state store ran, so
+        # JSON consumers asserting the current key set are unaffected.
+        if self._state_report:
+            data.update(self._state_report)
+        if self._unused_report is not None:
+            data["unused_access"] = self._unused_report
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, default=str)
         print(f"{BLUE}[*]{RESET} JSON report saved: {path}")
@@ -5392,6 +5619,169 @@ def aggregate_results(scanners: List["AWSLiveScanner"]) -> "AWSLiveScanner":
     return agg
 
 
+def _parse_expires(when: Optional[str], created_epoch: int) -> Optional[int]:
+    """Parse a waiver expiry: relative ('30d','12h','45m') or ISO8601 -> epoch.
+    Returns None only when `when` is empty/omitted (deliberate = no expiry).
+    Raises ValueError on a non-empty but unparseable value, so a typo can never
+    silently downgrade a time-boxed waiver into a permanent suppression."""
+    if not when:
+        return None
+    w = when.strip().lower()
+    if w and w[-1] in ("d", "h", "m") and w[:-1].isdigit():
+        mult = {"d": 86400, "h": 3600, "m": 60}[w[-1]]
+        return created_epoch + int(w[:-1]) * mult
+    try:
+        dt = datetime.fromisoformat(when.replace("Z", "+00:00"))
+    except Exception:
+        raise ValueError("expected a relative window like '30d'/'12h'/'45m' or an "
+                         "ISO8601 date")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
+
+
+def _default_state_path() -> str:
+    xdg = os.environ.get("XDG_STATE_HOME")
+    if xdg:
+        return os.path.join(xdg, "cnapp", "state.db")
+    return os.path.join(".cnapp", "state.db")
+
+
+def _process_state(store, scanner, args, scan_epoch: int) -> List:
+    """Run the persistent-state pipeline for ONE scanner (its own account):
+    apply a --suppress waiver, classify this scan's findings (lifecycle + drift),
+    record posture, attach a state report for save_json, and return the GATING
+    results (suppressed findings removed). Prints a concise drift/trend summary."""
+    acct = scanner.account
+    ts = aws_state.make_scan_ts(scan_epoch)
+
+    # A --suppress waiver is applied BEFORE classification so the first classified
+    # scan already reflects it.
+    if args.suppress:
+        key = args.suppress
+        if "|" in key:
+            match = {"type": "exact", "finding_key": key, "account": acct}
+        else:  # 'check:resource' glob form
+            cg, _, rg = key.partition(":")
+            match = {"type": "glob", "check_glob": cg or "*",
+                     "resource_glob": rg or "*", "account": acct}
+        wid = store.apply_waiver(match, approver=args.approver or "unknown",
+                                 reason=args.reason or "", created_epoch=scan_epoch,
+                                 expires_epoch=_parse_expires(args.expires, scan_epoch))
+        print(f"{BLUE}[*]{RESET} Waiver #{wid} recorded for '{args.suppress}' "
+              f"(approver: {args.approver}).")
+
+    scan_id = f"{acct}-{scan_epoch}"
+    counts = aws_state.severity_counts(scanner.results)
+    store.record_scan(acct, scan_id, ts, compute_risk_score(scanner.results),
+                      counts, region=scanner.region, scanner_version=VERSION)
+    drift = store.classify_and_diff(acct, scan_id, ts, scanner.results,
+                                    region=scanner.region,
+                                    global_sections=AWSLiveScanner.GLOBAL_SECTIONS)
+    store.record_posture(acct, scan_id, drift)
+
+    trend = store.trend(acct)
+    mttr = store.mttr(acct, by_severity=True, sla_days=args.sla_days, now_epoch=scan_epoch)
+    scanner._state_report = {
+        "drift": drift,
+        "trend": trend,
+        "mttr": mttr,
+        "waivers": store.list_waivers(acct, scan_epoch=scan_epoch),
+    }
+
+    # Console summary
+    print(f"\n{BOLD}{BLUE}══ DRIFT (account {acct}) ══{RESET}")
+    print(f"  new: {len(drift['new'])}  resolved: {len(drift['resolved'])}  "
+          f"reopened: {len(drift['reopened'])}  mutated: {len(drift['mutated'])}  "
+          f"still-open: {drift['still_open']}  suppressed: {drift['suppressed_count']}")
+    if drift["posture_delta"] is not None:
+        arrow = "▲" if drift["posture_delta"] > 0 else ("▼" if drift["posture_delta"] < 0 else "=")
+        print(f"  posture Δ vs previous scan: {arrow} {drift['posture_delta']:+}")
+    if mttr.get("mean_seconds") is not None:
+        print(f"  MTTR (mean): {mttr['mean_seconds'] / 86400:.1f}d over "
+              f"{mttr['resolved_count']} resolved finding(s)")
+    if mttr.get("open_over_sla"):
+        print(f"  {YELLOW}{mttr['open_over_sla']} finding(s) open past the "
+              f"{args.sla_days}d SLA{RESET}")
+
+    gating, suppressed = store.filter_suppressed(acct, scanner.results, scan_epoch,
+                                                 region=scanner.region)
+    if suppressed:
+        # A waiver is an accepted-risk GATING decision, not a remediation, so the
+        # posture score legitimately stays depressed (the risk still exists).
+        print(f"  {len(suppressed)} finding(s) suppressed by waivers "
+              f"(excluded from --fail-on gating; still tracked and still counted "
+              f"in the posture score).")
+    return gating
+
+
+def _run_ciem(scanner, args, scan_epoch: int, store=None) -> None:
+    """CIEM right-sizing pass (opt-in --ciem). For each enumerated principal,
+    resolve an unused-access signal (IAM SLAD + Access Analyzer), emit a LOW
+    CIEM-01 right-sizing finding for dormant/over-permissioned principals, and
+    apply a bounded, NON-mutating exploit-likelihood down-rank overlay to the
+    ranked attack paths (impact untouched; a dormant path is never suppressed
+    below the reporting threshold). Degrades gracefully: unknown dormancy => no
+    down-rank => prior behavior. Persists usage to the state store when present."""
+    try:
+        principals = scanner._get_iam_principals()
+    except Exception as e:
+        print(f"{YELLOW}[WARN]{RESET} CIEM skipped (could not enumerate principals: {e}).")
+        return
+    if not principals:
+        return
+    try:
+        iam = scanner._client("iam")
+    except Exception:
+        iam = None
+    try:
+        aa = scanner._client("accessanalyzer")
+    except Exception:
+        aa = None
+    analyzer_arn = aws_unused.find_unused_access_analyzer(aa)
+    signals, factor_by_arn, report = [], {}, []
+    fresh_after = scan_epoch - 24 * 3600     # 24h usage-cache TTL
+    for p in principals:
+        arn = p.get("arn")
+        if not arn:
+            continue
+        sig = None
+        if store is not None:
+            cached = store.get_usage(scanner.account, arn, fresh_after)
+            if cached:
+                sig = aws_unused.UnusedSignal(
+                    arn=arn, source=cached.get("source") or "NONE",
+                    dormant=None if cached.get("dormant") is None else bool(cached["dormant"]),
+                    last_used_epoch=cached.get("last_used_epoch"),
+                    last_used_iso=cached.get("last_used_iso"),
+                    window_days=cached.get("window_days") or aws_unused.DORMANT_AGE_DAYS)
+        if sig is None:
+            sig = aws_unused.unused_signal_for(arn, iam, aa, scan_epoch,
+                                               analyzer_arn=analyzer_arn)
+            if store is not None:
+                try:
+                    store.record_usage(scanner.account, arn, sig.to_dict(), scan_epoch)
+                except Exception:
+                    pass
+        signals.append(sig)
+        factor_by_arn[arn] = aws_unused.dormancy_factor(sig, scan_epoch)
+        rs = aws_unused.right_sizing_finding(sig)
+        if rs:
+            # Advisory 'review candidate' — WARN (LOW severity), never auto-delete.
+            scanner._add("WARN", rs["check_id"], "IAMPRIVESC",
+                         rs["resource"], rs["message"])
+            report.append(sig.to_dict())
+    scanner._unused_report = report
+    overlay = aws_unused.downrank_overlay(scanner.attack_paths, factor_by_arn)
+    if overlay:
+        scanner._state_report = scanner._state_report or {}
+        # attach as an annotation; the ranked paths themselves are unchanged
+        scanner._state_report["path_downrank"] = overlay
+        print(f"{BLUE}[*]{RESET} CIEM: {len(report)} right-sizing finding(s); "
+              f"{len(overlay)} attack path(s) traverse a dormant principal "
+              f"(exploit-likelihood down-ranked, still reported).")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="aws_live_scanner",
@@ -5495,6 +5885,46 @@ examples:
         "--compliance", action="store_true",
         help="Print the per-framework compliance scorecard (CIS/PCI/HIPAA/SOC2/NIST)",
     )
+    # ── Phase 5: persistent state / drift / waivers ──────────────────────────
+    parser.add_argument(
+        "--state", metavar="FILE",
+        help="SQLite state DB for finding lifecycle, drift, MTTR and posture "
+             "trend across scans (default location ./.cnapp/state.db if omitted). "
+             "Supersedes the ephemeral --baseline diff when given.",
+    )
+    parser.add_argument(
+        "--suppress", metavar="KEY",
+        help="Waive a finding so it stops failing the build (still tracked/open). "
+             "KEY is an exact finding key 'check_id|resource' or a glob "
+             "'check:resource'. Requires --approver and --state.",
+    )
+    parser.add_argument(
+        "--approver", metavar="NAME",
+        help="Approver recorded on a --suppress waiver (required with --suppress)",
+    )
+    parser.add_argument(
+        "--reason", metavar="TEXT", default="",
+        help="Reason recorded on a --suppress waiver",
+    )
+    parser.add_argument(
+        "--expires", metavar="WHEN",
+        help="Waiver expiry: relative ('30d','12h','45m') or ISO8601 date. Omit "
+             "for no expiry. An expired waiver auto-reactivates on the next scan.",
+    )
+    parser.add_argument(
+        "--list-waivers", dest="list_waivers", action="store_true",
+        help="Print active/expired/revoked waivers for the account (requires --state)",
+    )
+    parser.add_argument(
+        "--sla-days", metavar="N", dest="sla_days", type=int,
+        help="SLA window in days — report the count of findings open past it",
+    )
+    parser.add_argument(
+        "--ciem", action="store_true",
+        help="CIEM right-sizing pass: flag dormant/over-permissioned principals "
+             "(IAM service-last-accessed + Access Analyzer unused-access) and "
+             "down-rank attack paths through them. Extra API calls; off by default.",
+    )
     parser.add_argument(
         "--verbose", "-v",
         action="store_true",
@@ -5511,6 +5941,22 @@ examples:
         [s.strip().upper() for s in args.sections.split(",")]
         if args.sections else None
     )
+
+    # ── Phase 5 flag validation ──────────────────────────────────────────────
+    if args.suppress and not (args.approver and args.state):
+        print(f"{RED}[ERROR]{RESET} --suppress requires both --approver and --state.")
+        sys.exit(2)
+    if args.list_waivers and not args.state:
+        print(f"{RED}[ERROR]{RESET} --list-waivers requires --state.")
+        sys.exit(2)
+    if args.expires:
+        # Reject a malformed expiry BEFORE any scan work, so a typo never silently
+        # becomes a permanent (never-expiring) suppression of a real FAIL.
+        try:
+            _parse_expires(args.expires, int(datetime.now(timezone.utc).timestamp()))
+        except ValueError as e:
+            print(f"{RED}[ERROR]{RESET} Invalid --expires '{args.expires}': {e}")
+            sys.exit(2)
 
     # ── Multi-account (Organizations / explicit accounts) vs single-account ──
     if args.org or args.accounts:
@@ -5562,6 +6008,57 @@ examples:
     if args.compliance:
         scanner.print_compliance_rollup()
 
+    # ── Phase 5: persistent state / drift / waivers (per-account) ────────────
+    # Applied BEFORE report generation so drift/trend/MTTR land in the JSON, and
+    # the returned gating results drive the exit code. Fail-open: any state error
+    # falls back to the raw results (prior behavior).
+    gating_results = scanner.results
+    scan_epoch = int(datetime.now(timezone.utc).timestamp())
+    store = None
+    if args.state or args.list_waivers:
+        try:
+            store = aws_state.open(args.state or _default_state_path())
+            state_targets = scanners if (args.org or args.accounts) else [scanner]
+            if args.list_waivers:
+                seen = set()
+                for tgt in state_targets:
+                    if tgt.account in seen:
+                        continue
+                    seen.add(tgt.account)
+                    print(f"\n{BOLD}Waivers — account {tgt.account}{RESET}")
+                    for w in store.list_waivers(tgt.account, scan_epoch=scan_epoch):
+                        match = w.get("finding_key") or f"{w.get('check_glob')}:{w.get('resource_glob')}"
+                        print(f"  #{w['id']} [{w['state']}] {w['match_type']} {match} "
+                              f"approver={w['approver']} expires={w.get('expires_epoch')}")
+            if args.state:
+                combined: List = []
+                for tgt in state_targets:
+                    combined += _process_state(store, tgt, args, scan_epoch)
+                gating_results = combined
+                # For the aggregate JSON, surface the per-account state reports.
+                if state_targets and scanner is not state_targets[0]:
+                    scanner._state_report = {
+                        "accounts": [t.account for t in state_targets],
+                        "per_account": {t.account: t._state_report
+                                        for t in state_targets if t._state_report},
+                    }
+        except Exception as e:
+            print(f"{YELLOW}[WARN]{RESET} State store unavailable ({e}); "
+                  "continuing stateless.")
+            store = None
+
+    # ── Phase 5C: CIEM right-sizing / dormancy down-rank (opt-in) ─────────────
+    if args.ciem:
+        try:
+            ciem_targets = scanners if (args.org or args.accounts) else [scanner]
+            for tgt in ciem_targets:
+                _run_ciem(tgt, args, scan_epoch, store=store)
+        except Exception as e:
+            print(f"{YELLOW}[WARN]{RESET} CIEM pass failed ({e}); continuing.")
+
+    if store is not None:
+        store.close()
+
     if args.json:
         scanner.save_json(args.json)
     if args.html:
@@ -5587,11 +6084,12 @@ examples:
     out_dir = args.output_dir or f"aws_audit_{scanner.account}_{ts}"
     scanner.save_evidence(out_dir)
 
-    # Exit code: gate on --fail-on threshold if given, else any FAIL.
+    # Exit code: gate on --fail-on threshold if given, else any FAIL. Gating runs
+    # on the waiver-filtered results, so a suppressed FAIL cannot fail the build.
     if args.fail_on:
-        failed = fails_threshold(scanner.results, args.fail_on)
+        failed = fails_threshold(gating_results, args.fail_on)
     else:
-        failed = counts.get("FAIL", 0) > 0
+        failed = any(r.status == "FAIL" for r in gating_results)
     sys.exit(1 if failed else 0)
 
 

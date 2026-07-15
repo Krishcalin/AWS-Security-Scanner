@@ -4,6 +4,104 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.6.0] — 2026
+
+**CNAPP Phase 5 — Effective-Permissions Depth + Persistent State, Drift & Waivers.**
+Two capabilities that make the ranked attack paths *genuinely effective* and give
+the scanner *memory*: (1) an IAM effective-permissions solver that evaluates the
+real AWS decision chain (identity ∩ permission-boundary ∩ SCP, explicit-deny-wins)
+so an escalation edge a boundary or SCP provably neutralizes is **dropped** from
+the graph — tightening ATTACK-01/02 and the ranked paths; and (2) a stdlib-SQLite
+state store tracking finding lifecycle, drift, MTTR, posture trend, and waivers.
+Three new pure, dependency-free modules; `aws_correlate.py`/`aws_graph.py` unchanged.
+
+### Added — effective-permissions solver (`aws_effperm.py`, pure)
+- **`pivot_effective(action, identity, boundary, scp_levels)` → KEEP | CONDITIONED | DROP**
+  modeling the AWS single-account chain: explicit unconditional Deny → DROP;
+  permission boundary as a ceiling (intersection) — action not allowed there → DROP;
+  SCP path root→OU→account (AND across levels, OR within a level) — any level that
+  does not allow → DROP.
+- **Explicit-deny-wins at every scope**, and a three-state model: only a *provable
+  unconditional* denial prunes — a Condition-gated allow/deny downgrades the edge to
+  **CONDITIONED** (WARN), never a silent drop.
+- **`NotAction` inverse matching** (Deny/Allow guardrails) via a new `not_actions`
+  set on parsed statements.
+- **Fail-open invariant** — `boundary=None` AND `scp_levels=None` can never DROP an
+  identity-allowed pivot: the graph is byte-for-byte identical to before.
+
+### Added — boundary/SCP collection + graph edge refinement (`aws_live_scanner.py`)
+- Permission boundaries resolved per-principal from `GetAccountAuthorizationDetails`
+  (`PermissionsBoundary.PermissionsBoundaryArn` → cached managed-policy doc); an
+  unresolvable/empty boundary → `None` (fail open), **never** an empty deny-all list.
+- **`_get_scp_context()`** — read-only Organizations walk (account → OU → root) that
+  degrades to `None` for the management account, a non-`ALL`-features org, an org not
+  in use, any API/permission error, or any node whose SCPs are unreadable (an
+  unreadable ceiling must never be mistaken for deny-all).
+- `CAN_PRIVESC_TO` edges are ceiling-refined (neutralized → dropped, Condition-gated
+  → downgraded) and `CAN_ASSUME` edges gated by the *source* principal's effective
+  `sts:AssumeRole` (external/wildcard/service sources kept unchanged — fail open).
+- `save_json` gains an always-present **`effective_permissions`** audit block
+  (`boundary_evaluated`, `scp_evaluated`, `pruned_edges`, `downgraded_edges`).
+
+### Added — persistent state, drift, MTTR & waivers (`aws_state.py`, pure sqlite3)
+- **Finding lifecycle** (`open` → `resolved` → `reopened`) keyed by a stable
+  `finding_key`; **NEW** is a read-time projection and **MUTATED** flags config
+  drift (severity bump / message change) on an existing finding rather than
+  resolve-and-recreate.
+- **Coverage-gated resolve** — a partial (`--sections` / single-region) scan can
+  never mass-resolve findings from checks it did not run; region-independent
+  (IAM/S3/…) findings are stored under a stable `global` region so they resolve
+  regardless of which region the scan carried.
+- **MTTR** (episode-based, reopen-aware) + mean/median, by-severity, and
+  open-past-SLA; **posture trend** with per-scan deltas.
+- **Waivers** — approver + reason + expiry; suppression is a *live overlay* (the
+  finding stays open/tracked), so an expired waiver auto-reactivates on the next
+  scan with zero DB mutation. Suppressed findings are excluded from `--fail-on`
+  gating (still counted in the posture score and never hidden).
+
+### Added — CIEM unused-access / right-sizing (`aws_unused.py`, opt-in `--ciem`)
+- IAM Access Analyzer *unused-access* (when enabled) → Service-Last-Accessed
+  fallback (always) → dormancy classification; **never** reads analyzer-absent or a
+  stuck SLAD job as "all used".
+- A LOW **`CIEM-01`** right-sizing finding ("review candidate, not auto-delete") and
+  a bounded, non-mutating exploit-likelihood **down-rank overlay** for attack paths
+  through a dormant principal (impact untouched; floor `0.5`; unknown → no change).
+
+### Added — CLI
+- `--state FILE` (lifecycle/drift/MTTR/trend; supersedes the ephemeral `--baseline`
+  when given), `--suppress KEY` (+ `--approver`, `--reason`, `--expires`),
+  `--list-waivers`, `--sla-days N`, `--ciem`. Multi-account (`--org`) applies the
+  state store **per underlying account**, never to the aggregate.
+
+### Changed
+- `evaluate_privesc_scoped(statements, boundary=None, scp_levels=None, pruned=None)`
+  — new optional params; all existing single-arg callers are byte-for-byte identical.
+- `_policy_to_statements` now emits a `not_actions` set; `Allow`+`NotAction` still
+  over-approximates `actions={'*'}` for backward compatibility.
+- Version → **2.6.0**.
+
+### Fixed — pre-commit adversarial verification (18-agent hunt → 9 defects, all fixed + regression-tested)
+- **(CRITICAL, over-prune)** SCP org-walk no longer appends an *unreadable* level as
+  an empty deny-all that would mass-drop every escalation edge account-wide; an
+  unreadable node fails the whole SCP layer open.
+- **(CRITICAL, over-prune)** A full-admin identity whose `*` megapivot is capped by a
+  boundary/SCP/`Deny NotAction` no longer returns *no* privesc — it now enumerates
+  the granular IAM pivots that survive the ceiling.
+- Permission boundary with only a Condition-gated Deny and no Allow now DROPs
+  (implicit-deny of the ceiling) instead of keeping a conditioned edge.
+- Region-independent (global-service) findings resolve across differing `--region`
+  labels; regional findings stay region-gated (no cross-region mass-resolve).
+- A stuck SLAD job (never completes) is classified UNKNOWN, not dormant.
+- EKS-02 missing-log-types message is sorted (stable state fingerprint → no spurious
+  `MUTATED` drift on unchanged clusters).
+- Malformed `--expires` is rejected (exit 2) instead of silently becoming a permanent
+  waiver; the waiver-suppression console message no longer overclaims posture exclusion.
+
+### Testing
+- **92 new tests** (`test_effperm.py` 32, `test_state.py` 22, `test_unused.py` 21,
+  `test_phase5_integration.py` 17) → **294 total**, all green. Every adversarial-verify
+  defect has a dedicated regression test.
+
 ## [2.5.0] — 2026
 
 **CNAPP Phase 4 — Attack-Path Correlation & Prioritization ("ship the product").**
