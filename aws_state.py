@@ -141,7 +141,19 @@ class StateStore:
     @classmethod
     def open(cls, path: str) -> "StateStore":
         """Open (creating if needed) a state DB at ``path``. ``':memory:'`` for
-        tests. The parent dir is created 0700 and the file tightened to 0600."""
+        tests. Accepts a backend URL: a bare path or ``sqlite:///...`` opens the
+        sqlite store (default); a ``postgresql://`` URL selects the Postgres
+        backend, which is DEFERRED (Phase 7) and therefore raises
+        ``StateBackendUnavailable`` so the scanner cleanly runs stateless — it
+        NEVER silently falls back to a local sqlite file. The parent dir is
+        created 0700 and the file tightened to 0600."""
+        import aws_state_dialect
+        scheme, dsn = aws_state_dialect.parse_state_url(path)
+        if scheme == "postgres":
+            raise aws_state_dialect.StateBackendUnavailable(
+                "postgresql:// state backend is deferred to Phase 7 (needs psycopg "
+                "+ a live server); the DDL/upsert generators ship + are tested now")
+        path = dsn
         if path != ":memory:":
             d = os.path.dirname(os.path.abspath(path))
             try:

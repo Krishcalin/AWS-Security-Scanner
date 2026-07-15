@@ -67,8 +67,10 @@ import aws_correlate
 import aws_effperm
 import aws_state
 import aws_unused
+import aws_sidescan
+import aws_graph_neptune
 
-VERSION = "2.6.0"
+VERSION = "2.7.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -134,6 +136,7 @@ SECTION_LABELS = {
     "THREAT":         "LIVE THREAT DETECTIONS (GUARDDUTY)",
     "DATA":           "DATA SECURITY & FLAGSHIP ATTACK PATHS",
     "CORRELATE":      "ATTACK-PATH CORRELATION & CHOKE POINTS",
+    "SIDESCAN":       "AGENTLESS WORKLOAD SIDE-SCAN (EBS)",
 }
 
 
@@ -154,6 +157,8 @@ SEVERITY_WEIGHTS = {"CRITICAL": 15, "HIGH": 5, "MEDIUM": 2, "LOW": 0.5, "INFO": 
 
 # Map check_id → default severity when status is FAIL
 CHECK_SEVERITY = {
+    # Agentless side-scan (CWPP, Phase 6)
+    "CWPP-01": "HIGH", "CWPP-02": "CRITICAL", "CWPP-03": "HIGH",
     "IAM-01": "CRITICAL", "IAM-02": "CRITICAL", "IAM-04": "HIGH",
     "IAM-05": "MEDIUM", "IAM-06": "HIGH", "IAM-10": "MEDIUM",
     "S3-01": "HIGH", "S3-03": "HIGH", "S3-05": "MEDIUM",
@@ -238,6 +243,10 @@ CHECK_SEVERITY = {
 
 # ─── Compliance mapping: check_id → { framework: control } ──────────────────
 COMPLIANCE_MAP = {
+    # Agentless side-scan (CWPP, Phase 6)
+    "CWPP-01": {"NIST": "RA-5", "PCI-DSS": "6.3.1", "SOC2": "CC7.1"},
+    "CWPP-02": {"NIST": "SI-2", "PCI-DSS": "11.3.1", "SOC2": "CC7.1"},
+    "CWPP-03": {"NIST": "IA-5", "PCI-DSS": "8.3.1", "SOC2": "CC6.1"},
     # IAM
     "IAM-01": {"CIS": "1.5", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
     "IAM-02": {"CIS": "1.4", "PCI-DSS": "8.2.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "IA-2"},
@@ -398,6 +407,9 @@ COMPLIANCE_MAP = {
 
 # ─── Remediation commands: check_id → AWS CLI command ────────────────────────
 REMEDIATION_MAP = {
+    "CWPP-01": "Patch the vulnerable package (CVE reachable on an internet-exposed host — prioritize): aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=instanceids,Values=<INSTANCE_ID> --parameters Operation=Install, then rebuild the AMI from the patched instance.",
+    "CWPP-02": "KEV/exploited CVE on a reachable host — patch immediately or isolate: aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=instanceids,Values=<INSTANCE_ID> --parameters Operation=Install ; consider aws ec2 stop-instances --instance-ids <INSTANCE_ID> until patched.",
+    "CWPP-03": "Rotate/revoke the exposed credential and move it off disk: aws secretsmanager rotate-secret --secret-id <SECRET_ARN> (or aws iam update-access-key / delete-access-key), attach an instance role, and reference AWS Secrets Manager instead of the on-disk file.",
     "IAM-01": "Enable virtual MFA for root: aws iam create-virtual-mfa-device --virtual-mfa-device-name root-mfa && aws iam enable-mfa-device --user-name root --serial-number <MFA_ARN> --authentication-code1 <CODE1> --authentication-code2 <CODE2>",
     "IAM-02": "Delete root access keys: aws iam delete-access-key --access-key-id <KEY_ID>",
     "IAM-04": "Enable MFA for user: aws iam enable-mfa-device --user-name <USER> --serial-number <MFA_ARN> --authentication-code1 <CODE1> --authentication-code2 <CODE2>",
@@ -967,6 +979,17 @@ class AWSLiveScanner:
         self._downgraded_edges: List[Dict] = []     # edges downgraded to conditioned
         self._state_report: Optional[Dict] = None   # lifecycle/drift/trend/mttr (if --state)
         self._unused_report: Optional[List] = None  # CIEM right-sizing signals
+        # ── Phase 6: agentless side-scan + persistence/export metadata ───────
+        self.side_scan = False                      # --side-scan opt-in
+        self.side_scan_targets = "exposed"          # exposed | all | tagged
+        self.side_scan_tags: List[str] = []
+        self.side_scan_max = 20                     # hard target ceiling
+        self.side_scan_secrets = True
+        self.vuln_db_path: Optional[str] = None
+        self._side_scan_report: Optional[Dict] = None
+        self._backend_meta: Optional[Dict] = None
+        self._graph_export_meta: Optional[Dict] = None
+        self._sidescan_extractor_opener = None      # test seam: (vol_ids, iid) -> CM
 
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
@@ -4998,6 +5021,147 @@ class AWSLiveScanner:
                       f"| {c.label}")
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 41: AGENTLESS WORKLOAD SIDE-SCAN  (Phase 6 · CWPP)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _sidescan_scan_id(self) -> str:
+        return f"{self.account or 'acct'}-sidescan"
+
+    def _load_vuln_db(self):
+        """Load the offline vulnerability feed from --vuln-db. Accepts a raw list
+        of OSV records, or an object with {osv|records, epss, kev, exploits}.
+        Returns (OSVFeed, epss_map, kev_set, exploit_set) or None (inventory +
+        secrets still run; CVE match is simply skipped)."""
+        if not self.vuln_db_path:
+            return None
+        try:
+            with open(self.vuln_db_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception as e:
+            self._add("WARN", "CWPP-04", "SIDESCAN", "vuln-db",
+                      f"could not load --vuln-db {self.vuln_db_path}: {e}")
+            return None
+        if isinstance(data, list):
+            records, epss, kev, exploits = data, {}, set(), set()
+        else:
+            records = data.get("osv") or data.get("records") or []
+            epss = data.get("epss") or {}
+            kev = set(data.get("kev") or [])
+            exploits = set(data.get("exploits") or [])
+        return (aws_sidescan.OSVFeed.from_records(records), epss, set(kev), set(exploits))
+
+    def _select_sidescan_targets(self, g):
+        """In-scope instances for side-scan. Default 'exposed' reuses the Phase-2
+        internet-reachable EC2 set (bounds cost to what actually matters); 'all'
+        takes every EC2Instance node; 'tagged' is applied by the live extractor.
+        Returns [(instance_id, volume_ids)], capped at side_scan_max."""
+        exposed: List[str] = []
+        if g is not None and g.node("internet") is not None:
+            reach = g.reachable("internet", {"EXPOSED_TO", "ATTACHED_TO"}, max_hops=3)
+            for nid in reach:
+                node = g.node(nid) or {}
+                if node.get("kind") == "EC2Instance":
+                    iid = (node.get("props") or {}).get("instance_id")
+                    if iid:
+                        exposed.append(iid)
+        if self.side_scan_targets == "all":
+            chosen = [(n.get("props") or {}).get("instance_id")
+                      for n in (g.nodes("EC2Instance") if g else [])]
+        else:                                   # exposed (default) or tagged
+            chosen = exposed
+        seen: set = set()
+        out: List = []
+        for iid in chosen:
+            if not iid or iid in seen:
+                continue
+            seen.add(iid)
+            out.append((iid, []))               # volumes resolved by the live opener
+            if len(out) >= self.side_scan_max:
+                break
+        return out
+
+    def _default_extractor_opener(self, vol_ids, iid):
+        """Live extractor factory (deferred): snapshot the volumes and mount them.
+        Raises SideScanUnavailable (no boto3 / deferred fs extraction) so the
+        caller emits a clean CWPP-04 INFO no-op."""
+        import aws_sidescan_ebs
+        try:
+            ec2 = self._client("ec2")
+            ebs = self._client("ebs")
+        except Exception as e:
+            raise aws_sidescan_ebs.SideScanUnavailable(str(e))
+        return aws_sidescan_ebs.mounted_snapshots(ec2, ebs, vol_ids,
+                                                  scan_id=self._sidescan_scan_id())
+
+    def _check_side_scan(self):
+        self._section_header("SIDESCAN")
+        if not self.side_scan:
+            return
+        self._log("Agentless EBS-snapshot side-scan: OS-package CVEs + on-disk "
+                  "secrets -> HAS_VULN edges feeding attack-path correlation "
+                  "(Inspector-independent). Snapshots are scanner-owned + auto-cleaned.")
+        import aws_sidescan_ebs
+        feed_bundle = self._load_vuln_db()
+        if feed_bundle is None and self.vuln_db_path is None:
+            self._add("INFO", "CWPP-04", "SIDESCAN", "vuln-db",
+                      "no --vuln-db supplied; inventory + secrets only, CVE match skipped")
+        g = self._ensure_graph()
+        targets = self._select_sidescan_targets(g)
+        if not targets:
+            self._add("INFO", "CWPP-04", "SIDESCAN", "sidescan",
+                      f"no in-scope instances (target mode: {self.side_scan_targets})")
+            return
+        opener = self._sidescan_extractor_opener or self._default_extractor_opener
+        feed = feed_bundle[0] if feed_bundle else None
+        epss = feed_bundle[1] if feed_bundle else {}
+        kev = feed_bundle[2] if feed_bundle else set()
+        exploits = feed_bundle[3] if feed_bundle else set()
+        scanned = 0
+        per_instance: List[Dict] = []
+        for iid, vol_ids in targets:
+            arn = self._instance_arn(iid)
+            try:
+                with opener(vol_ids, iid) as extractor:
+                    res = aws_sidescan.sidescan_filesystem(
+                        extractor, feed, epss, kev, exploits,
+                        instance_id=iid, do_secrets=self.side_scan_secrets)
+            except aws_sidescan_ebs.SideScanUnavailable as e:
+                self._add("INFO", "CWPP-04", "SIDESCAN", iid,
+                          f"agentless side-scan unavailable for {iid} ({e})")
+                continue
+            except Exception as e:
+                self._add("WARN", "CWPP-04", "SIDESCAN", iid,
+                          f"side-scan of {iid} failed: {e}")
+                continue
+            scanned += 1
+            n_edges = aws_sidescan.emit_vuln_edges(g, arn, iid, res.vulns,
+                                                   snapshot_id=self._sidescan_scan_id())
+            for m in res.vulns:
+                fid = "CWPP-02" if m.kev else "CWPP-01"
+                osname = res.os.ecosystem if res.os else "?"
+                self._add("FAIL", fid, "SIDESCAN", iid,
+                          f"agentless {m.severity} {m.cve} (EPSS {m.epss}, "
+                          f"exploit={m.exploit_available}, "
+                          f"fix={'YES' if m.fixed_version else 'NO'}) in {m.package} "
+                          f"{m.installed_version} on {osname} | {iid}")
+            for s in res.secrets:
+                self._add("FAIL", "CWPP-03", "SIDESCAN", iid,
+                          f"{s.kind} on disk at {s.path}:{s.line} ({s.match_preview}) | {iid}")
+            for note in res.notes:
+                self._add("INFO", "CWPP-04", "SIDESCAN", iid, f"{note} | {iid}")
+            per_instance.append({
+                "instance_id": iid, "os": res.os.ecosystem if res.os else None,
+                "packages": len(res.packages), "vulns": len(res.vulns),
+                "secrets": len(res.secrets), "edges_added": n_edges, "notes": res.notes})
+        self._side_scan_report = {
+            "enabled": True, "target_mode": self.side_scan_targets,
+            "targets_selected": len(targets), "targets_scanned": scanned,
+            "vuln_db": self.vuln_db_path, "per_instance": per_instance}
+        if scanned == 0:
+            self._add("INFO", "CWPP-04", "SIDESCAN", "sidescan",
+                      f"selected {len(targets)} instance(s) but none could be read "
+                      "(live EBS extraction is deferred to Phase 7)")
+
+    # ══════════════════════════════════════════════════════════════════════════
     # ORCHESTRATION
     # ══════════════════════════════════════════════════════════════════════════
     def run(self):
@@ -5068,6 +5232,7 @@ class AWSLiveScanner:
             "APIGATEWAYV2":   self._check_apigatewayv2,
             "IAMPRIVESC":     self._check_iam_privesc,
             "EXPOSURE":       self._check_exposure,
+            "SIDESCAN":       self._check_side_scan,
             "VULN":           self._check_vuln,
             "THREAT":         self._check_threat,
             "DATA":           self._check_data,
@@ -5201,6 +5366,14 @@ class AWSLiveScanner:
             data.update(self._state_report)
         if self._unused_report is not None:
             data["unused_access"] = self._unused_report
+        # Phase 6: side-scan / backend / graph-export blocks — present only when
+        # their feature ran, so existing JSON consumers are unaffected.
+        if self._side_scan_report:
+            data["side_scan"] = self._side_scan_report
+        if self._backend_meta:
+            data["backend"] = self._backend_meta
+        if self._graph_export_meta:
+            data["graph_export"] = self._graph_export_meta
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, default=str)
         print(f"{BLUE}[*]{RESET} JSON report saved: {path}")
@@ -5782,6 +5955,57 @@ def _run_ciem(scanner, args, scan_epoch: int, store=None) -> None:
               f"(exploit-likelihood down-ranked, still reported).")
 
 
+def _apply_phase6_config(sc, args) -> None:
+    """Copy the Phase-6 side-scan flags onto a scanner before it runs."""
+    sc.side_scan = args.side_scan
+    sc.side_scan_targets = args.side_scan_targets
+    sc.side_scan_tags = args.side_scan_tag or []
+    sc.side_scan_max = max(1, min(args.side_scan_max, 500))
+    sc.side_scan_secrets = args.side_scan_secrets
+    sc.vuln_db_path = args.vuln_db
+
+
+def _export_graph_neptune(scanner, args) -> None:
+    """Write Neptune bulk-load CSV and/or openCypher upsert files from the built
+    graph (pure; no boto3). Fail-open to a WARN when no graph exists, exactly like
+    --graph."""
+    if not (args.graph_neptune_csv or args.graph_neptune_cypher):
+        return
+    if scanner.graph is None:
+        print(f"{YELLOW}[WARN]{RESET} No graph built — cannot export to Neptune "
+              "(include the IAMPRIVESC/EXPOSURE sections).")
+        return
+    meta: Dict = {}
+    if args.graph_neptune_csv:
+        bundle = aws_graph_neptune.to_gremlin_csv(scanner.graph)
+        os.makedirs(args.graph_neptune_csv, exist_ok=True)
+        written = []
+        for label, text in bundle.vertex_files.items():
+            p = os.path.join(args.graph_neptune_csv, f"vertices_{label}.csv")
+            with open(p, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+            written.append(p)
+        for label, text in bundle.edge_files.items():
+            p = os.path.join(args.graph_neptune_csv, f"edges_{label}.csv")
+            with open(p, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+            written.append(p)
+        with open(os.path.join(args.graph_neptune_csv, "manifest.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump(bundle.manifest, f, indent=2)
+        meta["gremlin_csv"] = {"dir": args.graph_neptune_csv, "files": len(written)}
+        print(f"{BLUE}[*]{RESET} Neptune bulk-load CSV exported: {len(written)} files "
+              f"to {args.graph_neptune_csv}")
+    if args.graph_neptune_cypher:
+        plan = aws_graph_neptune.to_opencypher_upsert(scanner.graph)
+        with open(args.graph_neptune_cypher, "w", encoding="utf-8") as f:
+            json.dump([{"query": q, "params": p} for q, p in plan], f, indent=2)
+        meta["opencypher"] = {"file": args.graph_neptune_cypher, "batches": len(plan)}
+        print(f"{BLUE}[*]{RESET} openCypher upsert plan exported: {len(plan)} batches "
+              f"to {args.graph_neptune_cypher}")
+    scanner._graph_export_meta = meta
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="aws_live_scanner",
@@ -5925,6 +6149,52 @@ examples:
              "(IAM service-last-accessed + Access Analyzer unused-access) and "
              "down-rank attack paths through them. Extra API calls; off by default.",
     )
+    # ── Phase 6: agentless side-scan + persistence/export ────────────────────
+    parser.add_argument(
+        "--side-scan", dest="side_scan", action="store_true",
+        help="Agentless EBS-snapshot side-scan: inventory OS packages + match CVEs "
+             "+ find on-disk secrets, adding HAS_VULN edges to the attack-path graph "
+             "(works even when Amazon Inspector is disabled). Off by default.",
+    )
+    parser.add_argument(
+        "--side-scan-targets", dest="side_scan_targets", default="exposed",
+        choices=["exposed", "all", "tagged"],
+        help="Which instances to side-scan: exposed (internet-reachable, default) | "
+             "all | tagged (requires --side-scan-tag)",
+    )
+    parser.add_argument(
+        "--side-scan-tag", dest="side_scan_tag", action="append", metavar="K=V",
+        help="Tag filter for --side-scan-targets tagged (repeatable)",
+    )
+    parser.add_argument(
+        "--side-scan-max", dest="side_scan_max", type=int, default=20,
+        help="Hard cap on instances to side-scan (default 20)",
+    )
+    parser.add_argument(
+        "--no-side-scan-secrets", dest="side_scan_secrets", action="store_false",
+        help="Skip the on-disk secret scan during side-scan (CVEs only)",
+    )
+    parser.add_argument(
+        "--vuln-db", dest="vuln_db", metavar="FILE",
+        help="Offline OSV vulnerability feed (JSON) for side-scan CVE matching. "
+             "A raw OSV record list, or {osv,epss,kev,exploits}. Absent = inventory "
+             "+ secrets only.",
+    )
+    parser.add_argument(
+        "--backend", metavar="URL",
+        help="State-store backend URL: sqlite:///path (default) or postgresql://... "
+             "(Postgres is deferred to Phase 7 — a postgresql:// URL runs stateless). "
+             "Overrides --state when given.",
+    )
+    parser.add_argument(
+        "--graph-neptune-csv", dest="graph_neptune_csv", metavar="DIR",
+        help="Export the security graph as Amazon Neptune bulk-load CSV files to DIR",
+    )
+    parser.add_argument(
+        "--graph-neptune-cypher", dest="graph_neptune_cypher", metavar="FILE",
+        help="Export the security graph as idempotent openCypher UNWIND/MERGE "
+             "statements (JSON) to FILE",
+    )
     parser.add_argument(
         "--verbose", "-v",
         action="store_true",
@@ -5958,6 +6228,25 @@ examples:
             print(f"{RED}[ERROR]{RESET} Invalid --expires '{args.expires}': {e}")
             sys.exit(2)
 
+    # ── Phase 6 flag validation + section wiring ─────────────────────────────
+    if args.side_scan:
+        if args.side_scan_targets == "tagged" and not args.side_scan_tag:
+            print(f"{RED}[ERROR]{RESET} --side-scan-targets tagged requires at least "
+                  "one --side-scan-tag K=V.")
+            sys.exit(2)
+        if args.side_scan_max < 1:
+            print(f"{RED}[ERROR]{RESET} --side-scan-max must be >= 1.")
+            sys.exit(2)
+        # SIDESCAN is not in the default SECTIONS set — wire it in explicitly so it
+        # runs AFTER EXPOSURE (needs the EC2Instance nodes) and BEFORE VULN/DATA/CORRELATE.
+        if sections is None:
+            sections = list(SECTIONS)
+        if "SIDESCAN" not in sections:
+            if "VULN" in sections:
+                sections.insert(sections.index("VULN"), "SIDESCAN")
+            else:
+                sections.append("SIDESCAN")
+
     # ── Multi-account (Organizations / explicit accounts) vs single-account ──
     if args.org or args.accounts:
         if not args.assume_role:
@@ -5985,6 +6274,7 @@ examples:
             sc = AWSLiveScanner(region=args.region, verbose=args.verbose,
                                 sections=sections, session=sess,
                                 all_regions=args.all_regions)
+            _apply_phase6_config(sc, args)
             sc.run()
             sc.print_report()
             scanners.append(sc)
@@ -6002,6 +6292,7 @@ examples:
             sections=sections,
             all_regions=args.all_regions,
         )
+        _apply_phase6_config(scanner, args)
         scanner.run()
         counts = scanner.print_report()
 
@@ -6015,9 +6306,15 @@ examples:
     gating_results = scanner.results
     scan_epoch = int(datetime.now(timezone.utc).timestamp())
     store = None
-    if args.state or args.list_waivers:
+    state_url = args.backend or args.state
+    want_state = bool(state_url) or args.list_waivers
+    if want_state:
+        import aws_state_dialect
+        scheme = aws_state_dialect.parse_state_url(state_url or "")[0]
         try:
-            store = aws_state.open(args.state or _default_state_path())
+            store = aws_state.open(state_url or _default_state_path())
+            scanner._backend_meta = {"scheme": scheme, "available": True,
+                                     "url": args.backend if args.backend else None}
             state_targets = scanners if (args.org or args.accounts) else [scanner]
             if args.list_waivers:
                 seen = set()
@@ -6030,7 +6327,7 @@ examples:
                         match = w.get("finding_key") or f"{w.get('check_glob')}:{w.get('resource_glob')}"
                         print(f"  #{w['id']} [{w['state']}] {w['match_type']} {match} "
                               f"approver={w['approver']} expires={w.get('expires_epoch')}")
-            if args.state:
+            if state_url:
                 combined: List = []
                 for tgt in state_targets:
                     combined += _process_state(store, tgt, args, scan_epoch)
@@ -6045,6 +6342,8 @@ examples:
         except Exception as e:
             print(f"{YELLOW}[WARN]{RESET} State store unavailable ({e}); "
                   "continuing stateless.")
+            scanner._backend_meta = {"scheme": scheme, "available": False,
+                                     "reason": str(e)}
             store = None
 
     # ── Phase 5C: CIEM right-sizing / dormancy down-rank (opt-in) ─────────────
@@ -6058,6 +6357,9 @@ examples:
 
     if store is not None:
         store.close()
+
+    # Phase 6: Neptune graph export (before save_json so its metadata lands there)
+    _export_graph_neptune(scanner, args)
 
     if args.json:
         scanner.save_json(args.json)

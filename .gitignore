@@ -18,7 +18,7 @@ htmlcov/
 *.db
 *.db-wal
 *.db-shm
-phase5_spec.json
+phase*_spec.json
 
 # Build artifacts
 build/
