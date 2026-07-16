@@ -4,6 +4,87 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.8.0] — 2026
+
+**CNAPP Phase 7 — Remediation + Code-to-Cloud ("close the loop").** Turns the
+ranked attack-path analysis into ACTION: a prioritized remediation plan that fixes
+the choke points which sever the most attack paths first, with remediation-as-code,
+mapped back to the IaC resource that created each finding. Read-only — it generates
+artifacts (runbook / plan / PR body), never applies changes. Plus productionized
+versions of the live paths Phase 6 deferred. Five new modules; `aws_correlate.py`/
+`aws_graph.py` unchanged.
+
+### Added — remediation engine (`aws_remediate.py`, pure)
+- A **prioritized, deduplicated plan** that **reuses `aws_correlate.minimal_cut` +
+  `ChokePoint`** (never re-ranks): "fix K items to cut N% of critical attack
+  paths," each action naming the node to fix, the paths it severs, the crown
+  jewels it protects, and effort/blast-radius.
+- **Remediation-as-code** — a template registry emitting Terraform + CloudFormation
+  + AWS CLI per fix (scope an open SG, cap a role with a permission boundary, block
+  public S3, patch a KEV CVE, …). A missing param renders as a `<PLACEHOLDER>`,
+  never a crash.
+- **Exports** — markdown runbook, JSON plan, GitHub issue checklist, PR body.
+  Deterministic. Read-only — never opens a PR or applies a change.
+
+### Added — code-to-cloud (`aws_codetocloud.py`, pure)
+- Maps a live finding back to the **IaC resource that declared it** (a new
+  brace-balanced Terraform block extractor + structural CloudFormation parse) via a
+  tiered **T1–T5 confidence matcher** (exact physical name / distinctive tag / CFN
+  logical-id / naming heuristic / type-only). Never guesses — an ambiguous match
+  returns `None`, so remediation can propose the **IaC diff** at `file:line`.
+
+### Added — productionized live paths (mock-tested; real infra still deferred)
+- `aws_graph_neptune_loader.py` — S3-key layout + bulk-load request builder +
+  `run_gremlin_bulk_load`/`run_opencypher_upsert` over injected s3/neptunedata.
+- `aws_sidescan_ebs.run_snapshot_sidescan` — the live snapshot lifecycle
+  (snapshot → copy/re-encrypt → fetch blocks → reassemble → extract) with
+  **guaranteed provenance-guarded cleanup on every error path**; a truncated read
+  is flagged INCOMPLETE (never a false clean bill).
+- `aws_sidescan.detect_fs` — a magic-byte sniffer (ext/xfs/luks/gpt) so an
+  encrypted/unsupported volume yields an honest INFO instead of a false-clean.
+
+### Added — integration + CLI
+- `--remediate` (+ `--remediate-out`/`--remediate-format`/`--remediate-min-severity`),
+  `--iac-dir` (enables code-to-cloud), `--graph-neptune-load`
+  (+ `--neptune-s3-bucket`/`--neptune-iam-role`/`--neptune-region`). `save_json`
+  gains gated `remediation`/`code_to_cloud` blocks. Default path (no flags) is
+  byte-for-byte unchanged.
+
+### Fixed — pre-merge adversarial verification (read-only hunt → 7 defects)
+All in the opt-in `--iac-dir`/`--remediate`/`--neptune-load` features; the default
+path and the live-runner cleanup safety verified clean.
+- **(HIGH ×4, code-to-cloud false match — the most dangerous class)** an empty/
+  unknown resource type no longer matches across ALL IaC resources; the T2 tag
+  tier requires a *distinctive* (non-denylisted, globally-unique) tag; the
+  Terraform brace balancer is now string/comment/heredoc-aware (a `{` inside a
+  string no longer bleeds a block into the next resource); and the tags extractor
+  no longer truncates on a `${…}` interpolation. Together these stop remediation
+  from proposing edits to the *wrong* IaC resource.
+- **(HIGH)** `patch_cve` is only chosen when a vulnerability actually gates the
+  severed path — an exposed instance with no CVE gets a privilege fix, not a
+  nonsensical "patch `<CVE>`".
+- **(MEDIUM)** the Neptune loader uses a fail-closed non-terminal allowlist so an
+  unusual/failed status breaks the poll loop instead of hanging to timeout.
+- **(LOW)** `_safe_format` uses `safe_substitute` so a `${…}`/bare `$` in a
+  template passes through literally instead of raising.
+
+### Changed
+- Version → **2.8.0**.
+
+### Scope — deferred (each fails closed to prior behavior)
+- Live `PostgresBackend` StateStore rewiring (regression risk to the Phase-5
+  lifecycle + not CI-verifiable without a server; the pure DDL/upsert generators
+  shipped in Phase 6 and `postgresql://` already degrades to stateless).
+- rpm Berkeley-DB/NDB decode and real ext4/xfs parsing (dissect) — orchestration
+  ships mock-tested; the real binary/kernel parse is integration-only.
+- Any live cloud/repo mutation (`--remediate` generates only; there is no apply).
+
+### Testing
+- **57 new tests** (`test_remediate.py`, `test_codetocloud.py`,
+  `test_neptune_loader.py`, `test_phase7_integration.py`, + side-scan runner/
+  detect_fs) → **483 total**, all green. A regression test backs every
+  adversarial-verify defect. boto3/psycopg/gremlin/dissect remain uninstalled.
+
 ## [2.7.0] — 2026
 
 **CNAPP Phase 6 — Agentless EBS Side-Scanning (CWPP) + Postgres/Neptune backends.**

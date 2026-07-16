@@ -248,3 +248,133 @@ def test_mounted_snapshots_deferred_raises():
     cm = eb.mounted_snapshots(None, None, ["vol-1"], scan_id="s1")
     with pytest.raises(eb.SideScanUnavailable):
         cm.__enter__()
+
+
+# ── live snapshot runner (mock-tested orchestration + guaranteed cleanup) ────
+class FakeEC2:
+    """Records ec2 calls; snapshots complete on first poll."""
+    def __init__(self, vol="vol-root", snap_error=False, tags=None):
+        self._vol = vol
+        self._snap_error = snap_error
+        self.calls = []
+        self._tags = tags or {}
+
+    def describe_instances(self, InstanceIds):
+        return {"Reservations": [{"Instances": [{
+            "InstanceId": InstanceIds[0], "RootDeviceName": "/dev/xvda",
+            "BlockDeviceMappings": [{"DeviceName": "/dev/xvda",
+                                     "Ebs": {"VolumeId": self._vol}}]}]}]}
+
+    def create_snapshot(self, VolumeId, TagSpecifications=None):
+        self.calls.append(("create_snapshot", VolumeId))
+        return {"SnapshotId": "snap-created"}
+
+    def copy_snapshot(self, **kw):
+        self.calls.append(("copy_snapshot", kw.get("SourceSnapshotId")))
+        return {"SnapshotId": "snap-copied"}
+
+    def modify_snapshot_attribute(self, **kw):
+        self.calls.append(("modify_snapshot_attribute", kw.get("OperationType")))
+
+    def describe_snapshots(self, SnapshotIds):
+        state = "error" if self._snap_error else "completed"
+        return {"Snapshots": [{"State": state, "SnapshotId": SnapshotIds[0]}]}
+
+    def delete_snapshot(self, SnapshotId):
+        self.calls.append(("delete_snapshot", SnapshotId))
+
+    def delete_volume(self, VolumeId):
+        self.calls.append(("delete_volume", VolumeId))
+
+    def detach_volume(self, VolumeId, Force=False):
+        self.calls.append(("detach_volume", VolumeId))
+
+
+def _ebs_one_block():
+    return FakeEBS({0: b"D" * eb.BLOCK_SIZE}, vol_gib=1)
+
+
+def test_run_snapshot_sidescan_happy_path_and_cleanup():
+    ec2 = FakeEC2()
+    ebs = _ebs_one_block()
+    seen = {}
+
+    def factory(img):
+        class _CM:
+            def __enter__(self_):
+                seen["read"] = img.read(0, 4)
+                return "EXTRACTOR"
+            def __exit__(self_, *a):
+                return False
+        return _CM()
+
+    res = eb.run_snapshot_sidescan(ec2, ebs, "i-1", scan_id="s1",
+                                   sidescan_fn=lambda ext: f"scanned:{ext}",
+                                   extractor_factory=factory, sleeper=lambda _s: None)
+    assert res.error is None
+    assert res.sidescan == "scanned:EXTRACTOR"
+    assert seen["read"] == b"DDDD"                       # blocks reassembled + extracted
+    assert res.cleanup.fully_clean and res.cleanup.succeeded >= 1
+    # the created snapshot was deleted (guaranteed cleanup)
+    assert ("delete_snapshot", "snap-created") in ec2.calls
+
+
+def test_run_snapshot_sidescan_cleanup_runs_on_error():
+    # snapshot enters 'error' -> the scan fails, but cleanup MUST still run
+    ec2 = FakeEC2(snap_error=True)
+    res = eb.run_snapshot_sidescan(ec2, _ebs_one_block(), "i-1", scan_id="s1",
+                                   sidescan_fn=lambda ext: "x",
+                                   extractor_factory=lambda img: None,
+                                   sleeper=lambda _s: None)
+    assert res.error is not None
+    assert ("delete_snapshot", "snap-created") in ec2.calls    # cleaned up despite error
+
+
+def test_run_snapshot_sidescan_capped_flags_incomplete():
+    ec2 = FakeEC2()
+    ebs = FakeEBS({i: b"x" * eb.BLOCK_SIZE for i in range(5)}, vol_gib=1)
+
+    def factory(img):
+        class _CM:
+            def __enter__(self_): return "E"
+            def __exit__(self_, *a): return False
+        return _CM()
+    res = eb.run_snapshot_sidescan(ec2, ebs, "i-1", scan_id="s1", max_blocks=2,
+                                   sidescan_fn=lambda ext: "ok", extractor_factory=factory,
+                                   sleeper=lambda _s: None)
+    assert any("INCOMPLETE" in n for n in res.notes)     # truncated read never a clean bill
+
+
+def test_run_cleanup_refuses_unowned_snapshot():
+    # describe_tags reports a snapshot NOT owned by us -> delete is skipped
+    ec2 = FakeEC2()
+    art = eb.ScanArtifacts(scan_id="s1", created_snapshot_id="snap-x")
+    rep = eb.run_cleanup(ec2, _ebs_one_block(), art,
+                         describe_tags=lambda sid: {eb.OWNER_TAG: "SOMEONE-ELSE"})
+    assert rep.skipped_unowned == 1
+    assert ("delete_snapshot", "snap-x") not in ec2.calls   # NOT deleted
+
+
+def test_run_cleanup_deletes_owned_snapshot():
+    ec2 = FakeEC2()
+    art = eb.ScanArtifacts(scan_id="s1", created_snapshot_id="snap-x")
+    rep = eb.run_cleanup(ec2, _ebs_one_block(), art,
+                         describe_tags=lambda sid: {eb.OWNER_TAG: "s1"})
+    assert rep.succeeded == 1 and ("delete_snapshot", "snap-x") in ec2.calls
+
+
+def test_poll_snapshot_timeout_raises():
+    class Pending(FakeEC2):
+        def describe_snapshots(self, SnapshotIds):
+            return {"Snapshots": [{"State": "pending"}]}
+    with pytest.raises(eb.SideScanUnavailable):
+        eb._poll_snapshot_completed(Pending(), "snap-1", sleeper=lambda _s: None,
+                                    timeout_s=10, interval_s=5)
+
+
+def test_sparse_image_as_file():
+    img = eb.SparseImage(1, block_size=4)
+    img.put(0, b"AABB")
+    f = img.as_file()
+    f.seek(2)
+    assert f.read(2) == b"BB"
