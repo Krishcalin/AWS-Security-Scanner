@@ -7,7 +7,7 @@ full **CNAPP** (Cloud-Native Application Protection Platform) — see the CNAPP
 blueprint/roadmap: the north star is AWS-deep **toxic-combination attack paths**
 computed over a unified security graph.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **Live Audit Scanner** (`aws_live_scanner.py` v2.6.0) -- live AWS account audit via boto3 (160+ checks, 40 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing**)
+- **Live Audit Scanner** (`aws_live_scanner.py` v2.7.0) -- live AWS account audit via boto3 (160+ checks, 40 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing**, **agentless EBS side-scan (CWPP)**, **Postgres/Neptune export**)
 - **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
 - **Exposure Oracle** (`aws_exposure.py`) -- pure, dependency-free internet-reachability core (SG ∩ stateless NACL ∩ IGW route ∩ public-IP)
 - **Deep-Plane Core** (`aws_deepplane.py`) -- pure Inspector/Macie/GuardDuty/Access-Analyzer parsers + the CAN_READ_DATA object-probe matcher
@@ -15,13 +15,15 @@ computed over a unified security graph.
 - **Effective-Permissions Solver** (`aws_effperm.py`) -- pure identity ∩ permission-boundary ∩ SCP evaluator (explicit-deny-wins, condition-aware, fail-open) that refines/drops escalation edges
 - **State Store** (`aws_state.py`) -- pure stdlib-sqlite3 finding lifecycle / drift / MTTR / posture-trend / waivers (the scanner's memory)
 - **CIEM Right-Sizing** (`aws_unused.py`) -- pure unused-access classification (Access Analyzer + SLAD) + dormancy down-rank overlay
+- **Agentless Side-Scan** (`aws_sidescan.py` + `aws_sidescan_ebs.py`) -- pure CWPP core: OS-package inventory + ecosystem-correct (dpkg/rpm/apk) OSV vuln matching + on-disk secrets → HAS_VULN edges; EBS Direct-API block plane (plan/checksum/sparse-reassembly/cleanup). Live fs extraction deferred
+- **Persistence Backends** (`aws_state_dialect.py` + `aws_graph_neptune.py`) -- pure Postgres DDL/upsert/dialect generators + Neptune Gremlin-CSV / openCypher graph export
 
 ## Repository Structure
 
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.6.0 (boto3, graph, exposure, deep-plane, correlate, effperm, state, ciem)
+├── aws_live_scanner.py      # Live audit scanner v2.7.0 (boto3, graph, exposure, deep-plane, correlate, effperm, state, ciem, sidescan, backends)
 ├── aws_graph.py             # SecurityGraph — nodes/edges, bounded traversal, graph.json (stdlib)
 ├── aws_exposure.py          # Internet-reachability oracle — 4-gate AND, pure/testable (stdlib)
 ├── aws_deepplane.py         # Deep-plane parsers/classifiers (Inspector/Macie/GuardDuty/AA), pure (stdlib)
@@ -29,6 +31,10 @@ AWS-Security-Scanner/
 ├── aws_effperm.py           # Effective-permissions solver — identity∩boundary∩SCP, deny-wins, pure (stdlib)
 ├── aws_state.py             # Persistent state store — lifecycle/drift/MTTR/waivers, pure sqlite3
 ├── aws_unused.py            # CIEM unused-access/right-sizing — Access-Analyzer+SLAD, dormancy down-rank, pure
+├── aws_sidescan.py          # Agentless CWPP core — inventory parsers + dpkg/rpm/apk vercmp + OSV match + secrets + HAS_VULN edges, pure
+├── aws_sidescan_ebs.py      # EBS Direct-API block plane — plan/delta/checksum/sparse-reassembly/cleanup, pure (live I/O deferred)
+├── aws_state_dialect.py     # Postgres/SQLite dialect — DDL/upsert/parse_state_url/row-shim, pure
+├── aws_graph_neptune.py     # Neptune export — Gremlin bulk-CSV + openCypher MERGE + round-trip loader, pure
 ├── tests/
 │   ├── test_live_scanner.py # 69 unit tests (mock boto3)
 │   ├── test_cnapp_phase1.py # 32 unit tests (graph, chains, trust, org fan-out, compliance rollup)
@@ -39,6 +45,11 @@ AWS-Security-Scanner/
 │   ├── test_state.py        # 22 unit tests (lifecycle/coverage-gated resolve/waivers/MTTR/trend)
 │   ├── test_unused.py       # 21 unit tests (dormancy/factor/right-sizing/down-rank/collection)
 │   ├── test_phase5_integration.py # 17 tests (ceiling prunes edges end-to-end + defect regressions)
+│   ├── test_sidescan.py     # 63 unit tests (dpkg/rpm/apk vercmp matrix, parsers, OSV match, secrets, edges)
+│   ├── test_sidescan_ebs.py # 21 unit tests (plan/delta-zeroing/checksum/SparseImage/cleanup/provenance)
+│   ├── test_graph_neptune.py     # 14 unit tests (Gremlin CSV types+escaping, openCypher, round-trip)
+│   ├── test_state_dialect.py     # 22 unit tests (URL parse, qmark→pyformat, upsert, row-shim, DDL parity)
+│   ├── test_phase6_integration.py # 15 tests (ATTACK-02-from-agentless pillar + wiring + defect regressions)
 │   └── samples/             # Vulnerable IaC + sample reports
 ├── scripts/
 │   └── validate_live.py     # Read-only live-account validation harness
@@ -87,10 +98,10 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.6.0)
+## Live Audit Scanner (`aws_live_scanner.py` v2.7.0)
 
 - **Type**: Live AWS account audit via boto3 (evolving toward CNAPP)
-- **Lines**: ~6,100
+- **Lines**: ~6,400
 - **Dependencies**: `boto3` (required), `aws_graph.py` + `aws_exposure.py` + `aws_deepplane.py` + `aws_correlate.py` + `aws_effperm.py` + `aws_state.py` + `aws_unused.py` (bundled, stdlib), Python 3.10+
 - **IAM permissions**: `SecurityAudit` AWS-managed policy (read-only) covers the deep-plane reads (Inspector2/Macie/GuardDuty/Access Analyzer) and the effective-permissions reads (`iam:GetAccountAuthorizationDetails` for boundaries, `organizations:Describe*/List*` for SCPs — all degrade gracefully); multi-account adds `sts:AssumeRole` into a read-only role per target account, and `organizations:ListAccounts` for `--org`. `--ciem` additionally uses `iam:GenerateServiceLastAccessedDetails` and `access-analyzer:ListFindingsV2`
 - **Compliance**: CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
@@ -227,6 +238,37 @@ off (never a FAIL/crash/phantom edge). Pure parsers live in `aws_deepplane.py`.
   9 defects (incl. 2 CRITICAL over-prunes: an unreadable-SCP deny-all and a full-admin
   short-circuit); all fixed and regression-tested before commit.
 
+### CNAPP Phase 6 additions (v2.7.0) — agentless side-scan (CWPP) + persistence backends
+
+- **Agentless side-scan (`aws_sidescan.py`, pure)** — the Wiz/Orca CWPP capability with
+  no agent: OS-package inventory parsers (dpkg/apk/rpm sqlite-header + manifest), the
+  THREE ecosystem-correct version comparators (dpkg/rpm/apk — never semver; a bug here is
+  a silent missed-CVE FN, the most dangerous class), an OSV matcher over distro-advisory
+  feeds with EPSS/KEV/exploit enrichment, and on-disk secret detection (entropy-gated,
+  preview-only). `emit_vuln_edges` writes `HAS_VULN` edges shaped 1:1 with the Inspector
+  plane, so agentless CVEs light up ATTACK-02 even when Inspector is OFF, and MERGE-converge
+  with Inspector when both run. Raw ext4/xfs parsing is deferred behind an injected
+  `FilesystemExtractor` (test impl `DictExtractor`).
+- **EBS block plane (`aws_sidescan_ebs.py`, pure)** — EBS Direct-API fetch planning
+  (full/delta with removed- AND capped-changed-block zeroing), base64-SHA256 checksum
+  verify, `SparseImage` reassembly, token rebind-on-expiry, and provenance-guarded cleanup
+  (`is_owned` — never delete a resource we did not tag). Live snapshot I/O + real fs
+  extraction deferred to Phase 7 behind `HAS_BOTO3`.
+- **Persistence backends (pure generators)** — `aws_state_dialect.py` renders the aws_state
+  schema for Postgres (BIGINT epochs, IDENTITY, ON CONFLICT upserts + drift-counter reset,
+  `?`→`%s`, hybrid Row shim, `parse_state_url`); a `postgresql://` URL routes to a clean
+  `StateBackendUnavailable` → stateless (never a silent local sqlite). `aws_graph_neptune.py`
+  exports Gremlin bulk-CSV (bool-before-int typing, per-label homogeneous columns, RFC-4180
+  escaping) + idempotent openCypher UNWIND/MERGE + a round-trip loader. `aws_graph`/
+  `aws_correlate` unchanged.
+- **Integration** — a gated `SIDESCAN` section (after EXPOSURE, before VULN) over the
+  internet-exposed EC2 set; CWPP-01..04 checks; CLI `--side-scan[/-targets/-tag/-max]`,
+  `--no-side-scan-secrets`, `--vuln-db`, `--backend`, `--graph-neptune-csv/-cypher`;
+  additive `save_json` blocks. Default path (no flags) is byte-for-byte unchanged.
+- **Verification** — a read-only adversarial hunt found 3 defects (a HIGH dpkg-comparator
+  missed-CVE FN, a MEDIUM `backend`-key default-path JSON leak, a LOW latent delta-cap
+  stale-bytes trap); all fixed + regression-tested before merge.
+
 ### Architecture
 
 ```python
@@ -339,16 +381,20 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
     [--org | --accounts ID1,ID2] [--assume-role ROLE] [--external-id ID] \
     [--state FILE] [--suppress KEY --approver NAME [--reason T] [--expires WHEN]] \
     [--list-waivers] [--sla-days N] [--ciem] \
+    [--side-scan [--side-scan-targets exposed|all|tagged] [--side-scan-tag K=V] \
+                 [--side-scan-max N] [--no-side-scan-secrets] [--vuln-db FILE]] \
+    [--backend URL] [--graph-neptune-csv DIR] [--graph-neptune-cypher FILE] \
     [-v] [--version]
 # Note: --sections takes a single COMMA-separated value (e.g. --sections IAM,S3,IAMPRIVESC)
 # --org/--accounts require --assume-role (a read-only role assumable in each target account)
 # --suppress requires --approver and --state; --list-waivers requires --state
+# --side-scan-targets tagged requires --side-scan-tag; --backend postgresql:// runs stateless (Phase 7)
 ```
 
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 294 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 426 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
@@ -365,6 +411,11 @@ Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
   state lifecycle (coverage-gated resolve, MUTATED, REOPENED, idempotency), waiver
   suppression + expiry re-gating, MTTR/trend; CIEM dormancy/right-sizing/down-rank;
   end-to-end ceiling edge-pruning; and a regression test per adversarial-verify defect
+- **Phase 6**: dpkg/rpm/apk version-comparison matrices + OSV affected-range matching;
+  inventory parsers + rpm-header struct decode; secrets FP/FN + exfil-safety; EBS
+  plan/delta-zeroing/checksum/sparse-reassembly/provenance-cleanup; Postgres dialect
+  (URL parse, qmark→pyformat, upsert, row-shim); Neptune CSV/openCypher + round-trip;
+  the ATTACK-02-from-agentless pillar; and a regression per adversarial-verify defect
 
 ## Conventions
 
