@@ -89,6 +89,21 @@ def test_build_delta_plan_zeroes_removed_blocks():
     assert plan.base_snapshot_id == "snap-1"
 
 
+def test_capped_delta_plan_zeroes_dropped_changed_blocks():
+    # regression (adversarial rank 3): a CHANGED block dropped by the cap must be
+    # zeroed onto the base, not left as stale non-zero base bytes (silent FN).
+    ebs = FakeEBS({10: b"N" * eb.BLOCK_SIZE, 11: b"N" * eb.BLOCK_SIZE},
+                  changed={10: "present", 11: "present"})
+    plan = eb.build_delta_plan(ebs, "snap-2", "snap-1", max_blocks=1)
+    assert plan.capped is True
+    assert [r.index for r in plan.blocks] == [10]
+    assert 11 in plan.zeroed_indexes            # dropped changed block -> zeroed
+    img = eb.SparseImage(1)
+    img.put(11, b"O" * eb.BLOCK_SIZE)           # stale base content
+    eb.apply_plan(ebs, plan, img)
+    assert img.read(11 * eb.BLOCK_SIZE, 1) != b"O"   # not left as stale base bytes
+
+
 # ── checksum ─────────────────────────────────────────────────────────────────
 def test_verify_block_checksum():
     data = b"hello world"

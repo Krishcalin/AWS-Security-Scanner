@@ -457,6 +457,9 @@ def collect_inventory(ext: FilesystemExtractor, os: OSRelease) -> List[Package]:
 def _deb_order(c: str) -> int:
     if c == "":
         return 0
+    if c.isdigit():
+        return 0          # a digit terminates the non-digit part (dpkg Policy 5.6.12);
+                          # weight 0 sorts it BELOW letters and ABOVE '~'
     if c == "~":
         return -1
     if c.isalpha():

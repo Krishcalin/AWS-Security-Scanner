@@ -5955,6 +5955,21 @@ def _run_ciem(scanner, args, scan_epoch: int, store=None) -> None:
               f"(exploit-likelihood down-ranked, still reported).")
 
 
+def _backend_meta_for(args, scheme: str, available: bool, reason: Optional[str] = None):
+    """Backend metadata for save_json — ONLY when the --backend feature ran.
+    A plain --state / --list-waivers run (Phase-5 flags, default sqlite) must not
+    inject a top-level 'backend' key that did not exist pre-Phase-6, so this
+    returns None unless --backend was explicitly given."""
+    if not getattr(args, "backend", None):
+        return None
+    meta = {"scheme": scheme, "available": available}
+    if available:
+        meta["url"] = args.backend
+    else:
+        meta["reason"] = reason
+    return meta
+
+
 def _apply_phase6_config(sc, args) -> None:
     """Copy the Phase-6 side-scan flags onto a scanner before it runs."""
     sc.side_scan = args.side_scan
@@ -6313,8 +6328,7 @@ examples:
         scheme = aws_state_dialect.parse_state_url(state_url or "")[0]
         try:
             store = aws_state.open(state_url or _default_state_path())
-            scanner._backend_meta = {"scheme": scheme, "available": True,
-                                     "url": args.backend if args.backend else None}
+            scanner._backend_meta = _backend_meta_for(args, scheme, True)
             state_targets = scanners if (args.org or args.accounts) else [scanner]
             if args.list_waivers:
                 seen = set()
@@ -6342,8 +6356,7 @@ examples:
         except Exception as e:
             print(f"{YELLOW}[WARN]{RESET} State store unavailable ({e}); "
                   "continuing stateless.")
-            scanner._backend_meta = {"scheme": scheme, "available": False,
-                                     "reason": str(e)}
+            scanner._backend_meta = _backend_meta_for(args, scheme, False, str(e))
             store = None
 
     # ── Phase 5C: CIEM right-sizing / dormancy down-rank (opt-in) ─────────────

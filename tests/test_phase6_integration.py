@@ -189,6 +189,44 @@ class TestSaveJsonGating(unittest.TestCase):
         assert data["side_scan"]["targets_scanned"] == 1
 
 
+class TestBackendMetaGating(unittest.TestCase):
+    """Regression (adversarial rank 2): the Phase-6 'backend' JSON key must NOT
+    leak onto a plain --state / --list-waivers run (no --backend flag)."""
+
+    def test_backend_meta_none_without_backend_flag(self):
+        from aws_live_scanner import _backend_meta_for
+
+        class Args:
+            backend = None
+        # a --state-only run resolves scheme 'sqlite' but must produce no backend meta
+        assert _backend_meta_for(Args(), "sqlite", True) is None
+        assert _backend_meta_for(Args(), "sqlite", False, "err") is None
+
+    def test_backend_meta_present_with_backend_flag(self):
+        from aws_live_scanner import _backend_meta_for
+
+        class Args:
+            backend = "postgresql://h/db"
+        m = _backend_meta_for(Args(), "postgres", False, "no psycopg")
+        assert m == {"scheme": "postgres", "available": False, "reason": "no psycopg"}
+        ok = _backend_meta_for(Args(), "postgres", True)
+        assert ok["available"] is True and ok["url"] == "postgresql://h/db"
+
+    def test_state_only_scanner_omits_backend_key(self):
+        # a scanner that ran --state (default sqlite, _backend_meta stays None)
+        # must emit JSON without a 'backend' key — byte-for-byte with pre-Phase-6.
+        sc = AWSLiveScanner(region="us-east-1", sections=["IAM"])
+        sc.account = ACCT
+        sc._state_report = {"drift": {"new": []}}     # as a --state run would set
+        assert sc._backend_meta is None
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "out.json")
+            sc.save_json(p)
+            data = json.loads(open(p, encoding="utf-8").read())
+        assert "backend" not in data
+        assert "drift" in data                        # state ran; backend did not
+
+
 class TestNeptuneExportWiring(unittest.TestCase):
 
     def test_export_graph_neptune_writes_files(self):

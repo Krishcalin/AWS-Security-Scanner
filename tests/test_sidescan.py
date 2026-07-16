@@ -64,6 +64,38 @@ def test_rpm_backport_release_ordering():
     assert ss.rpm_vercmp_str("1.0.2k-19.el7_9", "1.0.2k-16.el7_9") == 1
 
 
+# ── regression (adversarial rank 1, HIGH): a digit terminates the non-digit
+# part in dpkg comparison (weight 0), sorting BELOW letters. Getting this wrong
+# inverts ordering at any aligned digit-vs-letter slot and silently judges a
+# vulnerable package as not-affected (missed CVE). ─────────────────────────────
+@pytest.mark.parametrize("a,b,exp", [
+    ("1", "a", -1),                        # digit(0) < letter -> "1" < "a"
+    ("1.0.a", "1.0.1", 1),                 # letter(97) > digit-start(0)
+    ("2.4.0~20240101", "2.4.0~rc1", -1),   # snapshot digits sort below rc letters
+    ("1.1.1", "1.1.1a", -1),               # trailing letter is newer
+    ("1.1.1n", "1.1.1", 1),
+])
+def test_dpkg_vercmp_digit_terminates_nondigit_part(a, b, exp):
+    assert ss.dpkg_vercmp(a, b) == exp
+
+
+def test_version_affected_snapshot_before_rc_is_vulnerable():
+    # a git-snapshot pre-release ('~20240101') is BEFORE '~rc1', so an install at
+    # the snapshot is still affected by a CVE fixed at ~rc1 — must not be a FN.
+    ev = [{"introduced": "0"}, {"fixed": "2.4.0~rc1"}]
+    assert ss.version_affected("2.4.0~20240101", ev, ss.dpkg_vercmp) == (True, "2.4.0~rc1")
+
+
+def test_match_vulns_catches_snapshot_before_rc():
+    osr = ss.parse_os_release(b"ID=debian\nVERSION_ID=12\n")
+    pkg = ss.Package(name="foo", version="2.4.0~20240101", arch="amd64", source="foo",
+                     source_version="2.4.0~20240101", ecosystem="Debian:12",
+                     purl="pkg:deb/debian/foo@2.4.0~20240101", origin="dpkg")
+    feed = ss.OSVFeed.from_records([_osv("CVE-2024-7777", "Debian:12", "foo", "0", "2.4.0~rc1")])
+    matches = ss.match_vulns([pkg], feed, {}, set())
+    assert [m.cve for m in matches] == ["CVE-2024-7777"]
+
+
 # ── apk version comparison ───────────────────────────────────────────────────
 @pytest.mark.parametrize("a,b,exp", [
     ("1.0", "1.0", 0),

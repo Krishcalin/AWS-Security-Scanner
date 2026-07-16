@@ -163,6 +163,8 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 - **Effective-permissions ceiling** (CNAPP Phase 5) -- evaluates the real AWS decision chain (identity ∩ **permission-boundary** ∩ **SCP**, explicit-deny-wins, condition-aware) so an escalation edge a boundary or SCP *provably neutralizes* is **dropped** from the graph — the ranked paths reflect genuinely-reachable escalation, not merely granted permissions. Fail-open: absent boundary/SCP data behaves exactly as before (`aws_effperm.py`)
 - **Persistent state, drift & waivers** (CNAPP Phase 5) -- `--state cnapp.db` gives the scanner *memory*: finding lifecycle (open/resolved/**reopened**/**mutated**), coverage-gated resolve, **MTTR**, posture **trend**, and **waivers** (`--suppress` with approver/expiry — an accepted risk leaves `--fail-on` gating but stays tracked; expired waivers auto-reactivate) (`aws_state.py`)
 - **CIEM right-sizing** (CNAPP Phase 5, opt-in `--ciem`) -- flags dormant/over-permissioned principals (Access Analyzer unused-access → service-last-accessed) as LOW `CIEM-01` review candidates and down-ranks the exploit-likelihood of attack paths through them (impact untouched) (`aws_unused.py`)
+- **Agentless workload side-scan** (CNAPP Phase 6, opt-in `--side-scan`) -- the Wiz/Orca CWPP capability with *no agent*: inventory a workload's OS packages, match them against a vulnerability feed with ecosystem-correct (dpkg/rpm/apk) version comparison, and find on-disk secrets — adding `HAS_VULN` edges to the SAME graph so agentless CVEs **light up ATTACK-02 even when Amazon Inspector is disabled** (`CWPP-01/02/03`). Pure inventory/matching core + EBS Direct-API block plane; live disk extraction deferred (`aws_sidescan.py`, `aws_sidescan_ebs.py`)
+- **Persistence backends** (CNAPP Phase 6) -- `--backend postgresql://...` (Postgres state store, deferred to Phase 7 → runs stateless) and `--graph-neptune-csv`/`--graph-neptune-cypher` export the security graph as Amazon Neptune bulk-load CSV or idempotent openCypher upserts (`aws_state_dialect.py`, `aws_graph_neptune.py`)
 - **Security graph & attack-path chains** (CNAPP Phase 1) -- projects findings onto an ARN-keyed graph (`aws_graph.py`), builds `CAN_ASSUME` (trust) + `CAN_PRIVESC_TO` (privesc) edges, and surfaces **transitive privilege-escalation chains** (`user → assume role → escalate to admin`) plus roles assumable by *any* principal. Serialize with `--graph graph.json` (Neptune migration seed)
 - **IAM privilege-escalation analysis** -- builds each principal's effective permission set (via `GetAccountAuthorizationDetails`) and detects known escalation paths with resource-aware scoping; condition-guarded paths are downgraded to WARN, boundary/SCP-neutralized paths dropped
 - **Multi-account & multi-region** -- `--org` / `--accounts` fan out across an AWS Organization via `--assume-role`; `--all-regions` sweeps every enabled region for regional sections
@@ -174,7 +176,7 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 - **CI/CD gating** -- `--fail-on CRITICAL|HIGH|MEDIUM|LOW` for pipeline pass/fail control
 - **Scan diff** -- `--baseline prev.json` surfaces only what's *new* or *resolved* since a previous run (superseded by `--state` DB-backed lifecycle when both are given)
 - **Evidence collection** -- CSV/JSON artefact files saved per check
-- **294 unit tests** -- full test suite with mock boto3, no AWS credentials needed (incl. exposure, deep-plane, attack-path-scoring, and Phase-5 effective-permissions/state/CIEM false-positive/false-negative catalogs; a regression test backs every defect the pre-commit adversarial-verification pass found)
+- **426 unit tests** -- full test suite with mock boto3, no AWS credentials needed (incl. exposure, deep-plane, attack-path-scoring, Phase-5 effective-permissions/state/CIEM, and Phase-6 side-scan version-comparator/OSV-matching/EBS-block-plane/backend-export false-positive/false-negative catalogs; a regression test backs every defect the adversarial-verification passes found)
 
 ### Prerequisites (Live Scanner)
 
@@ -382,7 +384,7 @@ jobs:
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC Security Scanner (CloudFormation + Terraform, no credentials)
-├── aws_live_scanner.py      # Live Audit Scanner v2.6.0 (40 sections, graph, exposure, deep-plane, correlate, effperm, state, ciem)
+├── aws_live_scanner.py      # Live Audit Scanner v2.7.0 (40 sections, graph, exposure, deep-plane, correlate, effperm, state, ciem, sidescan, backends)
 ├── aws_exposure.py          # Internet-reachability oracle — 4-gate AND, pure/testable (stdlib)
 ├── aws_deepplane.py         # Deep-plane parsers (Inspector/Macie/GuardDuty/AA) + CAN_READ_DATA (stdlib)
 ├── aws_correlate.py         # Attack-path correlation engine — enumerate/score/rank/choke (stdlib)
@@ -390,6 +392,10 @@ AWS-Security-Scanner/
 ├── aws_effperm.py           # Effective-permissions solver — identity∩boundary∩SCP, deny-wins (stdlib)
 ├── aws_state.py             # Persistent state store — lifecycle/drift/MTTR/waivers (pure sqlite3)
 ├── aws_unused.py            # CIEM unused-access/right-sizing — Access-Analyzer+SLAD, dormancy (stdlib)
+├── aws_sidescan.py          # Agentless CWPP core — inventory + dpkg/rpm/apk vercmp + OSV match + secrets → HAS_VULN (stdlib)
+├── aws_sidescan_ebs.py      # EBS Direct-API block plane — plan/delta/checksum/sparse/cleanup (stdlib; live I/O deferred)
+├── aws_state_dialect.py     # Postgres/SQLite dialect — DDL/upsert/parse_state_url/row-shim (stdlib)
+├── aws_graph_neptune.py     # Neptune export — Gremlin bulk-CSV + openCypher MERGE + round-trip (stdlib)
 ├── tests/
 │   ├── test_live_scanner.py # 69 unit tests (mock boto3, no credentials needed)
 │   ├── test_cnapp_phase1.py # 32 unit tests (graph, chains, trust, org fan-out, compliance)
@@ -400,6 +406,11 @@ AWS-Security-Scanner/
 │   ├── test_state.py        # 22 unit tests (lifecycle, coverage-gated resolve, waivers, MTTR)
 │   ├── test_unused.py       # 21 unit tests (dormancy, right-sizing, down-rank, collection)
 │   ├── test_phase5_integration.py # 17 tests (ceiling edge-pruning + defect regressions)
+│   ├── test_sidescan.py     # 63 unit tests (dpkg/rpm/apk vercmp, parsers, OSV match, secrets, edges)
+│   ├── test_sidescan_ebs.py # 21 unit tests (plan/delta-zeroing/checksum/SparseImage/cleanup)
+│   ├── test_graph_neptune.py     # 14 unit tests (Gremlin CSV, openCypher, round-trip)
+│   ├── test_state_dialect.py     # 22 unit tests (URL parse, qmark→pyformat, upsert, DDL parity)
+│   ├── test_phase6_integration.py # 15 tests (ATTACK-02-from-agentless pillar + defect regressions)
 │   └── samples/             # Sample IaC files and reports
 ├── scripts/
 │   └── validate_live.py     # Read-only live-account validation harness

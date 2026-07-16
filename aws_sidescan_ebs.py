@@ -128,6 +128,11 @@ def build_delta_plan(ebs, snapshot_id: str, base_snapshot_id: str, *,
             continue
         if max_blocks is not None and len(refs) >= max_blocks:
             capped = True
+            # A dropped CHANGED block must be zeroed onto the cached base, not
+            # skipped — else the reassembled image keeps STALE non-zero base bytes
+            # (indistinguishable from current data = silent inventory FN). A zero
+            # hole is at least recognizable.
+            zeroed.append(idx)
             continue
         refs.append(BlockRef(index=idx, token=second))
     return FetchPlan(snapshot_id=snapshot_id, volume_size_gib=vol_size, block_size=bsize,
