@@ -371,3 +371,31 @@ def test_sidescan_failopen_unsupported_rpmdb():
     res = ss.sidescan_filesystem(ext, None, {}, set())
     assert res.packages == []
     assert any("not decodable" in n for n in res.notes)
+
+
+# ── detect_fs magic-byte sniffer (avoids false-clean on encrypted/unknown fs) ─
+def _reader(blob):
+    return lambda off, length: blob[off:off + length]
+
+
+def test_detect_fs_ext():
+    img = bytearray(0x440)
+    img[0x438:0x43a] = b"\x53\xef"
+    assert ss.detect_fs(_reader(bytes(img))) == "ext"
+
+
+def test_detect_fs_luks():
+    assert ss.detect_fs(_reader(b"LUKS\xba\xbe" + b"\x00" * 100)) == "luks"
+
+
+def test_detect_fs_xfs():
+    assert ss.detect_fs(_reader(b"XFSB" + b"\x00" * 100)) == "xfs"
+
+
+def test_detect_fs_unknown():
+    assert ss.detect_fs(_reader(b"\x00" * 2048)) == "unknown"
+
+
+def test_rpmdb_bdb_deferred_raises_unsupported():
+    with pytest.raises(ss.Unsupported):
+        ss.parse_rpmdb_bdb(b"\x00\x06\x15\x61rpmdb-bdb")

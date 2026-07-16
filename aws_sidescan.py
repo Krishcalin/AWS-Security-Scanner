@@ -428,6 +428,34 @@ def parse_rpmdb_sqlite(db_bytes: bytes, os: OSRelease) -> List[Package]:
     return out
 
 
+def detect_fs(read_fn: Callable[[int, int], bytes]) -> str:
+    """Sniff the filesystem/container type from magic bytes so an encrypted or
+    unsupported volume yields an honest 'unsupported' (→ INFO note) instead of a
+    false-clean empty inventory. ``read_fn(offset, length)`` reads raw bytes.
+    Returns 'ext' | 'xfs' | 'luks' | 'gpt' | 'unknown'."""
+    try:
+        if read_fn(0, 6) == b"LUKS\xba\xbe":
+            return "luks"
+        if read_fn(0, 4) == b"XFSB":
+            return "xfs"
+        if read_fn(0x438, 2) == b"\x53\xef":          # ext2/3/4 superblock magic 0xEF53 (LE)
+            return "ext"
+        if read_fn(512, 8) == b"EFI PART":            # GPT header at LBA1
+            return "gpt"
+    except Exception:
+        return "unknown"
+    return "unknown"
+
+
+# ── rpm Berkeley-DB (RHEL7/CentOS7) — DEFERRED ───────────────────────────────
+def parse_rpmdb_bdb(db: bytes):
+    """Decode a legacy Berkeley-DB rpmdb (RHEL7/CentOS7). DEFERRED: a correct
+    BDB-hash-page + overflow-chain walker plus a deterministic offline fixture is
+    a sizable undertaking; until it lands, collect_inventory surfaces an INFO note
+    (never a crash, never a false-clean). Raises Unsupported."""
+    raise Unsupported("rpmdb Berkeley-DB decode is deferred (use a modern sqlite rpmdb)")
+
+
 def collect_inventory(ext: FilesystemExtractor, os: OSRelease) -> List[Package]:
     """Dispatch to the right parser by pkgmgr. rpm tries the sqlite rpmdb, then a
     textual manifest. Raises Unsupported only for an undecodable rpmdb container."""

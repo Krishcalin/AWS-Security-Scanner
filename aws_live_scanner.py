@@ -70,7 +70,7 @@ import aws_unused
 import aws_sidescan
 import aws_graph_neptune
 
-VERSION = "2.7.0"
+VERSION = "2.8.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -990,6 +990,8 @@ class AWSLiveScanner:
         self._backend_meta: Optional[Dict] = None
         self._graph_export_meta: Optional[Dict] = None
         self._sidescan_extractor_opener = None      # test seam: (vol_ids, iid) -> CM
+        self._remediation_report: Optional[Dict] = None   # Phase 7 --remediate
+        self._code_to_cloud_meta: Optional[Dict] = None
 
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
@@ -5374,6 +5376,11 @@ class AWSLiveScanner:
             data["backend"] = self._backend_meta
         if self._graph_export_meta:
             data["graph_export"] = self._graph_export_meta
+        # Phase 7: remediation plan / code-to-cloud — present only when generated.
+        if self._remediation_report:
+            data["remediation"] = self._remediation_report
+        if self._code_to_cloud_meta:
+            data["code_to_cloud"] = self._code_to_cloud_meta
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, default=str)
         print(f"{BLUE}[*]{RESET} JSON report saved: {path}")
@@ -6021,6 +6028,92 @@ def _export_graph_neptune(scanner, args) -> None:
     scanner._graph_export_meta = meta
 
 
+def _run_remediation(scanner, args) -> None:
+    """Phase 7: build a prioritized remediation plan (reusing the correlate ranking)
+    + remediation-as-code, and write the requested export artifacts. Read-only —
+    generates artifacts only, never applies a change. Fail-open."""
+    if not args.remediate:
+        return
+    try:
+        import aws_remediate
+        matcher = None
+        if args.iac_dir:
+            import aws_codetocloud
+            idx = aws_codetocloud.build_iac_index(args.iac_dir)
+            matcher = idx.matcher()
+            scanner._code_to_cloud_meta = {"iac_dirs": list(args.iac_dir),
+                                           "resources_indexed": len(idx.resources)}
+        g = scanner.graph
+        nk = (lambda nid: (g.node(nid) or {}).get("kind")) if g else (lambda nid: None)
+        npf = (lambda nid: (g.node(nid) or {}).get("props", {})) if g else (lambda nid: {})
+        oe = g.out_edges if g else (lambda nid, kinds=None: [])
+        lo = (lambda nid: aws_correlate._label(g, nid)) if g else (lambda nid: nid)
+        plan = aws_remediate.build_plan(
+            scanner.results, scanner.attack_paths, scanner.choke_points,
+            node_kind=nk, label_of=lo, node_props=npf, out_edges=oe,
+            min_severity=args.remediate_min_severity, iac_matcher=matcher,
+            region=scanner.region, account=scanner.account)
+        scanner._remediation_report = aws_remediate.plan_to_json(plan)
+        print(f"\n{BOLD}{BLUE}══ REMEDIATION ══{RESET}  {plan.headline()}")
+        if args.remediate_out:
+            os.makedirs(args.remediate_out, exist_ok=True)
+            fmts = {f.strip().lower() for f in (args.remediate_format or "").split(",")}
+            written = []
+            if "json" in fmts:
+                p = os.path.join(args.remediate_out, "remediation_plan.json")
+                with open(p, "w", encoding="utf-8") as f:
+                    json.dump(aws_remediate.plan_to_json(plan), f, indent=2)
+                written.append(p)
+            if "md" in fmts:
+                p = os.path.join(args.remediate_out, "remediation_runbook.md")
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(aws_remediate.to_markdown(plan))
+                written.append(p)
+            if "issue" in fmts:
+                p = os.path.join(args.remediate_out, "remediation_issue.md")
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(aws_remediate.to_github_issue(plan))
+                written.append(p)
+            if "pr" in fmts:
+                p = os.path.join(args.remediate_out, "remediation_pr.md")
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(aws_remediate.to_github_pr_body(plan))
+                written.append(p)
+            if written:
+                print(f"{BLUE}[*]{RESET} Remediation artifacts written: {', '.join(written)}")
+    except Exception as e:
+        print(f"{YELLOW}[WARN]{RESET} Remediation unavailable ({e}); continuing.")
+
+
+def _run_neptune_load(scanner, args) -> None:
+    """Phase 7: push the Gremlin CSV export to a live Neptune cluster. Degrades to
+    the file export (already written) when boto3 or the required args are absent."""
+    if not args.graph_neptune_load:
+        return
+    if scanner.graph is None:
+        print(f"{YELLOW}[WARN]{RESET} --graph-neptune-load: no graph built; skipped.")
+        return
+    if not (args.neptune_s3_bucket and args.neptune_iam_role):
+        print(f"{YELLOW}[WARN]{RESET} --graph-neptune-load needs --neptune-s3-bucket "
+              "and --neptune-iam-role; wrote local files only.")
+        return
+    try:
+        import aws_graph_neptune_loader as loader
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        out = loader.run_gremlin_bulk_load(
+            scanner.graph, s3=scanner._client("s3"),
+            neptunedata=scanner._client("neptunedata"),
+            bucket=args.neptune_s3_bucket, prefix="cnapp-graph",
+            scan_id=f"{scanner.account}-{ts}", iam_role_arn=args.neptune_iam_role,
+            region=args.neptune_region or scanner.region)
+        scanner._graph_export_meta = {**(scanner._graph_export_meta or {}),
+                                      "neptune_load": out}
+        print(f"{BLUE}[*]{RESET} Neptune bulk load: {out['status']} "
+              f"(loadId {out.get('loadId')})")
+    except Exception as e:
+        print(f"{YELLOW}[WARN]{RESET} Neptune load failed ({e}); local files still written.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="aws_live_scanner",
@@ -6210,6 +6303,39 @@ examples:
         help="Export the security graph as idempotent openCypher UNWIND/MERGE "
              "statements (JSON) to FILE",
     )
+    # ── Phase 7: remediation / code-to-cloud ─────────────────────────────────
+    parser.add_argument(
+        "--remediate", action="store_true",
+        help="Generate a prioritized remediation plan (fix the choke points that "
+             "sever the most attack paths first) with remediation-as-code. Read-only "
+             "— it produces artifacts, never applies changes.",
+    )
+    parser.add_argument(
+        "--remediate-out", dest="remediate_out", metavar="DIR",
+        help="Directory to write the remediation runbook/plan/PR artifacts to",
+    )
+    parser.add_argument(
+        "--remediate-format", dest="remediate_format", metavar="FMT", default="md,json",
+        help="Comma-separated remediation export formats: md,json,issue,pr (default md,json)",
+    )
+    parser.add_argument(
+        "--remediate-min-severity", dest="remediate_min_severity", metavar="SEV",
+        default="MEDIUM", choices=["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+        help="Minimum severity for the posture long-tail of the remediation plan",
+    )
+    parser.add_argument(
+        "--iac-dir", dest="iac_dir", metavar="DIR", action="append",
+        help="Terraform/CloudFormation directory to enable code-to-cloud: map "
+             "findings back to the IaC source resource + propose the diff (repeatable)",
+    )
+    parser.add_argument(
+        "--graph-neptune-load", dest="graph_neptune_load", action="store_true",
+        help="Push the Neptune graph export to a live cluster (needs boto3 + "
+             "--neptune-s3-bucket/--neptune-iam-role); degrades to file export if absent",
+    )
+    parser.add_argument("--neptune-s3-bucket", dest="neptune_s3_bucket", metavar="BUCKET")
+    parser.add_argument("--neptune-iam-role", dest="neptune_iam_role", metavar="ARN")
+    parser.add_argument("--neptune-region", dest="neptune_region", metavar="REGION")
     parser.add_argument(
         "--verbose", "-v",
         action="store_true",
@@ -6373,6 +6499,9 @@ examples:
 
     # Phase 6: Neptune graph export (before save_json so its metadata lands there)
     _export_graph_neptune(scanner, args)
+    # Phase 7: live Neptune load + remediation plan (before save_json)
+    _run_neptune_load(scanner, args)
+    _run_remediation(scanner, args)
 
     if args.json:
         scanner.save_json(args.json)
