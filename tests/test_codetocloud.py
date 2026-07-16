@@ -91,11 +91,25 @@ def test_t1_from_arn():
     assert m.confidence == "high" and m.iac_resource.logical_id == "data"
 
 
-def test_t2_unique_tag():
-    idx = _index()
-    # no physical-name match, but a distinctive tag hits exactly one resource
-    m = CC.match_to_iac("some-bucket", "S3Bucket", {"ManagedBy": "terraform"}, idx)
+def test_t2_distinctive_tag_matches():
+    # a genuinely distinctive custom tag (unique across the index) -> HIGH
+    idx = CC.build_iac_index([])
+    idx.resources = CC._scan_tf_blocks(
+        'resource "aws_s3_bucket" "b" { bucket = "b" tags = { AppId = "svc-7f3a" } }', "f.tf")
+    m = CC.match_to_iac("some-bucket", "S3Bucket", {"AppId": "svc-7f3a"}, idx)
     assert m is not None and m.confidence == "high" and "T2" in m.evidence
+
+
+# ── regression (adversarial rank 2): a non-identifying tag must NOT match ─────
+def test_t2_non_identifying_tag_no_match():
+    idx = CC.build_iac_index([])
+    idx.resources = (
+        CC._scan_tf_blocks('resource "aws_s3_bucket" "alpha" { bucket="alpha" tags={ Environment="production" } }', "a.tf")
+        + CC._scan_tf_blocks('resource "aws_s3_bucket" "beta" { bucket="beta" tags={ Environment="dev" } }', "b.tf"))
+    # Environment=production is unique here but non-identifying -> no wrong-code match
+    assert CC.match_to_iac("gamma-bucket", "S3Bucket", {"Environment": "production"}, idx) is None
+    # aws: namespace tags are also ignored
+    assert CC.match_to_iac("gamma", "S3Bucket", {"aws:cloudformation:stack-name": "s"}, idx) is None
 
 
 def test_t3_cfn_logical_id():
@@ -133,6 +147,56 @@ def test_deterministic():
     a = CC.match_to_iac("acme-logs-prod", "S3Bucket", {}, idx).to_dict()
     b = CC.match_to_iac("acme-logs-prod", "S3Bucket", {}, idx).to_dict()
     assert a == b
+
+
+# ── regression (adversarial rank 1): empty/unknown type must not match all ───
+def test_empty_or_unknown_type_returns_none():
+    idx = CC.build_iac_index([])
+    idx.resources = CC._scan_tf_blocks('resource "aws_iam_role" "admin" { name = "admin-role" }', "f.tf")
+    assert idx._candidates("") == [] and idx._candidates("SQSQueue") == []
+    # a random S3 name with empty type must NOT anchor to the lone iam_role
+    assert CC.match_to_iac("some-random-s3-bucket", "", {}, idx) is None
+    # cross-type: an IAMRole-named string must not match with empty type
+    idx2 = CC.build_iac_index([])
+    idx2.resources = (CC._scan_tf_blocks('resource "aws_iam_role" "r" { name = "shared-name" }', "a.tf")
+                      + CC._scan_tf_blocks('resource "aws_s3_bucket" "b" { bucket = "other" }', "b.tf"))
+    assert CC.match_to_iac("shared-name", "", {}, idx2) is None
+
+
+# ── regression (adversarial rank 3): brace-in-string must not bleed blocks ────
+def test_balanced_string_aware_no_block_bleed():
+    tf = ('resource "aws_s3_bucket" "alpha" { bucket = "alpha-bucket"\n'
+          '  description = "a brace { here" }\n'
+          'resource "aws_s3_bucket" "beta" { bucket = "beta-bucket" tags = { CostCenter = "9999" } }\n')
+    res = {r.logical_id: r for r in CC._scan_tf_blocks(tf, "f.tf")}
+    # alpha's tags must be empty (beta's CostCenter must NOT bleed into alpha)
+    assert res["alpha"].tags == {}
+    assert res["beta"].tags.get("CostCenter") == "9999"
+    assert res["alpha"].physical_name == "alpha-bucket"
+
+
+def test_no_cross_type_name_bleed():
+    tf = ('resource "aws_iam_role" "r" { name = "role-thing"\n'
+          '  assume_role_policy = "has a { brace" }\n'
+          'resource "aws_s3_bucket" "b" { bucket = "shared-name" }\n')
+    res = {r.logical_id: r for r in CC._scan_tf_blocks(tf, "f.tf")}
+    assert res["r"].physical_name == "role-thing"     # not "shared-name"
+    assert res["b"].physical_name == "shared-name"
+
+
+# ── regression (adversarial rank 4): ${...} in tags must not truncate ────────
+def test_tf_tags_interpolation_not_truncated():
+    r = CC._scan_tf_blocks(
+        'resource "aws_s3_bucket" "a" { bucket = "bucket-a" '
+        'tags = { Env = "${var.env}" Team = "core" } }', "f.tf")[0]
+    assert r.tags.get("Env") == "${var.env}" and r.tags.get("Team") == "core"
+
+
+def test_tf_tags_nested_map_no_phantom():
+    r = CC._scan_tf_blocks(
+        'resource "aws_s3_bucket" "a" { bucket = "b" '
+        'tags = { Meta = { team = "x" } Owner = "real-owner" } }', "f.tf")[0]
+    assert "team" not in r.tags and r.tags.get("Owner") == "real-owner"
 
 
 def test_parse_error_file_skipped():

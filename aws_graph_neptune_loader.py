@@ -20,17 +20,14 @@ from typing import Callable, Dict, List
 
 import aws_graph_neptune as gn
 
-# Neptune bulk-loader terminal statuses (poll until one of these).
-LOADER_TERMINAL = frozenset({
-    "LOAD_COMPLETED", "LOAD_FAILED", "LOAD_CANCELLED_BY_USER",
-    "LOAD_CANCELLED_DUE_TO_ERRORS", "LOAD_UNEXPECTED_ERROR", "LOAD_S3_READ_ERROR",
-    "LOAD_S3_ACCESS_DENIED_ERROR", "LOAD_DATA_DEADLOCK", "LOAD_FAILED_BECAUSE_DEPENDENCY_NOT_SATISFIED",
-    "LOAD_FAILED_INVALID_REQUEST",
-})
+# Only these three Neptune loader statuses are IN-PROGRESS; everything else
+# (completed, any failure, or a future/unknown status) is terminal. Fail-closed
+# so the poll loop can never hang to timeout on an already-finished/failed load.
+LOADER_NONTERMINAL = frozenset({"LOAD_NOT_STARTED", "LOAD_IN_PROGRESS", "LOAD_IN_QUEUE"})
 
 
 def is_loader_terminal(status: str) -> bool:
-    return status in LOADER_TERMINAL
+    return status not in LOADER_NONTERMINAL
 
 
 def s3_key_layout(bundle, prefix: str, scan_id: str) -> Dict[str, str]:

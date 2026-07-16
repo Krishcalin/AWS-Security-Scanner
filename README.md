@@ -165,6 +165,8 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 - **CIEM right-sizing** (CNAPP Phase 5, opt-in `--ciem`) -- flags dormant/over-permissioned principals (Access Analyzer unused-access → service-last-accessed) as LOW `CIEM-01` review candidates and down-ranks the exploit-likelihood of attack paths through them (impact untouched) (`aws_unused.py`)
 - **Agentless workload side-scan** (CNAPP Phase 6, opt-in `--side-scan`) -- the Wiz/Orca CWPP capability with *no agent*: inventory a workload's OS packages, match them against a vulnerability feed with ecosystem-correct (dpkg/rpm/apk) version comparison, and find on-disk secrets — adding `HAS_VULN` edges to the SAME graph so agentless CVEs **light up ATTACK-02 even when Amazon Inspector is disabled** (`CWPP-01/02/03`). Pure inventory/matching core + EBS Direct-API block plane; live disk extraction deferred (`aws_sidescan.py`, `aws_sidescan_ebs.py`)
 - **Persistence backends** (CNAPP Phase 6) -- `--backend postgresql://...` (Postgres state store, deferred to Phase 7 → runs stateless) and `--graph-neptune-csv`/`--graph-neptune-cypher` export the security graph as Amazon Neptune bulk-load CSV or idempotent openCypher upserts (`aws_state_dialect.py`, `aws_graph_neptune.py`)
+- **Remediation engine** (CNAPP Phase 7, opt-in `--remediate`) -- turns the ranked attack paths into a **prioritized fix plan** ("fix these K choke points to cut N% of critical paths"), reusing the correlation ranking, with **remediation-as-code** (Terraform/CloudFormation/CLI per finding) and exports (markdown runbook, JSON, GitHub issue, PR body). **Read-only — it generates artifacts, never applies changes** (`aws_remediate.py`)
+- **Code-to-cloud** (CNAPP Phase 7, opt-in `--iac-dir`) -- maps a live cloud finding back to the **IaC resource that created it** (Terraform/CloudFormation) via a tiered confidence matcher that never guesses, so remediation targets the *source* and proposes the IaC diff at `file:line` (`aws_codetocloud.py`)
 - **Security graph & attack-path chains** (CNAPP Phase 1) -- projects findings onto an ARN-keyed graph (`aws_graph.py`), builds `CAN_ASSUME` (trust) + `CAN_PRIVESC_TO` (privesc) edges, and surfaces **transitive privilege-escalation chains** (`user → assume role → escalate to admin`) plus roles assumable by *any* principal. Serialize with `--graph graph.json` (Neptune migration seed)
 - **IAM privilege-escalation analysis** -- builds each principal's effective permission set (via `GetAccountAuthorizationDetails`) and detects known escalation paths with resource-aware scoping; condition-guarded paths are downgraded to WARN, boundary/SCP-neutralized paths dropped
 - **Multi-account & multi-region** -- `--org` / `--accounts` fan out across an AWS Organization via `--assume-role`; `--all-regions` sweeps every enabled region for regional sections
@@ -176,7 +178,7 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 - **CI/CD gating** -- `--fail-on CRITICAL|HIGH|MEDIUM|LOW` for pipeline pass/fail control
 - **Scan diff** -- `--baseline prev.json` surfaces only what's *new* or *resolved* since a previous run (superseded by `--state` DB-backed lifecycle when both are given)
 - **Evidence collection** -- CSV/JSON artefact files saved per check
-- **426 unit tests** -- full test suite with mock boto3, no AWS credentials needed (incl. exposure, deep-plane, attack-path-scoring, Phase-5 effective-permissions/state/CIEM, and Phase-6 side-scan version-comparator/OSV-matching/EBS-block-plane/backend-export false-positive/false-negative catalogs; a regression test backs every defect the adversarial-verification passes found)
+- **483 unit tests** -- full test suite with mock boto3, no AWS credentials needed (incl. exposure, deep-plane, attack-path-scoring, Phase-5 effective-permissions/state/CIEM, Phase-6 side-scan version-comparator/OSV-matching/EBS-block-plane/backend-export, and Phase-7 remediation/code-to-cloud false-positive/false-negative catalogs; a regression test backs every defect the adversarial-verification passes found)
 
 ### Prerequisites (Live Scanner)
 
@@ -384,7 +386,10 @@ jobs:
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC Security Scanner (CloudFormation + Terraform, no credentials)
-├── aws_live_scanner.py      # Live Audit Scanner v2.7.0 (40 sections, graph, exposure, deep-plane, correlate, effperm, state, ciem, sidescan, backends)
+├── aws_live_scanner.py      # Live Audit Scanner v2.8.0 (40 sections, graph, exposure, deep-plane, correlate, effperm, state, ciem, sidescan, backends, remediate, codetocloud)
+├── aws_remediate.py         # Remediation engine — prioritized plan + remediation-as-code + exports, pure (read-only)
+├── aws_codetocloud.py       # Code-to-cloud — IaC index + tiered T1–T5 matcher (TF/CFN → finding source), pure
+├── aws_graph_neptune_loader.py # Neptune live loader — bulk-load/openCypher runners (mock-tested), pure builders
 ├── aws_exposure.py          # Internet-reachability oracle — 4-gate AND, pure/testable (stdlib)
 ├── aws_deepplane.py         # Deep-plane parsers (Inspector/Macie/GuardDuty/AA) + CAN_READ_DATA (stdlib)
 ├── aws_correlate.py         # Attack-path correlation engine — enumerate/score/rank/choke (stdlib)

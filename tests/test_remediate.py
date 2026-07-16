@@ -142,6 +142,30 @@ def test_codegen_never_raises_on_missing_params():
     assert "<CIDR>" in art.cli and "sg-1" in art.cli
 
 
+# ── regression (adversarial rank 5): no patch_cve without a vuln ─────────────
+def test_select_fix_key_ec2_without_vuln_is_not_patch():
+    # an exposed instance whose severed path is privesc-driven (no HAS_VULN) must
+    # NOT get a nonsensical "patch <CVE>" fix
+    assert R._select_fix_key("EC2Instance", {"HAS_INSTANCE_PROFILE"}, set()) == "iam_boundary"
+    assert R._select_fix_key("EC2Instance", set(), set()) != "patch_cve"
+    # a genuinely vuln-gated instance still patches
+    assert R._select_fix_key("EC2Instance", {"HAS_VULN"}, set()) == "patch_cve"
+
+
+# ── regression (adversarial rank 7): _safe_format never raises ───────────────
+def test_safe_format_passes_through_non_identifier_dollars():
+    assert R._safe_format("id = ${aws_s3_bucket.b.id}", {}) == "id = ${aws_s3_bucket.b.id}"
+    assert R._safe_format("exit $? cost $5", {}) == "exit $? cost $5"
+    assert R._safe_format("cfn !Sub ${AWS::Region}", {}) == "cfn !Sub ${AWS::Region}"
+    assert R._safe_format("x=$foo", {}) == "x=<FOO>"     # missing convention preserved
+
+
+def test_render_terraform_with_braces_never_raises():
+    # the s3_block_public terraform template has literal { } — must render clean
+    art = R.render("s3_block_public", {"bucket": "b"})
+    assert "aws_s3_bucket_public_access_block" in art.terraform
+
+
 # ── posture long-tail ────────────────────────────────────────────────────────
 def test_posture_action_for_standalone_finding():
     g, _ = _flagship()

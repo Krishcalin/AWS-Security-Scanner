@@ -7,7 +7,7 @@ full **CNAPP** (Cloud-Native Application Protection Platform) — see the CNAPP
 blueprint/roadmap: the north star is AWS-deep **toxic-combination attack paths**
 computed over a unified security graph.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **Live Audit Scanner** (`aws_live_scanner.py` v2.7.0) -- live AWS account audit via boto3 (160+ checks, 40 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing**, **agentless EBS side-scan (CWPP)**, **Postgres/Neptune export**)
+- **Live Audit Scanner** (`aws_live_scanner.py` v2.8.0) -- live AWS account audit via boto3 (160+ checks, 40 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing**, **agentless EBS side-scan (CWPP)**, **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**)
 - **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
 - **Exposure Oracle** (`aws_exposure.py`) -- pure, dependency-free internet-reachability core (SG ∩ stateless NACL ∩ IGW route ∩ public-IP)
 - **Deep-Plane Core** (`aws_deepplane.py`) -- pure Inspector/Macie/GuardDuty/Access-Analyzer parsers + the CAN_READ_DATA object-probe matcher
@@ -15,15 +15,20 @@ computed over a unified security graph.
 - **Effective-Permissions Solver** (`aws_effperm.py`) -- pure identity ∩ permission-boundary ∩ SCP evaluator (explicit-deny-wins, condition-aware, fail-open) that refines/drops escalation edges
 - **State Store** (`aws_state.py`) -- pure stdlib-sqlite3 finding lifecycle / drift / MTTR / posture-trend / waivers (the scanner's memory)
 - **CIEM Right-Sizing** (`aws_unused.py`) -- pure unused-access classification (Access Analyzer + SLAD) + dormancy down-rank overlay
-- **Agentless Side-Scan** (`aws_sidescan.py` + `aws_sidescan_ebs.py`) -- pure CWPP core: OS-package inventory + ecosystem-correct (dpkg/rpm/apk) OSV vuln matching + on-disk secrets → HAS_VULN edges; EBS Direct-API block plane (plan/checksum/sparse-reassembly/cleanup). Live fs extraction deferred
-- **Persistence Backends** (`aws_state_dialect.py` + `aws_graph_neptune.py`) -- pure Postgres DDL/upsert/dialect generators + Neptune Gremlin-CSV / openCypher graph export
+- **Agentless Side-Scan** (`aws_sidescan.py` + `aws_sidescan_ebs.py`) -- pure CWPP core: OS-package inventory + ecosystem-correct (dpkg/rpm/apk) OSV vuln matching + on-disk secrets → HAS_VULN edges; EBS Direct-API block plane (plan/checksum/sparse-reassembly/cleanup) + live snapshot runner (guaranteed cleanup). Real fs extraction deferred
+- **Persistence Backends** (`aws_state_dialect.py` + `aws_graph_neptune.py` + `aws_graph_neptune_loader.py`) -- pure Postgres DDL/upsert/dialect generators + Neptune Gremlin-CSV / openCypher graph export + live bulk-load/openCypher runners
+- **Remediation Engine** (`aws_remediate.py`) -- pure prioritized fix plan (reuses `aws_correlate.minimal_cut`/`ChokePoint`) + remediation-as-code (Terraform/CFN/CLI) + runbook/JSON/issue/PR exports; read-only, never applies
+- **Code-to-Cloud** (`aws_codetocloud.py`) -- pure IaC index (Terraform block extractor + CFN parse) + tiered T1–T5 matcher mapping a live finding to its source IaC resource
 
 ## Repository Structure
 
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.7.0 (boto3, graph, exposure, deep-plane, correlate, effperm, state, ciem, sidescan, backends)
+├── aws_live_scanner.py      # Live audit scanner v2.8.0 (boto3, graph, exposure, deep-plane, correlate, effperm, state, ciem, sidescan, backends, remediate, codetocloud)
+├── aws_remediate.py         # Remediation engine — prioritized plan (reuses minimal_cut/ChokePoint) + remediation-as-code + exports, pure
+├── aws_codetocloud.py       # Code-to-cloud — IaC index (TF block extractor + CFN parse) + tiered T1–T5 matcher, pure
+├── aws_graph_neptune_loader.py # Neptune live loader — S3 bulk-load + openCypher runners (mock-tested), pure builders
 ├── aws_graph.py             # SecurityGraph — nodes/edges, bounded traversal, graph.json (stdlib)
 ├── aws_exposure.py          # Internet-reachability oracle — 4-gate AND, pure/testable (stdlib)
 ├── aws_deepplane.py         # Deep-plane parsers/classifiers (Inspector/Macie/GuardDuty/AA), pure (stdlib)
@@ -45,8 +50,12 @@ AWS-Security-Scanner/
 │   ├── test_state.py        # 22 unit tests (lifecycle/coverage-gated resolve/waivers/MTTR/trend)
 │   ├── test_unused.py       # 21 unit tests (dormancy/factor/right-sizing/down-rank/collection)
 │   ├── test_phase5_integration.py # 17 tests (ceiling prunes edges end-to-end + defect regressions)
-│   ├── test_sidescan.py     # 63 unit tests (dpkg/rpm/apk vercmp matrix, parsers, OSV match, secrets, edges)
-│   ├── test_sidescan_ebs.py # 21 unit tests (plan/delta-zeroing/checksum/SparseImage/cleanup/provenance)
+│   ├── test_sidescan.py     # dpkg/rpm/apk vercmp matrix, parsers, OSV match, secrets, edges, detect_fs
+│   ├── test_sidescan_ebs.py # block plane + live snapshot runner + provenance-guarded cleanup
+│   ├── test_remediate.py    # 22 tests (plan prioritization, codegen, exports, fix-key, determinism)
+│   ├── test_codetocloud.py  # 24 tests (TF/CFN parse, tiered matcher, false-match regressions)
+│   ├── test_neptune_loader.py # 11 tests (request builders + mock bulk-load/openCypher runners)
+│   ├── test_phase7_integration.py # remediation wiring + default-path invariant
 │   ├── test_graph_neptune.py     # 14 unit tests (Gremlin CSV types+escaping, openCypher, round-trip)
 │   ├── test_state_dialect.py     # 22 unit tests (URL parse, qmark→pyformat, upsert, row-shim, DDL parity)
 │   ├── test_phase6_integration.py # 15 tests (ATTACK-02-from-agentless pillar + wiring + defect regressions)
@@ -98,10 +107,10 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.7.0)
+## Live Audit Scanner (`aws_live_scanner.py` v2.8.0)
 
 - **Type**: Live AWS account audit via boto3 (evolving toward CNAPP)
-- **Lines**: ~6,400
+- **Lines**: ~6,700
 - **Dependencies**: `boto3` (required), `aws_graph.py` + `aws_exposure.py` + `aws_deepplane.py` + `aws_correlate.py` + `aws_effperm.py` + `aws_state.py` + `aws_unused.py` (bundled, stdlib), Python 3.10+
 - **IAM permissions**: `SecurityAudit` AWS-managed policy (read-only) covers the deep-plane reads (Inspector2/Macie/GuardDuty/Access Analyzer) and the effective-permissions reads (`iam:GetAccountAuthorizationDetails` for boundaries, `organizations:Describe*/List*` for SCPs — all degrade gracefully); multi-account adds `sts:AssumeRole` into a read-only role per target account, and `organizations:ListAccounts` for `--org`. `--ciem` additionally uses `iam:GenerateServiceLastAccessedDetails` and `access-analyzer:ListFindingsV2`
 - **Compliance**: CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
@@ -269,6 +278,47 @@ off (never a FAIL/crash/phantom edge). Pure parsers live in `aws_deepplane.py`.
   missed-CVE FN, a MEDIUM `backend`-key default-path JSON leak, a LOW latent delta-cap
   stale-bytes trap); all fixed + regression-tested before merge.
 
+### CNAPP Phase 7 additions (v2.8.0) — remediation + code-to-cloud ("close the loop")
+
+- **Remediation engine (`aws_remediate.py`, pure)** — `build_plan(...)` REUSES
+  `aws_correlate.minimal_cut` + `ChokePoint` (never re-ranks) to emit a prioritized,
+  deduped plan: "fix K items to cut N% of critical attack paths." Each
+  `RemediationAction` names the node to fix, the paths it severs, the crown jewels
+  it protects, effort/blast-radius, and **remediation-as-code** (a ~9-template
+  registry rendering Terraform + CloudFormation + AWS CLI; `_safe_format` uses
+  `string.Template.safe_substitute` so a missing param → `<PLACEHOLDER>` and a
+  `${…}`/`$` never raises). Exports: `to_markdown` runbook, `plan_to_json`,
+  `to_github_issue`, `to_github_pr_body`. **Read-only — generates artifacts, never
+  applies.** `_select_fix_key` picks the fix by node kind + own edges (patch_cve
+  only when a vuln actually gates the path).
+- **Code-to-cloud (`aws_codetocloud.py`, pure)** — `build_iac_index` (a NEW
+  string/comment/heredoc-aware brace-balanced Terraform block extractor +
+  structural CFN parse) + `match_to_iac` tiered T1–T5 confidence matcher (exact
+  physical name / *distinctive* tag / CFN logical-id / naming heuristic / type-only).
+  An empty/unknown type or ambiguous signal returns `None` — it NEVER anchors a
+  finding to the wrong resource. Feeds the remediation engine the IaC source
+  target + diff via `--iac-dir`.
+- **Live loaders/runners (mock-tested; real infra deferred)** —
+  `aws_graph_neptune_loader.py` (S3 bulk-load request builder with a fail-closed
+  non-terminal allowlist + runners over injected s3/neptunedata),
+  `aws_sidescan_ebs.run_snapshot_sidescan` (live snapshot lifecycle with
+  guaranteed provenance-guarded cleanup on every error path; a truncated read is
+  flagged INCOMPLETE), and `aws_sidescan.detect_fs` (magic sniffer so an
+  encrypted/unknown volume is an honest INFO, not a false-clean).
+- **Integration** — gated `--remediate` (+ `--remediate-out/-format/-min-severity`),
+  `--iac-dir`, `--graph-neptune-load`. `save_json` gains `remediation`/`code_to_cloud`
+  blocks. Default path (no flags) byte-for-byte unchanged; no `--remediate` → the
+  modules are never imported.
+- **Verification** — a read-only adversarial hunt found 7 defects (4 HIGH
+  code-to-cloud false-match bugs: cross-type match on empty type, non-distinctive
+  tag match, brace-in-string block bleed, `${…}` tag truncation; a HIGH nonsensical
+  patch_cve without a vuln; a MEDIUM loader-hang; a LOW `_safe_format` raise) — all
+  in the opt-in features, all fixed + regression-tested. Default path + cleanup
+  safety verified clean.
+- **Deferred** (fail-closed): live PostgresBackend StateStore rewiring (pure
+  generators shipped Phase 6), rpm Berkeley-DB decode + real ext4/xfs parse
+  (dissect), and any live cloud/repo mutation.
+
 ### Architecture
 
 ```python
@@ -384,6 +434,9 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
     [--side-scan [--side-scan-targets exposed|all|tagged] [--side-scan-tag K=V] \
                  [--side-scan-max N] [--no-side-scan-secrets] [--vuln-db FILE]] \
     [--backend URL] [--graph-neptune-csv DIR] [--graph-neptune-cypher FILE] \
+    [--graph-neptune-load --neptune-s3-bucket B --neptune-iam-role ARN] \
+    [--remediate [--remediate-out DIR] [--remediate-format md,json,issue,pr] \
+                 [--remediate-min-severity SEV]] [--iac-dir DIR] \
     [-v] [--version]
 # Note: --sections takes a single COMMA-separated value (e.g. --sections IAM,S3,IAMPRIVESC)
 # --org/--accounts require --assume-role (a read-only role assumable in each target account)
@@ -394,7 +447,7 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 426 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 483 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
@@ -411,6 +464,11 @@ Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
   state lifecycle (coverage-gated resolve, MUTATED, REOPENED, idempotency), waiver
   suppression + expiry re-gating, MTTR/trend; CIEM dormancy/right-sizing/down-rank;
   end-to-end ceiling edge-pruning; and a regression test per adversarial-verify defect
+- **Phase 7**: remediation-plan prioritization (reuses minimal_cut, first-cover
+  headline), fix-key selection + codegen determinism, code-to-cloud TF/CFN parse +
+  tiered matcher with false-match regressions (empty-type, non-distinctive tag,
+  brace-in-string bleed, `${…}` truncation), Neptune loader fail-closed terminal
+  detection, and the remediation wiring + default-path invariant
 - **Phase 6**: dpkg/rpm/apk version-comparison matrices + OSV affected-range matching;
   inventory parsers + rpm-header struct decode; secrets FP/FN + exfil-safety; EBS
   plan/delta-zeroing/checksum/sparse-reassembly/provenance-cleanup; Postgres dialect

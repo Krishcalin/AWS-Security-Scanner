@@ -45,6 +45,33 @@ def test_is_loader_terminal():
     assert not L.is_loader_terminal("LOAD_IN_PROGRESS")
 
 
+# ── regression (adversarial rank 6): fail-closed terminal detection ──────────
+def test_is_loader_terminal_fail_closed():
+    # only the 3 in-progress states are non-terminal; any other (incl. future/
+    # unusual failure codes) is terminal so the poll loop never hangs to timeout
+    assert L.is_loader_terminal("LOAD_DATA_FAILED_DUE_TO_FEED_MODIFIED_OR_DELETED")
+    assert L.is_loader_terminal("LOAD_COMMITTED_W_WRITE_CONFLICTS")
+    assert not L.is_loader_terminal("LOAD_NOT_STARTED")
+    assert not L.is_loader_terminal("LOAD_IN_QUEUE")
+
+
+def test_bulk_load_breaks_fast_on_unusual_terminal():
+    polls = {"n": 0}
+
+    class ND:
+        def start_loader_job(self, **kw):
+            return {"payload": {"loadId": "l1"}}
+
+        def get_loader_job_status(self, loadId):
+            polls["n"] += 1
+            return {"payload": {"overallStatus": {"status": "LOAD_COMMITTED_W_WRITE_CONFLICTS"}}}
+    out = L.run_gremlin_bulk_load(_graph(), s3=FakeS3(), neptunedata=ND(), bucket="b",
+                                  prefix="p", scan_id="s", iam_role_arn="r",
+                                  region="us-east-1", sleep=lambda _s: None, max_polls=50)
+    assert out["status"] == "LOAD_COMMITTED_W_WRITE_CONFLICTS"
+    assert polls["n"] == 1                     # broke after the first poll, not 50
+
+
 def test_opencypher_requests_json_params():
     reqs = L.opencypher_requests(_graph())
     assert reqs and all("openCypherQuery" in r and "parameters" in r for r in reqs)

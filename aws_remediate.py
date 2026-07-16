@@ -54,7 +54,10 @@ class _SafeMap:
 def _safe_format(tmpl: str, params: Dict) -> str:
     if not tmpl:
         return ""
-    return string.Template(tmpl).substitute(_SafeMap(params))
+    # safe_substitute never raises: a missing $name -> '<NAME>' (via _SafeMap), and
+    # a non-identifier sequence ('$?', '${aws_s3_bucket.b.id}', '${AWS::Region}')
+    # passes through literally instead of raising ValueError.
+    return string.Template(tmpl).safe_substitute(_SafeMap(params))
 
 
 # ── codegen templates ─────────────────────────────────────────────────────────
@@ -257,6 +260,21 @@ def _resource_keys(node_id: str, node_props: Dict) -> set:
     return {k for k in keys if k}
 
 
+_SECTION_KIND = {"S3": "S3Bucket", "EC2": "EC2Instance", "RDS": "RDS",
+                 "LAMBDA": "Lambda", "DYNAMODB": "DynamoDB"}
+
+
+def _canon_kind_for_result(r) -> str:
+    """A code-to-cloud canonical kind for a posture finding, from its ARN/section,
+    so the matcher is type-gated (never an empty type that would match any type)."""
+    res = _res_of_result(r)
+    if ":role/" in res:
+        return "IAMRole"
+    if ":user/" in res:
+        return "IAMUser"
+    return _SECTION_KIND.get(getattr(r, "section", ""), "")
+
+
 def _res_of_result(r) -> str:
     """The resource a Result points at (its .resource, or the '| <res>' suffix)."""
     res = getattr(r, "resource", "") or ""
@@ -279,8 +297,13 @@ def _select_fix_key(kind: Optional[str], edge_kinds: set, check_ids: set) -> str
         return "iam_boundary"           # a boundary caps privesc AND data access
     if "CAN_READ_DATA" in edge_kinds:
         return "iam_scope_data"
-    if kind == "EC2Instance" or "HAS_VULN" in edge_kinds:
+    if "HAS_VULN" in edge_kinds:        # patch ONLY when a vuln actually gates the path
         return "patch_cve"
+    if kind == "EC2Instance":
+        # an exposed instance with no vuln on it — the severed path is privilege/
+        # reachability driven, so the fix is on the role it can reach, NOT a
+        # nonsensical "patch <CVE>" with no CVE.
+        return "iam_boundary" if "HAS_INSTANCE_PROFILE" in edge_kinds else "_generic"
     if kind == "S3Bucket":
         return "s3_block_public"
     # 2. check-id fallback (posture actions have no graph node)
@@ -514,7 +537,7 @@ def build_plan(results: Sequence, attack_paths: Sequence, choke_points: Sequence
             iac_target = None
             if iac_matcher is not None:
                 try:
-                    m = iac_matcher(res, "", {})
+                    m = iac_matcher(res, _canon_kind_for_result(worst), {})
                     iac_target = m.to_dict() if m is not None else None
                 except Exception:
                     iac_target = None

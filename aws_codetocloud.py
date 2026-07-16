@@ -57,6 +57,11 @@ CANON: Dict[str, set] = {
 _TF_NAME_ATTRS = ("bucket", "name", "function_name", "role_name", "identifier",
                   "cluster_identifier", "domain_name", "table_name")
 
+# Tag keys too common to identify a specific resource (T2 must not match on these).
+_NON_IDENTIFYING = {"environment", "env", "stage", "name", "team", "owner", "project",
+                    "costcenter", "department", "managedby", "terraform", "application",
+                    "app", "tier", "role", "service"}
+
 
 @dataclass(frozen=True)
 class IacResource:
@@ -105,21 +110,69 @@ def _norm(name: str) -> str:
 
 
 # ── Terraform brace-balanced block extractor (NEW; pure) ─────────────────────
+# Per-type physical-name attribute so an aws_iam_role never picks up a following
+# aws_s3_bucket's `bucket =` (the cross-type name-bleed guard).
+_TYPE_NAME_ATTR = {
+    "aws_s3_bucket": "bucket", "aws_iam_role": "name", "aws_iam_user": "name",
+    "aws_lambda_function": "function_name", "aws_db_instance": "identifier",
+    "aws_dynamodb_table": "name", "aws_security_group": "name",
+}
+
+
 def _balanced(text: str, brace_pos: int):
+    """Return the body between a matching brace pair starting at ``brace_pos``,
+    string/comment/heredoc AWARE: a '{' or '}' inside a quoted string, a #/// or
+    /* */ comment, or a <<TAG heredoc does NOT change depth. Without this a lone
+    brace in a string value over-captures into the next resource block."""
     depth = 0
-    for i in range(brace_pos, len(text)):
+    i = brace_pos
+    n = len(text)
+    while i < n:
         c = text[i]
+        if c in ('"', "'"):                       # quoted string — skip to close
+            q = c
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    i += 2
+                    continue
+                if text[i] == q:
+                    i += 1
+                    break
+                i += 1
+            continue
+        if c == "#" or text[i:i + 2] == "//":     # line comment
+            nl = text.find("\n", i)
+            i = n if nl < 0 else nl
+            continue
+        if text[i:i + 2] == "/*":                 # block comment
+            end = text.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+            continue
+        if text[i:i + 2] == "<<":                 # heredoc
+            hm = re.match(r"<<[-~]?(\w+)", text[i:])
+            if hm:
+                tag = hm.group(1)
+                nl = text.find("\n", i)
+                if nl < 0:
+                    break
+                em = re.search(r"\n[ \t]*" + re.escape(tag) + r"\b", text[nl:])
+                i = n if not em else nl + em.end()
+                continue
         if c == "{":
             depth += 1
         elif c == "}":
             depth -= 1
             if depth == 0:
                 return text[brace_pos + 1:i]
+        i += 1
     return text[brace_pos + 1:]
 
 
 def _tf_attr(body: str, names) -> Optional[str]:
     for n in names:
+        if not n:
+            continue
         m = re.search(rf'(?m)^\s*{n}\s*=\s*"([^"]+)"', body)
         if m:
             return m.group(1)
@@ -127,11 +180,18 @@ def _tf_attr(body: str, names) -> Optional[str]:
 
 
 def _tf_tags(body: str) -> Dict[str, str]:
+    """Extract the tags map, brace-balanced (so a ``${var.env}`` interpolation or a
+    nested map inside the block no longer truncates it), then harvest only the
+    top-level scalar key=values."""
     tags: Dict[str, str] = {}
-    m = re.search(r"tags\s*=?\s*\{([^}]*)\}", body, re.DOTALL)
-    if m:
-        for km in re.finditer(r'"?([A-Za-z0-9_:.\-]+)"?\s*=\s*"([^"]*)"', m.group(1)):
-            tags[km.group(1)] = km.group(2)
+    m = re.search(r"tags\s*=?\s*\{", body)
+    if not m:
+        return tags
+    inner = _balanced(body, m.end() - 1)
+    # drop nested map literals (key = { ... }) so inner keys aren't harvested
+    stripped = re.sub(r"[A-Za-z0-9_]+\s*=\s*\{[^{}]*\}", "", inner)
+    for km in re.finditer(r'"?([A-Za-z0-9_:.\-]+)"?\s*=\s*"([^"]*)"', stripped):
+        tags[km.group(1)] = km.group(2)
     return tags
 
 
@@ -141,8 +201,10 @@ def _scan_tf_blocks(text: str, file: str) -> List[IacResource]:
         rtype, name = m.group(1), m.group(2)
         body = _balanced(text, m.end() - 1)
         line = text[:m.start()].count("\n") + 1
+        # per-type physical-name attr (never try 'bucket' for a non-bucket type)
+        attr = _TYPE_NAME_ATTR.get(rtype, "name")
         out.append(IacResource("terraform", file, line, rtype, name,
-                               _tf_attr(body, _TF_NAME_ATTRS), _tf_tags(body), {}))
+                               _tf_attr(body, [attr]), _tf_tags(body), {}))
     return out
 
 
@@ -209,9 +271,12 @@ class IacIndex:
         self.resources = resources
 
     def _candidates(self, live_type: str) -> List[IacResource]:
+        # An empty/unknown live_type must NOT fall back to all resources — that
+        # would let T1/T5 anchor a finding to an IaC resource of a DIFFERENT AWS
+        # type (a wrong-code false match). Unknown type -> no candidates -> None.
         types = CANON.get(live_type)
         if not types:
-            return list(self.resources)
+            return []
         return [r for r in self.resources if r.resource_type in types]
 
     def matcher(self) -> Callable:
@@ -250,9 +315,14 @@ def match_to_iac(live_resource: str, live_type: str, live_tags: Dict,
         if len(hits) == 1:
             return IacMatch(hits[0], "high", "T1 exact physical-name")
 
-    # T2 — unique distinctive tag match
+    # T2 — unique DISTINCTIVE tag match. A common tag (Environment/Name/Team/…)
+    # whose value merely happens to be unique must NOT anchor a match; require a
+    # non-denylisted key AND value uniqueness across the WHOLE index (not just the
+    # type-filtered candidates), else per-env layouts produce wrong-code matches.
     for k, v in live_tags.items():
-        if not v:
+        if not v or k.lower() in _NON_IDENTIFYING or k.lower().startswith("aws:"):
+            continue
+        if sum(1 for r in index.resources if r.tags.get(k) == v) != 1:
             continue
         th = [r for r in candidates if r.tags.get(k) == v]
         if len(th) == 1:
