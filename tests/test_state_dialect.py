@@ -114,7 +114,7 @@ def test_dialect_for():
 def test_open_postgres_url_raises_backend_unavailable():
     # postgresql:// must raise (scanner then runs stateless) — NEVER a local sqlite
     with pytest.raises(d.StateBackendUnavailable):
-        aws_state.open("postgresql://user@localhost/cnapp")
+        aws_state.open("postgresql://user@cnapp-nohost.invalid/cnapp")
 
 
 def test_open_sqlite_url_still_works():

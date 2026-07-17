@@ -132,7 +132,7 @@ def test_list_accounts_filters():
 
 def test_postgres_url_deferred():
     with pytest.raises(aws_state_dialect.StateBackendUnavailable):
-        AccountRegistry.open("postgresql://localhost/cnapp")
+        AccountRegistry.open("postgresql://cnapp-nohost.invalid/cnapp")
 
 
 # ── regression: record_health publishes the authoritative next_due to result ──

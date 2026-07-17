@@ -27,15 +27,11 @@ Design invariants
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
-import threading
 from typing import Dict, List, Optional
 
-import aws_state
-import aws_state_dialect
 from aws_state import make_scan_ts
-from aws_state_dialect import StateBackendUnavailable, build_upsert, parse_state_url
+from aws_state_dialect import StateBackendUnavailable, parse_state_url
 from cnapp_validate import ConnectionHealth, cadence
 
 # ── column orders (single source of truth; update sets EXCLUDE preserved cols) ──
@@ -60,78 +56,47 @@ _ACCOUNT_HEALTHS = {"unknown", "validating", "healthy", "degraded", "unauthorize
 
 
 class AccountRegistry:
-    """SQLite-backed registry for accounts, scan jobs, and connection health."""
+    """Registry for accounts, scan jobs, and connection health, over a
+    `cnapp_backend` Backend (sqlite by default, Postgres via ``postgresql://``).
+    The backend owns the connection + the reentrant lock that serializes all
+    access (FastAPI serves sync routes from a threadpool), so each multi-statement
+    write is wrapped in ``self._be.transaction()`` to stay atomic."""
 
-    def __init__(self, conn: sqlite3.Connection):
-        self._c = conn
-        # Serializes ALL use of the single shared connection. FastAPI serves sync
-        # routes from a threadpool, so without this two threads could interleave
-        # statements / commits on the one connection (torn multi-statement units,
-        # cursor races, a mis-timed cross-thread commit). Held across each read-
-        # modify-write (e.g. record_health's failure-count) so it is atomic too.
-        self._lock = threading.RLock()
+    def __init__(self, backend):
+        self._be = backend
+        self._c = backend.raw          # compat alias (tests use r._c.execute(sqlite_master))
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     @classmethod
     def open(cls, url: str = ":memory:") -> "AccountRegistry":
         """Open (creating + migrating if needed) the registry DB. Shares the schema
-        + migration with StateStore. ``postgresql://`` is deferred (raises)."""
-        scheme, dsn = parse_state_url(url)
-        if scheme == "postgres":
-            raise StateBackendUnavailable(
-                "postgresql:// registry backend is deferred (needs psycopg + a live "
-                "server); the DDL/upsert generators ship + are tested now")
+        + migration with StateStore via `cnapp_backend.backend_for`. A
+        ``postgresql://`` URL selects the live Postgres backend; if the driver is
+        absent or the server unreachable it raises `StateBackendUnavailable`."""
+        import cnapp_backend
+        scheme, _ = parse_state_url(url)
         # ON CONFLICT ... DO UPDATE (the preserve-on-reonboard guarantee) needs
         # SQLite >= 3.24 (2018). Python 3.10+ bundles newer, but verify loudly.
-        if sqlite3.sqlite_version_info < (3, 24, 0):
+        if scheme == "sqlite" and sqlite3.sqlite_version_info < (3, 24, 0):
             raise StateBackendUnavailable(
                 f"AccountRegistry needs SQLite >= 3.24 for upsert; found "
                 f"{sqlite3.sqlite_version}")
-        path = dsn
-        if path != ":memory:":
-            d = os.path.dirname(os.path.abspath(path))
-            try:
-                os.makedirs(d, mode=0o700, exist_ok=True)
-            except Exception:
-                pass
-        # check_same_thread=False: the web layer serves routes from a threadpool,
-        # so the single registry connection is touched from worker threads. All
-        # access is serialized by self._lock (busy_timeout only helps ACROSS
-        # connections, not within this shared one), which keeps each multi-
-        # statement write unit atomic.
-        conn = sqlite3.connect(path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")     # enforce scan_jobs.account_id FK
-        conn.execute("PRAGMA busy_timeout=5000")
-        # reuse StateStore's migration (creates ALL v2 tables idempotently)
-        aws_state.StateStore(conn)._migrate()
-        if path != ":memory:":
-            try:
-                os.chmod(path, 0o600)
-            except Exception:
-                pass
-        return cls(conn)
+        # check_same_thread=False: the sqlite connection is touched from the
+        # FastAPI threadpool; the backend lock serializes every access.
+        return cls(cnapp_backend.backend_for(url, check_same_thread=False))
 
     def close(self) -> None:
-        try:
-            self._c.close()
-        except Exception:
-            pass
+        self._be.close()
 
-    # ── locked connection helpers (all DB access goes through these) ──────────
+    # ── connection helpers (delegate to the lock-owning backend) ──────────────
     def _write(self, sql: str, params=()) -> None:
-        with self._lock:
-            self._c.execute(sql, params)
-            self._c.commit()
+        self._be.execute(sql, params)
 
     def _one(self, sql: str, params=()):
-        with self._lock:
-            return self._c.execute(sql, params).fetchone()
+        return self._be.query_one(sql, params)
 
     def _all(self, sql: str, params=()):
-        with self._lock:
-            return self._c.execute(sql, params).fetchall()
+        return self._be.query_all(sql, params)
 
     # ── accounts ──────────────────────────────────────────────────────────────
     def upsert_account(self, account_id: str, *, now_epoch: int, alias: Optional[str] = None,
@@ -176,8 +141,8 @@ class AccountRegistry:
             "first_seen_at": int(now_epoch), "updated_at": int(now_epoch),
         }
         update_cols = list(provided.keys()) + ["updated_at"]
-        sql = build_upsert("accounts", ACCT_COLS, ["account_id"], update_cols, ph="?")
-        self._write(sql, [insert[c] for c in ACCT_COLS])
+        self._be.upsert("accounts", ACCT_COLS, ["account_id"], update_cols,
+                        [insert[c] for c in ACCT_COLS])
 
     def get_account(self, account_id: str) -> Optional[Dict]:
         return _account_row(self._one("SELECT * FROM accounts WHERE account_id=?",
@@ -220,10 +185,9 @@ class AccountRegistry:
         ts = make_scan_ts(now_epoch)
         err_code = next((c.error_code for c in result.checks
                          if c.status == "fail" and c.error_code), None)
-        with self._lock:
-            prev = self._c.execute("SELECT consecutive_failures FROM connection_health "
-                                   "WHERE account=? AND role_arn=?",
-                                   (account, role_arn)).fetchone()
+        with self._be.transaction():        # atomic read-modify-write (locked)
+            prev = self._be.query_one("SELECT consecutive_failures FROM connection_health "
+                                      "WHERE account=? AND role_arn=?", (account, role_arn))
             prev_cf = int(prev["consecutive_failures"]) if prev else 0
             if health == ConnectionHealth.HEALTHY:
                 cf = 0
@@ -235,13 +199,11 @@ class AccountRegistry:
             vals = [account, role_arn, region, 1 if org_mode else 0, health.value,
                     result.observed_account_id, err_code, result.summary, cf,
                     ts.epoch, ts.iso, next_due]
-            sql = build_upsert("connection_health", CONN_COLS, ["account", "role_arn"],
-                               CONN_UPDATE, ph="?")
-            self._c.execute(sql, vals)
+            self._be.upsert("connection_health", CONN_COLS, ["account", "role_arn"],
+                            CONN_UPDATE, vals)
             # denormalize onto the accounts row (best-effort; UPDATE no-ops if absent)
-            self._c.execute("UPDATE accounts SET health=?, health_detail=?, updated_at=? "
-                            "WHERE account_id=?", (health.value, result.summary, ts.epoch, account))
-            self._c.commit()
+            self._be.execute("UPDATE accounts SET health=?, health_detail=?, updated_at=? "
+                             "WHERE account_id=?", (health.value, result.summary, ts.epoch, account))
         # the persisted schedule is authoritative — align the returned result to it
         try:
             result.next_revalidation_epoch = next_due
@@ -267,14 +229,12 @@ class AccountRegistry:
         NOT refresh it (an errored attempt is visible on the job row itself)."""
         vals = [job_id, account_id, status, started_at, finished_at,
                 int(findings_count or 0), error]
-        sql = build_upsert("scan_jobs", JOB_COLS, ["job_id"], JOB_UPDATE, ph="?")
-        with self._lock:
-            self._c.execute(sql, vals)
+        with self._be.transaction():
+            self._be.upsert("scan_jobs", JOB_COLS, ["job_id"], JOB_UPDATE, vals)
             if status == "done":
                 stamp = int(finished_at if finished_at is not None else now_epoch)
-                self._c.execute("UPDATE accounts SET last_scan_at=?, updated_at=? "
-                                "WHERE account_id=?", (stamp, int(now_epoch), account_id))
-            self._c.commit()
+                self._be.execute("UPDATE accounts SET last_scan_at=?, updated_at=? "
+                                 "WHERE account_id=?", (stamp, int(now_epoch), account_id))
 
     def get_scan_job(self, job_id: str) -> Optional[Dict]:
         row = self._one("SELECT * FROM scan_jobs WHERE job_id=?", (job_id,))
@@ -291,16 +251,14 @@ class AccountRegistry:
         if clauses:
             where = " WHERE " + " AND ".join(clauses)
         base = "SELECT * FROM scan_jobs" + where
-        with self._lock:
-            try:
-                rows = self._c.execute(
-                    base + " ORDER BY started_at DESC NULLS LAST, job_id", params).fetchall()
-            except sqlite3.OperationalError:
-                # older sqlite lacks NULLS LAST — emulate it while PRESERVING DESC
-                # (a naive strip of 'DESC NULLS LAST' would invert to ascending).
-                rows = self._c.execute(
-                    base + " ORDER BY (started_at IS NULL), started_at DESC, job_id",
-                    params).fetchall()
+        try:
+            rows = self._be.query_all(
+                base + " ORDER BY started_at DESC NULLS LAST, job_id", params)
+        except self._be.OperationalError:
+            # older sqlite lacks NULLS LAST — emulate it while PRESERVING DESC
+            # (a naive strip of 'DESC NULLS LAST' would invert to ascending).
+            rows = self._be.query_all(
+                base + " ORDER BY (started_at IS NULL), started_at DESC, job_id", params)
         return [dict(r) for r in rows]
 
 

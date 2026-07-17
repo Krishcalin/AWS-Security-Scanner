@@ -166,62 +166,52 @@ CREATE INDEX IF NOT EXISTS ix_conn_due ON connection_health(next_due_epoch);
 """
 
 
-class StateStore:
-    """SQLite-backed finding lifecycle / drift / waiver / posture store."""
+# ── upsert column sets (Phase 9: routed through the Backend abstraction) ──────
+# scans: the 13 columns record_scan writes. The 5 drift counters are OMITTED from
+# the insert and therefore DEFAULT to 0 — INSERT OR REPLACE (sqlite) resets them
+# on a re-scan, and reset_cols replicates that explicitly on Postgres.
+SCAN_COLS = ["scan_id", "account", "region", "ts_epoch", "ts_iso", "posture_score",
+             "grade", "crit", "high", "med", "low", "info", "scanner_version"]
+SCAN_UPDATE = SCAN_COLS[1:]
+SCAN_COUNTER_RESET = {"total_open": "0", "new_count": "0", "resolved_count": "0",
+                      "reopened_count": "0", "suppressed_count": "0"}
+COVERAGE_COLS = ["scan_id", "account", "region", "check_id"]
+USAGE_COLS = ["account", "arn", "source", "last_used_epoch", "last_used_iso", "dormant",
+              "granted_services", "used_services", "unused_services_json",
+              "unused_actions_json", "window_days", "collected_epoch", "slad_job_status",
+              "error_json"]
+USAGE_UPDATE = USAGE_COLS[2:]
 
-    def __init__(self, conn: sqlite3.Connection):
-        self._c = conn
+
+class StateStore:
+    """Finding lifecycle / drift / waiver / posture store, over a `cnapp_backend`
+    Backend (sqlite by default, Postgres when opened with a ``postgresql://`` URL)."""
+
+    def __init__(self, backend):
+        # Tolerant of a legacy raw sqlite3.Connection (wrapped in a SqliteBackend)
+        # so any old ``StateStore(conn)`` caller keeps working.
+        import cnapp_backend
+        self._be = (backend if isinstance(backend, cnapp_backend.Backend)
+                    else cnapp_backend.SqliteBackend(backend))
+        self._c = self._be.raw          # compat alias — keeps ``store._c.execute`` working
 
     # ── lifecycle: open / migrate ─────────────────────────────────────────────
     @classmethod
     def open(cls, path: str) -> "StateStore":
         """Open (creating if needed) a state DB at ``path``. ``':memory:'`` for
-        tests. Accepts a backend URL: a bare path or ``sqlite:///...`` opens the
-        sqlite store (default); a ``postgresql://`` URL selects the Postgres
-        backend, which is DEFERRED (Phase 7) and therefore raises
-        ``StateBackendUnavailable`` so the scanner cleanly runs stateless — it
-        NEVER silently falls back to a local sqlite file. The parent dir is
-        created 0700 and the file tightened to 0600."""
-        import aws_state_dialect
-        scheme, dsn = aws_state_dialect.parse_state_url(path)
-        if scheme == "postgres":
-            raise aws_state_dialect.StateBackendUnavailable(
-                "postgresql:// state backend is deferred to Phase 7 (needs psycopg "
-                "+ a live server); the DDL/upsert generators ship + are tested now")
-        path = dsn
-        if path != ":memory:":
-            d = os.path.dirname(os.path.abspath(path))
-            try:
-                os.makedirs(d, mode=0o700, exist_ok=True)
-            except Exception:
-                pass
-        conn = sqlite3.connect(path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA busy_timeout=5000")
-        store = cls(conn)
-        store._migrate()
-        if path != ":memory:":
-            try:
-                os.chmod(path, 0o600)
-            except Exception:
-                pass
-        return store
+        tests. A bare path or ``sqlite:///...`` opens the sqlite store (default,
+        0700 dir / 0600 file); a ``postgresql://`` URL selects the live Postgres
+        backend (Phase 9) — if the driver is absent or the server is unreachable it
+        raises ``StateBackendUnavailable`` so the scanner cleanly runs stateless and
+        NEVER silently falls back to a local sqlite file."""
+        import cnapp_backend
+        return cls(cnapp_backend.backend_for(path))
 
     def _migrate(self) -> None:
-        cur = self._c.execute("PRAGMA user_version")
-        ver = cur.fetchone()[0]
-        if ver < SCHEMA_VERSION:
-            self._c.executescript(_DDL)
-            self._c.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-            self._c.commit()
+        self._be.migrate()
 
     def close(self) -> None:
-        try:
-            self._c.close()
-        except Exception:
-            pass
+        self._be.close()
 
     # ── scan + coverage rows ──────────────────────────────────────────────────
     def record_scan(self, account: str, scan_id: str, ts: ScanTs, score: float,
@@ -230,14 +220,12 @@ class StateStore:
         """Insert the scan-summary row (score + severity counts). Drift-derived
         columns are filled later by :meth:`record_posture`."""
         c = counts or {}
-        self._c.execute(
-            "INSERT OR REPLACE INTO scans(scan_id,account,region,ts_epoch,ts_iso,"
-            "posture_score,grade,crit,high,med,low,info,scanner_version) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        self._be.upsert(
+            "scans", SCAN_COLS, ["scan_id"], SCAN_UPDATE,
             (scan_id, account, region, ts.epoch, ts.iso, float(score),
              _grade(score), c.get("crit", 0), c.get("high", 0), c.get("med", 0),
-             c.get("low", 0), c.get("info", 0), scanner_version))
-        self._c.commit()
+             c.get("low", 0), c.get("info", 0), scanner_version),
+            reset_cols=SCAN_COUNTER_RESET)
         return scan_id
 
     def record_coverage(self, scan_id: str, account: str,
@@ -247,22 +235,19 @@ class StateStore:
         The account column is forced to ``account`` regardless of each tuple's
         first element, so coverage always partitions by the scanning account."""
         rows = {(account, t[1], t[2]) for t in tuples}
-        self._c.executemany(
-            "INSERT OR IGNORE INTO scan_coverage(scan_id,account,region,check_id) "
-            "VALUES(?,?,?,?)",
+        self._be.upsert_many(
+            "scan_coverage", COVERAGE_COLS, COVERAGE_COLS, None,
             [(scan_id, a, r, cid) for (a, r, cid) in rows])
-        self._c.commit()
 
     def record_posture(self, account: str, scan_id: str, drift: Dict) -> None:
         """Fill the scan row's drift columns from a completed classify pass."""
-        self._c.execute(
+        self._be.execute(
             "UPDATE scans SET total_open=?, new_count=?, resolved_count=?, "
             "reopened_count=?, suppressed_count=? WHERE scan_id=?",
             (drift.get("still_open", 0) + len(drift.get("new", [])),
              len(drift.get("new", [])), len(drift.get("resolved", [])),
              len(drift.get("reopened", [])), drift.get("suppressed_count", 0),
              scan_id))
-        self._c.commit()
 
     # ── classification / drift ────────────────────────────────────────────────
     def classify_and_diff(self, account: str, scan_id: str, ts: ScanTs,
@@ -300,18 +285,18 @@ class StateStore:
                for r in results if getattr(r, "check_id", "")}
         self.record_coverage(scan_id, account, cov)
 
-        c = self._c
-        c.execute("BEGIN IMMEDIATE")
-        try:
+        # One atomic transaction (BEGIN IMMEDIATE on sqlite / a psycopg txn on PG);
+        # transaction() commits on clean exit, rolls back + re-raises on error.
+        with self._be.transaction():
             new_keys, reopened, mutated = [], [], []
             for k, r in cur.items():
                 fp = _fingerprint(r.severity, r.message)
-                row = c.execute(
+                row = self._be.query_one(
                     "SELECT status, fingerprint, first_seen_epoch, first_seen_iso, "
                     "first_seen_scan FROM findings WHERE account=? AND finding_key=?",
-                    (account, k)).fetchone()
+                    (account, k))
                 if row is None:
-                    c.execute(
+                    self._be.execute(
                         "INSERT INTO findings(account,finding_key,key_version,region,"
                         "check_id,section,resource,message,severity,result_status,status,"
                         "first_seen_scan,first_seen_epoch,first_seen_iso,last_seen_scan,"
@@ -324,7 +309,7 @@ class StateStore:
                     new_keys.append(k)
                     self._event(account, k, scan_id, ts.epoch, None, "NEW", r.severity)
                 elif row["status"] == "resolved":
-                    c.execute(
+                    self._be.execute(
                         "UPDATE findings SET status='open', resolved_epoch=NULL, "
                         "last_seen_scan=?, last_seen_epoch=?, last_seen_iso=?, "
                         "times_seen=times_seen+1, reopen_count=reopen_count+1, "
@@ -335,7 +320,7 @@ class StateStore:
                     reopened.append(k)
                     self._event(account, k, scan_id, ts.epoch, "resolved", "REOPENED", r.severity)
                 else:  # already open
-                    c.execute(
+                    self._be.execute(
                         "UPDATE findings SET last_seen_scan=?, last_seen_epoch=?, "
                         "last_seen_iso=?, times_seen=times_seen+1, severity=?, "
                         "message=?, result_status=?, last_scan_id=?, fingerprint=?, "
@@ -352,17 +337,17 @@ class StateStore:
             # re-observe. The coverage join is what prevents a partial scan from
             # mass-resolving checks it never ran.
             resolved = []
-            open_rows = c.execute(
+            open_rows = self._be.query_all(
                 "SELECT f.finding_key, f.severity FROM findings f "
                 "JOIN scan_coverage sc ON sc.scan_id=? AND sc.account=f.account "
                 "AND sc.region=f.region AND sc.check_id=f.check_id "
                 "WHERE f.account=? AND f.status='open'",
-                (scan_id, account)).fetchall()
+                (scan_id, account))
             for orow in open_rows:
                 k = orow["finding_key"]
                 if k in cur:
                     continue
-                c.execute(
+                self._be.execute(
                     "UPDATE findings SET status='resolved', resolved_epoch=?, "
                     "last_scan_id=? WHERE account=? AND finding_key=?",
                     (ts.epoch, scan_id, account, k))
@@ -379,22 +364,17 @@ class StateStore:
                     self._event(account, k, scan_id, ts.epoch, "open", "SUPPRESSED",
                                 r.severity, note=f"waiver:{wid}")
 
-            still_open = c.execute(
+            still_open = self._be.scalar(
                 "SELECT COUNT(*) FROM findings WHERE account=? AND status='open'",
-                (account,)).fetchone()[0]
-            prev = c.execute(
+                (account,))
+            prev = self._be.query_one(
                 "SELECT posture_score FROM scans WHERE account=? AND scan_id!=? "
-                "ORDER BY ts_epoch DESC LIMIT 1", (account, scan_id)).fetchone()
-            this = c.execute(
-                "SELECT posture_score FROM scans WHERE scan_id=?", (scan_id,)).fetchone()
+                "ORDER BY ts_epoch DESC LIMIT 1", (account, scan_id))
+            this = self._be.query_one(
+                "SELECT posture_score FROM scans WHERE scan_id=?", (scan_id,))
             posture_delta = None
             if prev is not None and this is not None:
                 posture_delta = round(this["posture_score"] - prev["posture_score"], 1)
-
-            c.execute("COMMIT")
-        except Exception:
-            c.execute("ROLLBACK")
-            raise
 
         return {
             "new": sorted(new_keys),
@@ -410,7 +390,7 @@ class StateStore:
     def _event(self, account: str, key: str, scan_id: str, ts_epoch: int,
                from_status: Optional[str], to_status: str,
                severity: str = "", note: str = "") -> None:
-        self._c.execute(
+        self._be.execute(
             "INSERT INTO finding_events(account,finding_key,scan_id,ts_epoch,"
             "from_status,to_status,severity,note) VALUES(?,?,?,?,?,?,?,?)",
             (account, key, scan_id, ts_epoch, from_status, to_status, severity, note))
@@ -423,27 +403,24 @@ class StateStore:
         ``{'type':'glob','check_glob':..,'resource_glob':..,'account':..,'region':..}``.
         Returns the waiver id."""
         mt = match.get("type", "exact")
-        cur = self._c.execute(
+        return self._be.insert_returning_id(
             "INSERT INTO waivers(match_type,finding_key,account,region,check_glob,"
             "resource_glob,approver,reason,created_epoch,expires_epoch,revoked) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,0)",
             (mt, match.get("finding_key"), match.get("account", "*"),
              match.get("region", "*"), match.get("check_glob"),
              match.get("resource_glob"), approver, reason, created_epoch,
-             expires_epoch))
-        self._c.commit()
-        return cur.lastrowid
+             expires_epoch), id_col="id")
 
     def revoke_waiver(self, waiver_id: int) -> None:
-        self._c.execute("UPDATE waivers SET revoked=1 WHERE id=?", (waiver_id,))
-        self._c.commit()
+        self._be.execute("UPDATE waivers SET revoked=1 WHERE id=?", (waiver_id,))
 
     def list_waivers(self, account: str, scan_epoch: Optional[int] = None) -> List[Dict]:
         """All waivers applicable to ``account`` (or global '*'), annotated with a
         live/expired/revoked state (relative to ``scan_epoch`` if given)."""
-        rows = self._c.execute(
+        rows = self._be.query_all(
             "SELECT * FROM waivers WHERE account='*' OR account=? ORDER BY id",
-            (account,)).fetchall()
+            (account,))
         out = []
         for w in rows:
             d = dict(w)
@@ -462,12 +439,12 @@ class StateStore:
         """Return the id of a LIVE waiver matching this finding, else None.
         Expiry is evaluated against the scan-supplied epoch, so an expired waiver
         deterministically stops matching (auto-reactivation is a pure predicate)."""
-        row = self._c.execute(
+        row = self._be.query_all(
             "SELECT id, match_type, finding_key, check_glob, resource_glob "
             "FROM waivers WHERE revoked=0 "
             "AND (expires_epoch IS NULL OR expires_epoch > ?) "
             "AND (account='*' OR account=?) AND (region='*' OR region=?)",
-            (scan_epoch, account, region)).fetchall()
+            (scan_epoch, account, region))
         for w in row:
             if w["match_type"] == "exact":
                 if w["finding_key"] == key:
@@ -504,10 +481,10 @@ class StateStore:
         not span the dormant gap). Returns mean/median seconds overall and, when
         ``by_severity``, per severity; plus ``open_over_sla`` when ``sla_days``
         and ``now_epoch`` are given."""
-        events = self._c.execute(
+        events = self._be.query_all(
             "SELECT finding_key, ts_epoch, to_status, severity FROM finding_events "
             "WHERE account=? AND to_status IN ('NEW','REOPENED','RESOLVED') "
-            "ORDER BY finding_key, ts_epoch, id", (account,)).fetchall()
+            "ORDER BY finding_key, ts_epoch, id", (account,))
         durations: List[int] = []
         by_sev: Dict[str, List[int]] = {}
         open_start: Dict[str, Tuple[int, str]] = {}
@@ -534,19 +511,19 @@ class StateStore:
                 for s, v in sorted(by_sev.items())}
         if sla_days is not None and now_epoch is not None:
             cutoff = now_epoch - sla_days * 86400
-            out["open_over_sla"] = self._c.execute(
+            out["open_over_sla"] = self._be.scalar(
                 "SELECT COUNT(*) FROM findings WHERE account=? AND status='open' "
-                "AND first_seen_epoch < ?", (account, cutoff)).fetchone()[0]
+                "AND first_seen_epoch < ?", (account, cutoff))
             out["sla_days"] = sla_days
         return out
 
     def trend(self, account: str) -> List[Dict]:
         """Posture history for ``account``, oldest first, each row annotated with
         the score delta from the previous scan."""
-        rows = self._c.execute(
+        rows = self._be.query_all(
             "SELECT scan_id,ts_epoch,ts_iso,posture_score,grade,crit,high,med,low,"
             "info,total_open,new_count,resolved_count,reopened_count,suppressed_count "
-            "FROM scans WHERE account=? ORDER BY ts_epoch, scan_id", (account,)).fetchall()
+            "FROM scans WHERE account=? ORDER BY ts_epoch, scan_id", (account,))
         out, prev = [], None
         for row in rows:
             d = dict(row)
@@ -556,19 +533,16 @@ class StateStore:
         return out
 
     def open_findings(self, account: str) -> List[Dict]:
-        rows = self._c.execute(
+        rows = self._be.query_all(
             "SELECT * FROM findings WHERE account=? AND status='open' "
-            "ORDER BY severity, finding_key", (account,)).fetchall()
+            "ORDER BY severity, finding_key", (account,))
         return [dict(r) for r in rows]
 
     # ── unused-access persistence (Phase 5C) ──────────────────────────────────
     def record_usage(self, account: str, arn: str, sig: Dict, collected_epoch: int) -> None:
         """Persist a right-sizing signal (24h TTL keyed by collected_epoch)."""
-        self._c.execute(
-            "INSERT OR REPLACE INTO principal_usage(account,arn,source,last_used_epoch,"
-            "last_used_iso,dormant,granted_services,used_services,unused_services_json,"
-            "unused_actions_json,window_days,collected_epoch,slad_job_status,error_json) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        self._be.upsert(
+            "principal_usage", USAGE_COLS, ["account", "arn"], USAGE_UPDATE,
             (account, arn, sig.get("source"), sig.get("last_used_epoch"),
              sig.get("last_used_iso"),
              None if sig.get("dormant") is None else int(bool(sig.get("dormant"))),
@@ -576,14 +550,13 @@ class StateStore:
              sig.get("unused_services_json"), sig.get("unused_actions_json"),
              sig.get("window_days"), collected_epoch, sig.get("slad_job_status"),
              sig.get("error_json")))
-        self._c.commit()
 
     def get_usage(self, account: str, arn: str, fresh_after_epoch: int) -> Optional[Dict]:
         """Return a cached usage row if collected at/after ``fresh_after_epoch``
         (TTL gate), else None so the caller re-collects."""
-        row = self._c.execute(
+        row = self._be.query_one(
             "SELECT * FROM principal_usage WHERE account=? AND arn=? "
-            "AND collected_epoch >= ?", (account, arn, fresh_after_epoch)).fetchone()
+            "AND collected_epoch >= ?", (account, arn, fresh_after_epoch))
         return dict(row) if row else None
 
 
