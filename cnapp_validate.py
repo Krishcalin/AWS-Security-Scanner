@@ -231,7 +231,20 @@ def validate_connection(*, expected_account_id: str, role: str, now_epoch: int,
         ident = sts.get_caller_identity()
         observed = str((ident or {}).get("Account", "") or "")
         res.observed_account_id = observed
-        if observed and observed != expected_account_id:
+        if not observed:
+            # Identity could not be established — the account assertion (the module's
+            # central invariant) cannot run, so fail CLOSED: never let an unverified
+            # connection reach HEALTHY / activate.
+            res.checks.append(CheckResult(
+                "caller_identity", "fail",
+                "GetCallerIdentity returned no Account — identity is unverified.",
+                error_code="NoCallerAccount",
+                remediation="STS did not report an account; do not trust this "
+                            "connection until identity can be confirmed."))
+            skip_rest("caller_identity")
+            return finish(ConnectionHealth.UNAUTHORIZED,
+                          "Identity unverified: STS returned no account.")
+        if observed != expected_account_id:
             res.checks.append(CheckResult(
                 "caller_identity", "fail",
                 f"Role belongs to account {observed}, not {expected_account_id}",
@@ -242,7 +255,7 @@ def validate_connection(*, expected_account_id: str, role: str, now_epoch: int,
             return finish(ConnectionHealth.UNAUTHORIZED,
                           f"Account mismatch: assumed role reports {observed}.")
         res.checks.append(CheckResult("caller_identity", "ok",
-                                      f"Confirmed account {observed or expected_account_id}"))
+                                      f"Confirmed account {observed}"))
     except BaseException as e:                       # noqa: BLE001
         code = _error_code(e)
         transient = code in _TRANSIENT

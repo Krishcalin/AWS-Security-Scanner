@@ -77,3 +77,13 @@ def test_resolve_round_trip_and_scheme_rules():
 def test_default_id_gen_is_high_entropy():
     a, b = OB.default_id_gen(), OB.default_id_gen()
     assert a != b and len(a) == 40 and all(c in "0123456789abcdef" for c in a)
+
+
+def test_unknown_scheme_error_never_echoes_the_raw_secret():
+    """A schemeless literal (a raw ExternalId mis-stored) must NOT appear in the
+    ValueError text — that message can reach persisted job errors / logs."""
+    raw = "a1b2c3d4" * 5                              # looks like a real 40-hex ExternalId
+    with pytest.raises(ValueError) as ei:
+        OB.resolve_external_id(raw, secret_reader=lambda r: "x")
+    assert raw not in str(ei.value)
+    assert "<no-scheme>" in str(ei.value)

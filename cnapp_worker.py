@@ -30,14 +30,17 @@ from cnapp_service import ScanSpec, serialize_scanner
 
 def _pre_validate(session, account_id: str) -> Optional[str]:
     """Confirm the assumed session actually points at ``account_id`` before running
-    a full scan. Returns None on success, else a short failure reason."""
+    a full scan. Returns None on success, else a short failure reason. Fails CLOSED:
+    an empty/unknown observed account is a failure, never a pass."""
     try:
         sts = session.client("sts")
         observed = str((sts.get_caller_identity() or {}).get("Account", "") or "")
-    except BaseException as e:                       # noqa: BLE001
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as e:                           # noqa: BLE001
         return f"credential check failed: {type(e).__name__}: {e}"
-    if observed and observed != account_id:
-        return f"assumed session is account {observed}, expected {account_id}"
+    if observed != account_id:
+        return f"assumed session is account {observed or '<unknown>'}, expected {account_id}"
     return None
 
 
@@ -60,10 +63,20 @@ def run_scan_job(svc, job: dict, *, spec: ScanSpec = None) -> dict:
             svc.registry.set_onboarding_status(account_id, "denied", end)
         return svc.registry.get_scan_job(job_id)
 
+    # 0. re-check the account is still active (it may have been disabled/denied
+    #    between enqueue and execution). A non-deny abort — a transient disable
+    #    must not itself flip the account to 'denied'.
+    acct = svc.registry.get_account(account_id)
+    if not acct or acct.get("onboarding_status") != "active":
+        status = acct.get("onboarding_status") if acct else "missing"
+        return fail(f"account no longer active (status={status}) — skipping scan")
+
     # 1. build the assumed-role session
     try:
         session = svc.session_factory(account_id)
-    except BaseException as e:                        # noqa: BLE001
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as e:                            # noqa: BLE001
         return fail(f"could not assume role: {type(e).__name__}: {e}", deny=True)
 
     # 2. pre-validate creds before the (expensive) scan
@@ -71,12 +84,14 @@ def run_scan_job(svc, job: dict, *, spec: ScanSpec = None) -> dict:
     if reason:
         return fail(reason, deny=True)
 
-    # 3. run the engine, trapping its sys.exit(2)
+    # 3. run the engine, trapping its sys.exit(2) (but never KeyboardInterrupt)
     try:
         sc = svc.scan_runner(session, spec)
     except SystemExit as e:
         return fail(f"engine exit {getattr(e, 'code', '?')} (credential/connect failure)")
-    except BaseException as e:                        # noqa: BLE001
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:                            # noqa: BLE001
         return fail(f"scan error: {type(e).__name__}: {e}")
 
     # 4. persist results + stamp the account's last_scan_at (terminal 'done')
@@ -84,7 +99,9 @@ def run_scan_job(svc, job: dict, *, spec: ScanSpec = None) -> dict:
         payload = serialize_scanner(sc)
         svc.results.put(account_id, payload)
         findings = payload.get("summary", {}).get("FAIL", 0)
-    except BaseException as e:                        # noqa: BLE001
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as e:                            # noqa: BLE001
         return fail(f"result persistence error: {type(e).__name__}: {e}")
 
     end = svc.clock()

@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 from typing import Dict, List, Optional
 
 import aws_state
@@ -63,6 +64,12 @@ class AccountRegistry:
 
     def __init__(self, conn: sqlite3.Connection):
         self._c = conn
+        # Serializes ALL use of the single shared connection. FastAPI serves sync
+        # routes from a threadpool, so without this two threads could interleave
+        # statements / commits on the one connection (torn multi-statement units,
+        # cursor races, a mis-timed cross-thread commit). Held across each read-
+        # modify-write (e.g. record_health's failure-count) so it is atomic too.
+        self._lock = threading.RLock()
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     @classmethod
@@ -88,8 +95,10 @@ class AccountRegistry:
             except Exception:
                 pass
         # check_same_thread=False: the web layer serves routes from a threadpool,
-        # so the single registry connection is touched from worker threads. Safe
-        # here — writes are short + committed and busy_timeout serializes them.
+        # so the single registry connection is touched from worker threads. All
+        # access is serialized by self._lock (busy_timeout only helps ACROSS
+        # connections, not within this shared one), which keeps each multi-
+        # statement write unit atomic.
         conn = sqlite3.connect(path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
@@ -110,8 +119,19 @@ class AccountRegistry:
         except Exception:
             pass
 
-    def _exec(self, sql: str, params=()):
-        return self._c.execute(sql, params)
+    # ── locked connection helpers (all DB access goes through these) ──────────
+    def _write(self, sql: str, params=()) -> None:
+        with self._lock:
+            self._c.execute(sql, params)
+            self._c.commit()
+
+    def _one(self, sql: str, params=()):
+        with self._lock:
+            return self._c.execute(sql, params).fetchone()
+
+    def _all(self, sql: str, params=()):
+        with self._lock:
+            return self._c.execute(sql, params).fetchall()
 
     # ── accounts ──────────────────────────────────────────────────────────────
     def upsert_account(self, account_id: str, *, now_epoch: int, alias: Optional[str] = None,
@@ -157,13 +177,11 @@ class AccountRegistry:
         }
         update_cols = list(provided.keys()) + ["updated_at"]
         sql = build_upsert("accounts", ACCT_COLS, ["account_id"], update_cols, ph="?")
-        self._exec(sql, [insert[c] for c in ACCT_COLS])
-        self._c.commit()
+        self._write(sql, [insert[c] for c in ACCT_COLS])
 
     def get_account(self, account_id: str) -> Optional[Dict]:
-        row = self._exec("SELECT * FROM accounts WHERE account_id=?",
-                         (account_id,)).fetchone()
-        return _account_row(row)
+        return _account_row(self._one("SELECT * FROM accounts WHERE account_id=?",
+                                      (account_id,)))
 
     def list_accounts(self, *, onboarding_status: Optional[str] = None,
                       health: Optional[str] = None) -> List[Dict]:
@@ -176,100 +194,114 @@ class AccountRegistry:
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY account_id"
-        return [_account_row(r) for r in self._exec(sql, params).fetchall()]
+        return [_account_row(r) for r in self._all(sql, params)]
 
     def set_onboarding_status(self, account_id: str, status: str, now_epoch: int) -> None:
         if status not in _ONBOARDING_STATUSES:
             raise ValueError(f"invalid onboarding_status {status!r}")
-        self._exec("UPDATE accounts SET onboarding_status=?, updated_at=? WHERE account_id=?",
-                   (status, int(now_epoch), account_id))
-        self._c.commit()
+        self._write("UPDATE accounts SET onboarding_status=?, updated_at=? WHERE account_id=?",
+                    (status, int(now_epoch), account_id))
 
     def set_health(self, account_id: str, health: str, health_detail: Optional[str],
                    now_epoch: int) -> None:
         if health not in _ACCOUNT_HEALTHS:
             raise ValueError(f"invalid account health {health!r}")
-        self._exec("UPDATE accounts SET health=?, health_detail=?, updated_at=? "
-                   "WHERE account_id=?", (health, health_detail, int(now_epoch), account_id))
-        self._c.commit()
+        self._write("UPDATE accounts SET health=?, health_detail=?, updated_at=? "
+                    "WHERE account_id=?", (health, health_detail, int(now_epoch), account_id))
 
     # ── connection health (validation cadence) ────────────────────────────────
     def record_health(self, account: str, role_arn: str, result, now_epoch: int, *,
                       region: str = "us-east-1", org_mode: bool = False) -> Dict:
         """Persist a ValidationResult into connection_health, computing the
-        consecutive-failure backoff, and denormalize health onto the accounts row.
-        Returns the stored connection_health record."""
-        prev = self._exec("SELECT consecutive_failures FROM connection_health "
-                          "WHERE account=? AND role_arn=?", (account, role_arn)).fetchone()
-        prev_cf = int(prev["consecutive_failures"]) if prev else 0
+        consecutive-failure backoff, denormalize health onto the accounts row, and
+        publish the authoritative next-due back onto the result so the API response
+        and the scheduler agree. The whole read-modify-write is atomic (locked)."""
         health = result.health
-        if health == ConnectionHealth.HEALTHY:
-            cf = 0
-        elif health == ConnectionHealth.UNAUTHORIZED:
-            cf = prev_cf + 1
-        else:                                   # validating / degraded — hold prior count
-            cf = prev_cf
         ts = make_scan_ts(now_epoch)
-        next_due = int(now_epoch) + cadence(health, cf)
         err_code = next((c.error_code for c in result.checks
                          if c.status == "fail" and c.error_code), None)
-        vals = [account, role_arn, region, 1 if org_mode else 0, health.value,
-                result.observed_account_id, err_code, result.summary, cf,
-                ts.epoch, ts.iso, next_due]
-        sql = build_upsert("connection_health", CONN_COLS, ["account", "role_arn"],
-                           CONN_UPDATE, ph="?")
-        self._exec(sql, vals)
-        # denormalize onto the accounts row (best-effort; UPDATE no-ops if absent)
-        self._exec("UPDATE accounts SET health=?, health_detail=?, updated_at=? "
-                   "WHERE account_id=?", (health.value, result.summary, ts.epoch, account))
-        self._c.commit()
+        with self._lock:
+            prev = self._c.execute("SELECT consecutive_failures FROM connection_health "
+                                   "WHERE account=? AND role_arn=?",
+                                   (account, role_arn)).fetchone()
+            prev_cf = int(prev["consecutive_failures"]) if prev else 0
+            if health == ConnectionHealth.HEALTHY:
+                cf = 0
+            elif health == ConnectionHealth.UNAUTHORIZED:
+                cf = prev_cf + 1
+            else:                               # validating / degraded — hold prior count
+                cf = prev_cf
+            next_due = int(now_epoch) + cadence(health, cf)
+            vals = [account, role_arn, region, 1 if org_mode else 0, health.value,
+                    result.observed_account_id, err_code, result.summary, cf,
+                    ts.epoch, ts.iso, next_due]
+            sql = build_upsert("connection_health", CONN_COLS, ["account", "role_arn"],
+                               CONN_UPDATE, ph="?")
+            self._c.execute(sql, vals)
+            # denormalize onto the accounts row (best-effort; UPDATE no-ops if absent)
+            self._c.execute("UPDATE accounts SET health=?, health_detail=?, updated_at=? "
+                            "WHERE account_id=?", (health.value, result.summary, ts.epoch, account))
+            self._c.commit()
+        # the persisted schedule is authoritative — align the returned result to it
+        try:
+            result.next_revalidation_epoch = next_due
+        except Exception:
+            pass
         return {k: v for k, v in zip(CONN_COLS, vals)}
 
     def health_due(self, now_epoch: int) -> List[Dict]:
         """Every connection due for re-validation (next_due_epoch <= now), soonest
         first — the scheduler's whole query."""
-        rows = self._exec("SELECT * FROM connection_health WHERE next_due_epoch<=? "
-                          "ORDER BY next_due_epoch", (int(now_epoch),)).fetchall()
-        return [dict(r) for r in rows]
+        return [dict(r) for r in self._all(
+            "SELECT * FROM connection_health WHERE next_due_epoch<=? ORDER BY next_due_epoch",
+            (int(now_epoch),))]
 
     # ── scan jobs ─────────────────────────────────────────────────────────────
     def record_scan_job(self, account_id: str, job_id: str, status: str, *,
                         now_epoch: int, started_at: Optional[int] = None,
                         finished_at: Optional[int] = None, findings_count: int = 0,
                         error: Optional[str] = None) -> None:
-        """Insert/advance a scan job. On a terminal status (done|error) the parent
-        account's last_scan_at is stamped."""
+        """Insert/advance a scan job (atomic with the account stamp). On a
+        SUCCESSFUL terminal status (done) the parent account's last_scan_at is
+        stamped — last_scan_at means 'last successful scan', so a failing scan does
+        NOT refresh it (an errored attempt is visible on the job row itself)."""
         vals = [job_id, account_id, status, started_at, finished_at,
                 int(findings_count or 0), error]
         sql = build_upsert("scan_jobs", JOB_COLS, ["job_id"], JOB_UPDATE, ph="?")
-        self._exec(sql, vals)
-        if status in ("done", "error"):
-            stamp = int(finished_at if finished_at is not None else now_epoch)
-            self._exec("UPDATE accounts SET last_scan_at=?, updated_at=? WHERE account_id=?",
-                       (stamp, int(now_epoch), account_id))
-        self._c.commit()
+        with self._lock:
+            self._c.execute(sql, vals)
+            if status == "done":
+                stamp = int(finished_at if finished_at is not None else now_epoch)
+                self._c.execute("UPDATE accounts SET last_scan_at=?, updated_at=? "
+                                "WHERE account_id=?", (stamp, int(now_epoch), account_id))
+            self._c.commit()
 
     def get_scan_job(self, job_id: str) -> Optional[Dict]:
-        row = self._exec("SELECT * FROM scan_jobs WHERE job_id=?", (job_id,)).fetchone()
+        row = self._one("SELECT * FROM scan_jobs WHERE job_id=?", (job_id,))
         return dict(row) if row else None
 
     def list_scan_jobs(self, *, account_id: Optional[str] = None,
                        status: Optional[str] = None) -> List[Dict]:
-        sql = "SELECT * FROM scan_jobs"
-        clauses, params = [], []
+        where, params = "", []
+        clauses = []
         if account_id:
             clauses.append("account_id=?"); params.append(account_id)
         if status:
             clauses.append("status=?"); params.append(status)
         if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY started_at DESC NULLS LAST, job_id"
-        try:
-            return [dict(r) for r in self._exec(sql, params).fetchall()]
-        except sqlite3.OperationalError:
-            # older sqlite lacks NULLS LAST — fall back to a portable ordering
-            sql = sql.replace(" DESC NULLS LAST", "")
-            return [dict(r) for r in self._exec(sql, params).fetchall()]
+            where = " WHERE " + " AND ".join(clauses)
+        base = "SELECT * FROM scan_jobs" + where
+        with self._lock:
+            try:
+                rows = self._c.execute(
+                    base + " ORDER BY started_at DESC NULLS LAST, job_id", params).fetchall()
+            except sqlite3.OperationalError:
+                # older sqlite lacks NULLS LAST — emulate it while PRESERVING DESC
+                # (a naive strip of 'DESC NULLS LAST' would invert to ascending).
+                rows = self._c.execute(
+                    base + " ORDER BY (started_at IS NULL), started_at DESC, job_id",
+                    params).fetchall()
+        return [dict(r) for r in rows]
 
 
 def _account_row(row) -> Optional[Dict]:

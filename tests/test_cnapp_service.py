@@ -195,3 +195,17 @@ def test_aggregate_overview_pure_empty():
     ov = aggregate_overview([])
     assert ov["accounts_scanned"] == 0 and ov["org_posture_score"] == 100.0
     assert ov["critical_attack_paths"] == 0
+
+
+# ── regression: re-onboarding an existing account REUSES its ExternalId ───────
+def test_reonboard_reuses_external_id_no_rotation():
+    svc, reg = _svc()
+    first = svc.init_onboarding(ACCT, alias="prod")
+    reg.set_onboarding_status(ACCT, "active", 5)
+    ref1 = reg.get_account(ACCT)["external_id_ref"]
+    second = svc.init_onboarding(ACCT, alias="prod-again")   # double-click / re-fetch URL
+    ref2 = reg.get_account(ACCT)["external_id_ref"]
+    assert first["reused"] is False and second["reused"] is True
+    assert ref1 == ref2                                      # ExternalId NOT rotated
+    assert reg.get_account(ACCT)["onboarding_status"] == "active"   # still connected
+    assert second["cfn_launch_url"]                          # URL still rebuilt for the operator

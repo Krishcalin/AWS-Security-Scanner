@@ -82,7 +82,9 @@ def build_upsert(table: str, cols: List[str], conflict_cols: List[str],
     """
     placeholders = ",".join([ph] * len(cols))
     sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})"
-    if update_cols is None:
+    # None OR an empty list -> DO NOTHING. (An empty update list must not render
+    # "DO UPDATE SET " with nothing after SET, which is invalid SQL.)
+    if not update_cols and not reset_cols:
         sql += f" ON CONFLICT ({', '.join(conflict_cols)}) DO NOTHING"
     else:
         sets = [f"{c}=EXCLUDED.{c}" for c in update_cols]

@@ -127,3 +127,13 @@ def test_migrate_requires_psycopg():
     # psycopg absent in CI -> raises StateBackendUnavailable, never a silent no-op
     with pytest.raises((d.StateBackendUnavailable, NotImplementedError)):
         d.migrate_sqlite_to_postgres(":memory:", "postgresql://x/y")
+
+
+def test_build_upsert_empty_update_cols_is_do_nothing():
+    """An empty update list must render DO NOTHING, never 'DO UPDATE SET ' (invalid)."""
+    import aws_state_dialect as D
+    sql = D.build_upsert("accounts", ["account_id", "alias"], ["account_id"], [], ph="?")
+    assert "DO NOTHING" in sql and "DO UPDATE SET" not in sql
+    # reset_cols with empty update still renders a valid DO UPDATE SET
+    sql2 = D.build_upsert("scans", ["scan_id", "crit"], ["scan_id"], [], reset_cols={"crit": "0"})
+    assert "DO UPDATE SET crit=0" in sql2

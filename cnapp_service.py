@@ -141,17 +141,36 @@ class PlatformService:
     def init_onboarding(self, account_id: str, *, region: str = "us-east-1",
                         method: str = "single", alias: str = "") -> dict:
         """Mint the ExternalId (stored only as a secret ref), register the account
-        as 'pending', and return the CloudFormation launch URL + CLI."""
+        as 'pending', and return the CloudFormation launch URL + CLI.
+
+        IDEMPOTENT: re-onboarding an account that already has an ExternalId REUSES
+        it (never rotates) — rotating would invalidate the already-deployed CFN
+        trust and silently break a live connection. Only a dedicated rotate flow
+        should mint a new ExternalId."""
+        now = self.clock()
+        existing = self.registry.get_account(account_id)
+        if existing and existing.get("external_id_ref"):
+            ref = existing["external_id_ref"]
+            external_id = cnapp_onboarding.resolve_external_id(
+                ref, secret_reader=self.secret_reader, region=region) or ""
+            # refresh only non-secret config; preserve lifecycle + the ExternalId
+            self.registry.upsert_account(account_id, now_epoch=now, alias=(alias or None),
+                                         onboarding_method=method, enabled_regions=[region])
+            return {"account_id": account_id, "role_name": cnapp_onboarding.ROLE_NAME,
+                    "external_id_ref": ref, "reused": True,
+                    "cfn_launch_url": cnapp_onboarding.build_launch_url(
+                        self.cfn_template_url, self.hub_role_arn, external_id, region),
+                    "cli": cnapp_onboarding.build_cli(
+                        self.cfn_template_url, self.hub_role_arn, external_id, region)}
         init = cnapp_onboarding.init_onboarding(
             account_id, region, id_gen=self.id_gen, secret_writer=self.secret_writer,
             hub_role_arn=self.hub_role_arn, cfn_template_url=self.cfn_template_url)
-        now = self.clock()
         self.registry.upsert_account(
             account_id, now_epoch=now, alias=alias, onboarding_method=method,
             role_arn=self._role_arn(account_id), external_id_ref=init.external_id_ref,
             enabled_regions=[region])
         return {"account_id": account_id, "role_name": init.role_name,
-                "external_id_ref": init.external_id_ref,
+                "external_id_ref": init.external_id_ref, "reused": False,
                 "cfn_launch_url": init.cfn_launch_url, "cli": init.cli}
 
     # ── validation ────────────────────────────────────────────────────────────

@@ -160,3 +160,26 @@ def test_result_serializes():
     d = res.to_dict()
     assert d["health"] == "healthy" and d["ok"] is True
     assert all("name" in c and "status" in c for c in d["checks"])
+
+
+# ── regression: empty observed account must NOT reach HEALTHY (fail closed) ────
+def test_empty_observed_account_is_unauthorized_not_healthy():
+    """GetCallerIdentity returning no Account must fail the identity assertion
+    rather than fabricate a 'confirmed' HEALTHY verdict (adversarial finding)."""
+    class NoAcctFactory:
+        def __call__(self, creds, service, region):
+            class STS:
+                def get_caller_identity(self):
+                    return {}            # no Account key
+            class EC2:
+                def describe_regions(self):
+                    return {"Regions": []}
+            return {"sts": STS(), "ec2": EC2()}[service]
+    res = validate_connection(expected_account_id=ACCT, role=ROLE, now_epoch=1,
+                              assume_role_fn=_assume_ok, client_factory=NoAcctFactory(),
+                              external_id="x")
+    assert res.health == ConnectionHealth.UNAUTHORIZED and not res.ok
+    ci = next(c for c in res.checks if c.name == "caller_identity")
+    assert ci.status == "fail" and ci.error_code == "NoCallerAccount"
+    # the canary step is skipped, never fabricates a 'Confirmed account' ok
+    assert not any(c.status == "ok" and "Confirmed" in c.detail for c in res.checks)

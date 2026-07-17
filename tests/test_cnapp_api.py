@@ -94,3 +94,19 @@ def test_missing_account_404():
     c = _client("admin")
     assert c.post("/accounts/999999999999/validate").status_code == 404
     assert c.get("/scans/nope").status_code == 404
+
+
+# ── regression: unset auth hook FAILS CLOSED (denies), never grants admin ─────
+def test_default_auth_hook_denies_everything():
+    TestClient = pytest.importorskip("fastapi.testclient").TestClient
+    app = cnapp_api.create_app(_svc())                       # NO current_role -> deny-all
+    c = TestClient(app)
+    assert c.get("/accounts").status_code == 403             # even a viewer read is denied
+    assert c.post("/accounts", json={"account_id": ACCT}).status_code == 403
+
+
+# ── regression: malformed account id -> 422, not 500 ─────────────────────────
+def test_malformed_account_id_returns_422():
+    c = _client("admin")
+    assert c.post("/accounts", json={"account_id": "abc"}).status_code == 422
+    assert c.post("/accounts", json={"account_id": "12345"}).status_code == 422

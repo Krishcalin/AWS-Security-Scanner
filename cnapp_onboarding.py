@@ -119,4 +119,7 @@ def resolve_external_id(external_id_ref: Optional[str], *, secret_reader: Secret
                          "resolved to a usable ExternalId")
     if ref.startswith(_RESOLVABLE_SCHEMES):
         return secret_reader(ref)
-    raise ValueError(f"unknown external_id_ref scheme: {ref.split('://', 1)[0]!r}")
+    # NEVER echo the ref itself: a schemeless literal here would BE the raw
+    # ExternalId, and this message can reach persisted job errors / logs.
+    scheme = ref.split("://", 1)[0] if "://" in ref else "<no-scheme>"
+    raise ValueError(f"unknown external_id_ref scheme: {scheme!r}")

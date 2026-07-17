@@ -4,6 +4,74 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.9.0] — 2026
+
+**CNAPP Phase 8 — Hosted multi-account platform (onboarding backend).** Turns the
+CLI scanner into a **self-hosted web platform**: an EC2 hub in a dedicated security
+account onboards many AWS accounts through a **read-only CloudFormation cross-account
+role** (single-account stack or org-wide **service-managed StackSet** with
+auto-enroll), validates each connection, and scans them on a schedule. The scan
+engine is UNCHANGED — every new capability is a thin, dependency-injected, offline-
+testable layer over the existing `assume_role_session` / `list_org_accounts` /
+`aggregate_results` and the Phase-6 dual-dialect store. No access keys; agentless.
+
+### Added — onboarding & validation (pure)
+- **`cnapp_onboarding.py`** — mints a server-side **ExternalId** (confused-deputy
+  guard), stores only a `secretsmanager://` / `ssm://` **reference** (never the
+  plaintext), and builds the CloudFormation quick-create **Launch-Stack URL** + CLI.
+  Idempotent re-onboard **reuses** the ExternalId rather than rotating it.
+- **`cnapp_validate.py`** — pure `validate_connection`: `sts:AssumeRole` →
+  `GetCallerIdentity` with a **hard account-match stop** (fail-closed on an empty or
+  mismatched account) → SecurityAudit read canary → `organizations:ListAccounts`.
+  4-state health (validating / healthy / degraded / unauthorized) + a failure
+  taxonomy + exponential re-validation backoff. No boto3.
+
+### Added — registry & orchestration
+- **`cnapp_registry.py`** — `AccountRegistry` over the same state store (new
+  `accounts`, `scan_jobs`, `connection_health` tables). Partial-update upsert that
+  **preserves lifecycle + untouched config** on re-onboard; a `threading.Lock`
+  serializes the shared connection so every multi-statement write (and the
+  failure-count read-modify-write) is atomic.
+- **`cnapp_service.py`** — `PlatformService` facade (all injected deps → unit-
+  testable with fakes) + `serialize_scanner` (byte-lockstep with `save_json` plus
+  `graph_full`) + `org_overview` rollup.
+- **`cnapp_worker.py`** — async job drain that **traps the engine's `sys.exit(2)`**,
+  pre-validates creds (wrong account → denied) fail-closed, and re-checks the
+  account is still active before scanning (closes the enqueue→execute window).
+- **`cnapp_api.py`** — thin FastAPI routers + viewer/admin **RBAC that fails closed**
+  by default (a forgotten auth hook denies, never grants admin). Guarded import — the
+  backend is fully usable/testable without FastAPI installed.
+
+### Added — deployment artifacts (`deploy/`)
+- `cnapp-scanner-role.yaml` (single-account), `cnapp-stackset.md` (org
+  service-managed StackSet + auto-deploy), `cnapp-hub-role.yaml`. Read-only:
+  **SecurityAudit + ViewOnlyAccess** only (never `ReadOnlyAccess`, which reads
+  workload data); EBS side-scan snapshot writes are an opt-in second policy.
+
+### Schema
+- `aws_state` + `aws_state_dialect` gain the 3 onboarding tables (both dialects,
+  `SCHEMA_VERSION` 1→2). Migration replays `IF NOT EXISTS` — non-destructive on a
+  live v1 DB. `build_upsert` now renders `DO NOTHING` for an empty update set.
+
+### Hardening (from a 19-agent read-only adversarial review — 12 confirmed, all fixed)
+- Fail-closed account assertion on empty `GetCallerIdentity`; idempotent re-onboard
+  (no silent ExternalId rotation); connection atomicity via a lock; ExternalId never
+  echoed in an error message / persisted job error; fail-closed RBAC default;
+  fail-closed pre-validate; enqueue→execute TOCTOU re-check; `KeyboardInterrupt` no
+  longer swallowed; sort-order fallback preserves `DESC`; `next_revalidation` aligned
+  to the persisted schedule; `last_scan_at` only on success; malformed input → 4xx.
+
+### Testing
+- **551 tests** (+68 offline: registry / validate / onboarding / service / worker /
+  API / CFN + 15 regression tests for the adversarial findings). All boto3 / psycopg
+  / FastAPI mocked; the whole backend runs offline.
+
+### Still deferred
+- Live PostgresBackend rewire (the registry already speaks both dialects — it is a
+  wiring + live-server task); the React UI (prototype shipped as a design artifact).
+
+---
+
 ## [2.8.0] — 2026
 
 **CNAPP Phase 7 — Remediation + Code-to-Cloud ("close the loop").** Turns the

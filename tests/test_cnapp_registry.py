@@ -133,3 +133,82 @@ def test_list_accounts_filters():
 def test_postgres_url_deferred():
     with pytest.raises(aws_state_dialect.StateBackendUnavailable):
         AccountRegistry.open("postgresql://localhost/cnapp")
+
+
+# ── regression: record_health publishes the authoritative next_due to result ──
+def test_record_health_aligns_result_next_revalidation():
+    r = _reg()
+    r.upsert_account(ACCT, now_epoch=100)
+    res = _vr(ConnectionHealth.UNAUTHORIZED, err="AccessDenied")
+    r.record_health(ACCT, "role", res, 200)                    # cf -> 1
+    res2 = _vr(ConnectionHealth.UNAUTHORIZED, err="AccessDenied")
+    rec = r.record_health(ACCT, "role", res2, 300)             # cf -> 2
+    # the ValidationResult's field now matches the persisted schedule (not cf=0)
+    assert res2.next_revalidation_epoch == rec["next_due_epoch"] == 300 + cadence(
+        ConnectionHealth.UNAUTHORIZED, 2)
+
+
+# ── regression: last_scan_at stamped only on a successful (done) scan ─────────
+def test_last_scan_at_not_stamped_on_error():
+    r = _reg()
+    r.upsert_account(ACCT, now_epoch=10)
+    r.record_scan_job(ACCT, "job-e", "error", now_epoch=50, finished_at=50, error="boom")
+    assert r.get_account(ACCT)["last_scan_at"] is None         # failed attempt doesn't count
+    r.record_scan_job(ACCT, "job-d", "done", now_epoch=90, finished_at=88)
+    assert r.get_account(ACCT)["last_scan_at"] == 88
+
+
+# ── regression: list_scan_jobs is newest-first ───────────────────────────────
+def test_list_scan_jobs_newest_first():
+    r = _reg()
+    r.upsert_account(ACCT, now_epoch=1)
+    for jid, t in [("old", 100), ("new", 300), ("mid", 200)]:
+        r.record_scan_job(ACCT, jid, "running", now_epoch=t, started_at=t)
+    assert [j["job_id"] for j in r.list_scan_jobs()] == ["new", "mid", "old"]
+
+
+# ── regression: partial re-upsert with NO config is still valid SQL ──────────
+def test_noconfig_reupsert_is_valid():
+    r = _reg()
+    r.upsert_account(ACCT, now_epoch=1, alias="a", enabled_regions=["us-east-1"])
+    r.upsert_account(ACCT, now_epoch=2)                        # nothing but updated_at
+    a = r.get_account(ACCT)
+    assert a["alias"] == "a" and a["enabled_regions"] == ["us-east-1"] and a["updated_at"] == 2
+
+
+# ── regression: concurrent same-account record_health serializes the backoff ──
+def test_concurrent_record_health_counts_every_failure():
+    import threading
+    r = _reg()
+    r.upsert_account(ACCT, now_epoch=0)
+    N = 25
+    barrier = threading.Barrier(N)
+
+    def worker(i):
+        barrier.wait()                                        # maximize contention
+        r.record_health(ACCT, "role", _vr(ConnectionHealth.UNAUTHORIZED, err="AccessDenied"),
+                        now_epoch=1000 + i)
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(N)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    row = r._one("SELECT consecutive_failures FROM connection_health WHERE account=?", (ACCT,))
+    assert row["consecutive_failures"] == N                   # no lost update under the lock
+
+
+def test_concurrent_distinct_account_writes_all_persist():
+    import threading
+    r = _reg()
+    ids = [f"{i:012d}" for i in range(1, 41)]
+
+    def worker(aid):
+        r.upsert_account(aid, now_epoch=1)
+        r.record_scan_job(aid, "job-" + aid, "done", now_epoch=2, finished_at=2)
+    threads = [threading.Thread(target=worker, args=(a,)) for a in ids]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(r.list_accounts()) == 40
+    assert len(r.list_scan_jobs()) == 40

@@ -117,3 +117,45 @@ def test_drain_once_runs_all_queued():
     svc.trigger_scan(all=True)
     done = drain_once(svc)
     assert len(done) == 2 and all(j["status"] == "done" for j in done)
+
+
+# ── regression: pre-validate fails CLOSED on empty observed account ───────────
+def test_prevalidate_empty_observed_fails_closed():
+    ran = {"scanned": False}
+    def runner(session, spec):
+        ran["scanned"] = True
+        return _runner(session, spec)
+    svc, reg = _svc(session_factory=lambda aid: FakeSession(aid, reports=""),  # STS returns no acct
+                    scan_runner=runner)
+    _active(reg, ACCT)
+    jid = svc.trigger_scan([ACCT])[0]
+    term = run_scan_job(svc, reg.get_scan_job(jid))
+    assert term["status"] == "error" and ran["scanned"] is False
+    assert reg.get_account(ACCT)["onboarding_status"] == "denied"
+
+
+# ── regression: account disabled after enqueue is skipped (TOCTOU) ───────────
+def test_disabled_after_enqueue_is_skipped_not_scanned():
+    ran = {"scanned": False}
+    def runner(session, spec):
+        ran["scanned"] = True
+        return _runner(session, spec)
+    svc, reg = _svc(scan_runner=runner)
+    _active(reg, ACCT)
+    jid = svc.trigger_scan([ACCT])[0]
+    reg.set_onboarding_status(ACCT, "disabled", 5)          # disabled between enqueue + run
+    term = run_scan_job(svc, reg.get_scan_job(jid))
+    assert term["status"] == "error" and "no longer active" in term["error"]
+    assert ran["scanned"] is False
+    assert reg.get_account(ACCT)["onboarding_status"] == "disabled"   # NOT flipped to denied
+
+
+# ── regression: KeyboardInterrupt is NOT swallowed into a failed job ─────────
+def test_keyboardinterrupt_propagates():
+    def interrupt(session, spec):
+        raise KeyboardInterrupt
+    svc, reg = _svc(scan_runner=interrupt)
+    _active(reg, ACCT)
+    jid = svc.trigger_scan([ACCT])[0]
+    with pytest.raises(KeyboardInterrupt):
+        run_scan_job(svc, reg.get_scan_job(jid))

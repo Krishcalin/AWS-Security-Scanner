@@ -21,7 +21,7 @@ from typing import List, Optional
 
 try:
     from fastapi import Depends, FastAPI, HTTPException, Query
-    from pydantic import BaseModel
+    from pydantic import BaseModel, Field
     _HAVE_FASTAPI = True
 except Exception as _e:                              # pragma: no cover - deploy-only
     _HAVE_FASTAPI = False
@@ -36,10 +36,14 @@ def _authorize(principal_role: str, min_role: str) -> bool:
     return _ROLE_RANK.get(principal_role, 0) >= _ROLE_RANK.get(min_role, 99)
 
 
-def create_app(service, *, current_role=lambda: "admin"):
+def create_app(service, *, current_role=lambda: ""):
     """Build the FastAPI app bound to a PlatformService. ``current_role`` is the
     auth hook (swap for a real SSO/JWT dependency in production); it returns the
-    caller's role for the RBAC gate."""
+    caller's role for the RBAC gate.
+
+    FAIL-CLOSED default: if left unset the hook returns "" (rank 0), which denies
+    EVERY route — a forgotten auth wiring must never silently grant admin. A real
+    deployment MUST pass a current_role that authenticates the caller."""
     if not _HAVE_FASTAPI:                            # pragma: no cover - deploy-only
         raise RuntimeError(
             "cnapp_api requires fastapi + pydantic (deploy-time): "
@@ -58,7 +62,7 @@ def create_app(service, *, current_role=lambda: "admin"):
         return dep
 
     class OnboardReq(BaseModel):
-        account_id: str
+        account_id: str = Field(pattern=r"^[0-9]{12}$")     # 422 on a malformed id
         region: str = "us-east-1"
         method: str = "single"
         alias: str = ""
@@ -70,8 +74,11 @@ def create_app(service, *, current_role=lambda: "admin"):
     # ── onboarding / validation (admin, private control plane) ────────────────
     @app.post("/accounts", status_code=201, dependencies=[Depends(require("admin"))])
     def onboard(body: OnboardReq):
-        return service.init_onboarding(body.account_id, region=body.region,
-                                       method=body.method, alias=body.alias)
+        try:
+            return service.init_onboarding(body.account_id, region=body.region,
+                                           method=body.method, alias=body.alias)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     @app.post("/accounts/{account_id}/validate", dependencies=[Depends(require("admin"))])
     def validate(account_id: str, org_mode: bool = Query(False)):
@@ -79,6 +86,8 @@ def create_app(service, *, current_role=lambda: "admin"):
             return service.validate_account(account_id, org_mode=org_mode)
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     # ── inventory (viewer) ────────────────────────────────────────────────────
     @app.get("/accounts", dependencies=[Depends(require("viewer"))])

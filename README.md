@@ -368,6 +368,48 @@ jobs:
 
 ---
 
+## Hosted CNAPP Platform (multi-account, agentless)
+
+Beyond the CLI, the scanner ships a **self-hosted platform backend** (CNAPP Phase 8)
+for onboarding and continuously scanning many AWS accounts — the Wiz/Orca model,
+agentless and with no access keys.
+
+**Architecture — hub & spoke.** One **hub** (an EC2 instance running the FastAPI
+service + worker + Postgres/SQLite state, in a dedicated security account) reaches
+every onboarded **spoke** account by assuming a **read-only cross-account role**
+(`CnappScannerRole`) that trusts only the hub role under a per-account `sts:ExternalId`
+(confused-deputy guard). Region/AZ are irrelevant to the API scan — control-plane
+endpoints are reachable from anywhere; the hub's own AZ never constrains coverage.
+
+**Onboarding.** Either deploy the single-account CloudFormation stack
+([`deploy/cnapp-scanner-role.yaml`](deploy/cnapp-scanner-role.yaml)) via a one-click
+Launch-Stack URL, or connect an entire **AWS Organization** with a service-managed
+**StackSet** ([`deploy/cnapp-stackset.md`](deploy/cnapp-stackset.md)) that auto-enrolls
+current and future member accounts. The role attaches only **SecurityAudit +
+ViewOnlyAccess** (read-only of configuration/IAM — never workload data).
+
+**Backend modules** (pure, dependency-injected, offline-testable):
+
+| Module | Role |
+|--------|------|
+| `cnapp_onboarding.py` | Mint ExternalId (stored as a secret *reference*), build the CFN launch URL/CLI |
+| `cnapp_validate.py` | `validate_connection`: assume → account-match hard stop → read canary → org list; health + backoff |
+| `cnapp_registry.py` | `AccountRegistry` (accounts / scan_jobs / connection_health) over the dual-dialect state store |
+| `cnapp_service.py` | `PlatformService` facade + `serialize_scanner` + org rollup |
+| `cnapp_worker.py` | Async scan-job execution (traps engine exit, pre-validates creds, TOCTOU re-check) |
+| `cnapp_api.py` | FastAPI routes + viewer/admin RBAC (fail-closed), guarded import |
+
+**HTTP surface** (all delegate to `PlatformService`; admin routes stay on the private
+hub control plane): `POST /accounts` (onboard → launch URL), `POST /accounts/{id}/validate`,
+`GET /accounts`, `POST /scans`, `GET /scans/{job_id}`,
+`GET /accounts/{id}/issues|paths|graph`, `GET /org/overview`.
+
+> Status: backend + onboarding + validation + registry + scan orchestration shipped
+> and tested offline (mocked STS/Org/PG/FastAPI). Live PostgresBackend wiring and the
+> React UI are the remaining pieces.
+
+---
+
 ## When to Use Which Scanner
 
 | Scenario | Recommended Scanner |
