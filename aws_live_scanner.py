@@ -70,7 +70,7 @@ import aws_unused
 import aws_sidescan
 import aws_graph_neptune
 
-VERSION = "2.10.0"
+VERSION = "2.11.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -86,7 +86,7 @@ STATUS_ICON  = {"PASS": "[PASS]", "FAIL": "[FAIL]", "WARN": "[WARN]", "INFO": "[
 # ─── Section registry ─────────────────────────────────────────────────────────
 SECTIONS = [
     "IAM", "S3", "VPC", "LOGGING", "KMS", "EC2",
-    "ECR", "BACKUP", "RDS", "GLACIER", "SNS", "SQS",
+    "AMI", "ECR", "BACKUP", "RDS", "GLACIER", "SNS", "SQS",
     "CLOUDFRONT", "ROUTE53", "BEDROCK", "BEDROCK_AGENTS",
     "LAMBDA", "EKS", "ECS", "SECRETS", "WAF",
     "ELASTICACHE", "OPENSEARCH", "DYNAMODB", "STEPFUNCTIONS",
@@ -102,6 +102,7 @@ SECTION_LABELS = {
     "LOGGING":        "LOGGING & MONITORING",
     "KMS":            "ENCRYPTION & KMS",
     "EC2":            "COMPUTE SECURITY",
+    "AMI":            "MACHINE IMAGES (AMI)",
     "ECR":            "CONTAINER SECURITY",
     "BACKUP":         "BACKUP & DR",
     "RDS":            "AMAZON RDS",
@@ -169,7 +170,8 @@ CHECK_SEVERITY = {
     "KMS-03": "HIGH",
     "EC2-04": "HIGH", "EC2-05": "MEDIUM", "EC2-06": "HIGH",
     "EC2-08": "HIGH",
-    "CNT-01": "MEDIUM",
+    "AMI-01": "HIGH",
+    "CNT-01": "MEDIUM", "CNT-02": "HIGH",
     "BCK-01": "MEDIUM",
     "RDS-01": "HIGH", "RDS-02": "CRITICAL", "RDS-03": "MEDIUM",
     "RDS-04": "MEDIUM", "RDS-05": "LOW", "RDS-06": "CRITICAL",
@@ -281,6 +283,7 @@ COMPLIANCE_MAP = {
     "EC2-05": {"CIS": "5.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EC2-08": {"CIS": "5.6", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EC2-06": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "AMI-01": {"CIS": "2.3.3", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     # RDS
     "RDS-01": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "RDS-02": {"CIS": "2.3.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
@@ -378,6 +381,7 @@ COMPLIANCE_MAP = {
     "CHOKEPOINT-01": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "CA-8"},
     # ── Backfill: FAIL-capable checks previously missing a compliance mapping ──
     "CNT-01": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5"},
+    "CNT-02": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5"},
     "BCK-01": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
     "SNS-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SNS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
@@ -512,6 +516,8 @@ REMEDIATION_MAP = {
     "IAMPE-21": "Break the escalation chain at its weakest hop: remove the privesc-granting permission from the assumable target role, OR restrict who can assume it (aws iam update-assume-role-policy --role-name <ROLE> --policy-document <TIGHTER_TRUST>). Apply a permissions boundary to the chain's entry principal.",
     "IAMPE-22": "Restrict the role trust policy to specific principal ARNs (remove Principal '*'): aws iam update-assume-role-policy --role-name <ROLE> --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"<TRUSTED_ARN>\"},\"Action\":\"sts:AssumeRole\",\"Condition\":{\"StringEquals\":{\"sts:ExternalId\":\"<ID>\"}}}]}'",
     "CNT-01": "Enable scan-on-push and pull existing findings: aws ecr put-image-scanning-configuration --repository-name <REPO> --image-scanning-configuration scanOnPush=true",
+    "CNT-02": "Rebuild the image on a patched base and push the new digest; delete the vulnerable image: aws ecr batch-delete-image --repository-name <REPO> --image-ids imageDigest=<DIGEST>. Enable Inspector enhanced scanning for continuous coverage.",
+    "AMI-01": "Revoke public/cross-account AMI sharing (a public AMI exposes its full disk snapshot): aws ec2 modify-image-attribute --image-id <AMI_ID> --launch-permission '{\"Remove\":[{\"Group\":\"all\"}]}' ; audit remaining account-level shares.",
     "GLC-01": "Remove public Glacier vault access policy: aws glacier set-vault-access-policy --vault-name <VAULT> --policy '{\"Policy\":\"<LEAST_PRIVILEGE_POLICY>\"}'",
     "SQS-02": "Restrict the queue policy to trusted principals: aws sqs set-queue-attributes --queue-url <URL> --attributes Policy='<LEAST_PRIVILEGE_POLICY>'",
     "R53-03": "Enable DNSSEC signing: aws route53 enable-hosted-zone-dnssec --hosted-zone-id <ZONE_ID>",
@@ -1646,6 +1652,55 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 7: CONTAINER SECURITY (ECR)
     # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 7b: MACHINE IMAGES (AMI)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_ami(self):
+        self._section_header("AMI")
+        self._log("AMI-01: self-owned AMIs shared publicly or cross-account "
+                  "(a public AMI exposes its full root-volume snapshot to every AWS account)")
+        try:
+            ec2    = self._client("ec2")
+            images = ec2.describe_images(Owners=["self"]).get("Images", [])
+        except Exception as e:
+            self._add("WARN", "AMI-01", "AMI", "ami", str(e))
+            return
+        if not images:
+            self._add("INFO", "AMI-01", "AMI", "ami", "No self-owned AMIs in this region")
+            return
+        exposed = 0
+        for img in images:
+            aid  = img.get("ImageId", "ami-?")
+            name = img.get("Name") or aid
+            label = f"{name} ({aid})" if name != aid else aid
+            if img.get("Public") is True:
+                exposed += 1
+                self._add("FAIL", "AMI-01", "AMI", label,
+                          f"AMI shared PUBLICLY — root-volume snapshot readable by any AWS "
+                          f"account | {aid}")
+                continue
+            # non-public: enumerate explicit cross-account launch shares
+            try:
+                perms = ec2.describe_image_attribute(
+                    ImageId=aid, Attribute="launchPermission"
+                ).get("LaunchPermissions", [])
+            except Exception:
+                perms = []
+            accounts = [p.get("UserId") for p in perms if p.get("UserId")]
+            group_all = any(p.get("Group") == "all" for p in perms)
+            if group_all:
+                exposed += 1
+                self._add("FAIL", "AMI-01", "AMI", label,
+                          f"AMI launch permission grants Group=all (public) | {aid}")
+            elif accounts:
+                exposed += 1
+                self._add("WARN", "AMI-01", "AMI", label,
+                          f"AMI shared with {len(accounts)} external account(s): "
+                          f"{', '.join(accounts[:5])}{'…' if len(accounts) > 5 else ''} | {aid}")
+        if exposed == 0:
+            self._add("PASS", "AMI-01", "AMI", "ami",
+                      f"All {len(images)} self-owned AMI(s) are private (no public/cross-account share)")
+
     def _check_ecr(self):
         self._section_header("ECR")
         self._log("CNT-01: ECR scan-on-push and encryption")
@@ -1670,8 +1725,57 @@ class AWSLiveScanner:
                 else:
                     self._add("FAIL", "CNT-01", "ECR", rname,
                               f"Scan-on-push=OFF enc={enc} | {rname}")
+                self._ingest_ecr_scan(ecr, repo)
         except Exception as e:
             self._add("WARN", "CNT-01", "ECR", "ecr", str(e))
+
+    def _ingest_ecr_scan(self, ecr, repo: Dict) -> None:
+        """CNT-02 — pull the ECR *native* image-scan findings for the newest image in a
+        repo and project HIGH/CRITICAL CVEs into the graph as ECRImage --HAS_VULN-->.
+        This is free basic-scan signal that surfaces even when Amazon Inspector
+        (enhanced scanning) is disabled. Bounded and fully best-effort."""
+        rname = repo["repositoryName"]
+        ruri  = repo.get("repositoryUri", rname)
+        try:
+            imgs = ecr.describe_images(
+                repositoryName=rname, filter={"tagStatus": "ANY"}
+            ).get("imageDetails", [])
+        except Exception:
+            return
+        if not imgs:
+            return
+        latest = max(imgs, key=lambda d: d.get("imagePushedAt") or 0)
+        digest = latest.get("imageDigest")
+        if not digest:
+            return
+        try:
+            resp = ecr.describe_image_scan_findings(
+                repositoryName=rname, imageId={"imageDigest": digest}
+            )
+        except Exception:
+            return   # ScanNotFoundException / not scanned yet — CNT-01 already flags this
+        sf = resp.get("imageScanFindings", {}) or {}
+        # normalise basic-scan (findings) and enhanced-scan (enhancedFindings) shapes
+        norm: List[tuple] = []
+        for f in sf.get("findings", []):
+            norm.append((f.get("name", ""), (f.get("severity") or "").upper()))
+        for ef in sf.get("enhancedFindings", []):
+            cve = (ef.get("packageVulnerabilityDetails", {}) or {}).get("vulnerabilityId", "")
+            norm.append((cve, (ef.get("severity") or "").upper()))
+        cves = [(c, sev) for c, sev in norm if c and sev in ("CRITICAL", "HIGH")]
+        if not cves:
+            return
+        g = self._ensure_graph()
+        node = f"{ruri}@{digest}"
+        g.add_node(node, "ECRImage", repository=rname, digest=digest, image_uri=ruri)
+        tags = latest.get("imageTags") or []
+        tag_s = f":{tags[0]}" if tags else ""
+        for cve, sev in cves[:100]:
+            g.add_node(cve, "Vulnerability", severity=sev, source="ecr-native-scan")
+            g.add_edge(node, cve, "HAS_VULN", cve=cve, severity=sev, source="ecr-native-scan")
+            self._add("FAIL", "CNT-02", "ECR", f"{rname}{tag_s}",
+                      f"container-image {sev} {cve} in newest image of {rname} "
+                      f"(ECR native scan) | {rname}@{digest[:19]}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 8: BACKUP & DR
@@ -5326,6 +5430,7 @@ class AWSLiveScanner:
             "LOGGING":        self._check_logging,
             "KMS":            self._check_kms,
             "EC2":            self._check_ec2,
+            "AMI":            self._check_ami,
             "ECR":            self._check_ecr,
             "BACKUP":         self._check_backup,
             "RDS":            self._check_rds,

@@ -219,3 +219,133 @@ def test_vuln_04_map_entries_complete():
     assert A.CHECK_SEVERITY.get("VULN-04") == "HIGH"
     assert "VULN-04" in A.COMPLIANCE_MAP
     assert "aws " in A.REMEDIATION_MAP.get("VULN-04", "").lower()
+
+
+# ── AMI-01 — self-owned AMI shared publicly / cross-account ──────────────────
+def _ami_scanner(images, attrs=None):
+    s = make_scanner(["AMI"])
+    ec2 = MagicMock()
+    ec2.describe_images.return_value = {"Images": images}
+    attrs = attrs or {}
+    ec2.describe_image_attribute.side_effect = lambda ImageId, Attribute: {
+        "LaunchPermissions": attrs.get(ImageId, [])}
+    s._clients["ec2:us-east-1"] = ec2
+    return s
+
+
+def test_ami_01_public_fails_and_shared_warns():
+    s = _ami_scanner(
+        [{"ImageId": "ami-pub", "Name": "golden", "Public": True},
+         {"ImageId": "ami-share", "Name": "app", "Public": False},
+         {"ImageId": "ami-priv", "Name": "internal", "Public": False}],
+        attrs={"ami-share": [{"UserId": "999988887777"}], "ami-priv": []})
+    s._check_ami()
+    fails = [r for r in s.results if r.check_id == "AMI-01" and r.status == "FAIL"]
+    warns = [r for r in s.results if r.check_id == "AMI-01" and r.status == "WARN"]
+    assert len(fails) == 1 and "ami-pub" in fails[0].resource
+    assert fails[0].severity == "HIGH"
+    assert len(warns) == 1 and "999988887777" in warns[0].message
+    # a mixed estate never emits the all-clear PASS
+    assert not any(r.check_id == "AMI-01" and r.status == "PASS" for r in s.results)
+
+
+def test_ami_01_group_all_launch_permission_fails():
+    s = _ami_scanner([{"ImageId": "ami-x", "Name": "x", "Public": False}],
+                     attrs={"ami-x": [{"Group": "all"}]})
+    s._check_ami()
+    assert any(r.check_id == "AMI-01" and r.status == "FAIL" and "ami-x" in r.resource
+               for r in s.results)
+
+
+def test_ami_01_all_private_passes():
+    s = _ami_scanner([{"ImageId": "ami-a", "Name": "a", "Public": False},
+                      {"ImageId": "ami-b", "Name": "b", "Public": False}],
+                     attrs={"ami-a": [], "ami-b": []})
+    s._check_ami()
+    assert any(r.check_id == "AMI-01" and r.status == "PASS" for r in s.results)
+    assert not any(r.check_id == "AMI-01" and r.status in ("FAIL", "WARN") for r in s.results)
+
+
+def test_ami_01_no_images_is_info():
+    s = _ami_scanner([])
+    s._check_ami()
+    assert any(r.check_id == "AMI-01" and r.status == "INFO" for r in s.results)
+
+
+def test_ami_01_map_entries_complete():
+    assert A.CHECK_SEVERITY.get("AMI-01") == "HIGH"
+    assert "AMI-01" in A.COMPLIANCE_MAP
+    assert "aws " in A.REMEDIATION_MAP.get("AMI-01", "").lower()
+
+
+# ── CNT-02 — ECR native-scan CVE ingest (works even when Inspector is off) ────
+def _ecr_scanner(repos, images=None, findings=None, findings_exc=None):
+    s = make_scanner(["ECR"])
+    ecr = MagicMock()
+    ecr.describe_repositories.return_value = {"repositories": repos}
+    ecr.describe_images.return_value = {"imageDetails": images or []}
+    if findings_exc is not None:
+        ecr.describe_image_scan_findings.side_effect = findings_exc
+    else:
+        ecr.describe_image_scan_findings.return_value = {
+            "imageScanFindings": findings or {}}
+    s._clients["ecr:us-east-1"] = ecr
+    return s
+
+
+_REPO = {"repositoryName": "app",
+         "repositoryUri": "1.dkr.ecr.us-east-1.amazonaws.com/app",
+         "imageScanningConfiguration": {"scanOnPush": True},
+         "encryptionConfiguration": {"encryptionType": "AES256"}}
+
+
+def test_cnt_02_ingests_high_critical_from_newest_image():
+    s = _ecr_scanner(
+        [_REPO],
+        images=[{"imageDigest": "sha256:new", "imagePushedAt": 100, "imageTags": ["v2"]},
+                {"imageDigest": "sha256:old", "imagePushedAt": 50, "imageTags": ["v1"]}],
+        findings={"findings": [
+            {"name": "CVE-2024-1", "severity": "CRITICAL"},
+            {"name": "CVE-2024-2", "severity": "HIGH"},
+            {"name": "CVE-2024-3", "severity": "MEDIUM"}]})   # filtered out
+    s._check_ecr()
+    c2 = [r for r in s.results if r.check_id == "CNT-02" and r.status == "FAIL"]
+    assert len(c2) == 2 and all("app:v2" == r.resource for r in c2)
+    st = s.graph.stats()
+    assert "ECRImage" in st["node_kinds"] and "HAS_VULN" in st["edge_kinds"]
+    # the newest image (by imagePushedAt) is the one scanned
+    assert any("sha256:new" in (e.get("dst", "") + e.get("src", ""))
+               for e in s.graph.edges("HAS_VULN"))
+
+
+def test_cnt_02_enhanced_findings_shape():
+    s = _ecr_scanner(
+        [_REPO],
+        images=[{"imageDigest": "sha256:e", "imagePushedAt": 1, "imageTags": []}],
+        findings={"enhancedFindings": [
+            {"severity": "HIGH",
+             "packageVulnerabilityDetails": {"vulnerabilityId": "CVE-2025-9"}}]})
+    s._check_ecr()
+    assert any(r.check_id == "CNT-02" and "CVE-2025-9" in r.message for r in s.results)
+
+
+def test_cnt_02_scan_not_found_is_silent():
+    s = _ecr_scanner([_REPO],
+                     images=[{"imageDigest": "sha256:z", "imagePushedAt": 1}],
+                     findings_exc=RuntimeError("ScanNotFoundException"))
+    s._check_ecr()
+    assert not any(r.check_id == "CNT-02" for r in s.results)
+    # CNT-01 still ran and passed
+    assert any(r.check_id == "CNT-01" for r in s.results)
+
+
+def test_cnt_02_no_images_no_findings():
+    s = _ecr_scanner([_REPO], images=[])
+    s._check_ecr()
+    assert not any(r.check_id == "CNT-02" for r in s.results)
+
+
+def test_cnt_02_map_entries_complete():
+    assert A.CHECK_SEVERITY.get("CNT-02") == "HIGH"
+    assert "CNT-02" in A.COMPLIANCE_MAP
+    assert "aws " in A.REMEDIATION_MAP.get("CNT-02", "").lower()
