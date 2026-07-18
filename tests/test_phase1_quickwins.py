@@ -622,3 +622,50 @@ def test_log_06_map_entries_complete():
     assert A.CHECK_SEVERITY.get("LOG-06") == "MEDIUM"
     assert "LOG-06" in A.COMPLIANCE_MAP
     assert "aws " in A.REMEDIATION_MAP.get("LOG-06", "").lower()
+
+
+# ── CVSS v3 vector-string base-score fix (aws_sidescan._cvss_base) ────────────
+import aws_sidescan as SS
+
+
+def test_cvss3_base_from_vector_known_scores():
+    cases = {
+        "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H": 9.8,   # critical RCE
+        "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H": 7.5,   # unauth DoS
+        "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N": 5.3,   # info leak
+        "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H": 7.8,   # local privesc
+        "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N": 6.1,   # reflected XSS (scope changed)
+        "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H": 9.8,   # v3.0 also supported
+    }
+    for vec, want in cases.items():
+        assert SS._cvss3_base_from_vector(vec) == want, vec
+
+
+def test_cvss3_base_from_vector_rejects_non_v3():
+    assert SS._cvss3_base_from_vector("AV:N/AC:L/Au:N/C:P/I:P/A:P") is None   # v2
+    assert SS._cvss3_base_from_vector("CVSS:4.0/AV:N/AC:L/AT:N/PR:N") is None  # v4
+    assert SS._cvss3_base_from_vector("garbage") is None
+    assert SS._cvss3_base_from_vector("") is None
+    assert SS._cvss3_base_from_vector("CVSS:3.1/AV:X/AC:L") is None            # bad metric
+
+
+def test_cvss_base_prefers_numeric_then_vector():
+    # numeric score used directly
+    assert SS._cvss_base({"severity": [{"type": "CVSS_V3", "score": "8.1"}]}) == 8.1
+    # vector string computed (was previously dropped -> None -> wrong MEDIUM band)
+    rec = {"severity": [{"type": "CVSS_V3",
+                         "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}]}
+    assert SS._cvss_base(rec) == 9.8
+    assert SS._band(SS._cvss_base(rec)) == "CRITICAL"   # not the old MEDIUM fallback
+    # no severity at all -> None
+    assert SS._cvss_base({"severity": []}) is None
+
+
+def test_scan_text_secrets_preview_only():
+    """scan_text_secrets returns findings but never the raw secret (preview only)."""
+    data = b"AKIAIOSFODNN7REALKEYX\n-----BEGIN RSA PRIVATE KEY-----\n"
+    finds = SS.scan_text_secrets(data, source="userdata:i-1")
+    kinds = {f.kind for f in finds}
+    assert "private-key" in kinds
+    for f in finds:
+        assert "…" in f.match_preview and f.path == "userdata:i-1"

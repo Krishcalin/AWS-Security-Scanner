@@ -781,12 +781,58 @@ def prefer_cve(rec: dict) -> str:
     return str(rec.get("id", "")).upper()
 
 
+def _cvss3_base_from_vector(vector: str) -> Optional[float]:
+    """Compute the CVSS v3.0/3.1 base score from a vector string
+    (e.g. 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H'). Returns None for
+    non-v3 vectors (v2/v4) or malformed input — the caller then falls back to
+    the database-specific severity band."""
+    if not vector or not vector.upper().startswith("CVSS:3"):
+        return None
+    m = dict(p.split(":", 1) for p in vector.split("/")[1:] if ":" in p)
+    try:
+        av = {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.2}[m["AV"]]
+        ac = {"L": 0.77, "H": 0.44}[m["AC"]]
+        ui = {"N": 0.85, "R": 0.62}[m["UI"]]
+        scope_changed = m["S"] == "C"
+        pr_key = m["PR"]
+        pr = ({"N": 0.85, "L": 0.68, "H": 0.5} if scope_changed
+              else {"N": 0.85, "L": 0.62, "H": 0.27})[pr_key]
+        imp = {"H": 0.56, "L": 0.22, "N": 0.0}
+        c, i, a = imp[m["C"]], imp[m["I"]], imp[m["A"]]
+    except (KeyError, ValueError):
+        return None
+
+    iss = 1 - ((1 - c) * (1 - i) * (1 - a))
+    if scope_changed:
+        impact = 7.52 * (iss - 0.029) - 3.25 * (iss - 0.02) ** 15
+    else:
+        impact = 6.42 * iss
+    if impact <= 0:
+        return 0.0
+    exploitability = 8.22 * av * ac * pr * ui
+    raw = (1.08 * (impact + exploitability) if scope_changed
+           else impact + exploitability)
+    return _cvss_roundup(min(raw, 10.0))
+
+
+def _cvss_roundup(x: float) -> float:
+    """CVSS v3.1 roundup — round up to one decimal, avoiding binary-float drift."""
+    n = int(round(x * 100000))
+    if n % 10000 == 0:
+        return n / 100000.0
+    return (math.floor(n / 10000) + 1) / 10.0
+
+
 def _cvss_base(rec: dict) -> Optional[float]:
     for s in rec.get("severity", []):
+        score = s.get("score")
         try:
-            return float(s.get("score"))
+            return float(score)
         except (TypeError, ValueError):
-            # CVSS vector string, not a base score — skip (band from db-specific)
+            # score is a CVSS vector string — compute the v3 base score from it
+            vec = _cvss3_base_from_vector(str(score))
+            if vec is not None:
+                return vec
             continue
     return None
 
