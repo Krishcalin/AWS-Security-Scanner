@@ -161,11 +161,14 @@ CHECK_SEVERITY = {
     "CWPP-01": "HIGH", "CWPP-02": "CRITICAL", "CWPP-03": "HIGH",
     "IAM-01": "CRITICAL", "IAM-02": "CRITICAL", "IAM-04": "HIGH",
     "IAM-05": "MEDIUM", "IAM-06": "HIGH", "IAM-10": "MEDIUM",
+    "IAM-07": "MEDIUM", "IAM-08": "MEDIUM",
     "S3-01": "HIGH", "S3-03": "HIGH", "S3-05": "MEDIUM",
     "VPC-01": "HIGH", "VPC-03": "MEDIUM",
     "LOG-01": "CRITICAL", "LOG-03": "HIGH", "LOG-04": "CRITICAL", "LOG-05": "MEDIUM",
     "ENC-03": "MEDIUM",
+    "KMS-03": "HIGH",
     "EC2-04": "HIGH", "EC2-05": "MEDIUM", "EC2-06": "HIGH",
+    "EC2-08": "HIGH",
     "CNT-01": "MEDIUM",
     "BCK-01": "MEDIUM",
     "RDS-01": "HIGH", "RDS-02": "CRITICAL", "RDS-03": "MEDIUM",
@@ -201,6 +204,7 @@ CHECK_SEVERITY = {
     "RS-01": "HIGH", "RS-02": "HIGH", "RS-03": "MEDIUM", "RS-04": "MEDIUM", "RS-05": "LOW",
     "EFS-01": "HIGH", "EFS-02": "MEDIUM", "EFS-03": "LOW",
     "ACM-01": "HIGH", "ACM-02": "MEDIUM", "ACM-03": "LOW",
+    "ACM-04": "HIGH", "ACM-05": "MEDIUM",
     "SM-01": "HIGH", "SM-02": "MEDIUM", "SM-03": "MEDIUM", "SM-04": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
     "AGW2-01": "MEDIUM", "AGW2-02": "HIGH", "AGW2-03": "LOW",
@@ -253,6 +257,8 @@ COMPLIANCE_MAP = {
     "IAM-04": {"CIS": "1.10", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
     "IAM-05": {"CIS": "1.8", "PCI-DSS": "8.3.6", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "IA-5(1)"},
     "IAM-06": {"CIS": "1.14", "PCI-DSS": "8.6.3", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.2", "NIST": "IA-5(1)"},
+    "IAM-07": {"CIS": "1.7", "SOC2": "CC6.1", "NIST": "AC-6(5)"},
+    "IAM-08": {"CIS": "1.12", "PCI-DSS": "8.2.6", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "AC-2(3)"},
     "IAM-10": {"CIS": "1.20", "PCI-DSS": "11.5", "HIPAA": "164.312(b)", "SOC2": "CC7.1", "NIST": "AC-6"},
     # S3
     "S3-01": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
@@ -268,9 +274,11 @@ COMPLIANCE_MAP = {
     "LOG-05": {"CIS": "4.16", "PCI-DSS": "11.5", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
     # KMS
     "ENC-03": {"CIS": "3.8", "PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
+    "KMS-03": {"NIST": "SC-12", "SOC2": "CC6.1", "HIPAA": "164.312(a)(2)(iv)"},
     # EC2
     "EC2-04": {"CIS": "5.6", "PCI-DSS": "2.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.1", "NIST": "CM-6"},
     "EC2-05": {"CIS": "5.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EC2-08": {"CIS": "5.6", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EC2-06": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     # RDS
     "RDS-01": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
@@ -400,6 +408,8 @@ COMPLIANCE_MAP = {
     "ELB-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CM-6"},
     "RS-05": {"PCI-DSS": "8.2.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "IA-2"},
     "ACM-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
+    "ACM-04": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
+    "ACM-05": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
     "COG-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CM-6"},
     "AGW2-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SC-5"},
     "LMB-05": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
@@ -415,6 +425,8 @@ REMEDIATION_MAP = {
     "IAM-04": "Enable MFA for user: aws iam enable-mfa-device --user-name <USER> --serial-number <MFA_ARN> --authentication-code1 <CODE1> --authentication-code2 <CODE2>",
     "IAM-05": "Update password policy: aws iam update-account-password-policy --minimum-password-length 14 --require-symbols --require-numbers --require-uppercase-characters --max-password-age 90 --password-reuse-prevention 24",
     "IAM-06": "Deactivate stale key: aws iam update-access-key --access-key-id <KEY_ID> --status Inactive --user-name <USER>",
+    "IAM-07": "Stop using the root user for daily tasks (use IAM roles) and alarm on root usage: aws cloudwatch put-metric-alarm --alarm-name root-account-usage --metric-name RootAccountUsage --namespace CISBenchmark --statistic Sum --period 300 --threshold 1 --comparison-operator GreaterThanOrEqualToThreshold",
+    "IAM-08": "Disable credentials unused for 45+ days: aws iam update-access-key --access-key-id <KEY_ID> --status Inactive --user-name <USER> (and remove console access if the password is unused)",
     "IAM-10": "Create Access Analyzer: aws accessanalyzer create-analyzer --analyzer-name account-analyzer --type ACCOUNT --region <REGION>",
     "S3-01": "Enable account BPA: aws s3control put-public-access-block --account-id <ACCT> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "S3-03": "Enable bucket encryption: aws s3api put-bucket-encryption --bucket <BUCKET> --server-side-encryption-configuration '{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\"}}]}'",
@@ -426,8 +438,10 @@ REMEDIATION_MAP = {
     "LOG-04": "Enable GuardDuty: aws guardduty create-detector --enable",
     "LOG-05": "Enable Security Hub: aws securityhub enable-security-hub --enable-default-standards",
     "ENC-03": "Enable key rotation: aws kms enable-key-rotation --key-id <KEY_ID>",
+    "KMS-03": "Cancel deletion if the CMK is still in use, or re-enable a disabled key: aws kms cancel-key-deletion --key-id <KEY_ID> ; aws kms enable-key --key-id <KEY_ID>",
     "EC2-04": "Enforce IMDSv2: aws ec2 modify-instance-metadata-options --instance-id <INSTANCE_ID> --http-tokens required --http-endpoint enabled",
     "EC2-06": "Enable default EBS encryption: aws ec2 enable-ebs-encryption-by-default",
+    "EC2-08": "Enforce IMDSv2 AND remove the public exposure (SSRF->credential path): aws ec2 modify-instance-metadata-options --instance-id <INSTANCE_ID> --http-tokens required --http-endpoint enabled ; then place the instance behind a load balancer / remove the public IP",
     "RDS-01": "Create encrypted copy: aws rds create-db-snapshot --db-instance-identifier <DB_ID> --db-snapshot-identifier pre-encrypt-snap && aws rds copy-db-snapshot --source-db-snapshot-identifier pre-encrypt-snap --target-db-snapshot-identifier encrypted-snap --kms-key-id <KMS_KEY>",
     "RDS-02": "Disable public access: aws rds modify-db-instance --db-instance-identifier <DB_ID> --no-publicly-accessible",
     "RDS-04": "Enable deletion protection: aws rds modify-db-instance --db-instance-identifier <DB_ID> --deletion-protection",
@@ -472,6 +486,8 @@ REMEDIATION_MAP = {
     "EFS-03": "Enable backups: aws efs put-backup-policy --file-system-id <FS_ID> --backup-policy Status=ENABLED",
     "ACM-01": "Renew/replace certificate before expiry: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS",
     "ACM-02": "Reissue with strong key: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS --key-algorithm RSA_2048",
+    "ACM-04": "Re-request the failed/revoked certificate: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS",
+    "ACM-05": "Migrate imported / non-auto-renewing certs to an ACM-managed (auto-renewing) certificate: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS",
     "SM-01": "Disable direct internet: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --direct-internet-access Disabled (recreate may be required; attach to a private subnet)",
     "SM-02": "Disable root access: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --root-access Disabled",
     "SM-03": "Set KMS key at creation: aws sagemaker create-notebook-instance --notebook-instance-name <NB> --kms-key-id <KMS_KEY> --instance-type ml.t3.medium --role-arn <ROLE>",
@@ -939,6 +955,26 @@ def diff_findings(current: List[Result], baseline_results: List[Dict]) -> Dict:
     }
 
 
+# ─── IAM credential-report age helpers (used by IAM-06/07/08) ────────────────
+def _cred_age_days(iso_ts: str) -> Optional[int]:
+    """Days since an IAM credential-report timestamp, or None when the field is
+    empty / 'N/A' / 'no_information' / 'not_supported' or unparseable."""
+    if not iso_ts or iso_ts in ("N/A", "no_information", "not_supported"):
+        return None
+    try:
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(iso_ts)).days
+    except Exception:
+        return None
+
+
+def _cred_idle_days(last_used: str, created: str) -> Optional[int]:
+    """How long a credential has been idle: days since last use, or (if never used)
+    days since it was created/rotated. None if neither timestamp is usable, so the
+    caller skips the credential rather than false-flagging it."""
+    d = _cred_age_days(last_used)
+    return d if d is not None else _cred_age_days(created)
+
+
 # ─── Scanner ──────────────────────────────────────────────────────────────────
 class AWSLiveScanner:
     """Live, read-only AWS security audit scanner."""
@@ -1163,6 +1199,45 @@ class AWSLiveScanner:
                             self._add("PASS", "IAM-06", "IAM",
                                       f"{user}/{k}",
                                       f"{user} {k} age={age}d OK")
+
+        # IAM-07 — Root account recent use (CIS 1.7); zero new API (cached report)
+        self._log("IAM-07: Root account recent use")
+        root = next((r for r in self._get_credential_report()
+                     if r.get("user") == "<root_account>"), None)
+        if root:
+            recent = []
+            for f in ("password_last_used", "access_key_1_last_used_date",
+                      "access_key_2_last_used_date"):
+                d = _cred_age_days(root.get(f, ""))
+                if d is not None and d <= 30:
+                    recent.append(f"{f.replace('_last_used_date','').replace('_',' ')}={d}d")
+            if recent:
+                self._add("FAIL", "IAM-07", "IAM", "root",
+                          f"Root account used within 30 days ({', '.join(recent)}) — "
+                          f"CIS 1.7: use IAM roles, not root, for daily tasks")
+            else:
+                self._add("PASS", "IAM-07", "IAM", "root",
+                          "No root credential use in the last 30 days")
+
+        # IAM-08 — Credentials unused for 45+ days (CIS 1.12); zero new API
+        self._log("IAM-08: Credentials unused for 45+ days")
+        for row in self._get_credential_report():
+            user = row.get("user", "")
+            if user == "<root_account>":
+                continue
+            if row.get("password_enabled") == "true":
+                idle = _cred_idle_days(row.get("password_last_used", ""),
+                                       row.get("user_creation_time", ""))
+                if idle is not None and idle > 45:
+                    self._add("FAIL", "IAM-08", "IAM", user,
+                              f"Console password unused {idle}d (>45) — disable it | {user}")
+            for k in ("access_key_1", "access_key_2"):
+                if row.get(f"{k}_active") == "true":
+                    idle = _cred_idle_days(row.get(f"{k}_last_used_date", ""),
+                                           row.get(f"{k}_last_rotated", ""))
+                    if idle is not None and idle > 45:
+                        self._add("FAIL", "IAM-08", "IAM", f"{user}/{k}",
+                                  f"{k} unused {idle}d (>45) — deactivate it | {user}")
 
         # IAM-10 — Access Analyzer in all regions
         self._log("IAM-10: Access Analyzer enabled in all regions")
@@ -1444,6 +1519,19 @@ class AWSLiveScanner:
                     kid = key["KeyId"]
                     try:
                         meta = kms.describe_key(KeyId=kid)["KeyMetadata"]
+                        # KMS-03 — CMK pending deletion / disabled (data-access risk)
+                        if meta.get("KeyManager") == "CUSTOMER":
+                            _st = meta.get("KeyState")
+                            _dsc = meta.get("Description") or kid[:8]
+                            if _st == "PendingDeletion":
+                                self._add("FAIL", "KMS-03", "KMS", kid,
+                                          f"CMK scheduled for deletion "
+                                          f"({meta.get('DeletionDate','')}) — irreversible "
+                                          f"data loss if still in use | {_dsc}")
+                            elif _st == "Disabled":
+                                self._add("FAIL", "KMS-03", "KMS", kid,
+                                          f"CMK is disabled — ciphertext under this key "
+                                          f"cannot be decrypted | {_dsc}")
                         if (meta.get("KeyManager") == "CUSTOMER"
                                 and meta.get("KeyState") == "Enabled"):
                             found    = True
@@ -1499,6 +1587,14 @@ class AWSLiveScanner:
                                       f"IMDSv2 not enforced "
                                       f"(HttpTokens={tokens}) | {name}")
                             all_pass = False
+                        # EC2-08 — SSRF->credential choke: public IP + IMDSv1
+                        # (both facts already in hand; no extra API call)
+                        if tokens != "required" and i.get("PublicIpAddress"):
+                            self._add("FAIL", "EC2-08", "EC2", name,
+                                      f"SSRF-to-credential exposure: public IP "
+                                      f"{i['PublicIpAddress']} + IMDSv1 "
+                                      f"(HttpTokens={tokens}) — an SSRF on this host "
+                                      f"can read its role credentials | {name}")
             if all_pass:
                 self._add("PASS", "EC2-04", "EC2", "all-instances",
                           "All EC2 instances enforce IMDSv2")
@@ -3744,6 +3840,24 @@ class AWSLiveScanner:
             else:
                 self._add("WARN", "ACM-03", "ACM", domain,
                           f"Certificate not associated with any resource | {domain}")
+
+            # ACM-04 — Unhealthy certificate status (TLS broken for the domain)
+            status = cert.get("Status", "")
+            if status in ("FAILED", "VALIDATION_TIMED_OUT", "REVOKED"):
+                self._add("FAIL", "ACM-04", "ACM", domain,
+                          f"Certificate status is {status} — TLS is broken for this "
+                          f"domain | {domain}")
+
+            # ACM-05 — Renewal risk (imported / ineligible for managed auto-renewal)
+            ctype = cert.get("Type", "")
+            if cert.get("RenewalEligibility") == "INELIGIBLE" and status == "ISSUED":
+                self._add("WARN", "ACM-05", "ACM", domain,
+                          f"Certificate is INELIGIBLE for managed renewal — it will "
+                          f"expire without action | {domain}")
+            elif ctype == "IMPORTED":
+                self._add("WARN", "ACM-05", "ACM", domain,
+                          f"Imported certificate — ACM will not auto-renew; rotate "
+                          f"manually before expiry | {domain}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 32: AMAZON SAGEMAKER
