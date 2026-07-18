@@ -180,3 +180,42 @@ def test_acm_04_failed_and_05_imported():
     # exactly one ACM-04 (the FAILED cert); the healthy imported/eligible certs don't fire it
     a4 = [r for r in s.results if r.check_id == "ACM-04"]
     assert len(a4) == 1 and a4[0].resource == "bad.example"
+
+
+# ── VULN-04 — Lambda dependency vuln un-dropped (was `continue # defer Lambda`) ─
+class _P:
+    def __init__(self, items):
+        self.items = items
+    def paginate(self, **kw):
+        return [{"findings": self.items}]
+
+
+def _inspector(findings, ec2="ENABLED", ecr="ENABLED"):
+    m = MagicMock()
+    m.batch_get_account_status.return_value = {
+        "accounts": [{"resourceState": {"ec2": {"status": ec2}, "ecr": {"status": ecr}}}]}
+    m.get_paginator.return_value = _P(findings)
+    m.batch_get_finding_details.return_value = {"findingDetails": []}   # no KEV
+    return m
+
+
+def test_vuln_04_lambda_dependency_undropped():
+    f = {"findingArn": "arn:finding/lam", "severity": "HIGH", "exploitAvailable": "NO",
+         "fixAvailable": "YES", "epss": {"score": 0.3},
+         "packageVulnerabilityDetails": {"vulnerabilityId": "CVE-2024-0001"},
+         "resources": [{"id": "arn:aws:lambda:us-east-1:1:function:pay",
+                        "type": "AWS_LAMBDA_FUNCTION"}]}
+    s = make_scanner(["VULN"])
+    s._clients["inspector2:us-east-1"] = _inspector([f])
+    with patch("builtins.print"):
+        s._check_vuln()
+    fails = {r.check_id for r in s.results if r.status == "FAIL"}
+    assert "VULN-04" in fails                          # was silently dropped before
+    st = s.graph.stats()
+    assert "LambdaFunction" in st["node_kinds"] and "HAS_VULN" in st["edge_kinds"]
+
+
+def test_vuln_04_map_entries_complete():
+    assert A.CHECK_SEVERITY.get("VULN-04") == "HIGH"
+    assert "VULN-04" in A.COMPLIANCE_MAP
+    assert "aws " in A.REMEDIATION_MAP.get("VULN-04", "").lower()

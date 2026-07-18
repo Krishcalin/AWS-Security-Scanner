@@ -221,6 +221,7 @@ CHECK_SEVERITY = {
     "EXPOSURE-01": "HIGH", "EXPOSURE-02": "MEDIUM", "ATTACK-01": "CRITICAL",
     # Phase 3: deep-plane ingestion (vuln / data / threat) + flagship attack path
     "VULN-01": "HIGH", "VULN-02": "CRITICAL", "VULN-03": "HIGH",
+    "VULN-04": "HIGH",
     "DATA-01": "MEDIUM", "DATA-02": "HIGH", "DATA-03": "MEDIUM",
     "EXTACCESS-01": "HIGH", "EXTACCESS-02": "MEDIUM", "EXTACCESS-03": "MEDIUM",
     "THREAT-01": "HIGH", "THREAT-02": "MEDIUM", "ATTACK-02": "CRITICAL",
@@ -364,6 +365,7 @@ COMPLIANCE_MAP = {
     "VULN-01": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "VULN-02": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5(2)"},
     "VULN-03": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "VULN-04": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "DATA-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "DATA-02": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "DATA-03": {"CIS": "2.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
@@ -521,6 +523,7 @@ REMEDIATION_MAP = {
     "VULN-01": "Patch the affected package to fixedInVersion, e.g. run the patch baseline: aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install, then re-scan in Inspector.",
     "VULN-02": "PRIORITIZE — this CVE is on the CISA KEV catalog (actively exploited). Patch immediately (aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install), and if internet-exposed isolate the host: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --groups <QUARANTINE_SG>",
     "VULN-03": "Rebuild the container image on a patched base and push; enable Inspector enhanced ECR scanning: aws inspector2 enable --resource-types ECR",
+    "VULN-04": "Update the vulnerable dependency in the Lambda deployment package/layer and redeploy: aws lambda update-function-code --function-name <FUNCTION> --zip-file fileb://patched.zip, then re-scan in Inspector.",
     "DATA-01": "Confirm the sensitive data is intended here; restrict access, enable default encryption with a CMK, and enable S3 Block Public Access on the bucket: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "DATA-02": "Remove public/external access from the crown-jewel bucket: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "DATA-03": "Enable default encryption on the crown-jewel bucket: aws s3api put-bucket-encryption --bucket <BUCKET> --server-side-encryption-configuration '{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\"}}]}'",
@@ -4796,8 +4799,11 @@ class AWSLiveScanner:
             elif rtype == "AWS_ECR_CONTAINER_IMAGE" and rid:
                 node = rid
                 g.add_node(node, "ECRImage")
+            elif rtype == "AWS_LAMBDA_FUNCTION" and rid:
+                node = rid
+                g.add_node(node, "LambdaFunction", function_arn=rid)
             else:
-                continue                                    # defer Lambda plane
+                continue                                    # non-graphable resource
             g.add_node(v["cve"], "Vulnerability", severity=v["severity"], epss=v["epss"],
                        kev=v["kev"], exploit_available=v["exploit_available"],
                        fix_available=v["fix_available"])
@@ -4809,6 +4815,8 @@ class AWSLiveScanner:
                 fid, tag = "VULN-02", "KEV/in-the-wild"
             elif rtype == "AWS_ECR_CONTAINER_IMAGE":
                 fid, tag = "VULN-03", "container-image"
+            elif rtype == "AWS_LAMBDA_FUNCTION":
+                fid, tag = "VULN-04", "lambda-dependency"
             else:
                 fid, tag = "VULN-01", "exploitable" if aws_deepplane.is_exploitable(v) else "high/critical"
             self._add("FAIL", fid, "VULN", rid,
