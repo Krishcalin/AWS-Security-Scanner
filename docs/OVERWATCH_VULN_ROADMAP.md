@@ -96,14 +96,17 @@ and feed the graph, no new infrastructure.
 - Config completeness `LOG-03a/b`; GuardDuty protection plans `LOG-04a-f`; Security Hub `LOG-05a/b`; Bedrock `BDR-02` guardrail strength; `SFN-04`
 - `CWPP-07` EOL-distro detection; fix `_cvss_base` to parse CVSS vector strings
 
-### Phase 2 — Marquee critical misconfigs · **M**
+### Phase 2 — Marquee critical misconfigs · **M** — ✅ SHIPPED (v2.12.0)
 Highest-severity standalone blind spots that need a new method but no new infrastructure.
-- `KMS-02` key-policy public/cross-account (`get_key_policy`) → PUBLIC_KMS/SHARED_KMS edge
-- `_check_cognito_identity` / `COG-05` unauth AWS-credential issuance → INTERNET→unauth-role→data edge
-- `R53-06` dangling-record / subdomain-takeover → DANGLING_DNS node
-- `_check_cloudwatch` `CW-01..16` — CIS v3 §4 metric-filter + alarm layer
-- `SEC-05` Secrets resource-policy public/cross-account; `IAMPE-23` federated OIDC/SAML wildcard trust
-- CloudTrail depth (`LOG-01b/06/07/08`: KMS SSE, data events, bucket public, delivery recency)
+Delivered as 28 checks across 6 families (branch `overwatch-phase2-misconfigs`), scoped by a
+6-agent research pass and hardened by an 11-defect read-only adversarial-verify pass.
+- ✅ `KMS-02` (public, CRITICAL) + `KMS-04` (cross-account, HIGH) key-policy → PUBLIC_KMS / SHARED_KMS edges
+- ✅ `_check_cognito_identity` `COG-05` (unauth AWS-credential issuance, HIGH) + `COG-06` (unauth role → admin, CRITICAL) → INTERNET→role CAN_ASSUME
+- ✅ `R53-06` dangling-record / subdomain-takeover (S3-website + Beanstalk confirmed → CAN_TAKEOVER; CloudFront/ELB/API-GW → WARN)
+- ✅ `_check_cloudwatch` `CW-01` gate + `CW-02..16` — CIS v3 §4 metric-filter + alarm layer (3-state, GLOBAL section)
+- ✅ `SEC-05` Secrets resource-policy public/cross-account (CRITICAL) → SHARED_SECRET; `IAMPE-23` federated OIDC/SAML wildcard trust (CRITICAL) → FEDERATED_CAN_ASSUME
+- ✅ CloudTrail depth `LOG-07` (SSE-KMS) / `LOG-08` (data events) / `LOG-09` (bucket public) / `LOG-10` (delivery health) — renumbered off the Phase-1 LOG-06 (GuardDuty plans)
+- New shared classifier `classify_resource_policy_stmt` (operator-aware public/cross-account/org) reused by KMS/SEC/LOG-09; `parse_trust_policy` now carries the raw `condition`.
 
 ### Phase 3 — Vuln-engine unlock · **L**
 Turn the flagship side-scan from test-only to live; the shared foundation Phases 4 & 8 reuse verbatim.

@@ -98,7 +98,7 @@ def _gaad_iam(users=None, roles=None, groups=None, policies=None):
 class TestDataStructures(unittest.TestCase):
 
     def test_version(self):
-        self.assertEqual(VERSION, "2.11.1")
+        self.assertEqual(VERSION, "2.12.0")
 
     def test_sections_count(self):
         self.assertEqual(len(SECTIONS), 43)
