@@ -868,12 +868,19 @@ _ORG_SCOPE_KEYS = {"aws:principalorgid", "aws:principalorgpaths"}
 
 
 def _flatten_condition_keys(condition) -> Dict[str, List[str]]:
-    """Lowercased condition-key -> list of string values, flattened across all
-    operator blocks (StringEquals, ForAllValues:StringLike, *IfExists, …)."""
+    """Lowercased condition-key -> values, flattened across POSITIVE-match operator
+    blocks only (StringEquals, ArnLike, StringLike, ForAllValues:*, *IfExists, …).
+    NEGATED operators (StringNotEquals/StringNotLike/ArnNotEquals/NotIpAddress/…) are
+    EXCLUDED: a wildcard principal gated only by 'StringNotEquals CallerAccount == own'
+    grants to the whole world EXCEPT the owner — it does NOT pin the grant to own, so
+    it must not be read as an account-scoping (private-making) condition."""
     out: Dict[str, List[str]] = {}
     if not isinstance(condition, dict):
         return out
-    for _op, block in condition.items():
+    for op, block in condition.items():
+        base = str(op).lower()
+        if "notequals" in base or "notlike" in base or "notipaddress" in base:
+            continue
         if not isinstance(block, dict):
             continue
         for k, v in block.items():
@@ -1182,7 +1189,12 @@ class AWSLiveScanner:
     ):
         self.region   = region
         self.verbose  = verbose
-        self.sections = [s.upper() for s in sections] if sections else list(SECTIONS)
+        _req = [s.upper() for s in sections] if sections else list(SECTIONS)
+        # Run in canonical SECTIONS order regardless of --sections ordering: graph-building
+        # sections have dependencies (IAMPRIVESC must precede EXPOSURE/COGNITO_IDENTITY,
+        # which augment its graph; CORRELATE runs last). Unknown sections keep their order.
+        _idx = {s: i for i, s in enumerate(SECTIONS)}
+        self.sections = sorted(_req, key=lambda s: _idx.get(s, len(SECTIONS)))
         self.results:  List[Result] = []
         self.account   = ""
         self.trusted_accounts: set = set()  # allowlist: cross-account grants to these are not flagged
@@ -1921,17 +1933,9 @@ class AWSLiveScanner:
             return
         s3 = self._client("s3")
         s3c = self._client("s3control")
-        # account-level BPA is a superset; if fully on, the bucket cannot be public
-        try:
-            acct_bpa = s3c.get_public_access_block(AccountId=self.account).get(
-                "PublicAccessBlockConfiguration", {})
-            if acct_bpa and all(acct_bpa.values()):
-                self._add("PASS", "LOG-09", "LOGGING", bucket,
-                          f"Trail bucket '{bucket}' shielded by account-level BPA")
-                return
-        except Exception:
-            pass
-        # bucket-level BPA (AccessDenied here => cross-account central-logging bucket)
+        # Probe the BUCKET's own BPA FIRST. AccessDenied here => the bucket is owned by
+        # another account (org/centralized logging) — the scanning account's own BPA
+        # would NOT protect it, so we must not apply the account-level shortcut.
         bpa_full = False
         try:
             b_bpa = s3.get_public_access_block(Bucket=bucket).get(
@@ -1943,7 +1947,17 @@ class AWSLiveScanner:
                           f"Trail bucket '{bucket}' owned by another account "
                           f"(centralized logging) — cannot verify from here")
                 return
-            # NoSuchPublicAccessBlockConfiguration => owned, no BPA set => proceed
+            # NoSuchPublicAccessBlockConfiguration => owned, no bucket BPA => check account BPA
+        # bucket is readable (owned) — now the account-level BPA superset legitimately applies
+        try:
+            acct_bpa = s3c.get_public_access_block(AccountId=self.account).get(
+                "PublicAccessBlockConfiguration", {})
+            if acct_bpa and all(acct_bpa.values()):
+                self._add("PASS", "LOG-09", "LOGGING", bucket,
+                          f"Trail bucket '{bucket}' shielded by account-level BPA")
+                return
+        except Exception:
+            pass
         # bucket policy — look for an unconditioned public grant
         public = False
         try:
@@ -1965,7 +1979,7 @@ class AWSLiveScanner:
                           f"Trail bucket '{bucket}' does not exist — logs not being stored")
                 return
             # NoSuchBucketPolicy => no policy => not public
-        if public:
+        if public and not bpa_full:
             g = self._ensure_graph()
             barn = f"arn:aws:s3:::{bucket}".lower()
             g.add_node("internet", "InternetSource", cidr="0.0.0.0/0")
@@ -1975,6 +1989,11 @@ class AWSLiveScanner:
             self._add("FAIL", "LOG-09", "LOGGING", bucket,
                       f"Trail log bucket '{bucket}' has a PUBLIC bucket policy — "
                       f"audit logs readable/tamperable")
+        elif public:
+            # RestrictPublicBuckets (full bucket BPA) neutralizes the public grant
+            self._add("WARN", "LOG-09", "LOGGING", bucket,
+                      f"Trail bucket '{bucket}' has a latent public policy statement but "
+                      f"Block Public Access neutralizes it — remove the stale grant")
         elif bpa_full:
             self._add("PASS", "LOG-09", "LOGGING", bucket,
                       f"Trail bucket '{bucket}' has Block Public Access enabled")
@@ -2060,10 +2079,11 @@ class AWSLiveScanner:
             if not t.get("IsMultiRegionTrail") or not t.get("CloudWatchLogsLogGroupArn"):
                 continue
             try:
-                if not ct.get_trail_status(Name=arn).get("IsLogging"):
-                    continue
+                logging = ct.get_trail_status(Name=arn).get("IsLogging")
             except Exception:
-                continue
+                logging = None                 # GetTrailStatus denied — don't drop the trail
+            if logging is False:
+                continue                       # only skip when EXPLICITLY not logging
             parts = t["CloudWatchLogsLogGroupArn"].split(":")
             if len(parts) >= 7:
                 log_groups.append((parts[3], parts[6], parts[4]))
@@ -2103,7 +2123,12 @@ class AWSLiveScanner:
         """3-state CIS §4 control: FAIL (no matching filter, or filter without an
         alarm/SNS action), WARN (alarm+SNS but no confirmed subscription), PASS
         (filter + alarm + ≥1 confirmed subscription)."""
-        matched = [f for f in filters if all(tok in f["pat"] for tok in tokens)]
+        # Boundary-aware: a token must not be immediately followed by another
+        # alphanumeric (so 'createroute' does NOT match inside 'createroutetable',
+        # nor 'createvpc' inside 'createvpcpeeringconnection').
+        def _has(pat, tok):
+            return re.search(re.escape(tok) + r"(?![a-z0-9])", pat) is not None
+        matched = [f for f in filters if all(_has(f["pat"], tok) for tok in tokens)]
         if not matched:
             self._add("FAIL", cid, "CLOUDWATCH", f"CIS-{cis}",
                       f"No CloudWatch metric filter for {name} (CIS {cis})")
@@ -3391,7 +3416,8 @@ class AWSLiveScanner:
                         else:
                             continue
                         fqdn = rr.get("Name", "").rstrip(".").lower()
-                        if not target or "*" in fqdn:
+                        # Route53 octal-escapes '*' as '\052' in record names
+                        if not target or "*" in fqdn or "\\052" in fqdn:
                             continue
                         key = (fqdn, target)
                         if key not in seen:
@@ -3406,7 +3432,9 @@ class AWSLiveScanner:
                       f"({len(candidates)} alias/CNAME records checked)")
 
     def _classify_dangling(self, fqdn: str, target: str, rtype: str, zname: str) -> bool:
-        if ".s3-website" in target:
+        # matches CNAME form '<bucket>.s3-website-<region>...' AND the ALIAS bare
+        # regional endpoint 's3-website.<region>...' / 's3-website-<region>...'
+        if re.search(r"(^|\.)s3-website[.-]", target):
             return self._dangling_s3(fqdn, target, rtype, zname)
         if target.endswith(".elasticbeanstalk.com"):
             return self._dangling_beanstalk(fqdn, target, rtype, zname)
@@ -5237,8 +5265,10 @@ class AWSLiveScanner:
         """COG-06 — is the anonymous-assumable role over-permissioned? Graph
         CAN_PRIVESC_TO (if IAMPRIVESC ran) OR an attached AWS-managed admin policy."""
         g = self._ensure_graph()
-        over = bool(g.out_edges(unauth_arn, {"CAN_PRIVESC_TO"}))
-        if not over and _account_of(unauth_arn) == self.account:
+        privesc_edges = g.out_edges(unauth_arn, {"CAN_PRIVESC_TO"})
+        confirmed = any(self._edge_unconditioned(e) for e in privesc_edges)
+        conditioned_only = bool(privesc_edges) and not confirmed
+        if not confirmed and not conditioned_only and _account_of(unauth_arn) == self.account:
             try:
                 iam = self._client("iam")
                 attached = iam.list_attached_role_policies(
@@ -5247,13 +5277,17 @@ class AWSLiveScanner:
                          "arn:aws:iam::aws:policy/PowerUserAccess",
                          "arn:aws:iam::aws:policy/IAMFullAccess"}
                 if any(p.get("PolicyArn") in admin for p in attached):
-                    over = True
+                    confirmed = True
             except Exception:
                 pass
-        if over:
+        if confirmed:
             self._add("FAIL", "COG-06", "COGNITO_IDENTITY", pname,
                       f"Unauthenticated role of pool '{pname}' is over-permissioned "
                       f"(admin/privesc) — anonymous internet → admin | {pid}")
+        elif conditioned_only:
+            self._add("WARN", "COG-06", "COGNITO_IDENTITY", pname,
+                      f"Unauthenticated role of pool '{pname}' has a Condition-gated privesc "
+                      f"primitive — verify the condition is unsatisfiable | {pid}")
         else:
             self._add("PASS", "COG-06", "COGNITO_IDENTITY", pname,
                       f"Unauthenticated role of pool '{pname}' shows no admin/privesc primitive")
@@ -5730,10 +5764,15 @@ class AWSLiveScanner:
             if v == "*":
                 s = "open"
             else:
-                body = v[5:] if v.lower().startswith("repo:") else v
-                repo_spec = body.split(":", 1)[0]          # ORG/REPO (GitHub) or whole sub
-                rest = body[len(repo_spec):]
-                if "*" in repo_spec:
+                # Strip the leading claim key generically (GitHub 'repo:', GitLab
+                # 'project_path:', Terraform 'organization:', …) so the org/repo (or
+                # group/project) identity segment is examined for ANY issuer, not just
+                # GitHub. A '*' in that identity segment => org-wildcard (FAIL); a '*'
+                # only in the trailing ref/branch/environment portion => branch-wildcard.
+                body = v.split(":", 1)[1] if ":" in v else v
+                id_spec = body.split(":", 1)[0]            # ORG/REPO or GROUP/PROJECT
+                rest = body[len(id_spec):]
+                if "*" in id_spec:
                     s = "org-wildcard"
                 elif "*" in rest:
                     s = "branch-wildcard"

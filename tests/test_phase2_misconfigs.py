@@ -647,3 +647,126 @@ def test_cw_maps_complete():
         cid = f"CW-{n:02d}"
         assert cid in A.CHECK_SEVERITY and cid in A.COMPLIANCE_MAP
         assert "aws " in A.REMEDIATION_MAP.get(cid, "").lower()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Regressions for the adversarial-verify fixes (11 confirmed defects)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# 1. classifier: a NEGATED account-scope condition must NOT be read as private
+def test_classify_negated_condition_is_not_private():
+    r = _c({"Effect": "Allow", "Principal": "*", "Action": "kms:Decrypt", "Resource": "*",
+            "Condition": {"StringNotEquals": {"kms:CallerAccount": OWN}}})
+    assert r is not None and r["kind"] in ("public", "public_conditioned")   # was falsely None
+
+
+# 2. IAMPE-23: org/group-wide wildcard from a NON-GitHub public issuer => FAIL
+def test_oidc_sub_scope_issuer_generic():
+    f = A.AWSLiveScanner._oidc_sub_scope
+    assert f(["project_path:mygroup/*"]) == "org-wildcard"                 # GitLab group-wide
+    assert f(["project_path:mygroup/myproject:ref_type:branch:ref:main"]) == "concrete"
+
+
+def test_iampe_23_gitlab_group_wildcard_fails():
+    s = _fed_scanner()
+    st = {"effect": "Allow", "aws": [], "service": [],
+          "federated": [f"arn:aws:iam::{OWN}:oidc-provider/gitlab.com"],
+          "actions": {"sts:assumerolewithwebidentity"}, "wildcard": False, "has_condition": True,
+          "condition": {"StringLike": {"gitlab.com:sub": "project_path:mygroup/*"}}}
+    s._check_federated_trust(_role("gl", [st]))
+    assert any(r.check_id == "IAMPE-23" and r.status == "FAIL" for r in s.results)
+
+
+# 3. LOG-09: a cross-account trail bucket must be INFO even when own-account BPA is full
+def test_log_09_crossaccount_bucket_not_false_pass():
+    s, ct = _ct_scanner([_trail()])                 # _ct_scanner sets account BPA fully on
+    s._clients["s3:us-east-1"].get_public_access_block.side_effect = RuntimeError("AccessDenied")
+    s._check_cloudtrail_config()
+    l9 = [r for r in s.results if r.check_id == "LOG-09"]
+    assert l9 and all(r.status == "INFO" for r in l9)          # not a false account-BPA PASS
+    assert not any(r.check_id == "LOG-09" and r.status == "PASS" for r in s.results)
+
+
+# 4. R53-06: apex S3-website ALIAS (bare regional endpoint) takeover is detected
+def test_r53_06_s3_website_alias_apex_takeover():
+    alias = {"Name": "example.com.", "Type": "A",
+             "AliasTarget": {"HostedZoneId": "Z3AQBSTGFYJSTF",     # S3 website HZ != customer zid
+                             "DNSName": "s3-website-us-east-1.amazonaws.com",
+                             "EvaluateTargetHealth": False}}
+    s = _r53_scanner([alias])
+    s3 = MagicMock()
+    s3.list_buckets.return_value = {"Buckets": []}
+    s3.head_bucket.side_effect = RuntimeError("NoSuchBucket")
+    s._clients["s3:us-east-1"] = s3
+    s._check_dangling_dns()
+    assert any(r.check_id == "R53-06" and r.status == "FAIL" and "example.com" in r.resource
+               for r in s.results)
+
+
+# 5. CW-01: GetTrailStatus AccessDenied must not fabricate a FAIL / short-circuit CIS §4
+def test_cw_01_trail_status_denied_still_evaluates():
+    s = _cw_scanner([(_UNAUTH_PATTERN, "UnauthorizedAPICalls", "CISBenchmark")])
+    s._clients["cloudtrail:us-east-1"].get_trail_status.side_effect = RuntimeError("AccessDeniedException")
+    s._check_cloudwatch()
+    assert any(r.check_id == "CW-01" and r.status == "PASS" for r in s.results)
+    assert not any(r.check_id == "CW-01" and r.status == "FAIL" for r in s.results)
+
+
+# 6. LOG-09: a public policy neutralized by full bucket BPA is WARN, not FAIL
+def test_log_09_public_policy_but_bpa_full_warns():
+    s, ct = _ct_scanner([_trail()])
+    s._clients["s3control:us-east-1"].get_public_access_block.return_value = {
+        "PublicAccessBlockConfiguration": {"BlockPublicAcls": False}}      # account BPA not full
+    s3 = s._clients["s3:us-east-1"]
+    s3.get_public_access_block.return_value = {"PublicAccessBlockConfiguration": {
+        "BlockPublicAcls": True, "IgnorePublicAcls": True,
+        "BlockPublicPolicy": True, "RestrictPublicBuckets": True}}         # bucket BPA full
+    s3.get_bucket_policy.return_value = {"Policy": json.dumps({"Statement": [
+        {"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject", "Resource": "*"}]})}
+    s._check_cloudtrail_config()
+    assert any(r.check_id == "LOG-09" and r.status == "WARN" for r in s.results)
+    assert not any(r.check_id == "LOG-09" and r.status == "FAIL" for r in s.results)
+
+
+# 7. Sections run in canonical order regardless of --sections ordering
+def test_sections_canonicalized_for_graph_deps():
+    s = make_scanner(["CORRELATE", "COGNITO_IDENTITY", "IAMPRIVESC"])
+    assert (s.sections.index("IAMPRIVESC") < s.sections.index("COGNITO_IDENTITY")
+            < s.sections.index("CORRELATE"))
+
+
+# 8. COG-06: a Condition-gated privesc edge is WARN, not a CRITICAL FAIL
+def test_cog_06_conditioned_privesc_warns_not_critical():
+    role = f"arn:aws:iam::{OWN}:role/pool-unauth"
+    s = _ci_scanner([{"IdentityPoolId": "us-east-1:p", "IdentityPoolName": "cond"}],
+                    describe={"us-east-1:p": {"AllowUnauthenticatedIdentities": True}},
+                    roles={"us-east-1:p": {"unauthenticated": role}})
+    s.graph.add_node(role, "IAMRole")
+    s.graph.add_node("admin:x", "AdminCapability")
+    s.graph.add_edge(role, "admin:x", "CAN_PRIVESC_TO", conditioned=True)   # gated
+    s._check_cognito_identity()
+    assert any(r.check_id == "COG-06" and r.status == "WARN" for r in s.results)
+    assert not any(r.check_id == "COG-06" and r.status == "FAIL" for r in s.results)
+
+
+# 9. R53-06: Route53 octal-escaped wildcard records (\052) are skipped, no mangled findings
+def test_r53_06_wildcard_record_skipped():
+    rec = _cname("\\052.example.com.", "\\052.example.com.s3-website-us-east-1.amazonaws.com")
+    s = _r53_scanner([rec])
+    s._check_dangling_dns()
+    assert not any(r.check_id == "R53-06" and "052" in r.resource for r in s.results)
+
+
+# 10/11. CW token matching is boundary-aware (peering-only != VPC changes)
+def test_cw_15_peering_only_filter_does_not_pass():
+    peering = "{ ($.eventName = CreateVpcPeeringConnection) || ($.eventName = DeleteVpcPeeringConnection) }"
+    s = _cw_scanner([(peering, "VpcPeering", "CIS")])
+    s._check_cloudwatch()
+    assert any(r.check_id == "CW-15" and r.status == "FAIL" for r in s.results)
+
+
+def test_cw_15_proper_vpc_filter_passes():
+    vpc = "{ ($.eventName = CreateVpc) || ($.eventName = DeleteVpc) || ($.eventName = ModifyVpcAttribute) }"
+    s = _cw_scanner([(vpc, "VpcChanges", "CIS")])
+    s._check_cloudwatch()
+    assert any(r.check_id == "CW-15" and r.status == "PASS" for r in s.results)
