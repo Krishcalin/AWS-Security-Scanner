@@ -42,6 +42,7 @@ import sys
 import json
 import csv
 import io
+import re
 import gzip
 import base64
 import time
@@ -170,7 +171,7 @@ CHECK_SEVERITY = {
     "LOG-01": "CRITICAL", "LOG-03": "HIGH", "LOG-04": "CRITICAL", "LOG-05": "MEDIUM",
     "LOG-06": "MEDIUM",
     "ENC-03": "MEDIUM",
-    "KMS-03": "HIGH",
+    "KMS-02": "CRITICAL", "KMS-03": "HIGH", "KMS-04": "HIGH",
     "EC2-04": "HIGH", "EC2-05": "MEDIUM", "EC2-06": "HIGH",
     "EC2-07": "HIGH", "EC2-08": "HIGH",
     "AMI-01": "HIGH",
@@ -286,6 +287,8 @@ COMPLIANCE_MAP = {
     # KMS
     "ENC-03": {"CIS": "3.8", "PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
     "KMS-03": {"NIST": "SC-12", "SOC2": "CC6.1", "HIPAA": "164.312(a)(2)(iv)"},
+    "KMS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "KMS-04": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     # EC2
     "EC2-04": {"CIS": "5.6", "PCI-DSS": "2.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.1", "NIST": "CM-6"},
     "EC2-05": {"CIS": "5.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
@@ -461,6 +464,8 @@ REMEDIATION_MAP = {
     "LOG-05": "Enable Security Hub: aws securityhub enable-security-hub --enable-default-standards",
     "ENC-03": "Enable key rotation: aws kms enable-key-rotation --key-id <KEY_ID>",
     "KMS-03": "Cancel deletion if the CMK is still in use, or re-enable a disabled key: aws kms cancel-key-deletion --key-id <KEY_ID> ; aws kms enable-key --key-id <KEY_ID>",
+    "KMS-02": "Remove the wildcard '*' principal from the KMS key policy (or gate it with a kms:CallerAccount / aws:PrincipalOrgID condition), then re-apply: aws kms put-key-policy --key-id <KEY_ID> --policy-name default --policy file://scoped-key-policy.json",
+    "KMS-04": "Remove the cross-account/Organization principal from the KMS key policy (or constrain it with aws:PrincipalOrgID + a trusted-account allowlist), then re-apply: aws kms put-key-policy --key-id <KEY_ID> --policy-name default --policy file://scoped-key-policy.json",
     "EC2-04": "Enforce IMDSv2: aws ec2 modify-instance-metadata-options --instance-id <INSTANCE_ID> --http-tokens required --http-endpoint enabled",
     "EC2-06": "Enable default EBS encryption: aws ec2 enable-ebs-encryption-by-default",
     "EC2-07": "Remove the secret from user-data and rotate it; move it to SSM Parameter Store / Secrets Manager referenced at boot: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --user-data file://sanitized-userdata.txt (stop the instance first)",
@@ -785,9 +790,100 @@ def parse_trust_policy(doc) -> List[Dict]:
 
 
 def _account_of(arn: str) -> str:
-    """Account id segment of an ARN (arn:partition:service:region:account:...)."""
-    parts = arn.split(":")
+    """Account id segment of an ARN (arn:partition:service:region:account:...).
+    Also normalizes a bare 12-digit account-id principal to itself."""
+    if isinstance(arn, str) and re.fullmatch(r"\d{12}", arn):
+        return arn
+    parts = arn.split(":") if isinstance(arn, str) else []
     return parts[4] if len(parts) >= 5 else ""
+
+
+# Condition keys that scope a grant to a specific account (own => not public/external)
+_ACCOUNT_SCOPE_KEYS = {"aws:sourceaccount", "aws:principalaccount", "kms:calleraccount",
+                       "aws:sourceowner", "s3:resourceaccount", "aws:resourceaccount"}
+_ORG_SCOPE_KEYS = {"aws:principalorgid", "aws:principalorgpaths"}
+
+
+def _flatten_condition_keys(condition) -> Dict[str, List[str]]:
+    """Lowercased condition-key -> list of string values, flattened across all
+    operator blocks (StringEquals, ForAllValues:StringLike, *IfExists, …)."""
+    out: Dict[str, List[str]] = {}
+    if not isinstance(condition, dict):
+        return out
+    for _op, block in condition.items():
+        if not isinstance(block, dict):
+            continue
+        for k, v in block.items():
+            vals = v if isinstance(v, list) else [v]
+            out.setdefault(str(k).lower(), []).extend(str(x) for x in vals)
+    return out
+
+
+def classify_resource_policy_stmt(stmt: Dict, own_account: str) -> Optional[Dict]:
+    """Classify one resource-policy statement's exposure (KMS key policy, Secrets
+    resource policy, S3/SNS/SQS-style bucket policy). Returns None for non-Allow
+    or purely own-account/service statements. Otherwise a dict:
+      {kind: 'public'|'public_conditioned'|'org'|'cross_account',
+       external_accounts: [ids], org_id: str|None, has_condition: bool}
+    - public              = wildcard principal, no scoping condition (worst case)
+    - public_conditioned  = wildcard principal gated only by an unrecognized condition
+    - org                 = wildcard/principal gated by aws:PrincipalOrgID (org-shared)
+    - cross_account       = explicit external-account principal(s)
+    A wildcard gated by an account-scope condition pinned to own_account => None (private)."""
+    if not isinstance(stmt, dict) or stmt.get("Effect") != "Allow":
+        return None
+    principal = stmt.get("Principal")
+    not_principal = stmt.get("NotPrincipal")
+    cond = stmt.get("Condition")
+    ckeys = _flatten_condition_keys(cond)
+    has_cond = bool(cond)
+    org_vals = [v for k in _ORG_SCOPE_KEYS if k in ckeys for v in ckeys[k]]
+    acct_scope_vals = [v for k in _ACCOUNT_SCOPE_KEYS if k in ckeys for v in ckeys[k]]
+
+    # normalize AWS principals -> wildcard flag + list of raw principal strings
+    wildcard = False
+    aws_principals: List[str] = []
+    if principal == "*":
+        wildcard = True
+    elif isinstance(principal, dict):
+        aws_p = principal.get("AWS")
+        if aws_p is not None:
+            for v in (aws_p if isinstance(aws_p, list) else [aws_p]):
+                if v == "*":
+                    wildcard = True
+                else:
+                    aws_principals.append(v)
+        # Service / Federated / CanonicalUser principals are handled by callers
+    # Allow + NotPrincipal == "everyone except X" == effectively public
+    if not_principal is not None and principal is None:
+        wildcard = True
+
+    if wildcard:
+        if org_vals:
+            return {"kind": "org", "external_accounts": [], "org_id": org_vals[0],
+                    "has_condition": True}
+        if acct_scope_vals:
+            # pinned to a specific account via condition
+            if own_account and all(v == own_account for v in acct_scope_vals):
+                return None                                  # private (own account only)
+            return {"kind": "cross_account", "external_accounts": sorted(set(acct_scope_vals)),
+                    "org_id": None, "has_condition": True}
+        if has_cond:
+            return {"kind": "public_conditioned", "external_accounts": [], "org_id": None,
+                    "has_condition": True}
+        return {"kind": "public", "external_accounts": [], "org_id": None,
+                "has_condition": False}
+
+    # explicit AWS principals -> collect external accounts
+    external = sorted({acct for p in aws_principals
+                       if (acct := _account_of(p)) and acct != own_account})
+    if external:
+        if org_vals:
+            return {"kind": "org", "external_accounts": external, "org_id": org_vals[0],
+                    "has_condition": True}
+        return {"kind": "cross_account", "external_accounts": external, "org_id": None,
+                "has_condition": has_cond}
+    return None                                              # own-account only / service
 
 
 def evaluate_privesc_scoped(statements: List[Dict], boundary: Optional[List[Dict]] = None,
@@ -1025,6 +1121,7 @@ class AWSLiveScanner:
         self.sections = [s.upper() for s in sections] if sections else list(SECTIONS)
         self.results:  List[Result] = []
         self.account   = ""
+        self.trusted_accounts: set = set()  # allowlist: cross-account grants to these are not flagged
         self._session  = session          # boto3.Session for assumed-role scans; None = ambient creds
         self.all_regions_scan = all_regions
         self.graph: Optional[SecurityGraph] = None
@@ -1731,6 +1828,9 @@ class AWSLiveScanner:
                                 self._add("FAIL", "KMS-03", "KMS", kid,
                                           f"CMK is disabled — ciphertext under this key "
                                           f"cannot be decrypted | {_dsc}")
+                            # KMS-02/04 — key-policy public / cross-account exposure
+                            if _st not in ("PendingDeletion", "PendingReplicaDeletion"):
+                                self._check_kms_key_policy(kms, kid, meta)
                         if (meta.get("KeyManager") == "CUSTOMER"
                                 and meta.get("KeyState") == "Enabled"):
                             found    = True
@@ -1751,6 +1851,73 @@ class AWSLiveScanner:
                           "No customer-managed KMS keys found")
         except Exception as e:
             self._add("FAIL", "ENC-03", "KMS", "kms", str(e))
+
+    def _check_kms_key_policy(self, kms, kid: str, meta: Dict) -> None:
+        """KMS-02 (public) / KMS-04 (cross-account or org) key-policy exposure. Its own
+        try/except so a GetKeyPolicy AccessDenied surfaces as WARN, not the KMS loop's
+        silent `except: pass`."""
+        try:
+            pol_str = kms.get_key_policy(KeyId=kid, PolicyName="default").get("Policy")
+            pol = json.loads(pol_str) if pol_str else {}
+        except Exception as e:
+            self._add("WARN", "KMS-02", "KMS", kid, f"could not evaluate key policy: {e}")
+            return
+        stmts = pol.get("Statement", [])
+        if isinstance(stmts, dict):
+            stmts = [stmts]
+        node = (meta.get("Arn") or kid).lower()
+        desc = meta.get("Description") or kid[:8]
+        trusted = getattr(self, "trusted_accounts", set())
+        public = public_cond = False
+        cross_accts: set = set()
+        org_id = None
+        for st in stmts:
+            c = classify_resource_policy_stmt(st, self.account or "")
+            if not c:
+                continue
+            if c["kind"] == "public":
+                public = True
+            elif c["kind"] == "public_conditioned":
+                public_cond = True
+            elif c["kind"] == "org":
+                org_id = c.get("org_id") or org_id
+            elif c["kind"] == "cross_account":
+                cross_accts.update(a for a in c["external_accounts"] if a not in trusted)
+        g = self._ensure_graph()
+        g.add_node(node, "KMSKey", key_id=kid, multi_region=meta.get("MultiRegion"),
+                   scan_source="kms-policy")
+        # KMS-02 (public)
+        if public:
+            g.add_node("principal:*", "AnyPrincipal")
+            g.add_edge("principal:*", node, "PUBLIC_KMS", basis="key-policy",
+                       scan_source="kms-policy")
+            self._add("FAIL", "KMS-02", "KMS", kid,
+                      f"KMS key policy grants PUBLIC access (wildcard principal, "
+                      f"unconditioned) | {desc}")
+        elif public_cond:
+            self._add("WARN", "KMS-02", "KMS", kid,
+                      f"KMS key policy wildcard principal gated only by an unrecognized "
+                      f"condition — manual review | {desc}")
+        else:
+            self._add("PASS", "KMS-02", "KMS", kid,
+                      f"KMS key policy has no public grant | {desc}")
+        # KMS-04 (cross-account / org)
+        if cross_accts:
+            for acct in sorted(cross_accts):
+                g.add_node("account:" + acct, "AWSAccount", account=acct, external=True,
+                           scan_source="kms-policy")
+                g.add_edge("account:" + acct, node, "SHARED_KMS", acct=acct,
+                           basis="key-policy", scan_source="kms-policy")
+            self._add("FAIL", "KMS-04", "KMS", kid,
+                      f"KMS key policy grants CROSS-ACCOUNT access to "
+                      f"{', '.join(sorted(cross_accts))} | {desc}")
+        elif org_id:
+            self._add("WARN", "KMS-04", "KMS", kid,
+                      f"KMS key policy shares to AWS Organization {org_id} — verify it "
+                      f"is your org | {desc}")
+        else:
+            self._add("PASS", "KMS-04", "KMS", kid,
+                      f"KMS key policy has no cross-account grant | {desc}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 6: COMPUTE / EC2
