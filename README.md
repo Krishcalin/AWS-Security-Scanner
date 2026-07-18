@@ -404,9 +404,16 @@ hub control plane): `POST /accounts` (onboard → launch URL), `POST /accounts/{
 `GET /accounts`, `POST /scans`, `GET /scans/{job_id}`,
 `GET /accounts/{id}/issues|paths|graph`, `GET /org/overview`.
 
-> Status: backend + onboarding + validation + registry + scan orchestration shipped
-> and tested offline (mocked STS/Org/PG/FastAPI). Live PostgresBackend wiring and the
-> React UI are the remaining pieces.
+**Shared Postgres state.** Opening the state store with a `postgresql://` URL runs
+the whole state plane (finding lifecycle/drift/waivers + the account registry) on a
+real Postgres via psycopg3 — the shared store for the hub. Both stores route through
+one `Backend` abstraction (`cnapp_backend.py`); the sqlite path is byte-identical and
+a missing driver / unreachable server fails loudly rather than falling back to a
+local file.
+
+> Status: backend + onboarding + validation + registry + scan orchestration +
+> **live Postgres state** shipped and tested offline (mocked STS/Org/FastAPI + a
+> fake psycopg3 driver). A connection pool and the React UI are the remaining pieces.
 
 ---
 

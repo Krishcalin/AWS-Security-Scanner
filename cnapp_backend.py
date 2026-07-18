@@ -68,11 +68,10 @@ class Backend(ABC):
     @abstractmethod
     def _execmany(self, sql: str, seq: List[Sequence]) -> None: ...
     @abstractmethod
-    def _begin(self) -> None: ...
-    @abstractmethod
-    def _commit_txn(self) -> None: ...
-    @abstractmethod
-    def _rollback_txn(self) -> None: ...
+    def _txn_cm(self):                                          # -> a context manager
+        """Return a context manager that BEGINs on enter, COMMITs on a clean exit,
+        and ROLLBACKs on an exception (sqlite: BEGIN IMMEDIATE/COMMIT/ROLLBACK;
+        Postgres: psycopg's own ``conn.transaction()``)."""
     @abstractmethod
     def migrate(self) -> None: ...
     @abstractmethod
@@ -137,20 +136,15 @@ class Backend(ABC):
     def transaction(self) -> Iterator[None]:
         with self.lock:
             first = self._depth == 0
-            if first:
-                self._begin()
             self._depth += 1
             try:
-                yield
-            except BaseException:
-                self._depth -= 1
                 if first:
-                    self._rollback_txn()
-                raise
-            else:
+                    with self._txn_cm():      # real BEGIN/COMMIT/ROLLBACK
+                        yield
+                else:                         # nested: reuse the outer transaction
+                    yield
+            finally:
                 self._depth -= 1
-                if first:
-                    self._commit_txn()
 
     def close(self) -> None:
         try:
@@ -162,6 +156,7 @@ class Backend(ABC):
 class SqliteBackend(Backend):
     def __init__(self, conn: sqlite3.Connection) -> None:
         super().__init__()
+        conn.row_factory = sqlite3.Row      # honor the wrapped-raw-connection contract
         self.raw = conn
         self.dialect = SqliteDialect()
         self.OperationalError = sqlite3.OperationalError
@@ -169,7 +164,6 @@ class SqliteBackend(Backend):
     @classmethod
     def connect(cls, path: str, *, check_same_thread: bool = True) -> "SqliteBackend":
         conn = sqlite3.connect(path, check_same_thread=check_same_thread)
-        conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=5000")
@@ -181,14 +175,16 @@ class SqliteBackend(Backend):
     def _execmany(self, sql, seq):
         self.raw.executemany(sql, seq)
 
-    def _begin(self):
+    @contextmanager
+    def _txn_cm(self):
         self.raw.execute("BEGIN IMMEDIATE")
-
-    def _commit_txn(self):
-        self.raw.execute("COMMIT")
-
-    def _rollback_txn(self):
-        self.raw.execute("ROLLBACK")
+        try:
+            yield
+        except BaseException:
+            self.raw.execute("ROLLBACK")
+            raise
+        else:
+            self.raw.execute("COMMIT")
 
     def insert_returning_id(self, sql, params, id_col="id") -> int:
         with self.lock:
@@ -226,7 +222,12 @@ class PostgresBackend(Backend):
             raise StateBackendUnavailable(
                 f"postgresql:// backend needs psycopg: {e}")
         try:
-            conn = psycopg.connect(dsn, autocommit=False,
+            # autocommit=True: single statements (every read + each depth-0 write)
+            # auto-commit, so a SELECT never leaves the shared connection "idle in
+            # transaction" and a failed statement never leaves it in the aborted
+            # state that would poison every later request. Multi-statement atomic
+            # blocks use conn.transaction() (see _txn_cm) for an explicit BEGIN.
+            conn = psycopg.connect(dsn, autocommit=True,
                                    connect_timeout=connect_timeout)
             conn.row_factory = hybrid_row_factory
         except StateBackendUnavailable:
@@ -242,14 +243,8 @@ class PostgresBackend(Backend):
         cur = self.raw.cursor()                  # psycopg3 has no conn.executemany
         cur.executemany(sql, list(seq))
 
-    def _begin(self):
-        pass                                     # autocommit=False auto-begins a txn
-
-    def _commit_txn(self):
-        self.raw.commit()
-
-    def _rollback_txn(self):
-        self.raw.rollback()
+    def _txn_cm(self):
+        return self.raw.transaction()            # psycopg's own BEGIN/COMMIT/ROLLBACK
 
     def insert_returning_id(self, sql, params, id_col="id") -> int:
         rsql = self.dialect.convert(sql) + f" RETURNING {id_col}"
@@ -283,6 +278,13 @@ def backend_for(url: str, *, check_same_thread: bool = True) -> Backend:
         be = PostgresBackend.connect(url)
         be.migrate()
         return be
+    # ON CONFLICT upserts (record_scan/coverage/usage + the whole registry) need
+    # SQLite >= 3.24 (2018). Fail LOUD + pre-flight here rather than with an opaque
+    # "near ON: syntax error" on the first write mid-scan.
+    if sqlite3.sqlite_version_info < (3, 24, 0):
+        raise StateBackendUnavailable(
+            f"sqlite backend needs SQLite >= 3.24 for ON CONFLICT upserts; found "
+            f"{sqlite3.sqlite_version}")
     if dsn != ":memory:":
         try:
             os.makedirs(os.path.dirname(os.path.abspath(dsn)), mode=0o700, exist_ok=True)

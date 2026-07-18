@@ -27,11 +27,9 @@ Design invariants
 from __future__ import annotations
 
 import json
-import sqlite3
 from typing import Dict, List, Optional
 
 from aws_state import make_scan_ts
-from aws_state_dialect import StateBackendUnavailable, parse_state_url
 from cnapp_validate import ConnectionHealth, cadence
 
 # ── column orders (single source of truth; update sets EXCLUDE preserved cols) ──
@@ -74,15 +72,10 @@ class AccountRegistry:
         ``postgresql://`` URL selects the live Postgres backend; if the driver is
         absent or the server unreachable it raises `StateBackendUnavailable`."""
         import cnapp_backend
-        scheme, _ = parse_state_url(url)
-        # ON CONFLICT ... DO UPDATE (the preserve-on-reonboard guarantee) needs
-        # SQLite >= 3.24 (2018). Python 3.10+ bundles newer, but verify loudly.
-        if scheme == "sqlite" and sqlite3.sqlite_version_info < (3, 24, 0):
-            raise StateBackendUnavailable(
-                f"AccountRegistry needs SQLite >= 3.24 for upsert; found "
-                f"{sqlite3.sqlite_version}")
-        # check_same_thread=False: the sqlite connection is touched from the
-        # FastAPI threadpool; the backend lock serializes every access.
+        # check_same_thread=False: the sqlite connection is touched from the FastAPI
+        # threadpool; the backend lock serializes every access. The SQLite>=3.24
+        # (ON CONFLICT) guard + the postgres driver/reachability check both live in
+        # backend_for, so a bad backend fails loudly + pre-flight here.
         return cls(cnapp_backend.backend_for(url, check_same_thread=False))
 
     def close(self) -> None:

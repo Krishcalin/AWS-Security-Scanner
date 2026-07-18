@@ -7,7 +7,7 @@ full **CNAPP** (Cloud-Native Application Protection Platform) — see the CNAPP
 blueprint/roadmap: the north star is AWS-deep **toxic-combination attack paths**
 computed over a unified security graph.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **Live Audit Scanner** (`aws_live_scanner.py` v2.9.0) -- live AWS account audit via boto3 (160+ checks, 40 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing**, **agentless EBS side-scan (CWPP)**, **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**)
+- **Live Audit Scanner** (`aws_live_scanner.py` v2.10.0) -- live AWS account audit via boto3 (160+ checks, 40 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing**, **agentless EBS side-scan (CWPP)**, **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**)
 - **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
 - **Exposure Oracle** (`aws_exposure.py`) -- pure, dependency-free internet-reachability core (SG ∩ stateless NACL ∩ IGW route ∩ public-IP)
 - **Deep-Plane Core** (`aws_deepplane.py`) -- pure Inspector/Macie/GuardDuty/Access-Analyzer parsers + the CAN_READ_DATA object-probe matcher
@@ -25,7 +25,7 @@ computed over a unified security graph.
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.9.0 (boto3, graph, exposure, deep-plane, correlate, effperm, state, ciem, sidescan, backends, remediate, codetocloud)
+├── aws_live_scanner.py      # Live audit scanner v2.10.0 (boto3, graph, exposure, deep-plane, correlate, effperm, state, ciem, sidescan, backends, remediate, codetocloud)
 ├── aws_remediate.py         # Remediation engine — prioritized plan (reuses minimal_cut/ChokePoint) + remediation-as-code + exports, pure
 ├── aws_codetocloud.py       # Code-to-cloud — IaC index (TF block extractor + CFN parse) + tiered T1–T5 matcher, pure
 ├── aws_graph_neptune_loader.py # Neptune live loader — S3 bulk-load + openCypher runners (mock-tested), pure builders
@@ -107,7 +107,7 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.9.0)
+## Live Audit Scanner (`aws_live_scanner.py` v2.10.0)
 
 - **Type**: Live AWS account audit via boto3 (evolving toward CNAPP)
 - **Lines**: ~6,700
@@ -278,7 +278,7 @@ off (never a FAIL/crash/phantom edge). Pure parsers live in `aws_deepplane.py`.
   missed-CVE FN, a MEDIUM `backend`-key default-path JSON leak, a LOW latent delta-cap
   stale-bytes trap); all fixed + regression-tested before merge.
 
-### CNAPP Phase 8 additions (v2.9.0) — hosted multi-account platform (onboarding backend)
+### CNAPP Phase 8 additions (v2.10.0) — hosted multi-account platform (onboarding backend)
 
 Turns the CLI scanner into a **self-hosted web platform** WITHOUT touching the
 engine. Hub-and-spoke: one EC2 hub assumes a read-only cross-account role per
@@ -319,7 +319,7 @@ no boto3/psycopg/FastAPI in the pure path).
 - **Verification** — a 19-agent read-only adversarial hunt confirmed **12 defects** (silent
   ExternalId rotation, empty-account fail-open, shared-connection atomicity, secret in an
   error string, fail-open RBAC default, TOCTOU, KeyboardInterrupt swallow, …) — all fixed +
-  regression-tested. **551 tests.** Reuses `assume_role_session`/`list_org_accounts`/
+  regression-tested. **571 tests.** Reuses `assume_role_session`/`list_org_accounts`/
   `aggregate_results` verbatim.
 - **Deferred**: live PostgresBackend rewire (registry already dual-dialect); React UI
   (design prototype shipped).
@@ -493,7 +493,7 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 551 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 571 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:

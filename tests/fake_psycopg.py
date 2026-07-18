@@ -72,6 +72,7 @@ class FakeConn:
         self.execute_log = []     # [(sql, params)] — primary assertion surface
         self.commits = 0
         self.rollbacks = 0
+        self.transactions = 0     # count of transaction() blocks opened
         self.row_factory = None
         self._stubs = []          # [(needle, cols, rows)] FIFO; first match wins
 
@@ -101,6 +102,21 @@ class FakeConn:
 
     def close(self):
         pass
+
+    def transaction(self):
+        """Mimic psycopg3 conn.transaction(): BEGIN on enter, COMMIT on a clean
+        exit, ROLLBACK on an exception (never suppresses)."""
+        conn = self
+
+        class _Tx:
+            def __enter__(self_):
+                conn.transactions += 1
+                return self_
+
+            def __exit__(self_, et, ev, tb):
+                conn.commit() if et is None else conn.rollback()
+                return False
+        return _Tx()
 
     @property
     def sql_log(self):

@@ -4,6 +4,58 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.10.0] — 2026
+
+**CNAPP Phase 9 — Live PostgresBackend.** The state plane (Phase-5 finding
+lifecycle/drift/waivers/MTTR **and** the Phase-8 onboarding registry) now runs on a
+real Postgres when opened with a `postgresql://` URL — the deferred "shared team
+store" for the hosted hub. The SQL translation layer already existed (Phase-6
+dialect); Phase 9 adds the missing connection/execution layer.
+
+### Added — `cnapp_backend.py` (the Backend abstraction)
+- One `Backend` that owns the connection, a reentrant lock, the dialect, and a
+  transaction-depth counter. `StateStore` + `AccountRegistry` route **every**
+  read/write through it (`execute` / `query_one` / `query_all` / `scalar` /
+  `upsert` / `upsert_many` / `insert_returning_id` / `transaction` / `migrate`).
+- **`SqliteBackend`** — a transparent identity wrapper (same PRAGMAs / `sqlite3.Row`
+  / `BEGIN IMMEDIATE` / `PRAGMA user_version`). The sqlite path is **byte-identical**;
+  the full suite is the regression gate.
+- **`PostgresBackend`** — real **psycopg3** (+ `psycopg_pool` available): `?`→`%s`,
+  `hybrid_row_factory` rows (positional **and** by-name **and** `dict`), `ON CONFLICT`
+  upserts, `RETURNING` ids, a `schema_migrations` table. **`autocommit=True`** so a
+  read never leaks "idle in transaction" and a failed statement never poisons the
+  shared connection; atomic multi-statement blocks use psycopg's own
+  `conn.transaction()`. A missing driver OR unreachable server →
+  `StateBackendUnavailable`, **never** a silent sqlite fallback.
+
+### Changed
+- `aws_state.StateStore` + `cnapp_registry.AccountRegistry` no longer touch a raw
+  `sqlite3.Connection`; `classify_and_diff`'s `BEGIN IMMEDIATE` block is now
+  `with self._be.transaction()`. `SCHEMA_VERSION` / behavior unchanged.
+- `Backend.upsert` uses `ON CONFLICT DO UPDATE` on **both** engines (the form that
+  preserves omitted columns for re-onboard); `scans` stays behaviorally identical
+  (update-all + reset-counters ≡ `INSERT OR REPLACE`).
+
+### Hardening (from a read-only adversarial review — 6 confirmed, all fixed)
+- `autocommit=True` + `conn.transaction()` (fixes the idle-in-transaction leak and
+  the aborted-connection poison a single failed statement would cause on a shared
+  psycopg connection); the SQLite ≥ 3.24 (`ON CONFLICT`) guard centralized in
+  `backend_for` so `StateStore` fails pre-flight instead of mid-scan; `SqliteBackend`
+  sets `row_factory` when wrapping a raw connection (the legacy `StateStore(conn)`
+  contract). The sqlite-drift finder found **no** behavioral regression.
+
+### Testing
+- **571 tests** (+20 offline PG-path via an injected fake psycopg3 connection —
+  conversion / `ON CONFLICT` upsert / migrate / `RETURNING` / transaction commit &
+  rollback / `autocommit` / `StateBackendUnavailable` + a `scans` drift-reset
+  self-check). No live server needed; the sqlite path stays byte-identical.
+
+### Still deferred
+- A `psycopg_pool.ConnectionPool` (a pure scalability optimization over the single
+  serialized connection); the React UI.
+
+---
+
 ## [2.9.0] — 2026
 
 **CNAPP Phase 8 — Hosted multi-account platform (onboarding backend).** Turns the

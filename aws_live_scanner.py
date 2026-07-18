@@ -70,7 +70,7 @@ import aws_unused
 import aws_sidescan
 import aws_graph_neptune
 
-VERSION = "2.9.0"
+VERSION = "2.10.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"

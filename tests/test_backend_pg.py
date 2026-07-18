@@ -170,3 +170,65 @@ def test_scan_counter_reset_matches_defaulted_columns():
     defaulted = {c[1] for c in cols if c[4] is not None}    # dflt_value not null
     omitted = set(defaulted) - set(S.SCAN_COLS)
     assert set(S.SCAN_COUNTER_RESET.keys()) == omitted
+
+
+# ── regression (adversarial): autocommit=True + real transaction() ───────────
+def test_connect_uses_autocommit_true(monkeypatch):
+    """A shared psycopg conn MUST be autocommit=True — else reads leak
+    'idle in transaction' and a failed statement poisons the connection."""
+    import psycopg
+    captured = {}
+    def fake_connect(dsn, **kw):
+        captured.update(kw); captured["dsn"] = dsn
+        return FakeConn()
+    monkeypatch.setattr(psycopg, "connect", fake_connect)
+    B.PostgresBackend.connect("postgresql://u@h/db")
+    assert captured["autocommit"] is True
+
+
+def test_transaction_goes_through_psycopg_transaction_cm():
+    """Atomic blocks use conn.transaction() (explicit BEGIN/COMMIT under
+    autocommit), never a manual BEGIN — proven via the fake's counter."""
+    fc = FakeConn()
+    be = _pg(fc)
+    with be.transaction():
+        be.execute("UPDATE t SET a=? WHERE b=?", ("x", "y"))
+    assert fc.transactions == 1
+    assert not any("BEGIN" in s for s in fc.sql_log)     # no manual BEGIN emitted
+
+
+def test_reads_do_not_open_a_transaction():
+    """query_* at depth 0 must not open a transaction (autocommit handles it)."""
+    fc = FakeConn()
+    fc.stub("FROM accounts", ["account_id"], [(ACCT,)])
+    _pg(fc).query_one("SELECT * FROM accounts WHERE account_id=?", (ACCT,))
+    assert fc.transactions == 0 and fc.rollbacks == 0
+
+
+# ── regression: SQLite >= 3.24 guard is centralized in backend_for ───────────
+def test_backend_for_guards_old_sqlite(monkeypatch):
+    monkeypatch.setattr(B.sqlite3, "sqlite_version_info", (3, 23, 0))
+    with pytest.raises(D.StateBackendUnavailable):
+        B.backend_for(":memory:")
+
+
+# ── regression: wrapping a raw sqlite3.Connection sets row_factory ───────────
+def test_sqlite_backend_wrap_sets_row_factory():
+    import sqlite3
+    raw = sqlite3.connect(":memory:")
+    be = B.SqliteBackend(raw)
+    assert raw.row_factory is sqlite3.Row
+    be.migrate()
+    be.execute("INSERT INTO accounts(account_id,alias,onboarding_method,onboarding_status,"
+               "role_arn,enabled_regions,health,first_seen_at,updated_at) "
+               "VALUES('210987654321','p','single','pending','','[]','unknown',1,1)")
+    row = be.query_one("SELECT * FROM accounts WHERE account_id=?", (ACCT,))
+    assert row["alias"] == "p" and dict(row)["account_id"] == ACCT
+
+
+def test_statestore_legacy_raw_conn_path_works():
+    """The advertised StateStore(raw_conn) compat path must yield by-name rows."""
+    import sqlite3
+    st = S.StateStore(sqlite3.connect(":memory:"))
+    st._migrate()
+    assert st.open_findings("acct") == []          # dict(row) access must not raise
