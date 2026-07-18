@@ -101,7 +101,7 @@ class TestDataStructures(unittest.TestCase):
         self.assertEqual(VERSION, "2.11.1")
 
     def test_sections_count(self):
-        self.assertEqual(len(SECTIONS), 42)
+        self.assertEqual(len(SECTIONS), 43)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

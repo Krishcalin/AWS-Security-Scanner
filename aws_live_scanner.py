@@ -87,7 +87,7 @@ STATUS_ICON  = {"PASS": "[PASS]", "FAIL": "[FAIL]", "WARN": "[WARN]", "INFO": "[
 
 # ─── Section registry ─────────────────────────────────────────────────────────
 SECTIONS = [
-    "IAM", "S3", "VPC", "LOGGING", "KMS", "EC2",
+    "IAM", "S3", "VPC", "LOGGING", "CLOUDWATCH", "KMS", "EC2",
     "AMI", "ECR", "BACKUP", "RDS", "GLACIER", "SNS", "SQS",
     "CLOUDFRONT", "ROUTE53", "BEDROCK", "BEDROCK_AGENTS",
     "LAMBDA", "EKS", "ECS", "SECRETS", "WAF",
@@ -103,6 +103,7 @@ SECTION_LABELS = {
     "S3":             "S3 SECURITY",
     "VPC":            "NETWORK SECURITY",
     "LOGGING":        "LOGGING & MONITORING",
+    "CLOUDWATCH":     "CLOUDWATCH ALARMS (CIS §4)",
     "KMS":            "ENCRYPTION & KMS",
     "EC2":            "COMPUTE SECURITY",
     "AMI":            "MACHINE IMAGES (AMI)",
@@ -173,6 +174,11 @@ CHECK_SEVERITY = {
     "LOG-01": "CRITICAL", "LOG-03": "HIGH", "LOG-04": "CRITICAL", "LOG-05": "MEDIUM",
     "LOG-06": "MEDIUM", "LOG-07": "MEDIUM", "LOG-08": "MEDIUM", "LOG-09": "CRITICAL",
     "LOG-10": "HIGH",
+    "CW-01": "HIGH",
+    "CW-02": "MEDIUM", "CW-03": "MEDIUM", "CW-04": "MEDIUM", "CW-05": "MEDIUM",
+    "CW-06": "MEDIUM", "CW-07": "MEDIUM", "CW-08": "MEDIUM", "CW-09": "MEDIUM",
+    "CW-10": "MEDIUM", "CW-11": "MEDIUM", "CW-12": "MEDIUM", "CW-13": "MEDIUM",
+    "CW-14": "MEDIUM", "CW-15": "MEDIUM", "CW-16": "MEDIUM",
     "ENC-03": "MEDIUM",
     "KMS-02": "CRITICAL", "KMS-03": "HIGH", "KMS-04": "HIGH",
     "EC2-04": "HIGH", "EC2-05": "MEDIUM", "EC2-06": "HIGH",
@@ -294,6 +300,22 @@ COMPLIANCE_MAP = {
     "LOG-08": {"CIS": "3.10", "PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "LOG-09": {"CIS": "3.3", "PCI-DSS": "10.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AU-9"},
     "LOG-10": {"PCI-DSS": "10.7", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-5"},
+    "CW-01": {"CIS": "4.1", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6(1)"},
+    "CW-02": {"CIS": "4.1", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SI-4"},
+    "CW-03": {"CIS": "4.2", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SI-4"},
+    "CW-04": {"CIS": "4.3", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AC-6(9)"},
+    "CW-05": {"CIS": "4.4", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-06": {"CIS": "4.5", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-07": {"CIS": "4.6", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SI-4"},
+    "CW-08": {"CIS": "4.7", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-09": {"CIS": "4.8", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-10": {"CIS": "4.9", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-11": {"CIS": "4.10", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-12": {"CIS": "4.11", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-13": {"CIS": "4.12", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-14": {"CIS": "4.13", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-15": {"CIS": "4.14", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-16": {"CIS": "4.15", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
     # KMS
     "ENC-03": {"CIS": "3.8", "PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
     "KMS-03": {"NIST": "SC-12", "SOC2": "CC6.1", "HIPAA": "164.312(a)(2)(iv)"},
@@ -481,6 +503,22 @@ REMEDIATION_MAP = {
     "LOG-08": "Add data-event logging: aws cloudtrail put-event-selectors --trail-name <TRAIL> --advanced-event-selectors '[{\"Name\":\"S3 data events\",\"FieldSelectors\":[{\"Field\":\"eventCategory\",\"Equals\":[\"Data\"]},{\"Field\":\"resources.type\",\"Equals\":[\"AWS::S3::Object\"]}]}]'",
     "LOG-09": "Block public access on the trail bucket and strip public policy/ACL grants: aws s3api put-public-access-block --bucket <TRAIL_BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "LOG-10": "Inspect and repair the delivery failure: aws cloudtrail get-trail-status --name <TRAIL> (read LatestDeliveryError), fix the bucket policy / re-enable the KMS key, then aws cloudtrail start-logging --name <TRAIL>",
+    "CW-01": "Wire a multi-region trail to CloudWatch Logs so CIS section-4 metric filters can exist: aws cloudtrail update-trail --name <TRAIL> --is-multi-region-trail --cloud-watch-logs-log-group-arn <LOG_GROUP_ARN> --cloud-watch-logs-role-arn <ROLE_ARN> ; aws cloudtrail start-logging --name <TRAIL>",
+    "CW-02": "Add the CIS 4.1 (unauthorized API calls) metric filter + alarm + subscription: aws logs put-metric-filter --log-group-name <LG> --filter-name unauthorized-api-calls --filter-pattern '{($.errorCode=\"*UnauthorizedOperation\")||($.errorCode=\"AccessDenied*\")}' --metric-transformations metricName=UnauthorizedAPICalls,metricNamespace=CISBenchmark,metricValue=1 ; aws cloudwatch put-metric-alarm --alarm-name unauthorized-api-calls --metric-name UnauthorizedAPICalls --namespace CISBenchmark --statistic Sum --period 300 --threshold 1 --comparison-operator GreaterThanOrEqualToThreshold --evaluation-periods 1 --alarm-actions <SNS_TOPIC_ARN> ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-03": "Add the CIS 4.2 (console sign-in without MFA) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-04": "Add the CIS 4.3 (root account usage) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-05": "Add the CIS 4.4 (IAM policy changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-06": "Add the CIS 4.5 (CloudTrail config changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-07": "Add the CIS 4.6 (console auth failures) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-08": "Add the CIS 4.7 (CMK disable/deletion) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-09": "Add the CIS 4.8 (S3 bucket policy changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-10": "Add the CIS 4.9 (AWS Config changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-11": "Add the CIS 4.10 (security group changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-12": "Add the CIS 4.11 (network ACL changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-13": "Add the CIS 4.12 (network gateway changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-14": "Add the CIS 4.13 (route table changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-15": "Add the CIS 4.14 (VPC changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-16": "Add the CIS 4.15 (organization changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
     "ENC-03": "Enable key rotation: aws kms enable-key-rotation --key-id <KEY_ID>",
     "KMS-03": "Cancel deletion if the CMK is still in use, or re-enable a disabled key: aws kms cancel-key-deletion --key-id <KEY_ID> ; aws kms enable-key --key-id <KEY_ID>",
     "KMS-02": "Remove the wildcard '*' principal from the KMS key policy (or gate it with a kms:CallerAccount / aws:PrincipalOrgID condition), then re-apply: aws kms put-key-policy --key-id <KEY_ID> --policy-name default --policy file://scoped-key-policy.json",
@@ -1131,7 +1169,8 @@ class AWSLiveScanner:
 
     # Sections that enumerate global (region-agnostic) resources — run once even
     # when --all-regions sweeps every enabled region for the rest.
-    GLOBAL_SECTIONS = {"IAM", "S3", "ROUTE53", "CLOUDFRONT", "IAMPRIVESC", "CORRELATE"}
+    GLOBAL_SECTIONS = {"IAM", "S3", "ROUTE53", "CLOUDFRONT", "IAMPRIVESC", "CORRELATE",
+                       "CLOUDWATCH"}
 
     def __init__(
         self,
@@ -1970,6 +2009,144 @@ class AWSLiveScanner:
             else:
                 self._add("WARN", "LOG-06", "LOGGING", f"{did}:{name}",
                           f"GuardDuty {label} DISABLED — reduced threat coverage | {did}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION: CLOUDWATCH ALARMS (CIS AWS Foundations Benchmark v3 §4)
+    # ══════════════════════════════════════════════════════════════════════════
+    # (check_id, CIS §, human name, required lowercased tokens a matching filter must
+    #  contain). CW-02..CW-16 == CIS 4.1..4.15 (4.16 = Security Hub == LOG-05).
+    _CIS4_CONTROLS = [
+        ("CW-02", "4.1",  "unauthorized API calls",          ["unauthorizedoperation", "accessdenied"]),
+        ("CW-03", "4.2",  "console sign-in without MFA",      ["consolelogin", "mfaused"]),
+        ("CW-04", "4.3",  "root account usage",              ["useridentity.type", "root"]),
+        ("CW-05", "4.4",  "IAM policy changes",              ["deleterolepolicy", "putrolepolicy"]),
+        ("CW-06", "4.5",  "CloudTrail configuration changes", ["createtrail", "deletetrail"]),
+        ("CW-07", "4.6",  "console authentication failures",  ["consolelogin", "failedauthentication"]),
+        ("CW-08", "4.7",  "CMK disable/scheduled deletion",   ["disablekey", "schedulekeydeletion"]),
+        ("CW-09", "4.8",  "S3 bucket policy changes",         ["putbucketpolicy", "deletebucketpolicy"]),
+        ("CW-10", "4.9",  "AWS Config changes",              ["stopconfigurationrecorder"]),
+        ("CW-11", "4.10", "security group changes",          ["authorizesecuritygroupingress", "revokesecuritygroupingress"]),
+        ("CW-12", "4.11", "network ACL changes",             ["createnetworkaclentry", "deletenetworkaclentry"]),
+        ("CW-13", "4.12", "network gateway changes",         ["createinternetgateway", "deleteinternetgateway"]),
+        ("CW-14", "4.13", "route table changes",             ["createroute", "deleteroutetable"]),
+        ("CW-15", "4.14", "VPC changes",                     ["createvpc", "deletevpc"]),
+        ("CW-16", "4.15", "organization changes",            ["organizations.amazonaws.com"]),
+    ]
+
+    @staticmethod
+    def _norm_filter(s: str) -> str:
+        """Normalize a metric-filter pattern for token matching: lowercase + strip all
+        whitespace, quotes and parentheses (so '($.errorCode = "AccessDenied*")' and
+        '$.errorCode="AccessDenied*"' compare equal)."""
+        return re.sub(r'[\s"\'()]', "", s or "").lower()
+
+    def _check_cloudwatch(self):
+        self._section_header("CLOUDWATCH")
+        self._log("CW-01..16: CloudWatch CIS v3 §4 metric-filter + alarm coverage")
+        try:
+            ct = self._client("cloudtrail")
+            trails = ct.describe_trails(includeShadowTrails=True).get("trailList", [])
+        except Exception as e:
+            self._add("WARN", "CW-01", "CLOUDWATCH", "cloudtrail", str(e))
+            return
+        unique = {}
+        for t in trails:
+            arn = t.get("TrailARN") or t.get("Name")
+            if arn and arn not in unique:
+                unique[arn] = t
+        # qualifying trails: multi-region + logging + wired to CloudWatch Logs
+        log_groups = []                        # (region, logGroupName, account)
+        for arn, t in unique.items():
+            if not t.get("IsMultiRegionTrail") or not t.get("CloudWatchLogsLogGroupArn"):
+                continue
+            try:
+                if not ct.get_trail_status(Name=arn).get("IsLogging"):
+                    continue
+            except Exception:
+                continue
+            parts = t["CloudWatchLogsLogGroupArn"].split(":")
+            if len(parts) >= 7:
+                log_groups.append((parts[3], parts[6], parts[4]))
+        if not log_groups:
+            self._add("FAIL", "CW-01", "CLOUDWATCH", "cloudwatch",
+                      "No multi-region CloudTrail delivering to CloudWatch Logs — CIS §4 "
+                      "metric-filter alarms cannot exist")
+            return
+        # collect the union of metric filters across owner-account log groups
+        filters, owner_group_seen = [], False
+        for region, lg_name, acct in log_groups:
+            if acct and self.account and acct != self.account:
+                continue                       # org-trail log group in another account
+            owner_group_seen = True
+            try:
+                logs = self._client("logs", region=region)
+                for page in logs.get_paginator("describe_metric_filters").paginate(
+                        logGroupName=lg_name):
+                    for mf in page.get("metricFilters", []):
+                        pat = self._norm_filter(mf.get("filterPattern", ""))
+                        for mt in mf.get("metricTransformations", []):
+                            filters.append({"pat": pat, "metric": mt.get("metricName"),
+                                            "ns": mt.get("metricNamespace"), "region": region})
+            except Exception:
+                pass
+        if not owner_group_seen:
+            self._add("INFO", "CW-01", "CLOUDWATCH", "cloudwatch",
+                      "CloudTrail→CW-Logs monitoring is owned by the org/management account; "
+                      "CIS §4 metric filters are evaluated in the resource-owner account")
+            return
+        self._add("PASS", "CW-01", "CLOUDWATCH", "cloudwatch",
+                  f"CloudTrail→CloudWatch Logs present ({len(filters)} metric filters found)")
+        for cid, cis, name, tokens in self._CIS4_CONTROLS:
+            self._eval_cis4_control(cid, cis, name, tokens, filters)
+
+    def _eval_cis4_control(self, cid, cis, name, tokens, filters) -> None:
+        """3-state CIS §4 control: FAIL (no matching filter, or filter without an
+        alarm/SNS action), WARN (alarm+SNS but no confirmed subscription), PASS
+        (filter + alarm + ≥1 confirmed subscription)."""
+        matched = [f for f in filters if all(tok in f["pat"] for tok in tokens)]
+        if not matched:
+            self._add("FAIL", cid, "CLOUDWATCH", f"CIS-{cis}",
+                      f"No CloudWatch metric filter for {name} (CIS {cis})")
+            return
+        best = 0                               # 0 no-alarm/action, 1 no-subs, 2 ok
+        for f in matched:
+            try:
+                cw = self._client("cloudwatch", region=f["region"])
+                alarms = cw.describe_alarms_for_metric(
+                    Namespace=f["ns"], MetricName=f["metric"]).get("MetricAlarms", [])
+            except Exception:
+                alarms = []
+            for al in alarms:
+                if not al.get("ActionsEnabled", True):
+                    continue
+                sns_actions = [a for a in al.get("AlarmActions", []) if ":sns:" in a]
+                if not sns_actions:
+                    continue
+                best = max(best, 1)
+                for topic in sns_actions:
+                    tparts = topic.split(":")
+                    treg = tparts[3] if len(tparts) >= 4 else f["region"]
+                    try:
+                        sns = self._client("sns", region=treg)
+                        confirmed = False
+                        for page in sns.get_paginator("list_subscriptions_by_topic").paginate(
+                                TopicArn=topic):
+                            for sub in page.get("Subscriptions", []):
+                                if (sub.get("SubscriptionArn") or "").startswith("arn:"):
+                                    confirmed = True
+                        if confirmed:
+                            best = 2
+                    except Exception:
+                        pass
+        if best == 2:
+            self._add("PASS", cid, "CLOUDWATCH", f"CIS-{cis}",
+                      f"Metric filter + alarm + confirmed subscription for {name} (CIS {cis})")
+        elif best == 1:
+            self._add("WARN", cid, "CLOUDWATCH", f"CIS-{cis}",
+                      f"Alarm for {name} has no confirmed SNS subscription (CIS {cis})")
+        else:
+            self._add("FAIL", cid, "CLOUDWATCH", f"CIS-{cis}",
+                      f"Metric filter for {name} has no alarm/SNS action (CIS {cis})")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 5: ENCRYPTION & KMS
@@ -6532,6 +6709,7 @@ class AWSLiveScanner:
             "S3":             self._check_s3,
             "VPC":            self._check_vpc,
             "LOGGING":        self._check_logging,
+            "CLOUDWATCH":     self._check_cloudwatch,
             "KMS":            self._check_kms,
             "EC2":            self._check_ec2,
             "AMI":            self._check_ami,

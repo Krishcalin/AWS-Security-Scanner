@@ -558,3 +558,92 @@ def test_r53_06_private_zone_skipped():
 def test_r53_06_map_complete():
     assert A.CHECK_SEVERITY.get("R53-06") == "HIGH" and "R53-06" in A.COMPLIANCE_MAP
     assert "aws " in A.REMEDIATION_MAP.get("R53-06", "").lower()
+
+
+# ── CW-01..16 — CloudWatch CIS §4 metric-filter + alarm coverage ─────────────
+_UNAUTH_PATTERN = '{ ($.errorCode = "*UnauthorizedOperation") || ($.errorCode = "AccessDenied*") }'
+
+
+def _cw_scanner(filter_specs, alarms=None, subs_confirmed=True):
+    """filter_specs: list of (filterPattern, metricName, metricNamespace)."""
+    s = make_scanner(["CLOUDWATCH"])
+    lg_arn = f"arn:aws:logs:us-east-1:{OWN}:log-group:ct-logs:*"
+    ct = MagicMock()
+    ct.describe_trails.return_value = {"trailList": [{
+        "Name": "t", "TrailARN": "arn:aws:cloudtrail:us-east-1:1:trail/t",
+        "IsMultiRegionTrail": True, "CloudWatchLogsLogGroupArn": lg_arn}]}
+    ct.get_trail_status.return_value = {"IsLogging": True}
+    s._clients["cloudtrail:us-east-1"] = ct
+    logs = MagicMock()
+    logs.get_paginator.return_value = MockPaginator("metricFilters", [
+        {"filterPattern": p, "metricTransformations": [{"metricName": m, "metricNamespace": ns}]}
+        for p, m, ns in filter_specs])
+    s._clients["logs:us-east-1"] = logs
+    cw = MagicMock()
+    cw.describe_alarms_for_metric.return_value = {"MetricAlarms": alarms if alarms is not None else [
+        {"ActionsEnabled": True, "AlarmActions": [f"arn:aws:sns:us-east-1:{OWN}:sec-alarms"]}]}
+    s._clients["cloudwatch:us-east-1"] = cw
+    sns = MagicMock()
+    sub = "arn:aws:sns:us-east-1:1:sec-alarms:s1" if subs_confirmed else "PendingConfirmation"
+    sns.get_paginator.return_value = MockPaginator("Subscriptions", [{"SubscriptionArn": sub}])
+    s._clients["sns:us-east-1"] = sns
+    return s
+
+
+def test_cw_norm_filter():
+    assert A.AWSLiveScanner._norm_filter('( $.errorCode = "AccessDenied*" )') == "$.errorcode=accessdenied*"
+
+
+def test_cw_01_gate_no_trail_single_fail_no_storm():
+    s = make_scanner(["CLOUDWATCH"])
+    ct = MagicMock()
+    ct.describe_trails.return_value = {"trailList": []}
+    s._clients["cloudtrail:us-east-1"] = ct
+    s._check_cloudwatch()
+    assert len([r for r in s.results if r.check_id == "CW-01" and r.status == "FAIL"]) == 1
+    # gate short-circuits -> no 15x per-control storm
+    assert not any(r.check_id.startswith("CW-") and r.check_id != "CW-01" for r in s.results)
+
+
+def test_cw_matched_control_passes_others_fail():
+    s = _cw_scanner([(_UNAUTH_PATTERN, "UnauthorizedAPICalls", "CISBenchmark")])
+    s._check_cloudwatch()
+    assert any(r.check_id == "CW-01" and r.status == "PASS" for r in s.results)
+    assert any(r.check_id == "CW-02" and r.status == "PASS" for r in s.results)   # CIS 4.1 covered
+    assert any(r.check_id == "CW-03" and r.status == "FAIL" for r in s.results)   # 4.2 not present
+    # exactly 15 per-control results (CW-02..CW-16)
+    per = {r.check_id for r in s.results if r.check_id not in ("CW-01",) and r.check_id.startswith("CW-")}
+    assert len(per) == 15
+
+
+def test_cw_02_alarm_without_subscription_warns():
+    s = _cw_scanner([(_UNAUTH_PATTERN, "UnauthorizedAPICalls", "CISBenchmark")], subs_confirmed=False)
+    s._check_cloudwatch()
+    assert any(r.check_id == "CW-02" and r.status == "WARN" for r in s.results)
+
+
+def test_cw_02_filter_without_alarm_fails():
+    s = _cw_scanner([(_UNAUTH_PATTERN, "UnauthorizedAPICalls", "CISBenchmark")], alarms=[])
+    s._check_cloudwatch()
+    assert any(r.check_id == "CW-02" and r.status == "FAIL" for r in s.results)
+
+
+def test_cw_01_org_owned_loggroup_is_info():
+    s = make_scanner(["CLOUDWATCH"])
+    lg_arn = f"arn:aws:logs:us-east-1:{EXT}:log-group:ct-logs:*"   # another account
+    ct = MagicMock()
+    ct.describe_trails.return_value = {"trailList": [{
+        "Name": "t", "TrailARN": "arn:aws:cloudtrail:us-east-1:1:trail/t",
+        "IsMultiRegionTrail": True, "CloudWatchLogsLogGroupArn": lg_arn}]}
+    ct.get_trail_status.return_value = {"IsLogging": True}
+    s._clients["cloudtrail:us-east-1"] = ct
+    s._check_cloudwatch()
+    assert any(r.check_id == "CW-01" and r.status == "INFO" for r in s.results)
+    assert not any(r.check_id == "CW-02" for r in s.results)   # per-control skipped
+
+
+def test_cw_maps_complete():
+    for n in range(1, 17):
+        cid = f"CW-{n:02d}"
+        assert cid in A.CHECK_SEVERITY and cid in A.COMPLIANCE_MAP
+        assert "aws " in A.REMEDIATION_MAP.get(cid, "").lower()
