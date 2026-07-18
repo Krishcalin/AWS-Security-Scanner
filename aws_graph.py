@@ -135,9 +135,11 @@ class SecurityGraph:
         return {
             "directed": True,
             "multigraph": False,
-            "nodes": [{"id": n["id"], "kind": n["kind"], **n["props"]}
+            # Reserved structural keys are written LAST so a stray prop named
+            # id/kind/source/target can never clobber an endpoint (node-link format).
+            "nodes": [{**n["props"], "id": n["id"], "kind": n["kind"]}
                       for n in self._nodes.values()],
-            "edges": [{"source": e["src"], "target": e["dst"], "kind": e["kind"], **e["props"]}
+            "edges": [{**e["props"], "source": e["src"], "target": e["dst"], "kind": e["kind"]}
                       for lst in self._out.values() for e in lst],
         }
 

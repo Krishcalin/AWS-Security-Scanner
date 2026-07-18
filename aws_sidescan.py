@@ -947,7 +947,10 @@ _SECRET_PATHS = [
 ]
 
 _SECRET_CONTENT = [
-    ("aws-access-key", re.compile(rb"\b(AKIA|ASIA)[0-9A-Z]{16}\b"), True),
+    # NOT entropy-gated: AKIA/ASIA + 16 base32 is a deterministic, near-zero-FP
+    # prefix format whose max Shannon entropy (log2(20)=4.32) sits at the 4.0 gate,
+    # so gating would drop the majority of real key IDs. _SECRET_DENY covers examples.
+    ("aws-access-key", re.compile(rb"\b(AKIA|ASIA)[0-9A-Z]{16}\b"), False),
     ("private-key", re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----"), False),
     ("github-pat", re.compile(rb"\bghp_[0-9A-Za-z]{36}\b"), False),
     ("slack-token", re.compile(rb"\bxox[baprs]-[0-9A-Za-z-]{10,}"), False),

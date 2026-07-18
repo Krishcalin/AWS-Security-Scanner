@@ -98,7 +98,7 @@ def _gaad_iam(users=None, roles=None, groups=None, policies=None):
 class TestDataStructures(unittest.TestCase):
 
     def test_version(self):
-        self.assertEqual(VERSION, "2.11.0")
+        self.assertEqual(VERSION, "2.11.1")
 
     def test_sections_count(self):
         self.assertEqual(len(SECTIONS), 41)
@@ -511,10 +511,10 @@ class TestELBChecks(unittest.TestCase):
     def test_no_logging_weak_tls_http_no_redirect(self):
         scanner = make_scanner(["ELB"])
         elb = MagicMock()
-        elb.describe_load_balancers.return_value = {"LoadBalancers": [{
+        elb.get_paginator.return_value = MockPaginator("LoadBalancers", [{
             "LoadBalancerArn": "arn:lb", "LoadBalancerName": "web-alb",
             "Type": "application",
-        }]}
+        }])
         elb.describe_load_balancer_attributes.return_value = {"Attributes": [
             {"Key": "access_logs.s3.enabled", "Value": "false"},
             {"Key": "deletion_protection.enabled", "Value": "false"},
@@ -628,9 +628,9 @@ class TestACMChecks(unittest.TestCase):
     def test_expired_and_unused(self):
         scanner = make_scanner(["ACM"])
         acm = MagicMock()
-        acm.list_certificates.return_value = {"CertificateSummaryList": [
+        acm.get_paginator.return_value = MockPaginator("CertificateSummaryList", [
             {"CertificateArn": "arn:cert1", "DomainName": "old.example.com"},
-        ]}
+        ])
         acm.describe_certificate.return_value = {"Certificate": {
             "DomainName": "old.example.com",
             "NotAfter": datetime.now(timezone.utc) - timedelta(days=5),

@@ -49,18 +49,39 @@ def _ec2_scanner(instances):
     return s
 
 
+_PROF = {"Arn": "arn:aws:iam::1:instance-profile/web"}
+
+
 def test_ec2_08_flags_only_public_imdsv1():
     s = _ec2_scanner([
-        {"InstanceId": "i-1", "PublicIpAddress": "1.2.3.4",
+        {"InstanceId": "i-1", "PublicIpAddress": "1.2.3.4", "IamInstanceProfile": _PROF,
          "MetadataOptions": {"HttpTokens": "optional"}, "Tags": [{"Key": "Name", "Value": "web"}]},
-        {"InstanceId": "i-2", "PublicIpAddress": "5.6.7.8",
+        {"InstanceId": "i-2", "PublicIpAddress": "5.6.7.8", "IamInstanceProfile": _PROF,
          "MetadataOptions": {"HttpTokens": "required"}},       # IMDSv2 -> safe
-        {"InstanceId": "i-3", "MetadataOptions": {"HttpTokens": "optional"}},  # no public IP -> safe
+        {"InstanceId": "i-3", "IamInstanceProfile": _PROF,
+         "MetadataOptions": {"HttpTokens": "optional"}},       # no public IP -> safe
     ])
     s._check_ec2()
     fails = [r for r in s.results if r.check_id == "EC2-08" and r.status == "FAIL"]
     assert len(fails) == 1 and "web" in fails[0].resource
     assert fails[0].severity == "HIGH"
+
+
+def test_ec2_08_not_flagged_when_imds_endpoint_disabled():
+    # public + IMDSv1 tokens, but the IMDS endpoint is off -> no SSRF-to-cred path
+    s = _ec2_scanner([{"InstanceId": "i-x", "PublicIpAddress": "1.2.3.4",
+                       "IamInstanceProfile": _PROF,
+                       "MetadataOptions": {"HttpTokens": "optional", "HttpEndpoint": "disabled"}}])
+    s._check_ec2()
+    assert not any(r.check_id == "EC2-08" for r in s.results)
+
+
+def test_ec2_08_not_flagged_without_role():
+    # public + IMDSv1 but NO instance profile -> no role credentials to steal
+    s = _ec2_scanner([{"InstanceId": "i-y", "PublicIpAddress": "1.2.3.4",
+                       "MetadataOptions": {"HttpTokens": "optional"}}])
+    s._check_ec2()
+    assert not any(r.check_id == "EC2-08" for r in s.results)
 
 
 def test_ec2_08_clean_when_imdsv2():
@@ -163,9 +184,9 @@ def test_kms_03_pending_deletion_and_disabled():
 def test_acm_04_failed_and_05_imported():
     s = make_scanner(["ACM"])
     acm = MagicMock()
-    acm.list_certificates.return_value = {"CertificateSummaryList": [
+    acm.get_paginator.return_value = MockPaginator("CertificateSummaryList", [
         {"CertificateArn": "arn:failed"}, {"CertificateArn": "arn:imported"},
-        {"CertificateArn": "arn:ineligible"}]}
+        {"CertificateArn": "arn:ineligible"}])
     certs = {
         "arn:failed": {"DomainName": "bad.example", "Status": "FAILED", "Type": "AMAZON_ISSUED"},
         "arn:imported": {"DomainName": "imp.example", "Status": "ISSUED", "Type": "IMPORTED",
@@ -285,7 +306,7 @@ def _ecr_scanner(repos, images=None, findings=None, findings_exc=None):
     s = make_scanner(["ECR"])
     ecr = MagicMock()
     ecr.describe_repositories.return_value = {"repositories": repos}
-    ecr.describe_images.return_value = {"imageDetails": images or []}
+    ecr.get_paginator.return_value = MockPaginator("imageDetails", images or [])
     if findings_exc is not None:
         ecr.describe_image_scan_findings.side_effect = findings_exc
     else:
@@ -357,8 +378,12 @@ def test_cnt_02_map_entries_complete():
 def _rds_scanner(instances=None, snaps=None, snap_attrs=None):
     s = make_scanner(["RDS"])
     rds = MagicMock()
-    rds.get_paginator.return_value = MockPaginator("DBInstances", instances or [])
-    rds.describe_db_snapshots.return_value = {"DBSnapshots": snaps or []}
+
+    def _pag(op):
+        if op == "describe_db_snapshots":
+            return MockPaginator("DBSnapshots", snaps or [])
+        return MockPaginator("DBInstances", instances or [])
+    rds.get_paginator.side_effect = _pag
     snap_attrs = snap_attrs or {}
     rds.describe_db_snapshot_attributes.side_effect = lambda DBSnapshotIdentifier: {
         "DBSnapshotAttributesResult": {
@@ -412,7 +437,7 @@ def test_rds_08_11_map_entries_complete():
 def _elb_scanner(lbs, attrs_by_arn=None, listeners=None):
     s = make_scanner(["ELB"])
     elb = MagicMock()
-    elb.describe_load_balancers.return_value = {"LoadBalancers": lbs}
+    elb.get_paginator.return_value = MockPaginator("LoadBalancers", lbs)
     attrs_by_arn = attrs_by_arn or {}
     elb.describe_load_balancer_attributes.side_effect = lambda LoadBalancerArn: {
         "Attributes": [{"Key": k, "Value": v}
@@ -475,16 +500,33 @@ def _s3_scanner(buckets, policies=None, versioning=None):
 
 _TLS_POLICY = json.dumps({"Statement": [
     {"Effect": "Deny", "Principal": "*", "Action": "s3:*",
+     "Resource": ["arn:aws:s3:::with-tls", "arn:aws:s3:::with-tls/*"],
      "Condition": {"Bool": {"aws:SecureTransport": "false"}}}]})
+
+
+def _full_deny(**kw):
+    base = {"Effect": "Deny", "Principal": "*", "Action": "s3:*",
+            "Resource": "arn:aws:s3:::b/*",
+            "Condition": {"Bool": {"aws:SecureTransport": "false"}}}
+    base.update(kw)
+    return base
 
 
 def test_stmt_denies_insecure_transport():
     f = A.AWSLiveScanner._stmt_denies_insecure_transport
-    assert f({"Effect": "Deny", "Condition": {"Bool": {"aws:SecureTransport": "false"}}})
-    assert f({"Effect": "Deny", "Condition": {"BoolIfExists": {"aws:SecureTransport": ["false"]}}})
-    assert not f({"Effect": "Allow", "Condition": {"Bool": {"aws:SecureTransport": "false"}}})
-    assert not f({"Effect": "Deny", "Condition": {"Bool": {"aws:SecureTransport": "true"}}})
-    assert not f({"Effect": "Deny"})
+    # effective full-coverage denies
+    assert f(_full_deny(), "b")
+    assert f(_full_deny(Condition={"BoolIfExists": {"aws:SecureTransport": ["false"]}}), "b")
+    assert f(_full_deny(Resource="*"), "b")
+    assert f(_full_deny(Principal={"AWS": "*"}), "b")
+    assert f(_full_deny(Action=["s3:*"]), "b")
+    # ineffective / narrowly-scoped -> NOT full TLS enforcement
+    assert not f(_full_deny(Effect="Allow"), "b")
+    assert not f(_full_deny(Condition={"Bool": {"aws:SecureTransport": "true"}}), "b")
+    assert not f(_full_deny(Action="s3:PutObject"), "b")                    # single action
+    assert not f(_full_deny(Principal={"AWS": "arn:aws:iam::1:role/x"}), "b")  # single principal
+    assert not f(_full_deny(Resource="arn:aws:s3:::b"), "b")                # bucket only, not objects
+    assert not f({"Effect": "Deny"}, "b")                                   # no condition
 
 
 def test_s3_07_tls_policy_present_vs_absent():
@@ -494,6 +536,18 @@ def test_s3_07_tls_policy_present_vs_absent():
     p = {r.resource for r in s.results if r.check_id == "S3-07" and r.status == "PASS"}
     w = {r.resource for r in s.results if r.check_id == "S3-07" and r.status == "WARN"}
     assert p == {"with-tls"} and w == {"no-tls"}
+
+
+def test_s3_07_narrow_deny_is_not_pass():
+    narrow = json.dumps({"Statement": [
+        {"Effect": "Deny", "Principal": "*", "Action": "s3:PutObject",
+         "Resource": "arn:aws:s3:::partial/*",
+         "Condition": {"Bool": {"aws:SecureTransport": "false"}}}]})
+    s = _s3_scanner(["partial"], policies={"partial": narrow},
+                    versioning={"partial": "Enabled"})
+    s._check_s3()
+    w = {r.resource for r in s.results if r.check_id == "S3-07" and r.status == "WARN"}
+    assert w == {"partial"}   # a PutObject-only deny still leaves HTTP GET -> WARN, not PASS
 
 
 def test_s3_08_versioning():
@@ -514,7 +568,7 @@ def test_s3_07_08_map_entries_complete():
 def _vpc_scanner(sgs, vpcs=None, flow_logs=None):
     s = make_scanner(["VPC"])
     ec2 = MagicMock()
-    ec2.describe_security_groups.return_value = {"SecurityGroups": sgs}
+    ec2.get_paginator.return_value = MockPaginator("SecurityGroups", sgs)
     ec2.describe_vpcs.return_value = {"Vpcs": vpcs or []}
     ec2.describe_flow_logs.return_value = {"FlowLogs": flow_logs or []}
     s._clients["ec2:us-east-1"] = ec2
@@ -669,3 +723,194 @@ def test_scan_text_secrets_preview_only():
     assert "private-key" in kinds
     for f in finds:
         assert "…" in f.match_preview and f.path == "userdata:i-1"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Regressions for the adversarial-verify fixes (17 confirmed defects)
+# ══════════════════════════════════════════════════════════════════════════════
+import aws_graph
+from datetime import datetime as _dt, timezone as _tz
+
+
+# EC2-07 AKIA entropy-gate fix — a realistic (sub-4.0-entropy) AWS key is now caught
+def test_ec2_07_realistic_aws_key_detected():
+    finds = SS.scan_text_secrets(b"AWS_ACCESS_KEY_ID=AKIAZ3XYK7QWMNBVCXZ2\n")
+    assert any(f.kind == "aws-access-key" for f in finds)   # was dropped by the 4.0 gate
+
+
+# CNT-02 max() datetime-vs-missing-field crash fix + scan_source (not 'source') prop
+def test_cnt_02_datetime_pushed_at_no_crash_and_scan_source():
+    imgs = [{"imageDigest": "sha256:new", "imageTags": ["v2"],
+             "imagePushedAt": _dt(2026, 6, 1, tzinfo=_tz.utc)},
+            {"imageDigest": "sha256:mid",                          # missing imagePushedAt
+             "imageTags": ["v1"]},
+            {"imageDigest": "sha256:old",
+             "imagePushedAt": _dt(2026, 1, 1, tzinfo=_tz.utc)}]
+    s = _ecr_scanner([_REPO], images=imgs,
+                     findings={"findings": [{"name": "CVE-2026-1", "severity": "CRITICAL"}]})
+    s._check_ecr()   # must not raise TypeError comparing datetime with int
+    assert any(r.check_id == "CNT-02" and r.status == "FAIL" for r in s.results)
+    edges = s.graph.to_dict()["edges"]
+    hv = [e for e in edges if e["kind"] == "HAS_VULN"]
+    assert hv, "HAS_VULN edge should serialize"
+    # the reserved 'source' endpoint is the ECRImage node, NOT the literal scan tag
+    assert hv[0]["source"].startswith(_REPO["repositoryUri"])
+    assert hv[0]["source"] != "ecr-native-scan"
+    assert hv[0].get("scan_source") == "ecr-native-scan"
+    assert "sha256:new" in hv[0]["source"]   # newest image chosen despite the missing field
+
+
+# aws_graph.to_dict hardening — a stray edge prop can't clobber the endpoint keys
+def test_graph_to_dict_reserved_keys_win_over_props():
+    g = aws_graph.SecurityGraph()
+    g.add_node("img", "ECRImage")
+    g.add_node("cve", "Vulnerability")
+    g.add_edge("img", "cve", "HAS_VULN", source="SHOULD_NOT_WIN")
+    e = [x for x in g.to_dict()["edges"] if x["kind"] == "HAS_VULN"][0]
+    assert e["source"] == "img" and e["target"] == "cve"
+
+
+# ACM fix — list is paginated AND passes an Includes.keyTypes filter (EC + RSA_3072/4096)
+def test_acm_passes_keytypes_and_paginates():
+    s = make_scanner(["ACM"])
+    acm = MagicMock()
+    pag = MagicMock()
+    pag.paginate.return_value = [{"CertificateSummaryList": [{"CertificateArn": "arn:ec"}]}]
+    acm.get_paginator.return_value = pag
+    acm.describe_certificate.side_effect = lambda CertificateArn: {"Certificate": {
+        "DomainName": "ec.example", "Status": "FAILED", "Type": "AMAZON_ISSUED"}}
+    s._clients["acm:us-east-1"] = acm
+    s._check_acm()
+    acm.get_paginator.assert_called_with("list_certificates")
+    kt = pag.paginate.call_args.kwargs["Includes"]["keyTypes"]
+    assert "EC_prime256v1" in kt and "RSA_4096" in kt
+    assert any(r.check_id == "ACM-04" for r in s.results)   # the EC cert is now evaluated
+
+
+# RDS-11 pagination — an unencrypted snapshot on page 2 is still flagged
+def test_rds_11_second_page_snapshot_flagged():
+    s = make_scanner(["RDS"])
+    rds = MagicMock()
+
+    def _pag(op):
+        if op == "describe_db_snapshots":
+            p = MagicMock()
+            p.paginate.return_value = [
+                {"DBSnapshots": [{"DBSnapshotIdentifier": "s1", "Encrypted": True}]},
+                {"DBSnapshots": [{"DBSnapshotIdentifier": "s2", "Encrypted": False}]}]
+            return p
+        return MockPaginator("DBInstances", [])
+    rds.get_paginator.side_effect = _pag
+    rds.describe_db_snapshot_attributes.return_value = {
+        "DBSnapshotAttributesResult": {"DBSnapshotAttributes": []}}
+    s._clients["rds:us-east-1"] = rds
+    s._check_rds()
+    f = [r for r in s.results if r.check_id == "RDS-11" and r.status == "FAIL"]
+    assert {r.resource for r in f} == {"s2"}   # page-2 snapshot seen
+
+
+# VULN-04 gate fix — Inspector Lambda-only account still emits VULN-04
+def test_vuln_04_lambda_only_inspector_enabled():
+    f = {"findingArn": "arn:finding/lam", "severity": "HIGH", "exploitAvailable": "NO",
+         "fixAvailable": "YES", "epss": {"score": 0.3},
+         "packageVulnerabilityDetails": {"vulnerabilityId": "CVE-2026-2"},
+         "resources": [{"id": "arn:aws:lambda:us-east-1:1:function:pay",
+                        "type": "AWS_LAMBDA_FUNCTION"}]}
+    m = MagicMock()
+    m.batch_get_account_status.return_value = {"accounts": [{"resourceState": {
+        "ec2": {"status": "DISABLED"}, "ecr": {"status": "DISABLED"},
+        "lambda": {"status": "ENABLED"}}}]}
+    m.get_paginator.return_value = _P([f])
+    m.batch_get_finding_details.return_value = {"findingDetails": []}
+    s = make_scanner(["VULN"])
+    s._clients["inspector2:us-east-1"] = m
+    with patch("builtins.print"):
+        s._check_vuln()
+    assert any(r.check_id == "VULN-04" and r.status == "FAIL" for r in s.results)
+
+
+# IAM-07 — an unavailable credential report surfaces a WARN, never silent absence
+def test_iam_07_unavailable_report_warns():
+    s = _iam_scanner()
+    s._cred_report = []          # empty AND not ok -> report could not be evaluated
+    s._cred_report_ok = False
+    with patch("aws_live_scanner.ClientError", MockClientError, create=True):
+        s._check_iam()
+    assert any(r.check_id == "IAM-07" and r.status == "WARN" for r in s.results)
+
+
+# IAM-08 — a freshly set, never-used password on an old user is NOT a 45d-unused finding
+@patch("aws_live_scanner.ClientError", MockClientError, create=True)
+def test_iam_08_recent_unused_password_not_flagged():
+    s = _iam_scanner()
+    s._cred_report = [_ROOT_IDLE,
+        {"user": "dave", "password_enabled": "true", "password_last_used": "N/A",
+         "password_last_changed": _ago(5), "user_creation_time": _ago(400),
+         "access_key_1_active": "false", "access_key_2_active": "false"}]
+    s._check_iam()
+    assert not any(r.check_id == "IAM-08" and "dave" in r.resource for r in s.results)
+
+
+# KMS-03 — a multi-Region key in PendingReplicaDeletion is flagged
+def test_kms_03_pending_replica_deletion():
+    s = make_scanner(["KMS"])
+    kms = MagicMock()
+    kms.get_paginator.return_value = MockPaginator("Keys", [{"KeyId": "k-rep"}])
+    kms.describe_key.return_value = {"KeyMetadata": {
+        "KeyManager": "CUSTOMER", "KeyState": "PendingReplicaDeletion"}}
+    kms.get_key_rotation_status.return_value = {"KeyRotationEnabled": True}
+    s._clients["kms:us-east-1"] = kms
+    s._check_kms()
+    assert any(r.check_id == "KMS-03" and r.status == "FAIL" and r.resource == "k-rep"
+               for r in s.results)
+
+
+# AMI-01 — an org/OU-shared (non-public) AMI is treated as a cross-account share
+def test_ami_01_org_share_flagged():
+    s = _ami_scanner([{"ImageId": "ami-org", "Name": "shared", "Public": False}],
+                     attrs={"ami-org": [{"OrganizationArn":
+                                         "arn:aws:organizations::1:organization/o-abc"}]})
+    s._check_ami()
+    w = [r for r in s.results if r.check_id == "AMI-01" and r.status == "WARN"]
+    assert len(w) == 1 and "ami-org" in w[0].resource
+    assert not any(r.check_id == "AMI-01" and r.status == "PASS" for r in s.results)
+
+
+# VPC-04 pagination — a rule-bearing default SG on page 2 is still flagged
+def test_vpc_04_default_sg_second_page():
+    s = make_scanner(["VPC"])
+    ec2 = MagicMock()
+    pag = MagicMock()
+    pag.paginate.return_value = [
+        {"SecurityGroups": [{"GroupId": "sg-a", "GroupName": "app", "VpcId": "v",
+                             "IpPermissions": [], "IpPermissionsEgress": []}]},
+        {"SecurityGroups": [{"GroupId": "sg-def", "GroupName": "default", "VpcId": "v",
+                             "IpPermissions": [{"IpProtocol": "-1"}], "IpPermissionsEgress": []}]}]
+    ec2.get_paginator.return_value = pag
+    ec2.describe_vpcs.return_value = {"Vpcs": []}
+    ec2.describe_flow_logs.return_value = {"FlowLogs": []}
+    s._clients["ec2:us-east-1"] = ec2
+    s._check_vpc()
+    assert any(r.check_id == "VPC-04" and r.status == "WARN" and "sg-def" in r.resource
+               for r in s.results)
+
+
+# ELB-07 pagination — a monitor-mode ALB on page 2 is still flagged
+def test_elb_07_lb_second_page():
+    s = make_scanner(["ELB"])
+    elb = MagicMock()
+    pag = MagicMock()
+    pag.paginate.return_value = [
+        {"LoadBalancers": [{"LoadBalancerArn": "arn:1", "LoadBalancerName": "p1",
+                            "Type": "application"}]},
+        {"LoadBalancers": [{"LoadBalancerArn": "arn:2", "LoadBalancerName": "mon-lb",
+                            "Type": "application"}]}]
+    elb.get_paginator.return_value = pag
+    elb.describe_load_balancer_attributes.side_effect = lambda LoadBalancerArn: {
+        "Attributes": [{"Key": "routing.http.desync_mitigation_mode",
+                        "Value": "monitor" if LoadBalancerArn == "arn:2" else "defensive"}]}
+    elb.describe_listeners.return_value = {"Listeners": []}
+    s._clients["elbv2:us-east-1"] = elb
+    s._check_elb()
+    assert any(r.check_id == "ELB-07" and r.status == "WARN" and r.resource == "mon-lb"
+               for r in s.results)

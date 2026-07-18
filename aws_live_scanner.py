@@ -71,7 +71,7 @@ import aws_unused
 import aws_sidescan
 import aws_graph_neptune
 
-VERSION = "2.11.0"
+VERSION = "2.11.1"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -1032,6 +1032,7 @@ class AWSLiveScanner:
         self.choke_points: List = []       # ranked ChokePoint objects
         self._clients: Dict[str, object] = {}
         self._cred_report:  Optional[List[Dict]] = None
+        self._cred_report_ok: bool = False
         self._all_regions:  Optional[List[str]]  = None
         self._iam_principals: Optional[List[Dict]] = None
         self._managed_policy_cache: Dict[str, tuple] = {}
@@ -1106,16 +1107,33 @@ class AWSLiveScanner:
     def _get_credential_report(self) -> List[Dict]:
         if self._cred_report is not None:
             return self._cred_report
+        # None (not []) records "could not evaluate" so credential checks can tell an
+        # empty account apart from an unavailable report and avoid a false all-clear.
+        self._cred_report_ok = False
         try:
             iam = self._client("iam")
-            iam.generate_credential_report()
-            time.sleep(6)
+            # generate_credential_report is async; poll its State rather than a fixed
+            # sleep (a fresh/large account is not COMPLETE within a few seconds).
+            for attempt in range(20):
+                state = iam.generate_credential_report().get("State", "")
+                if state == "COMPLETE":
+                    break
+                time.sleep(3)
             resp    = iam.get_credential_report()
             content = base64.b64decode(resp["Content"]).decode("utf-8")
             self._cred_report = list(csv.DictReader(io.StringIO(content)))
+            self._cred_report_ok = True
         except Exception as e:
-            self._log(f"Could not generate credential report: {e}")
-            self._cred_report = []
+            # one retry: get_credential_report can still be ReportInProgress
+            try:
+                time.sleep(5)
+                resp    = iam.get_credential_report()
+                content = base64.b64decode(resp["Content"]).decode("utf-8")
+                self._cred_report = list(csv.DictReader(io.StringIO(content)))
+                self._cred_report_ok = True
+            except Exception:
+                self._log(f"Could not generate credential report: {e}")
+                self._cred_report = []
         return self._cred_report
 
     # ── All enabled regions (cached) ─────────────────────────────────────────
@@ -1231,8 +1249,8 @@ class AWSLiveScanner:
 
         # IAM-07 — Root account recent use (CIS 1.7); zero new API (cached report)
         self._log("IAM-07: Root account recent use")
-        root = next((r for r in self._get_credential_report()
-                     if r.get("user") == "<root_account>"), None)
+        report = self._get_credential_report()
+        root = next((r for r in report if r.get("user") == "<root_account>"), None)
         if root:
             recent = []
             for f in ("password_last_used", "access_key_1_last_used_date",
@@ -1247,6 +1265,11 @@ class AWSLiveScanner:
             else:
                 self._add("PASS", "IAM-07", "IAM", "root",
                           "No root credential use in the last 30 days")
+        elif not self._cred_report_ok:
+            # never silently skip — tell the operator the root audit could not run
+            self._add("WARN", "IAM-07", "IAM", "root",
+                      "Credential report unavailable — IAM-07/08 root & unused-credential "
+                      "audit could not be evaluated (retry the scan)")
 
         # IAM-08 — Credentials unused for 45+ days (CIS 1.12); zero new API
         self._log("IAM-08: Credentials unused for 45+ days")
@@ -1255,8 +1278,10 @@ class AWSLiveScanner:
             if user == "<root_account>":
                 continue
             if row.get("password_enabled") == "true":
+                # never-used fallback = the password's own age (password_last_changed),
+                # not the user's age — a freshly set unused password isn't "45d unused".
                 idle = _cred_idle_days(row.get("password_last_used", ""),
-                                       row.get("user_creation_time", ""))
+                                       row.get("password_last_changed", ""))
                 if idle is not None and idle > 45:
                     self._add("FAIL", "IAM-08", "IAM", user,
                               f"Console password unused {idle}d (>45) — disable it | {user}")
@@ -1370,7 +1395,7 @@ class AWSLiveScanner:
                 stmts = pol.get("Statement", [])
                 if isinstance(stmts, dict):
                     stmts = [stmts]
-                if any(self._stmt_denies_insecure_transport(st) for st in stmts):
+                if any(self._stmt_denies_insecure_transport(st, bname) for st in stmts):
                     self._add("PASS", "S3-07", "S3", bname,
                               f"Bucket policy denies non-TLS access | {bname}")
                 else:
@@ -1395,20 +1420,47 @@ class AWSLiveScanner:
                 pass
 
     @staticmethod
-    def _stmt_denies_insecure_transport(st: Dict) -> bool:
-        """True if an IAM/bucket-policy statement denies requests made without TLS
-        (Effect=Deny + aws:SecureTransport=false under Bool/BoolIfExists)."""
+    def _stmt_denies_insecure_transport(st: Dict, bucket: str = "") -> bool:
+        """True only if a bucket-policy statement EFFECTIVELY denies all non-TLS
+        access: Effect=Deny + aws:SecureTransport=false, applied to EVERY principal,
+        ALL S3 actions, and at least the object-level resource (bucket/*). A
+        narrowly-scoped deny (single action/principal/resource) does NOT count —
+        plaintext HTTP to other actions/objects would still be possible."""
         if st.get("Effect") != "Deny":
             return False
+        # (a) aws:SecureTransport=false condition (Bool / BoolIfExists, str or list)
         cond = st.get("Condition", {}) or {}
+        has_cond = False
         for op in ("Bool", "BoolIfExists"):
             val = (cond.get(op) or {}).get("aws:SecureTransport")
             if val is None:
                 continue
             vals = val if isinstance(val, list) else [val]
             if any(str(v).lower() == "false" for v in vals):
-                return True
-        return False
+                has_cond = True
+                break
+        if not has_cond:
+            return False
+        # (b) every principal ("*" or {"AWS": "*"})
+        princ = st.get("Principal")
+        if princ != "*":
+            if not isinstance(princ, dict):
+                return False
+            aws_p = princ.get("AWS")
+            aws_list = aws_p if isinstance(aws_p, list) else [aws_p]
+            if "*" not in aws_list:
+                return False
+        # (c) all S3 actions ("s3:*" or "*")
+        actions = st.get("Action", [])
+        actions = actions if isinstance(actions, list) else [actions]
+        if not any(a in ("*", "s3:*") for a in actions):
+            return False
+        # (d) at least the object-level resource (bucket/*, an /* wildcard, or "*")
+        res = st.get("Resource", [])
+        res = res if isinstance(res, list) else [res]
+        obj_arn = f"arn:aws:s3:::{bucket}/*" if bucket else None
+        return any(r == "*" or (isinstance(r, str) and r.endswith("/*")) or r == obj_arn
+                   for r in res)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 3: NETWORK SECURITY
@@ -1431,7 +1483,7 @@ class AWSLiveScanner:
         default_seen = False
         default_sg_issues = []
         try:
-            for sg in ec2.describe_security_groups()["SecurityGroups"]:
+            for sg in self._paginate_all(ec2, "describe_security_groups", "SecurityGroups"):
                 if sg.get("GroupName") == "default":
                     default_seen = True
                     inbound  = sg.get("IpPermissions", [])
@@ -1645,7 +1697,7 @@ class AWSLiveScanner:
                         if meta.get("KeyManager") == "CUSTOMER":
                             _st = meta.get("KeyState")
                             _dsc = meta.get("Description") or kid[:8]
-                            if _st == "PendingDeletion":
+                            if _st in ("PendingDeletion", "PendingReplicaDeletion"):
                                 self._add("FAIL", "KMS-03", "KMS", kid,
                                           f"CMK scheduled for deletion "
                                           f"({meta.get('DeletionDate','')}) — irreversible "
@@ -1735,14 +1787,17 @@ class AWSLiveScanner:
                                       f"IMDSv2 not enforced "
                                       f"(HttpTokens={tokens}) | {name}")
                             all_pass = False
-                        # EC2-08 — SSRF->credential choke: public IP + IMDSv1
-                        # (both facts already in hand; no extra API call)
-                        if tokens != "required" and i.get("PublicIpAddress"):
+                        # EC2-08 — SSRF->credential choke: public IP + reachable IMDSv1
+                        # + an attached role to steal (all facts in hand; no extra API).
+                        endpoint = i.get("MetadataOptions", {}).get("HttpEndpoint", "enabled")
+                        has_role = bool(i.get("IamInstanceProfile"))
+                        if (tokens != "required" and endpoint == "enabled"
+                                and i.get("PublicIpAddress") and has_role):
                             self._add("FAIL", "EC2-08", "EC2", name,
                                       f"SSRF-to-credential exposure: public IP "
                                       f"{i['PublicIpAddress']} + IMDSv1 "
-                                      f"(HttpTokens={tokens}) — an SSRF on this host "
-                                      f"can read its role credentials | {name}")
+                                      f"(HttpTokens={tokens}) + attached IAM role — an SSRF "
+                                      f"on this host can read its role credentials | {name}")
                         # EC2-07 — plaintext secret embedded in instance user-data
                         self._scan_ec2_user_data(ec2, iid, name)
             if all_pass:
@@ -1828,16 +1883,21 @@ class AWSLiveScanner:
             except Exception:
                 perms = []
             accounts = [p.get("UserId") for p in perms if p.get("UserId")]
+            # AMIs can also be shared to an entire AWS Organization / OU (GA feature) —
+            # readable by every account in it, so treat those as cross-account shares too.
+            orgs = [p.get("OrganizationArn") or p.get("OrganizationalUnitArn")
+                    for p in perms if p.get("OrganizationArn") or p.get("OrganizationalUnitArn")]
             group_all = any(p.get("Group") == "all" for p in perms)
             if group_all:
                 exposed += 1
                 self._add("FAIL", "AMI-01", "AMI", label,
                           f"AMI launch permission grants Group=all (public) | {aid}")
-            elif accounts:
+            elif accounts or orgs:
                 exposed += 1
+                shared = accounts + orgs
                 self._add("WARN", "AMI-01", "AMI", label,
-                          f"AMI shared with {len(accounts)} external account(s): "
-                          f"{', '.join(accounts[:5])}{'…' if len(accounts) > 5 else ''} | {aid}")
+                          f"AMI shared with {len(shared)} external principal(s): "
+                          f"{', '.join(shared[:5])}{'…' if len(shared) > 5 else ''} | {aid}")
         if exposed == 0:
             self._add("PASS", "AMI-01", "AMI", "ami",
                       f"All {len(images)} self-owned AMI(s) are private (no public/cross-account share)")
@@ -1878,14 +1938,19 @@ class AWSLiveScanner:
         rname = repo["repositoryName"]
         ruri  = repo.get("repositoryUri", rname)
         try:
-            imgs = ecr.describe_images(
+            imgs: List[Dict] = []
+            for page in ecr.get_paginator("describe_images").paginate(
                 repositoryName=rname, filter={"tagStatus": "ANY"}
-            ).get("imageDetails", [])
+            ):
+                imgs.extend(page.get("imageDetails", []))
         except Exception:
             return
         if not imgs:
             return
-        latest = max(imgs, key=lambda d: d.get("imagePushedAt") or 0)
+        # imagePushedAt is a tz-aware datetime in real boto3 (and optional). Use a
+        # comparable epoch sentinel so a missing field can't raise TypeError.
+        _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        latest = max(imgs, key=lambda d: d.get("imagePushedAt") or _epoch)
         digest = latest.get("imageDigest")
         if not digest:
             return
@@ -1912,8 +1977,10 @@ class AWSLiveScanner:
         tags = latest.get("imageTags") or []
         tag_s = f":{tags[0]}" if tags else ""
         for cve, sev in cves[:100]:
-            g.add_node(cve, "Vulnerability", severity=sev, source="ecr-native-scan")
-            g.add_edge(node, cve, "HAS_VULN", cve=cve, severity=sev, source="ecr-native-scan")
+            # NB: prop key must NOT be "source"/"target"/"id"/"kind" — those collide
+            # with the node-link endpoint keys in SecurityGraph.to_dict().
+            g.add_node(cve, "Vulnerability", severity=sev, scan_source="ecr-native-scan")
+            g.add_edge(node, cve, "HAS_VULN", cve=cve, severity=sev, scan_source="ecr-native-scan")
             self._add("FAIL", "CNT-02", "ECR", f"{rname}{tag_s}",
                       f"container-image {sev} {cve} in newest image of {rname} "
                       f"(ECR native scan) | {rname}@{digest[:19]}")
@@ -2070,9 +2137,11 @@ class AWSLiveScanner:
         # RDS-06 — Public snapshot visibility  +  RDS-11 — snapshot encryption at rest
         self._log("RDS-06/RDS-11: RDS snapshot public visibility and encryption at rest")
         try:
-            snaps        = rds.describe_db_snapshots(
+            snaps = []
+            for page in rds.get_paginator("describe_db_snapshots").paginate(
                 SnapshotType="manual"
-            )["DBSnapshots"]
+            ):
+                snaps.extend(page.get("DBSnapshots", []))
             public_snaps = []
             unencrypted  = 0
             for s in snaps:
@@ -3768,7 +3837,7 @@ class AWSLiveScanner:
         elb = self._client("elbv2")
 
         try:
-            lbs = elb.describe_load_balancers().get("LoadBalancers", [])
+            lbs = self._paginate_all(elb, "describe_load_balancers", "LoadBalancers")
         except Exception as e:
             self._add("WARN", "ELB-01", "ELB", "elb", str(e))
             return
@@ -4067,8 +4136,16 @@ class AWSLiveScanner:
         self._section_header("ACM")
         acm = self._client("acm")
 
+        # ListCertificates defaults to RSA_1024/RSA_2048 ONLY — must pass keyTypes to
+        # see ECDSA (EC_*) and RSA_3072/4096 certs — and it is paginated.
+        _ACM_KEY_TYPES = ["RSA_1024", "RSA_2048", "RSA_3072", "RSA_4096",
+                          "EC_prime256v1", "EC_secp384r1", "EC_secp521r1"]
         try:
-            certs = acm.list_certificates().get("CertificateSummaryList", [])
+            certs = []
+            for page in acm.get_paginator("list_certificates").paginate(
+                Includes={"keyTypes": _ACM_KEY_TYPES}
+            ):
+                certs.extend(page.get("CertificateSummaryList", []))
         except Exception as e:
             self._add("WARN", "ACM-01", "ACM", "acm", str(e))
             return
@@ -5042,14 +5119,18 @@ class AWSLiveScanner:
             rs = ((st.get("accounts") or [{}])[0]).get("resourceState") or {}
             ec2_on = (rs.get("ec2") or {}).get("status") == "ENABLED"
             ecr_on = (rs.get("ecr") or {}).get("status") == "ENABLED"
+            # lambda / lambdaCode scan plans are independently toggleable — without
+            # this, a Lambda-only Inspector account skips VULN-04 entirely.
+            lambda_on = ((rs.get("lambda") or {}).get("status") == "ENABLED"
+                         or (rs.get("lambdaCode") or {}).get("status") == "ENABLED")
         except Exception as e:
             self._add("INFO", "VULN-01", "VULN", "inspector2",
                       f"Amazon Inspector not enabled/accessible in {self.region}: {e}")
             return
-        if not (ec2_on or ecr_on):
+        if not (ec2_on or ecr_on or lambda_on):
             self._add("INFO", "VULN-01", "VULN", "inspector2",
-                      f"Amazon Inspector disabled in {self.region} (ec2/ecr not ENABLED) "
-                      "— no vulnerability signal")
+                      f"Amazon Inspector disabled in {self.region} (ec2/ecr/lambda not "
+                      "ENABLED) — no vulnerability signal")
             return
 
         g = self._ensure_graph()
