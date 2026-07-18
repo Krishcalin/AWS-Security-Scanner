@@ -82,7 +82,9 @@ def build_upsert(table: str, cols: List[str], conflict_cols: List[str],
     """
     placeholders = ",".join([ph] * len(cols))
     sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})"
-    if update_cols is None:
+    # None OR an empty list -> DO NOTHING. (An empty update list must not render
+    # "DO UPDATE SET " with nothing after SET, which is invalid SQL.)
+    if not update_cols and not reset_cols:
         sql += f" ON CONFLICT ({', '.join(conflict_cols)}) DO NOTHING"
     else:
         sets = [f"{c}=EXCLUDED.{c}" for c in update_cols]
@@ -184,6 +186,36 @@ POSTGRES_DDL: List[str] = [
        unused_services_json TEXT, unused_actions_json TEXT, window_days INTEGER,
        collected_epoch BIGINT, slad_job_status TEXT, error_json TEXT,
        PRIMARY KEY(account,arn))""",
+    # ── onboarding plane (Phase 8) — sqlite twins in aws_state._DDL. Only diff:
+    # the *_at / *_epoch columns are BIGINT here (INTEGER on sqlite). ────────────
+    """CREATE TABLE IF NOT EXISTS accounts(
+       account_id TEXT PRIMARY KEY CHECK(length(account_id)=12),
+       alias TEXT NOT NULL DEFAULT '', org_id TEXT,
+       onboarding_method TEXT NOT NULL DEFAULT 'manual' CHECK(onboarding_method IN ('single','org','manual')),
+       onboarding_status TEXT NOT NULL DEFAULT 'pending' CHECK(onboarding_status IN ('pending','active','denied','disabled')),
+       role_arn TEXT NOT NULL DEFAULT '', external_id_ref TEXT,
+       enabled_regions TEXT NOT NULL DEFAULT '[]', scan_schedule TEXT,
+       health TEXT NOT NULL DEFAULT 'unknown' CHECK(health IN ('unknown','validating','healthy','degraded','unauthorized')),
+       health_detail TEXT,
+       last_scan_at BIGINT, first_seen_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)""",
+    "CREATE INDEX IF NOT EXISTS ix_acct_org ON accounts(org_id)",
+    "CREATE INDEX IF NOT EXISTS ix_acct_health ON accounts(health)",
+    """CREATE TABLE IF NOT EXISTS scan_jobs(
+       job_id TEXT PRIMARY KEY,
+       account_id TEXT NOT NULL REFERENCES accounts(account_id),
+       status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','done','error')),
+       started_at BIGINT, finished_at BIGINT, findings_count INTEGER NOT NULL DEFAULT 0, error TEXT)""",
+    "CREATE INDEX IF NOT EXISTS ix_job_acct ON scan_jobs(account_id, started_at)",
+    "CREATE INDEX IF NOT EXISTS ix_job_status ON scan_jobs(status)",
+    """CREATE TABLE IF NOT EXISTS connection_health(
+       account TEXT NOT NULL, role_arn TEXT NOT NULL, region TEXT NOT NULL DEFAULT 'us-east-1',
+       org_mode INTEGER NOT NULL DEFAULT 0,
+       health TEXT NOT NULL CHECK(health IN ('validating','healthy','degraded','unauthorized')),
+       observed_account TEXT, last_error_code TEXT, last_detail TEXT,
+       consecutive_failures INTEGER NOT NULL DEFAULT 0,
+       last_validated_epoch BIGINT NOT NULL, last_validated_iso TEXT NOT NULL, next_due_epoch BIGINT NOT NULL,
+       PRIMARY KEY(account, role_arn))""",
+    "CREATE INDEX IF NOT EXISTS ix_conn_due ON connection_health(next_due_epoch)",
 ]
 
 # Per-account advisory lock replacing sqlite's whole-DB BEGIN IMMEDIATE (different

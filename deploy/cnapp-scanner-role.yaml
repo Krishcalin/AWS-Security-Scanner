@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  KIZEN CNAPP — read-only cross-account scanner role. Creates CnappScannerRole,
+  assumable ONLY by the CNAPP hub role and ONLY under the sts:ExternalId issued at
+  onboarding (confused-deputy guard). Grants read-only (describe/list) access to
+  configuration and IAM — NO customer workload DATA reads, NO write actions.
+
+Parameters:
+  ExternalId:
+    Type: String
+    NoEcho: true
+    MinLength: 16
+    Description: >-
+      Per-customer STS ExternalId issued by the CNAPP hub during onboarding. Paste
+      the value from the onboarding screen. Server-generated — never invent your own.
+  HubRoleArn:
+    Type: String
+    Default: arn:aws:iam::HUB_ACCOUNT_ID:role/CnappHubRole
+    AllowedPattern: '^arn:aws:iam::\d{12}:role/.+$'
+    Description: The CNAPP hub role ARN (the sole trusted principal).
+
+Resources:
+  CnappScannerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CnappScannerRole            # fixed name => predictable per-account ARN
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCnappHubAssumeWithExternalId
+            Effect: Allow
+            Principal:
+              AWS: !Ref HubRoleArn          # the HUB ROLE, never account-root
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalId
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/SecurityAudit
+        - arn:aws:iam::aws:policy/job-function/ViewOnlyAccess
+        # NOTE: intentionally NOT ReadOnlyAccess — that grants workload DATA reads
+        # (s3:GetObject, dynamodb:GetItem, sqs:ReceiveMessage, ...) which would
+        # violate the read-only-of-CONFIG contract. SecurityAudit + ViewOnlyAccess
+        # are the tighter list/describe surface a CNAPP actually needs.
+      Policies:
+        - PolicyName: CnappScannerReadOnlyExtras
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CiemLastAccessed
+                Effect: Allow
+                Action:
+                  - iam:GenerateServiceLastAccessedDetails
+                  - iam:GetServiceLastAccessedDetails
+                  - iam:GetServiceLastAccessedDetailsWithEntities
+                Resource: '*'
+              - Sid: ConfigReadGapsManagedPoliciesMiss
+                Effect: Allow
+                Action:
+                  - ec2:GetEbsEncryptionByDefault
+                  - ec2:GetEbsDefaultKmsKeyId
+                  - ec2:GetSnapshotBlockPublicAccessState
+                  - access-analyzer:ValidatePolicy
+                Resource: '*'
+      Tags:
+        - { Key: 'cnapp:managed', Value: 'true' }
+
+  # ── OPT-IN ONLY (disabled by default) ──────────────────────────────────────
+  # Agentless EBS workload side-scan needs snapshot-lifecycle WRITE actions
+  # (CreateSnapshot on a customer volume, share to the hub, cleanup). These are
+  # writes and touch a customer resource, so they are NOT in the default role.
+  # To enable: set the EnableSideScan condition and attach CnappSideScanSnapshotOps
+  # (tag-scoped to cnapp:sidescan; mirrors aws_sidescan_ebs OWNER_TAG / is_owned).
+  #
+  #   - PolicyName: CnappSideScanSnapshotOps
+  #     PolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Effect: Allow
+  #           Action: [ ebs:ListSnapshotBlocks, ebs:ListChangedBlocks, ebs:GetSnapshotBlock,
+  #                     ec2:DescribeSnapshots ]
+  #           Resource: '*'
+  #         - Effect: Allow
+  #           Action: [ ec2:CreateSnapshot ]
+  #           Resource: 'arn:aws:ec2:*:*:volume/*'
+  #         - Effect: Allow
+  #           Action: [ ec2:CreateTags, ec2:CopySnapshot, ec2:ModifySnapshotAttribute,
+  #                     ec2:DeleteSnapshot ]
+  #           Resource: 'arn:aws:ec2:*:*:snapshot/*'
+  #           Condition: { StringEquals: { 'aws:ResourceTag/cnapp:sidescan': 'true' } }
+
+Outputs:
+  RoleArn:
+    Description: Paste this into the CNAPP hub tenant registry.
+    Value: !GetAtt CnappScannerRole.Arn
+  ExternalIdReminder:
+    Description: The ExternalId is stored only in the CNAPP hub secret store.
+    Value: 'Configured (NoEcho)'
+
+# Deploy notes:
+#  * Requires CAPABILITY_NAMED_IAM (fixed RoleName).
+#  * IAM is global — deploy in exactly ONE region per account (a second region
+#    errors on the duplicate global role).
+#  * Quick-create URL (params pre-filled) is produced by cnapp_onboarding.init_onboarding.

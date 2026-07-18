@@ -7,7 +7,7 @@ full **CNAPP** (Cloud-Native Application Protection Platform) — see the CNAPP
 blueprint/roadmap: the north star is AWS-deep **toxic-combination attack paths**
 computed over a unified security graph.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **Live Audit Scanner** (`aws_live_scanner.py` v2.8.0) -- live AWS account audit via boto3 (160+ checks, 40 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing**, **agentless EBS side-scan (CWPP)**, **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**)
+- **Live Audit Scanner** (`aws_live_scanner.py` v2.10.0) -- live AWS account audit via boto3 (160+ checks, 40 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing**, **agentless EBS side-scan (CWPP)**, **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**)
 - **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
 - **Exposure Oracle** (`aws_exposure.py`) -- pure, dependency-free internet-reachability core (SG ∩ stateless NACL ∩ IGW route ∩ public-IP)
 - **Deep-Plane Core** (`aws_deepplane.py`) -- pure Inspector/Macie/GuardDuty/Access-Analyzer parsers + the CAN_READ_DATA object-probe matcher
@@ -25,7 +25,7 @@ computed over a unified security graph.
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.8.0 (boto3, graph, exposure, deep-plane, correlate, effperm, state, ciem, sidescan, backends, remediate, codetocloud)
+├── aws_live_scanner.py      # Live audit scanner v2.10.0 (boto3, graph, exposure, deep-plane, correlate, effperm, state, ciem, sidescan, backends, remediate, codetocloud)
 ├── aws_remediate.py         # Remediation engine — prioritized plan (reuses minimal_cut/ChokePoint) + remediation-as-code + exports, pure
 ├── aws_codetocloud.py       # Code-to-cloud — IaC index (TF block extractor + CFN parse) + tiered T1–T5 matcher, pure
 ├── aws_graph_neptune_loader.py # Neptune live loader — S3 bulk-load + openCypher runners (mock-tested), pure builders
@@ -107,7 +107,7 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.8.0)
+## Live Audit Scanner (`aws_live_scanner.py` v2.10.0)
 
 - **Type**: Live AWS account audit via boto3 (evolving toward CNAPP)
 - **Lines**: ~6,700
@@ -278,6 +278,52 @@ off (never a FAIL/crash/phantom edge). Pure parsers live in `aws_deepplane.py`.
   missed-CVE FN, a MEDIUM `backend`-key default-path JSON leak, a LOW latent delta-cap
   stale-bytes trap); all fixed + regression-tested before merge.
 
+### CNAPP Phase 8 additions (v2.10.0) — hosted multi-account platform (onboarding backend)
+
+Turns the CLI scanner into a **self-hosted web platform** WITHOUT touching the
+engine. Hub-and-spoke: one EC2 hub assumes a read-only cross-account role per
+onboarded account. Every module is pure + dependency-injected (offline-testable;
+no boto3/psycopg/FastAPI in the pure path).
+
+- **`cnapp_validate.py`** (pure) — `validate_connection(*, expected_account_id, role,
+  now_epoch, assume_role_fn, client_factory, ...)`: assume → `GetCallerIdentity` with
+  a **fail-closed account-match hard stop** (empty OR mismatched account → UNAUTHORIZED,
+  never HEALTHY) → SecurityAudit canary → org list. `ConnectionHealth`
+  (validating/healthy/degraded/unauthorized), `FAILURE_TAXONOMY`, `cadence()` backoff.
+- **`cnapp_onboarding.py`** (pure) — `init_onboarding` mints a **server-side** ExternalId,
+  writes it via an injected `secret_writer`, stores ONLY a `secretsmanager://`/`ssm://`
+  **ref**; `build_launch_url` (CFN quick-create); `resolve_external_id` (never echoes a
+  raw literal in errors).
+- **`cnapp_registry.py`** — `AccountRegistry` over the aws_state store (`accounts`,
+  `scan_jobs`, `connection_health`). Partial-update upsert (preserves lifecycle +
+  untouched config on re-onboard, via `build_upsert` ON CONFLICT — never
+  INSERT OR REPLACE); a `threading.Lock` makes every multi-statement write + the
+  `consecutive_failures` read-modify-write atomic on the shared connection.
+- **`cnapp_service.py`** — `PlatformService` (injected registry/results/session_factory/
+  clock/…). **Idempotent `init_onboarding` REUSES the ExternalId** on re-onboard (never
+  rotates → never breaks the deployed trust). `serialize_scanner` mirrors `save_json`
+  + `graph_full`; `org_overview` aggregates active accounts.
+- **`cnapp_worker.py`** — `run_scan_job`: re-checks the account is still active (TOCTOU),
+  builds the assumed session, **fail-closed pre-validate**, runs the engine **trapping
+  `sys.exit(2)`** (but NOT `KeyboardInterrupt`), persists results, stamps `last_scan_at`
+  only on success.
+- **`cnapp_api.py`** — thin FastAPI routers; `require(min_role)` RBAC that **fails closed**
+  (default hook denies, never grants admin); guarded import so the backend runs without
+  FastAPI. `OnboardReq.account_id` is pattern-constrained (422, not 500).
+- **`deploy/`** — `cnapp-scanner-role.yaml` (single-account, SecurityAudit+ViewOnlyAccess,
+  ExternalId trust, side-scan writes opt-in), `cnapp-stackset.md` (org service-managed
+  StackSet auto-enroll), `cnapp-hub-role.yaml` (assume scoped to the role NAME + org).
+- **Schema** — `aws_state._DDL` + `aws_state_dialect.POSTGRES_DDL` gain the 3 tables;
+  `SCHEMA_VERSION` 1→2 (migration replays `IF NOT EXISTS`, non-destructive). `build_upsert`
+  renders `DO NOTHING` for an empty update set.
+- **Verification** — a 19-agent read-only adversarial hunt confirmed **12 defects** (silent
+  ExternalId rotation, empty-account fail-open, shared-connection atomicity, secret in an
+  error string, fail-open RBAC default, TOCTOU, KeyboardInterrupt swallow, …) — all fixed +
+  regression-tested. **571 tests.** Reuses `assume_role_session`/`list_org_accounts`/
+  `aggregate_results` verbatim.
+- **Deferred**: live PostgresBackend rewire (registry already dual-dialect); React UI
+  (design prototype shipped).
+
 ### CNAPP Phase 7 additions (v2.8.0) — remediation + code-to-cloud ("close the loop")
 
 - **Remediation engine (`aws_remediate.py`, pure)** — `build_plan(...)` REUSES
@@ -447,7 +493,7 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 483 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 571 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:

@@ -1,0 +1,76 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  KIZEN CNAPP — hub instance role. Attach to the EC2 instance that runs the CNAPP
+  platform (in your dedicated security account). It grants the hub the ONE
+  privilege it needs against spokes — assume the read-only CnappScannerRole — plus
+  read access to its own secret store (the per-account ExternalIds) and the
+  Organizations read used to discover member accounts. No customer-account data.
+
+Parameters:
+  OrgId:
+    Type: String
+    Default: o-xxxxxxxxxx
+    Description: Your AWS Organization id (scopes the assume + org reads).
+  SecretPrefix:
+    Type: String
+    Default: cnapp/externalid/*
+    Description: Secrets Manager name prefix holding the per-account ExternalIds.
+
+Resources:
+  CnappHubRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CnappHubRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CnappHubAssumeSpokes
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Assume ONLY the fixed scanner role name, ONLY within this org.
+              - Sid: AssumeScannerRoleInOrg
+                Effect: Allow
+                Action: sts:AssumeRole
+                Resource: 'arn:aws:iam::*:role/CnappScannerRole'
+                Condition:
+                  StringEquals:
+                    aws:ResourceOrgID: !Ref OrgId
+              # Discover member accounts to scan.
+              - Sid: OrgDiscovery
+                Effect: Allow
+                Action:
+                  - organizations:ListAccounts
+                  - organizations:DescribeOrganization
+                Resource: '*'
+              # Read the per-account ExternalIds this hub minted at onboarding.
+              - Sid: ReadExternalIdSecrets
+                Effect: Allow
+                Action: [ secretsmanager:GetSecretValue, secretsmanager:CreateSecret,
+                          secretsmanager:PutSecretValue ]
+                Resource: !Sub 'arn:aws:secretsmanager:*:${AWS::AccountId}:secret:${SecretPrefix}'
+      Tags:
+        - { Key: 'cnapp:managed', Value: 'true' }
+
+  CnappHubInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: CnappHubRole
+      Roles: [ !Ref CnappHubRole ]
+
+Outputs:
+  HubRoleArn:
+    Description: Use this as the HubRoleArn parameter when onboarding spoke accounts.
+    Value: !GetAtt CnappHubRole.Arn
+
+# Hardening reminders (the hub is a crown jewel — it can read every account):
+#  * Run the EC2 host in a PRIVATE subnet behind an internal ALB; do NOT expose
+#    the onboarding/validate/scan control plane publicly.
+#  * KMS-encrypt the EBS volume + the Postgres/state store.
+#  * sts:AssumeRole above is Resource-scoped to the fixed role NAME and Condition-
+#    scoped to aws:ResourceOrgID — a stolen hub credential still cannot assume a
+#    role outside this org, and every spoke trust additionally requires the ExternalId.
