@@ -960,6 +960,31 @@ def scan_secrets(ext: FilesystemExtractor, roots=("/home", "/root", "/etc", "/va
     return out
 
 
+def scan_text_secrets(data, source: str = "", entropy_min: float = 4.0) -> List[SecretFinding]:
+    """Scan an in-memory blob (e.g. EC2 user-data, a config string) for embedded
+    secrets using the same content regexes as scan_secrets. Only a first4…last4
+    preview is retained — never the secret itself."""
+    out: List[SecretFinding] = []
+    if not data:
+        return out
+    if isinstance(data, str):
+        data = data.encode("utf-8", "replace")
+    for kind, rx, entropy_gated in _SECRET_CONTENT:
+        for m in rx.finditer(data):
+            tok = m.group(0)
+            tok_s = tok.decode("utf-8", "replace")
+            if any(d in tok_s for d in _SECRET_DENY):
+                continue
+            if entropy_gated and shannon_entropy(tok_s) < entropy_min:
+                continue
+            line = data[:m.start()].count(b"\n") + 1
+            out.append(SecretFinding(kind=kind, path=source, line=line,
+                                     match_preview=_preview(tok),
+                                     entropy=round(shannon_entropy(tok_s), 2),
+                                     severity="HIGH"))
+    return out
+
+
 # ── graph emit (HAS_VULN edges, 1:1 with Inspector) ──────────────────────────
 def to_has_vuln_edges(instance_arn: str, matches: List[EnrichedMatch],
                       snapshot_id: str = "") -> List[VulnEdge]:

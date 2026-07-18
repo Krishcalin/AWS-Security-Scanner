@@ -42,6 +42,7 @@ import sys
 import json
 import csv
 import io
+import gzip
 import base64
 import time
 import fnmatch
@@ -167,10 +168,11 @@ CHECK_SEVERITY = {
     "S3-07": "MEDIUM", "S3-08": "MEDIUM",
     "VPC-01": "HIGH", "VPC-03": "MEDIUM", "VPC-04": "MEDIUM",
     "LOG-01": "CRITICAL", "LOG-03": "HIGH", "LOG-04": "CRITICAL", "LOG-05": "MEDIUM",
+    "LOG-06": "MEDIUM",
     "ENC-03": "MEDIUM",
     "KMS-03": "HIGH",
     "EC2-04": "HIGH", "EC2-05": "MEDIUM", "EC2-06": "HIGH",
-    "EC2-08": "HIGH",
+    "EC2-07": "HIGH", "EC2-08": "HIGH",
     "AMI-01": "HIGH",
     "CNT-01": "MEDIUM", "CNT-02": "HIGH",
     "BCK-01": "MEDIUM",
@@ -279,6 +281,7 @@ COMPLIANCE_MAP = {
     "LOG-01": {"CIS": "3.1", "PCI-DSS": "10.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "LOG-03": {"CIS": "3.5", "PCI-DSS": "10.5.3", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "CM-8"},
     "LOG-04": {"CIS": "4.15", "PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
+    "LOG-06": {"CIS": "4.16", "PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
     "LOG-05": {"CIS": "4.16", "PCI-DSS": "11.5", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
     # KMS
     "ENC-03": {"CIS": "3.8", "PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
@@ -288,6 +291,7 @@ COMPLIANCE_MAP = {
     "EC2-05": {"CIS": "5.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EC2-08": {"CIS": "5.6", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EC2-06": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "EC2-07": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "IA-5"},
     "AMI-01": {"CIS": "2.3.3", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     # RDS
     "RDS-01": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
@@ -453,11 +457,13 @@ REMEDIATION_MAP = {
     "LOG-01": "Create multi-region trail: aws cloudtrail create-trail --name org-trail --s3-bucket-name <BUCKET> --is-multi-region-trail --enable-log-file-validation && aws cloudtrail start-logging --name org-trail",
     "LOG-03": "Start Config recorder: aws configservice start-configuration-recorder --configuration-recorder-name default",
     "LOG-04": "Enable GuardDuty: aws guardduty create-detector --enable",
+    "LOG-06": "Turn on the missing GuardDuty protection plan(s): aws guardduty update-detector --detector-id <DETECTOR_ID> --features '[{\"Name\":\"<FEATURE>\",\"Status\":\"ENABLED\"}]' (e.g. S3_DATA_EVENTS, RUNTIME_MONITORING, EBS_MALWARE_PROTECTION)",
     "LOG-05": "Enable Security Hub: aws securityhub enable-security-hub --enable-default-standards",
     "ENC-03": "Enable key rotation: aws kms enable-key-rotation --key-id <KEY_ID>",
     "KMS-03": "Cancel deletion if the CMK is still in use, or re-enable a disabled key: aws kms cancel-key-deletion --key-id <KEY_ID> ; aws kms enable-key --key-id <KEY_ID>",
     "EC2-04": "Enforce IMDSv2: aws ec2 modify-instance-metadata-options --instance-id <INSTANCE_ID> --http-tokens required --http-endpoint enabled",
     "EC2-06": "Enable default EBS encryption: aws ec2 enable-ebs-encryption-by-default",
+    "EC2-07": "Remove the secret from user-data and rotate it; move it to SSM Parameter Store / Secrets Manager referenced at boot: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --user-data file://sanitized-userdata.txt (stop the instance first)",
     "EC2-08": "Enforce IMDSv2 AND remove the public exposure (SSRF->credential path): aws ec2 modify-instance-metadata-options --instance-id <INSTANCE_ID> --http-tokens required --http-endpoint enabled ; then place the instance behind a load balancer / remove the public IP",
     "RDS-01": "Create encrypted copy: aws rds create-db-snapshot --db-instance-identifier <DB_ID> --db-snapshot-identifier pre-encrypt-snap && aws rds copy-db-snapshot --source-db-snapshot-identifier pre-encrypt-snap --target-db-snapshot-identifier encrypted-snap --kms-key-id <KMS_KEY>",
     "RDS-02": "Disable public access: aws rds modify-db-instance --db-instance-identifier <DB_ID> --no-publicly-accessible",
@@ -1562,6 +1568,7 @@ class AWSLiveScanner:
                     if status == "ENABLED":
                         self._add("PASS", "LOG-04", "LOGGING", did,
                                   f"GuardDuty ENABLED | {did}")
+                        self._check_guardduty_features(did, d)
                     else:
                         self._add("FAIL", "LOG-04", "LOGGING", did,
                                   f"GuardDuty {status} | {did}")
@@ -1591,6 +1598,33 @@ class AWSLiveScanner:
                 self._add("FAIL", "LOG-05", "LOGGING", "securityhub", str(e))
         except Exception as e:
             self._add("FAIL", "LOG-05", "LOGGING", "securityhub", str(e))
+
+    # GuardDuty protection plans expected enabled for full threat coverage
+    _GD_FEATURES = {
+        "S3_DATA_EVENTS":         "S3 Protection",
+        "EKS_AUDIT_LOGS":         "EKS Audit Log Monitoring",
+        "EBS_MALWARE_PROTECTION": "Malware Protection (EBS)",
+        "RDS_LOGIN_EVENTS":       "RDS Protection",
+        "LAMBDA_NETWORK_LOGS":    "Lambda Protection",
+        "RUNTIME_MONITORING":     "Runtime Monitoring",
+    }
+
+    def _check_guardduty_features(self, did: str, detector: Dict) -> None:
+        """LOG-06 — GuardDuty protection plans. An ENABLED detector still leaves
+        S3/EKS/malware/RDS/Lambda/runtime coverage off unless each feature is
+        explicitly enabled. Silent on the legacy API that omits the feature list."""
+        feats = {f.get("Name"): f.get("Status") for f in detector.get("Features", [])}
+        if not feats:
+            return
+        for name, label in self._GD_FEATURES.items():
+            if name not in feats:
+                continue
+            if feats[name] == "ENABLED":
+                self._add("PASS", "LOG-06", "LOGGING", f"{did}:{name}",
+                          f"GuardDuty {label} ENABLED | {did}")
+            else:
+                self._add("WARN", "LOG-06", "LOGGING", f"{did}:{name}",
+                          f"GuardDuty {label} DISABLED — reduced threat coverage | {did}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 5: ENCRYPTION & KMS
@@ -1644,6 +1678,32 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 6: COMPUTE / EC2
     # ══════════════════════════════════════════════════════════════════════════
+    def _scan_ec2_user_data(self, ec2, iid: str, name: str) -> None:
+        """EC2-07 — secrets embedded in instance user-data. User-data is readable by
+        anything that can reach IMDS on the host (and via the console/API), so an
+        embedded credential is effectively plaintext-at-rest on every boot."""
+        try:
+            ud = ec2.describe_instance_attribute(
+                InstanceId=iid, Attribute="userData"
+            ).get("UserData", {}).get("Value")
+        except Exception:
+            return
+        if not ud:
+            return
+        try:
+            raw = base64.b64decode(ud)
+        except Exception:
+            return
+        if raw[:2] == b"\x1f\x8b":                     # gzip (cloud-init) — best-effort inflate
+            try:
+                raw = gzip.decompress(raw)
+            except Exception:
+                pass
+        for sec in aws_sidescan.scan_text_secrets(raw, source=f"userdata:{iid}"):
+            self._add("FAIL", "EC2-07", "EC2", name,
+                      f"Secret in user-data ({sec.kind}, preview {sec.match_preview}) "
+                      f"— readable via IMDS/console | {iid}")
+
     def _check_ec2(self):
         self._section_header("EC2")
         ec2 = self._client("ec2")
@@ -1683,6 +1743,8 @@ class AWSLiveScanner:
                                       f"{i['PublicIpAddress']} + IMDSv1 "
                                       f"(HttpTokens={tokens}) — an SSRF on this host "
                                       f"can read its role credentials | {name}")
+                        # EC2-07 — plaintext secret embedded in instance user-data
+                        self._scan_ec2_user_data(ec2, iid, name)
             if all_pass:
                 self._add("PASS", "EC2-04", "EC2", "all-instances",
                           "All EC2 instances enforce IMDSv2")

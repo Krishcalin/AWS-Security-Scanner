@@ -2,6 +2,7 @@
 IAM-07/08 (root recent-use + unused-credential-45d), KMS-03 (pending-deletion/disabled
 CMK), ACM-04/05 (unhealthy status + renewal risk). Reuses the mocked-boto3 harness
 from test_live_scanner; no AWS credentials, no network."""
+import base64
 import json
 import os
 import sys
@@ -548,3 +549,76 @@ def test_vpc_04_no_default_sg_no_finding():
     assert A.CHECK_SEVERITY.get("VPC-04") == "MEDIUM"
     assert "VPC-04" in A.COMPLIANCE_MAP
     assert "aws " in A.REMEDIATION_MAP.get("VPC-04", "").lower()
+
+
+# ── EC2-07 — plaintext secret in instance user-data ──────────────────────────
+def test_ec2_07_secret_in_user_data_fails():
+    ud = base64.b64encode(
+        b"#!/bin/bash\nexport K=-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n").decode()
+    s = _ec2_scanner([{"InstanceId": "i-secret",
+                       "MetadataOptions": {"HttpTokens": "required"},
+                       "Tags": [{"Key": "Name", "Value": "boot"}]}])
+    s._clients["ec2:us-east-1"].describe_instance_attribute.return_value = {
+        "UserData": {"Value": ud}}
+    s._check_ec2()
+    f = [r for r in s.results if r.check_id == "EC2-07" and r.status == "FAIL"]
+    assert len(f) == 1 and "boot" in f[0].resource and f[0].severity == "HIGH"
+
+
+def test_ec2_07_gzip_user_data_fails():
+    import gzip as _gz
+    ud = base64.b64encode(_gz.compress(
+        b"AKIAIOSFODNN7REALKEY\ntoken=ghp_" + b"a" * 36 + b"\n")).decode()
+    s = _ec2_scanner([{"InstanceId": "i-gz", "MetadataOptions": {"HttpTokens": "required"}}])
+    s._clients["ec2:us-east-1"].describe_instance_attribute.return_value = {
+        "UserData": {"Value": ud}}
+    s._check_ec2()
+    assert any(r.check_id == "EC2-07" and r.status == "FAIL" for r in s.results)
+
+
+def test_ec2_07_clean_user_data_no_finding():
+    ud = base64.b64encode(b"#!/bin/bash\nyum update -y\n").decode()
+    s = _ec2_scanner([{"InstanceId": "i-clean", "MetadataOptions": {"HttpTokens": "required"}}])
+    s._clients["ec2:us-east-1"].describe_instance_attribute.return_value = {
+        "UserData": {"Value": ud}}
+    s._check_ec2()
+    assert not any(r.check_id == "EC2-07" for r in s.results)
+
+
+def test_ec2_07_no_user_data_no_finding():
+    s = _ec2_scanner([{"InstanceId": "i-none", "MetadataOptions": {"HttpTokens": "required"}}])
+    s._clients["ec2:us-east-1"].describe_instance_attribute.return_value = {"UserData": {}}
+    s._check_ec2()
+    assert not any(r.check_id == "EC2-07" for r in s.results)
+    assert A.CHECK_SEVERITY.get("EC2-07") == "HIGH"
+    assert "EC2-07" in A.COMPLIANCE_MAP
+    assert "aws " in A.REMEDIATION_MAP.get("EC2-07", "").lower()
+
+
+# ── LOG-06 — GuardDuty protection plans ──────────────────────────────────────
+def test_log_06_guardduty_features():
+    s = make_scanner(["LOGGING"])
+    detector = {"Status": "ENABLED", "Features": [
+        {"Name": "S3_DATA_EVENTS", "Status": "ENABLED"},
+        {"Name": "RUNTIME_MONITORING", "Status": "DISABLED"},
+        {"Name": "RDS_LOGIN_EVENTS", "Status": "DISABLED"},
+        {"Name": "SOME_UNKNOWN_FEATURE", "Status": "DISABLED"}]}   # unknown -> ignored
+    s._check_guardduty_features("det-1", detector)
+    warns = {r.resource.split(":")[-1] for r in s.results
+             if r.check_id == "LOG-06" and r.status == "WARN"}
+    passes = {r.resource.split(":")[-1] for r in s.results
+              if r.check_id == "LOG-06" and r.status == "PASS"}
+    assert warns == {"RUNTIME_MONITORING", "RDS_LOGIN_EVENTS"}
+    assert passes == {"S3_DATA_EVENTS"}
+
+
+def test_log_06_legacy_api_silent():
+    s = make_scanner(["LOGGING"])
+    s._check_guardduty_features("det-1", {"Status": "ENABLED"})   # no Features key
+    assert not any(r.check_id == "LOG-06" for r in s.results)
+
+
+def test_log_06_map_entries_complete():
+    assert A.CHECK_SEVERITY.get("LOG-06") == "MEDIUM"
+    assert "LOG-06" in A.COMPLIANCE_MAP
+    assert "aws " in A.REMEDIATION_MAP.get("LOG-06", "").lower()
