@@ -368,11 +368,16 @@ jobs:
 
 ---
 
-## Hosted CNAPP Platform (multi-account, agentless)
+## OverWatch — Hosted CNAPP Platform (multi-account, agentless)
 
-Beyond the CLI, the scanner ships a **self-hosted platform backend** (CNAPP Phase 8)
-for onboarding and continuously scanning many AWS accounts — the Wiz/Orca model,
-agentless and with no access keys.
+**OverWatch** is the product name for this CNAPP: the attack-path-graph layer that
+collapses a whole AWS estate into the ranked handful of internet → exposed workload
+→ exploitable CVE → over-privileged role → crown-jewel-data paths, and names the
+**choke point** that severs the most.
+
+Beyond the CLI, OverWatch ships a **self-hosted platform backend** for onboarding and
+continuously scanning many AWS accounts — the Wiz/Orca model, agentless and with no
+access keys.
 
 **Architecture — hub & spoke.** One **hub** (an EC2 instance running the FastAPI
 service + worker + Postgres/SQLite state, in a dedicated security account) reaches

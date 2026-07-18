@@ -1,163 +1,166 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 240" width="800" height="240" role="img" aria-label="OverWatch — agentless AWS CNAPP: correlates internet to exposed workload to exploitable CVE to over-privileged role to crown-jewel data into ranked attack paths and choke points">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#0f1923"/>
-      <stop offset="40%" style="stop-color:#1a2332"/>
-      <stop offset="100%" style="stop-color:#0d1117"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b1120"/>
+      <stop offset="1" stop-color="#080d16"/>
     </linearGradient>
-    <linearGradient id="awsGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#ff9900"/>
-      <stop offset="100%" style="stop-color:#ffb347"/>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="0.55" stop-color="#60a5fa"/>
+      <stop offset="1" stop-color="#6366f1"/>
     </linearGradient>
-    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#ff9900"/>
-      <stop offset="100%" style="stop-color:#e68a00"/>
+    <linearGradient id="conn" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#6366f1"/>
     </linearGradient>
-    <linearGradient id="accentLine" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#ff9900"/>
-      <stop offset="50%" style="stop-color:#ffb347"/>
-      <stop offset="100%" style="stop-color:#ff9900"/>
+    <linearGradient id="node" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#142033"/>
+      <stop offset="1" stop-color="#0d1626"/>
     </linearGradient>
-    <filter id="glow">
-      <feGaussianBlur stdDeviation="3" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-    <clipPath id="bannerClip">
-      <rect width="1200" height="300" rx="16"/>
-    </clipPath>
+    <linearGradient id="estate1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#38bdf8" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#6366f1" stop-opacity="0.32"/>
+    </linearGradient>
+    <linearGradient id="estate2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#1e3a8a" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#3730a3" stop-opacity="0.30"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.6">
+      <stop offset="0" stop-color="#6366f1" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="chokeGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#f5b53d" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#f5b53d" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="card"><rect x="0" y="0" width="800" height="240" rx="18"/></clipPath>
+    <style>
+      .wm  { font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+      .mono{ font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+      .cap { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size: 8px; fill: #93a7c6; }
+      .nl  { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size: 8.5px; fill: #e6eef9; }
+    </style>
   </defs>
 
-  <!-- Background -->
-  <g clip-path="url(#bannerClip)">
-    <rect width="1200" height="300" rx="16" fill="url(#bg)"/>
+  <g clip-path="url(#card)">
+    <rect x="0" y="0" width="800" height="240" fill="url(#bg)"/>
+    <rect x="0" y="0" width="800" height="240" fill="url(#glow)"/>
 
-    <!-- Subtle hex grid pattern -->
-    <g opacity="0.03" stroke="#ff9900" stroke-width="0.5" fill="none">
-      <path d="M50,30 L70,18 L90,30 L90,54 L70,66 L50,54 Z"/>
-      <path d="M90,30 L110,18 L130,30 L130,54 L110,66 L90,54 Z"/>
-      <path d="M130,30 L150,18 L170,30 L170,54 L150,66 L130,54 Z"/>
-      <path d="M70,66 L90,54 L110,66 L110,90 L90,102 L70,90 Z"/>
-      <path d="M110,66 L130,54 L150,66 L150,90 L130,102 L110,90 Z"/>
-      <path d="M50,102 L70,90 L90,102 L90,126 L70,138 L50,126 Z"/>
-      <path d="M90,102 L110,90 L130,102 L130,126 L110,138 L90,126 Z"/>
-      <path d="M900,60 L920,48 L940,60 L940,84 L920,96 L900,84 Z"/>
-      <path d="M940,60 L960,48 L980,60 L980,84 L960,96 L940,84 Z"/>
-      <path d="M980,60 L1000,48 L1020,60 L1020,84 L1000,96 L980,84 Z"/>
-      <path d="M1020,60 L1040,48 L1060,60 L1060,84 L1040,96 L1020,84 Z"/>
-      <path d="M920,96 L940,84 L960,96 L960,120 L940,132 L920,120 Z"/>
-      <path d="M960,96 L980,84 L1000,96 L1000,120 L980,132 L960,120 Z"/>
-      <path d="M1000,96 L1020,84 L1040,96 L1040,120 L1020,132 L1000,120 Z"/>
-      <path d="M940,132 L960,120 L980,132 L980,156 L960,168 L940,156 Z"/>
-      <path d="M980,132 L1000,120 L1020,132 L1020,156 L1000,168 L980,156 Z"/>
-      <path d="M900,200 L920,188 L940,200 L940,224 L920,236 L900,224 Z"/>
-      <path d="M940,200 L960,188 L980,200 L980,224 L960,236 L940,224 Z"/>
-      <path d="M1060,180 L1080,168 L1100,180 L1100,204 L1080,216 L1060,204 Z"/>
-      <path d="M1100,180 L1120,168 L1140,180 L1140,204 L1120,216 L1100,204 Z"/>
+    <!-- ===== Wordmark: shield + all-seeing eye watching the crown jewel ===== -->
+    <g transform="translate(40,46)">
+      <path d="M0 -15 L21 -22 L42 -15 L42 4 Q42 19 21 27 Q0 19 0 4 Z" fill="url(#node)" stroke="url(#accent)" stroke-width="1.6"/>
+      <path d="M8 3 Q21 -8 34 3 Q21 14 8 3 Z" fill="none" stroke="#38bdf8" stroke-width="1.8"/>
+      <circle cx="21" cy="3" r="4.2" fill="url(#accent)"/>
+      <circle cx="21" cy="3" r="1.5" fill="#f5b53d"/>
+      <path d="M4 -13 A20 20 0 0 1 38 -13" fill="none" stroke="#6366f1" stroke-width="1.1" stroke-dasharray="2 3" opacity="0.7"/>
+      <text x="60" y="9" class="wm" font-size="37" font-weight="700" fill="#e8eff8">Over<tspan fill="url(#accent)">Watch</tspan></text>
+      <text x="63" y="28" class="mono" font-size="10" letter-spacing="1.9" fill="#8298b4">AGENTLESS  CNAPP  ·  ATTACK-PATH  GRAPH</text>
     </g>
 
-    <!-- Top accent line -->
-    <rect x="0" y="0" width="1200" height="4" fill="url(#accentLine)"/>
+    <!-- ===== Agentless pillars feeding the graph ===== -->
+    <g class="mono" font-size="8.5" fill="#93a7c6" text-anchor="end">
+      <text x="84" y="118">config</text>
+      <text x="84" y="140">identity</text>
+      <text x="84" y="162">workload</text>
+    </g>
+    <g fill="none" stroke-width="2.2" stroke-linecap="round">
+      <path d="M90 114 C118 114 126 140 150 140" stroke="#38bdf8"/>
+      <path d="M90 136 C116 136 124 140 150 140" stroke="#60a5fa"/>
+      <path d="M90 158 C118 158 126 140 150 140" stroke="#6366f1"/>
+    </g>
+    <text class="mono" x="150" y="96" font-size="7.5" fill="#6f88a3" text-anchor="middle">cspm · ciem · cwpp · dspm · cdr</text>
 
-    <!-- Decorative circuit lines -->
-    <g stroke="#ff9900" stroke-width="1" opacity="0.08">
-      <line x1="0" y1="80" x2="60" y2="80"/>
-      <circle cx="60" cy="80" r="2" fill="#ff9900"/>
-      <line x1="60" y1="80" x2="60" y2="150"/>
-      <circle cx="60" cy="150" r="2" fill="#ff9900"/>
-      <line x1="1140" y1="120" x2="1200" y2="120"/>
-      <circle cx="1140" cy="120" r="2" fill="#ff9900"/>
-      <line x1="1140" y1="120" x2="1140" y2="200"/>
-      <circle cx="1140" cy="200" r="2" fill="#ff9900"/>
-      <line x1="1140" y1="200" x2="1200" y2="200"/>
+    <!-- ===== Connectors + arrows along the attack path ===== -->
+    <g stroke="url(#conn)" stroke-width="3" fill="none">
+      <line x1="184" y1="140" x2="226" y2="140"/>
+      <line x1="296" y1="140" x2="338" y2="140"/>
+      <line x1="408" y1="140" x2="450" y2="140"/>
+      <line x1="520" y1="140" x2="562" y2="140"/>
+    </g>
+    <g fill="#6366f1">
+      <polygon points="229,140 221,135 221,145"/>
+      <polygon points="341,140 333,135 333,145"/>
+      <polygon points="453,140 445,135 445,145"/>
+      <polygon points="565,140 557,135 557,145"/>
     </g>
 
-    <!-- Shield + cloud icon -->
-    <g transform="translate(105, 150)" filter="url(#glow)">
-      <!-- Outer shield -->
-      <path d="M0,-70 L55,-50 L55,10 C55,50 28,72 0,82 C-28,72 -55,50 -55,10 L-55,-50 Z"
-            fill="none" stroke="url(#shieldGrad)" stroke-width="3" opacity="0.9"/>
-      <!-- Inner shield fill -->
-      <path d="M0,-60 L45,-43 L45,8 C45,42 23,60 0,68 C-23,60 -45,42 -45,8 L-45,-43 Z"
-            fill="#ff9900" opacity="0.08"/>
-
-      <!-- AWS smile/arrow inside shield -->
-      <path d="M-22,8 Q0,28 22,8" fill="none" stroke="#ff9900" stroke-width="3" stroke-linecap="round"/>
-      <path d="M12,8 L22,8 L18,-2" fill="none" stroke="#ff9900" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-
-      <!-- Cloud outline above the smile -->
-      <path d="M-18,-20 C-18,-34 -6,-38 2,-32 C6,-40 20,-38 22,-28 C30,-26 30,-16 24,-12 L-14,-12 C-22,-12 -24,-16 -18,-20 Z"
-            fill="none" stroke="#ffb347" stroke-width="1.8" opacity="0.7"/>
-
-      <!-- Lock icon below -->
-      <rect x="-8" y="32" width="16" height="12" rx="2" fill="none" stroke="#ff9900" stroke-width="1.5" opacity="0.6"/>
-      <path d="M-4,32 L-4,27 C-4,22 4,22 4,27 L4,32" fill="none" stroke="#ff9900" stroke-width="1.5" opacity="0.6"/>
-      <circle cx="0" cy="38" r="1.5" fill="#ff9900" opacity="0.6"/>
+    <!-- ===== The toxic chain: INTERNET > EXPOSED > CVE > ROLE(choke) > CROWN ===== -->
+    <g text-anchor="middle">
+      <!-- INTERNET -->
+      <g transform="translate(150,140)">
+        <rect x="-33" y="-22" width="66" height="44" rx="9" fill="url(#node)" stroke="url(#accent)" stroke-width="1.5"/>
+        <g fill="none" stroke="#38bdf8" stroke-width="1.7">
+          <circle cx="0" cy="-5" r="7"/><ellipse cx="0" cy="-5" rx="3" ry="7"/><line x1="-7" y1="-5" x2="7" y2="-5"/>
+        </g>
+        <text x="0" y="17" class="nl">INTERNET</text>
+        <text x="0" y="34" class="cap">0.0.0.0/0</text>
+      </g>
+      <!-- EXPOSED -->
+      <g transform="translate(262,140)">
+        <rect x="-33" y="-22" width="66" height="44" rx="9" fill="url(#node)" stroke="url(#accent)" stroke-width="1.5"/>
+        <rect x="-8" y="-8" width="16" height="10" rx="1.5" fill="none" stroke="#60a5fa" stroke-width="1.7"/>
+        <line x1="0" y1="2" x2="0" y2="5" stroke="#60a5fa" stroke-width="1.7"/><line x1="-4" y1="5" x2="4" y2="5" stroke="#60a5fa" stroke-width="1.7" stroke-linecap="round"/>
+        <path d="M6 -11 Q11 -11 11 -6" fill="none" stroke="#38bdf8" stroke-width="1.5" stroke-linecap="round"/>
+        <text x="0" y="17" class="nl">EXPOSED</text>
+        <text x="0" y="34" class="cap">public :443</text>
+      </g>
+      <!-- CVE (KEV) -->
+      <g transform="translate(374,140)">
+        <rect x="-33" y="-22" width="66" height="44" rx="9" fill="url(#node)" stroke="url(#accent)" stroke-width="1.5"/>
+        <path d="M0 -13 L9 4 L-9 4 Z" fill="none" stroke="#ff3b5c" stroke-width="1.9" stroke-linejoin="round"/>
+        <line x1="0" y1="-6" x2="0" y2="-1" stroke="#ff3b5c" stroke-width="1.9" stroke-linecap="round"/>
+        <circle cx="0" cy="2" r="1.2" fill="#ff3b5c"/>
+        <text x="0" y="17" class="nl" fill="#ffd7de">CVE</text>
+        <text x="0" y="34" class="cap" fill="#ff6b85">KEV · exploited</text>
+      </g>
+      <!-- ROLE = choke point (highlighted) -->
+      <g transform="translate(486,140)">
+        <circle cx="0" cy="0" r="34" fill="url(#chokeGlow)"/>
+        <rect x="-35" y="-24" width="70" height="48" rx="10" fill="none" stroke="#f5b53d" stroke-width="1.4" stroke-dasharray="4 3" opacity="0.85"/>
+        <rect x="-33" y="-22" width="66" height="44" rx="9" fill="url(#node)" stroke="url(#accent)" stroke-width="1.6"/>
+        <circle cx="-5" cy="-6" r="4.5" fill="none" stroke="#38bdf8" stroke-width="1.9"/>
+        <path d="M-1.6 -2.6 L7 6 M4 3 L7 0 M7 6 L4 9" fill="none" stroke="#38bdf8" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="0" y="17" class="nl">ROLE</text>
+        <text x="0" y="34" class="cap" fill="#f5b53d">★ choke · admin</text>
+      </g>
+      <!-- CROWN jewel data -->
+      <g transform="translate(598,140)">
+        <rect x="-33" y="-22" width="66" height="44" rx="9" fill="url(#node)" stroke="url(#accent)" stroke-width="1.5"/>
+        <path d="M-8 -8 L8 -8 L11 -3 L0 8 L-11 -3 Z" fill="none" stroke="#f5b53d" stroke-width="1.7" stroke-linejoin="round"/>
+        <path d="M-8 -8 L-4 -3 L4 -3 L8 -8 M-4 -3 L0 8 L4 -3" fill="none" stroke="#f5b53d" stroke-width="1.1" opacity="0.85"/>
+        <text x="0" y="17" class="nl">CROWN</text>
+        <text x="0" y="34" class="cap" fill="#f7cd7d">PII · S3 data</text>
+      </g>
     </g>
 
-    <!-- Title -->
-    <text x="210" y="105" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="46" font-weight="700" fill="#ffffff" letter-spacing="-0.5">
-      AWS Security Scanner
-    </text>
-
-    <!-- Subtitle -->
-    <text x="210" y="148" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="19" fill="#ff9900" letter-spacing="0.5" font-weight="500">
-      Cloud Security Audit &amp; IaC Static Analysis
-    </text>
-
-    <!-- Description -->
-    <text x="210" y="185" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="14" fill="#8b949e">
-      CIS AWS Foundations Benchmark v3.0 | CloudFormation | Terraform | 160+ Security Checks
-    </text>
-
-    <!-- Tags row -->
-    <g transform="translate(210, 210)">
-      <rect x="0" y="0" width="56" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
-      <text x="28" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">IAM</text>
-
-      <rect x="66" y="0" width="42" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
-      <text x="87" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">S3</text>
-
-      <rect x="118" y="0" width="52" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
-      <text x="144" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">EC2</text>
-
-      <rect x="180" y="0" width="52" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
-      <text x="206" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">RDS</text>
-
-      <rect x="242" y="0" width="52" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
-      <text x="268" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">VPC</text>
-
-      <rect x="304" y="0" width="52" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
-      <text x="330" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">KMS</text>
-
-      <rect x="366" y="0" width="52" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
-      <text x="392" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">EKS</text>
-
-      <rect x="428" y="0" width="52" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
-      <text x="454" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">WAF</text>
-
-      <rect x="490" y="0" width="78" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
-      <text x="529" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">Bedrock</text>
-
-      <rect x="578" y="0" width="60" height="26" rx="5" fill="#ff9900" opacity="0.12" stroke="#ff9900" stroke-width="0.5" stroke-opacity="0.3"/>
-      <text x="608" y="17" font-family="'Segoe UI', monospace" font-size="11" fill="#ffb347" text-anchor="middle" font-weight="600">+16</text>
+    <!-- ===== Choke-point insight (the headline OverWatch produces) ===== -->
+    <path d="M513 118 C548 108 560 92 588 92" fill="none" stroke="#f5b53d" stroke-width="1.6" stroke-dasharray="3 3"/>
+    <circle cx="588" cy="92" r="2.2" fill="#f5b53d"/>
+    <g text-anchor="end">
+      <text class="mono" x="762" y="86" font-size="9.5" font-weight="700" fill="#f5b53d">★ CHOKE POINT</text>
+      <text class="mono" x="762" y="99" font-size="8" fill="#c9d6ea">fix 1 → cut 100% of critical paths</text>
     </g>
 
-    <!-- Version badge -->
-    <g transform="translate(1065, 30)">
-      <rect x="0" y="0" width="95" height="30" rx="15" fill="#ff9900" opacity="0.15" stroke="#ff9900" stroke-width="1" stroke-opacity="0.4"/>
-      <text x="48" y="20" font-family="'Segoe UI', monospace" font-size="13" fill="#ffb347" text-anchor="middle" font-weight="700">v1.1.0</text>
+    <!-- ===== Multi-account estate under watch = the security graph ===== -->
+    <g transform="translate(0,190)">
+      <path d="M0 6 H800 V50 H0 Z" fill="url(#estate2)"/>
+      <path d="M0 13 H800 V50 H0 Z" fill="url(#estate1)"/>
+      <line x1="0" y1="13" x2="800" y2="13" stroke="#38bdf8" stroke-width="1" opacity="0.35"/>
+      <!-- cross-account graph: account nodes joined by a faint edge line -->
+      <line x1="60" y1="25" x2="740" y2="25" stroke="#60a5fa" stroke-width="1" opacity="0.30"/>
+      <g>
+        <rect x="54" y="19" width="12" height="12" rx="2.5" fill="url(#node)" stroke="#38bdf8" stroke-width="1"/>
+        <rect x="150" y="19" width="12" height="12" rx="2.5" fill="url(#node)" stroke="#60a5fa" stroke-width="1"/>
+        <rect x="246" y="19" width="12" height="12" rx="2.5" fill="url(#node)" stroke="#38bdf8" stroke-width="1"/>
+        <rect x="342" y="19" width="12" height="12" rx="2.5" fill="url(#node)" stroke="#6366f1" stroke-width="1"/>
+        <rect x="438" y="19" width="12" height="12" rx="2.5" fill="url(#node)" stroke="#ff3b5c" stroke-width="1.2"/>
+        <rect x="534" y="19" width="12" height="12" rx="2.5" fill="url(#node)" stroke="#60a5fa" stroke-width="1"/>
+        <rect x="630" y="19" width="12" height="12" rx="2.5" fill="url(#node)" stroke="#f5b53d" stroke-width="1.2"/>
+        <rect x="726" y="19" width="12" height="12" rx="2.5" fill="url(#node)" stroke="#38bdf8" stroke-width="1"/>
+      </g>
+      <text class="mono" x="60" y="44" font-size="7.5" fill="#8399ba">multi-account · multi-region · one security graph</text>
+      <text class="mono" x="740" y="44" font-size="7.5" fill="#8399ba" text-anchor="end">MITRE ATT&amp;CK-aligned · remediation-as-code</text>
     </g>
-
-    <!-- CIS badge -->
-    <g transform="translate(1025, 70)">
-      <rect x="0" y="0" width="135" height="26" rx="13" fill="#232f3e" stroke="#ff9900" stroke-width="1" stroke-opacity="0.3"/>
-      <text x="68" y="17" font-family="'Segoe UI', sans-serif" font-size="11" fill="#8b949e" text-anchor="middle">CIS Benchmark v3.0</text>
-    </g>
-
-    <!-- Bottom accent line -->
-    <rect x="0" y="296" width="1200" height="4" fill="url(#accentLine)"/>
   </g>
+  <rect x="0.75" y="0.75" width="798.5" height="238.5" rx="17.5" fill="none" stroke="#1e2b47"/>
 </svg>
