@@ -464,3 +464,97 @@ def test_cog_05_06_maps_complete():
     assert A.CHECK_SEVERITY.get("COG-05") == "HIGH" and A.CHECK_SEVERITY.get("COG-06") == "CRITICAL"
     for cid in ("COG-05", "COG-06"):
         assert cid in A.COMPLIANCE_MAP and "aws " in A.REMEDIATION_MAP.get(cid, "").lower()
+
+
+# ── R53-06 — dangling DNS / subdomain takeover ───────────────────────────────
+def _r53_scanner(records, zones=None):
+    s = make_scanner(["ROUTE53"])
+    s.graph = aws_graph.SecurityGraph()
+    r53 = MagicMock()
+    zones = zones or [{"Id": "/hostedzone/Z1", "Name": "example.com.",
+                       "Config": {"PrivateZone": False}}]
+
+    def _pag(op):
+        if op == "list_hosted_zones":
+            return MockPaginator("HostedZones", zones)
+        if op == "list_resource_record_sets":
+            return MockPaginator("ResourceRecordSets", records)
+        return MockPaginator("X", [])
+    r53.get_paginator.side_effect = _pag
+    s._clients["route53:us-east-1"] = r53
+    return s
+
+
+def _cname(name, value, rtype="CNAME"):
+    return {"Name": name, "Type": rtype, "ResourceRecords": [{"Value": value}]}
+
+
+def test_r53_06_s3_website_takeover_fail():
+    s = _r53_scanner([_cname("app.example.com.",
+                             "app.example.com.s3-website-us-east-1.amazonaws.com")])
+    s3 = MagicMock()
+    s3.list_buckets.return_value = {"Buckets": []}
+    s3.head_bucket.side_effect = RuntimeError("NoSuchBucket")
+    s._clients["s3:us-east-1"] = s3
+    s._check_dangling_dns()
+    assert any(r.check_id == "R53-06" and r.status == "FAIL" and "app.example.com" in r.resource
+               for r in s.results)
+    assert "CAN_TAKEOVER" in s.graph.stats()["edge_kinds"]
+
+
+def test_r53_06_s3_website_exists_no_finding():
+    s = _r53_scanner([_cname("app.example.com.",
+                             "app.example.com.s3-website-us-east-1.amazonaws.com")])
+    s3 = MagicMock()
+    s3.list_buckets.return_value = {"Buckets": [{"Name": "app.example.com"}]}
+    s._clients["s3:us-east-1"] = s3
+    s._check_dangling_dns()
+    assert not any(r.check_id == "R53-06" and r.status == "FAIL" for r in s.results)
+    assert any(r.check_id == "R53-06" and r.status == "PASS" for r in s.results)
+
+
+def test_r53_06_beanstalk_terminated_fail():
+    s = _r53_scanner([_cname("eb.example.com.", "my-env.us-west-2.elasticbeanstalk.com")])
+    eb = MagicMock()
+    eb.describe_environments.return_value = {"Environments": []}   # env gone
+    s._clients["elasticbeanstalk:us-west-2"] = eb
+    s._check_dangling_dns()
+    assert any(r.check_id == "R53-06" and r.status == "FAIL" and "eb.example.com" in r.resource
+               for r in s.results)
+
+
+def test_r53_06_beanstalk_live_no_finding():
+    s = _r53_scanner([_cname("eb.example.com.", "my-env.us-west-2.elasticbeanstalk.com")])
+    eb = MagicMock()
+    eb.describe_environments.return_value = {"Environments": [
+        {"CNAME": "my-env.us-west-2.elasticbeanstalk.com", "Status": "Ready"}]}
+    s._clients["elasticbeanstalk:us-west-2"] = eb
+    s._check_dangling_dns()
+    assert not any(r.check_id == "R53-06" and r.status == "FAIL" for r in s.results)
+
+
+def test_r53_06_cloudfront_unverified_warns_not_fails():
+    alias = {"Name": "cf.example.com.", "Type": "A",
+             "AliasTarget": {"HostedZoneId": "Z2FDTNDATAQYW2",
+                             "DNSName": "d123abc.cloudfront.net", "EvaluateTargetHealth": False}}
+    s = _r53_scanner([alias])
+    cf = MagicMock()
+    cf.get_paginator.return_value = MockPaginator("DistributionList", {"Items": []})
+    s._clients["cloudfront:us-east-1"] = cf
+    s._check_dangling_dns()
+    r6 = [r for r in s.results if r.check_id == "R53-06" and "cf.example.com" in r.resource]
+    assert r6 and all(r.status == "WARN" for r in r6)   # cross-account/deleted -> WARN, never FAIL
+
+
+def test_r53_06_private_zone_skipped():
+    s = _r53_scanner([_cname("x.internal.", "x.s3-website-us-east-1.amazonaws.com")],
+                     zones=[{"Id": "/hostedzone/Z1", "Name": "internal.",
+                             "Config": {"PrivateZone": True}}])
+    s._check_dangling_dns()
+    assert any(r.check_id == "R53-06" and r.status == "INFO" for r in s.results)
+    assert not any(r.check_id == "R53-06" and r.status == "FAIL" for r in s.results)
+
+
+def test_r53_06_map_complete():
+    assert A.CHECK_SEVERITY.get("R53-06") == "HIGH" and "R53-06" in A.COMPLIANCE_MAP
+    assert "aws " in A.REMEDIATION_MAP.get("R53-06", "").lower()

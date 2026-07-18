@@ -246,6 +246,7 @@ CHECK_SEVERITY = {
     "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "MEDIUM", "SQS-04": "LOW",
     "GLC-01": "CRITICAL", "GLC-02": "MEDIUM", "GLC-03": "LOW",
     "R53-01": "MEDIUM", "R53-02": "MEDIUM", "R53-03": "HIGH", "R53-04": "LOW", "R53-05": "MEDIUM",
+    "R53-06": "HIGH",
     "DDB-03": "MEDIUM", "DDB-04": "MEDIUM",
     "EKS-04": "MEDIUM", "EKS-05": "MEDIUM",
     "ECS-04": "HIGH", "ECS-05": "MEDIUM",
@@ -420,6 +421,7 @@ COMPLIANCE_MAP = {
     "R53-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-20"},
     "R53-03": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-20"},
     "R53-05": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "R53-06": {"PCI-DSS": "2.4", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SC-20"},
     "DDB-03": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "DDB-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
     "EKS-04": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
@@ -567,6 +569,7 @@ REMEDIATION_MAP = {
     "GLC-01": "Remove public Glacier vault access policy: aws glacier set-vault-access-policy --vault-name <VAULT> --policy '{\"Policy\":\"<LEAST_PRIVILEGE_POLICY>\"}'",
     "SQS-02": "Restrict the queue policy to trusted principals: aws sqs set-queue-attributes --queue-url <URL> --attributes Policy='<LEAST_PRIVILEGE_POLICY>'",
     "R53-03": "Enable DNSSEC signing: aws route53 enable-hosted-zone-dnssec --hosted-zone-id <ZONE_ID>",
+    "R53-06": "Remove the obsolete record or repoint it at a live resource you control: aws route53 change-resource-record-sets --hosted-zone-id <ZONE_ID> --change-batch '{\"Changes\":[{\"Action\":\"DELETE\",\"ResourceRecordSet\":{...}}]}'. If an S3-website target was deleted, reclaim the name first: aws s3api create-bucket --bucket <BUCKET> --region <REGION>",
     "DDB-04": "Enable deletion protection: aws dynamodb update-table --table-name <TABLE> --deletion-protection-enabled",
     "ECS-04": "Recreate the task definition with awsvpc network mode (drop host mode): aws ecs register-task-definition --network-mode awsvpc --cli-input-json file://taskdef.json",
     "EXPOSURE-01": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0  (then re-add a scoped CIDR)",
@@ -3171,6 +3174,215 @@ class AWSLiveScanner:
         except Exception as e:
             self._add("WARN", "R53-05", "ROUTE53", "route53resolver",
                       f"Resolver checks — {e}")
+
+        # R53-06 — dangling DNS records / subdomain takeover
+        self._check_dangling_dns()
+
+    def _check_dangling_dns(self) -> None:
+        """R53-06 — dangling DNS records / subdomain-takeover risk. S3-website and
+        Elastic Beanstalk targets that no longer exist are CONFIRMED takeovers (FAIL +
+        internet-CAN_TAKEOVER edge); CloudFront/ELB/API-GW absence can be cross-account,
+        so WARN. Read-only: describe/list + a head_bucket existence probe only."""
+        self._log("R53-06: dangling DNS records / subdomain takeover")
+        try:
+            r53 = self._client("route53", region="us-east-1")
+            zones = []
+            for page in r53.get_paginator("list_hosted_zones").paginate():
+                zones.extend(page.get("HostedZones", []))
+        except Exception as e:
+            self._add("WARN", "R53-06", "ROUTE53", "route53", str(e))
+            return
+        public_zones = [z for z in zones if not z.get("Config", {}).get("PrivateZone", False)]
+        if not public_zones:
+            self._add("INFO", "R53-06", "ROUTE53", "route53", "No public hosted zones")
+            return
+        candidates, seen = [], set()
+        for z in public_zones:
+            zid = z["Id"].split("/")[-1]
+            zname = z.get("Name", "").rstrip(".")
+            try:
+                for page in r53.get_paginator("list_resource_record_sets").paginate(HostedZoneId=zid):
+                    for rr in page.get("ResourceRecordSets", []):
+                        rtype = rr.get("Type", "")
+                        alias = rr.get("AliasTarget")
+                        if alias:
+                            if alias.get("HostedZoneId") == zid:
+                                continue                        # intra-zone self-alias
+                            target = (alias.get("DNSName") or "").rstrip(".").lower()
+                        elif rtype == "CNAME" and rr.get("ResourceRecords"):
+                            target = (rr["ResourceRecords"][0].get("Value") or "").rstrip(".").lower()
+                        else:
+                            continue
+                        fqdn = rr.get("Name", "").rstrip(".").lower()
+                        if not target or "*" in fqdn:
+                            continue
+                        key = (fqdn, target)
+                        if key not in seen:
+                            seen.add(key)
+                            candidates.append((fqdn, target, rtype, zname))
+            except Exception as e:
+                self._add("WARN", "R53-06", "ROUTE53", zname, f"could not list records: {e}")
+        flagged = sum(1 for c in candidates if self._classify_dangling(*c))
+        if flagged == 0 and candidates:
+            self._add("PASS", "R53-06", "ROUTE53", "route53",
+                      f"No dangling records across {len(public_zones)} public zone(s) "
+                      f"({len(candidates)} alias/CNAME records checked)")
+
+    def _classify_dangling(self, fqdn: str, target: str, rtype: str, zname: str) -> bool:
+        if ".s3-website" in target:
+            return self._dangling_s3(fqdn, target, rtype, zname)
+        if target.endswith(".elasticbeanstalk.com"):
+            return self._dangling_beanstalk(fqdn, target, rtype, zname)
+        if target.endswith(".cloudfront.net"):
+            return self._dangling_cloudfront(fqdn, target, rtype, zname)
+        if target.endswith(".elb.amazonaws.com"):
+            return self._dangling_elb(fqdn, target, rtype, zname)
+        if ".execute-api." in target:
+            self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                      f"API Gateway alias {target} — manually verify the API/custom domain "
+                      f"still exists | zone {zname}")
+            return True
+        return False
+
+    def _emit_dangling(self, fqdn, target, rtype, zname, service, confirmed) -> None:
+        g = self._ensure_graph()
+        g.add_node(fqdn, "DanglingDNSRecord", record_type=rtype, dangling_target=target,
+                   dangling_service=service, zone_name=zname,
+                   confidence="confirmed" if confirmed else "probable", scan_source="route53")
+        if confirmed:
+            g.add_node("internet", "InternetSource", cidr="0.0.0.0/0")
+            g.add_edge("internet", fqdn, "CAN_TAKEOVER", dangling_service=service,
+                       confidence="confirmed", scan_source="route53")
+
+    @staticmethod
+    def _s3_error_code(e) -> str:
+        if hasattr(e, "response"):
+            return ((getattr(e, "response", {}) or {}).get("Error", {}) or {}).get("Code", "")
+        s = str(e)
+        for c in ("NoSuchBucket", "NotFound", "AccessDenied", "Forbidden", "404", "403"):
+            if c in s:
+                return c
+        return ""
+
+    def _dangling_s3(self, fqdn, target, rtype, zname) -> bool:
+        bucket = fqdn                       # S3 website hosting requires bucket name == FQDN
+        s3 = self._client("s3")
+        try:
+            if bucket in {b["Name"].lower() for b in s3.list_buckets().get("Buckets", [])}:
+                return False                # bucket exists in this account
+        except Exception:
+            pass
+        try:
+            s3.head_bucket(Bucket=bucket)
+            return False                    # exists (200)
+        except Exception as e:
+            code = self._s3_error_code(e)
+            if code in ("404", "NoSuchBucket", "NotFound"):
+                self._emit_dangling(fqdn, target, rtype, zname, "s3-website", True)
+                self._add("FAIL", "R53-06", "ROUTE53", fqdn,
+                          f"S3-website bucket '{bucket}' does not exist — subdomain {fqdn} is "
+                          f"TAKEABLE (S3 names are globally re-registerable) | zone {zname}")
+                return True
+            if code in ("403", "Forbidden", "AccessDenied"):
+                self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                          f"S3-website bucket '{bucket}' exists outside this account — verify "
+                          f"ownership (possible takeover) | zone {zname}")
+                return True
+            self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                      f"could not confirm S3-website target {bucket} — manually verify | zone {zname}")
+            return True
+
+    def _dangling_beanstalk(self, fqdn, target, rtype, zname) -> bool:
+        m = re.search(r"\.([a-z]{2}-[a-z]+-\d+)\.elasticbeanstalk\.com$", target)
+        if not m:
+            self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                      f"legacy non-regionalized Elastic Beanstalk name {target} — manually "
+                      f"verify | zone {zname}")
+            return True
+        region = m.group(1)
+        try:
+            eb = self._client("elasticbeanstalk", region=region)
+            live, tok = set(), None
+            while True:
+                kw = {"NextToken": tok} if tok else {}
+                resp = eb.describe_environments(**kw)
+                for e in resp.get("Environments", []):
+                    if e.get("Status") not in ("Terminated", "Terminating"):
+                        cn = (e.get("CNAME") or "").rstrip(".").lower()
+                        if cn:
+                            live.add(cn)
+                tok = resp.get("NextToken")
+                if not tok:
+                    break
+        except Exception as e:
+            self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                      f"could not verify Elastic Beanstalk target {target}: {e} | zone {zname}")
+            return True
+        if target in live:
+            return False
+        self._emit_dangling(fqdn, target, rtype, zname, "elasticbeanstalk", True)
+        self._add("FAIL", "R53-06", "ROUTE53", fqdn,
+                  f"Elastic Beanstalk env for {target} is gone/terminated — subdomain {fqdn} "
+                  f"is TAKEABLE (EB CNAME re-registerable in {region}) | zone {zname}")
+        return True
+
+    def _dangling_cloudfront(self, fqdn, target, rtype, zname) -> bool:
+        try:
+            cf = self._client("cloudfront", region="us-east-1")
+            dom_aliases = {}
+            for page in cf.get_paginator("list_distributions").paginate():
+                for d in (page.get("DistributionList", {}) or {}).get("Items", []):
+                    dom_aliases[(d.get("DomainName") or "").lower()] = {
+                        a.lower() for a in (d.get("Aliases", {}) or {}).get("Items", [])}
+        except Exception as e:
+            self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                      f"could not verify CloudFront target {target}: {e} | zone {zname}")
+            return True
+        if target in dom_aliases:
+            if fqdn in dom_aliases[target]:
+                return False                # properly associated
+            self._emit_dangling(fqdn, target, rtype, zname, "cloudfront", False)
+            self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                      f"CloudFront distribution {target} exists but {fqdn} is NOT in its "
+                      f"alternate-domain list — serves error / takeover-adjacent | zone {zname}")
+            return True
+        self._emit_dangling(fqdn, target, rtype, zname, "cloudfront", False)
+        self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                  f"CloudFront target {target} not owned by this account — deleted or "
+                  f"cross-account; manually verify | zone {zname}")
+        return True
+
+    def _dangling_elb(self, fqdn, target, rtype, zname) -> bool:
+        norm = target[len("dualstack."):] if target.startswith("dualstack.") else target
+        m = re.search(r"\.([a-z]{2}-[a-z]+-\d+)\.elb\.amazonaws\.com$", norm)
+        if not m:
+            self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                      f"could not parse region from ELB target {target} — manually verify "
+                      f"| zone {zname}")
+            return True
+        region = m.group(1)
+        names = set()
+        try:
+            for page in self._client("elbv2", region=region).get_paginator(
+                    "describe_load_balancers").paginate():
+                for lb in page.get("LoadBalancers", []):
+                    names.add((lb.get("DNSName") or "").lower())
+        except Exception:
+            pass
+        try:
+            for page in self._client("elb", region=region).get_paginator(
+                    "describe_load_balancers").paginate():
+                for d in page.get("LoadBalancerDescriptions", []):
+                    names.add((d.get("DNSName") or "").lower())
+        except Exception:
+            pass
+        if norm in names:
+            return False
+        self._emit_dangling(fqdn, target, rtype, zname, "elb", False)
+        self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                  f"ELB DNS name {target} not present in {region} — LB deleted; AWS may "
+                  f"recycle the name (takeover) | zone {zname}")
+        return True
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 15: AWS BEDROCK
