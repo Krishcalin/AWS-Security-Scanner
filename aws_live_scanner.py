@@ -198,6 +198,7 @@ CHECK_SEVERITY = {
     "ECS-01": "CRITICAL", "ECS-02": "HIGH", "ECS-03": "MEDIUM",
     "ECS-04": "HIGH", "ECS-05": "MEDIUM",
     "SEC-01": "HIGH", "SEC-02": "HIGH", "SEC-03": "MEDIUM", "SEC-04": "MEDIUM",
+    "SEC-05": "CRITICAL",
     "WAF-01": "HIGH", "WAF-02": "MEDIUM", "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
     "ELC-01": "HIGH", "ELC-02": "HIGH", "ELC-03": "HIGH", "ELC-04": "MEDIUM",
     "OSR-01": "HIGH", "OSR-02": "HIGH", "OSR-03": "MEDIUM",
@@ -223,7 +224,7 @@ CHECK_SEVERITY = {
     "IAMPE-14": "HIGH", "IAMPE-16": "HIGH", "IAMPE-18": "MEDIUM",
     "IAMPE-19": "CRITICAL", "IAMPE-20": "MEDIUM",
     # Graph-derived (Phase 1): transitive chains + dangerous trust
-    "IAMPE-21": "HIGH", "IAMPE-22": "HIGH",
+    "IAMPE-21": "HIGH", "IAMPE-22": "HIGH", "IAMPE-23": "CRITICAL",
     # Phase 2: effective internet exposure + attack paths
     "EXPOSURE-01": "HIGH", "EXPOSURE-02": "MEDIUM", "ATTACK-01": "CRITICAL",
     # Phase 3: deep-plane ingestion (vuln / data / threat) + flagship attack path
@@ -419,6 +420,8 @@ COMPLIANCE_MAP = {
     "ECS-05": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SEC-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SEC-04": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "SEC-05": {"CIS": "1.16", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "IAMPE-23": {"CIS": "1.16", "PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "WAF-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "WAF-04": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "ELC-04": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
@@ -485,6 +488,7 @@ REMEDIATION_MAP = {
     "EKS-03": "Enable secrets encryption: aws eks associate-encryption-config --cluster-name <CLUSTER> --encryption-config '[{\"resources\":[\"secrets\"],\"provider\":{\"keyArn\":\"<KMS_ARN>\"}}]'",
     "SEC-01": "Enable rotation: aws secretsmanager rotate-secret --secret-id <SECRET_ID> --rotation-lambda-arn <LAMBDA_ARN> --rotation-rules AutomaticallyAfterDays=30",
     "SEC-02": "Update rotation schedule: aws secretsmanager rotate-secret --secret-id <SECRET_ID> --rotation-rules AutomaticallyAfterDays=90",
+    "SEC-05": "Remove the public/cross-account grant (or scope it with aws:PrincipalOrgID) and block public policies: aws secretsmanager put-resource-policy --secret-id <SECRET_ARN> --block-public-policy --resource-policy file://scoped-policy.json ; or drop it: aws secretsmanager delete-resource-policy --secret-id <SECRET_ARN>",
     "ELC-01": "Enable at-rest encryption on new cluster: aws elasticache create-replication-group --replication-group-id <ID> --at-rest-encryption-enabled",
     "ELC-02": "Enable in-transit encryption on new cluster: aws elasticache create-replication-group --replication-group-id <ID> --transit-encryption-enabled",
     "OSR-01": "Enforce HTTPS: aws opensearch update-domain-config --domain-name <DOMAIN> --domain-endpoint-options EnforceHTTPS=true,TLSSecurityPolicy=Policy-Min-TLS-1-2-2019-07",
@@ -540,6 +544,7 @@ REMEDIATION_MAP = {
     "IAMPE-20": "Scope sts:AssumeRole to specific trusted role ARNs instead of '*': edit the policy Resource, then bound the principal: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
     "IAMPE-21": "Break the escalation chain at its weakest hop: remove the privesc-granting permission from the assumable target role, OR restrict who can assume it (aws iam update-assume-role-policy --role-name <ROLE> --policy-document <TIGHTER_TRUST>). Apply a permissions boundary to the chain's entry principal.",
     "IAMPE-22": "Restrict the role trust policy to specific principal ARNs (remove Principal '*'): aws iam update-assume-role-policy --role-name <ROLE> --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"<TRUSTED_ARN>\"},\"Action\":\"sts:AssumeRole\",\"Condition\":{\"StringEquals\":{\"sts:ExternalId\":\"<ID>\"}}}]}'",
+    "IAMPE-23": "Scope the federated OIDC trust to a specific repo+ref via the :sub condition (StringEquals, not just :aud): aws iam update-assume-role-policy --role-name <ROLE> --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Federated\":\"arn:aws:iam::<ACCT>:oidc-provider/token.actions.githubusercontent.com\"},\"Action\":\"sts:AssumeRoleWithWebIdentity\",\"Condition\":{\"StringEquals\":{\"token.actions.githubusercontent.com:aud\":\"sts.amazonaws.com\",\"token.actions.githubusercontent.com:sub\":\"repo:<ORG>/<REPO>:ref:refs/heads/main\"}}}]}'",
     "CNT-01": "Enable scan-on-push and pull existing findings: aws ecr put-image-scanning-configuration --repository-name <REPO> --image-scanning-configuration scanOnPush=true",
     "CNT-02": "Rebuild the image on a patched base and push the new digest; delete the vulnerable image: aws ecr batch-delete-image --repository-name <REPO> --image-ids imageDigest=<DIGEST>. Enable Inspector enhanced scanning for continuous coverage.",
     "AMI-01": "Revoke public/cross-account AMI sharing (a public AMI exposes its full disk snapshot): aws ec2 modify-image-attribute --image-id <AMI_ID> --launch-permission '{\"Remove\":[{\"Group\":\"all\"}]}' ; audit remaining account-level shares.",
@@ -785,7 +790,8 @@ def parse_trust_policy(doc) -> List[Dict]:
         actions = {str(a).lower() for a in _as_list(av)} if av else set()
         out.append({"effect": eff, "aws": aws, "service": svc, "federated": fed,
                     "wildcard": wildcard, "actions": actions,
-                    "has_condition": bool(st.get("Condition"))})
+                    "has_condition": bool(st.get("Condition")),
+                    "condition": st.get("Condition") or None})
     return out
 
 
@@ -3643,6 +3649,69 @@ class AWSLiveScanner:
                 if age > 90:
                     self._add("WARN", "SEC-04", "SECRETS", sname,
                               f"Secret '{sname}' not accessed in {age} days")
+            # SEC-05 — resource policy public / cross-account exposure
+            self._check_secret_policy(sm, s)
+
+    def _check_secret_policy(self, sm, s: Dict) -> None:
+        """SEC-05 — Secrets Manager resource-policy public/cross-account exposure. Its
+        own try/except per secret so one AccessDenied never aborts the SECRETS section.
+        No resource policy attached => IAM-only access (the common case) => silent."""
+        arn = s.get("ARN", "")
+        sname = s.get("Name", arn)
+        try:
+            pol_str = sm.get_resource_policy(SecretId=arn).get("ResourcePolicy")
+        except Exception:
+            return
+        if not pol_str:
+            return
+        try:
+            stmts = json.loads(pol_str).get("Statement", [])
+        except Exception:
+            return
+        if isinstance(stmts, dict):
+            stmts = [stmts]
+        trusted = getattr(self, "trusted_accounts", set())
+        public = public_cond = False
+        cross: set = set()
+        org_id = None
+        for st in stmts:
+            c = classify_resource_policy_stmt(st, self.account or "")
+            if not c:
+                continue
+            if c["kind"] == "public":
+                public = True
+            elif c["kind"] == "public_conditioned":
+                public_cond = True
+            elif c["kind"] == "org":
+                org_id = c.get("org_id") or org_id
+            elif c["kind"] == "cross_account":
+                cross.update(a for a in c["external_accounts"] if a not in trusted)
+        if not (public or public_cond or cross or org_id):
+            return                              # same-account only — no noise
+        g = self._ensure_graph()
+        g.add_node(arn, "SecretsManagerSecret", name=sname, scan_source="secrets")
+        if public:
+            g.add_node("internet", "InternetSource", cidr="0.0.0.0/0")
+            g.add_edge("internet", arn, "SHARED_SECRET", public=True, scan_source="secrets")
+            self._add("FAIL", "SEC-05", "SECRETS", sname,
+                      f"Secret resource policy grants PUBLIC access (wildcard principal, "
+                      f"unconditioned) — readable by any AWS principal | {sname}")
+        elif cross:
+            for acct in sorted(cross):
+                g.add_node("account:" + acct, "AWSAccount", account=acct, external=True)
+                g.add_edge("account:" + acct, arn, "SHARED_SECRET", external_account=acct,
+                           scan_source="secrets")
+            self._add("FAIL", "SEC-05", "SECRETS", sname,
+                      f"Secret resource policy grants CROSS-ACCOUNT access to "
+                      f"{', '.join(sorted(cross))} | {sname}")
+        elif public_cond:
+            self._add("WARN", "SEC-05", "SECRETS", sname,
+                      f"Secret resource policy wildcard principal is condition-guarded — "
+                      f"verify it restricts access | {sname}")
+        elif org_id:
+            self._add("WARN", "SEC-05", "SECRETS", sname,
+                      f"Secret resource policy shares to AWS Organization {org_id} — "
+                      f"verify it is your org | {sname}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 21: AWS WAF
@@ -4994,6 +5063,116 @@ class AWSLiveScanner:
         self.graph = g
         return g
 
+    # Multi-tenant public OIDC issuers: anyone on the internet can mint a token
+    _PUBLIC_OIDC_ISSUERS = {
+        "token.actions.githubusercontent.com": "GitHub Actions",
+        "gitlab.com":                          "GitLab CI",
+        "app.terraform.io":                    "Terraform Cloud",
+        "vstoken.dev.azure.com":               "Azure DevOps",
+        "api.bitbucket.org":                   "Bitbucket",
+    }
+
+    @staticmethod
+    def _oidc_sub_scope(sub_vals: List[str]) -> str:
+        """Classify how tightly an OIDC :sub condition is pinned:
+        'open' (no/wildcard sub), 'org-wildcard' (org or repo wildcarded),
+        'branch-wildcard' (concrete repo, wildcard ref/env), 'concrete'. Returns the
+        MOST-permissive class across all sub values."""
+        if not sub_vals:
+            return "open"
+        rank = {"open": 3, "org-wildcard": 2, "branch-wildcard": 1, "concrete": 0}
+        best = "concrete"
+        for v in sub_vals:
+            v = str(v)
+            if v == "*":
+                s = "open"
+            else:
+                body = v[5:] if v.lower().startswith("repo:") else v
+                repo_spec = body.split(":", 1)[0]          # ORG/REPO (GitHub) or whole sub
+                rest = body[len(repo_spec):]
+                if "*" in repo_spec:
+                    s = "org-wildcard"
+                elif "*" in rest:
+                    s = "branch-wildcard"
+                else:
+                    s = "concrete"
+            if rank[s] > rank[best]:
+                best = s
+        return best
+
+    def _emit_federated_edge(self, g, provider_key: str, ptype: str, p: Dict,
+                             st: Dict, scope: str, public_issuer: bool) -> None:
+        node = "federated:" + provider_key
+        g.add_node(node, "FederatedPrincipal", provider=provider_key, provider_type=ptype,
+                   public=public_issuer, scan_source="iam-privesc")
+        g.add_edge(node, p["_node"], "FEDERATED_CAN_ASSUME",
+                   has_condition=st.get("has_condition", False), sub_scope=scope,
+                   provider_type=ptype, scan_source="iam-privesc")
+
+    def _check_federated_trust(self, p: Dict) -> bool:
+        """IAMPE-23 — role trusts a federated OIDC/SAML/Cognito provider with a missing
+        or wildcard subject condition (anyone-can-assume). Public multi-tenant issuers
+        (GitHub/GitLab/…) with an open or org-wildcard :sub are CRITICAL; a concrete
+        repo:ORG/REPO:ref:… sub is correctly scoped and NOT flagged."""
+        found = False
+        g = self._ensure_graph()
+        for st in p.get("trust", []):
+            if st.get("effect") != "Allow" or not st.get("federated"):
+                continue
+            feds = [str(f) for f in st["federated"]]
+            actions = st.get("actions", set())
+            ckeys = _flatten_condition_keys(st.get("condition"))
+            is_saml = any("saml-provider" in f for f in feds) or "sts:assumerolewithsaml" in actions
+            is_cognito = any(f == "cognito-identity.amazonaws.com" for f in feds)
+            is_oidc = (any("oidc-provider/" in f for f in feds)
+                       or "sts:assumerolewithwebidentity" in actions)
+            host = ""
+            for f in feds:
+                if "oidc-provider/" in f:
+                    host = f.split("oidc-provider/", 1)[1].lower()
+                    break
+            role_res = f"role:{p['name']}"
+            if is_cognito:
+                aud = [v for k, vs in ckeys.items() if k.endswith(":aud") for v in vs]
+                amr = [v for k, vs in ckeys.items() if k.endswith(":amr") for v in vs]
+                if not aud or any("unauthenticated" in str(v).lower() for v in amr):
+                    found = True
+                    self._add("WARN", "IAMPE-23", "IAMPRIVESC", role_res,
+                              f"Role trusts a Cognito identity pool with no aud / "
+                              f"unauthenticated amr — guest/any-pool assume | role {p['name']}")
+            elif is_oidc:
+                sub = [v for k, vs in ckeys.items() if k.endswith(":sub") for v in vs]
+                scope = self._oidc_sub_scope(sub)
+                provider = self._PUBLIC_OIDC_ISSUERS.get(host)
+                if provider and scope in ("open", "org-wildcard"):
+                    found = True
+                    self._add("FAIL", "IAMPE-23", "IAMPRIVESC", role_res,
+                              f"Role trusts {provider} OIDC with "
+                              f"{'no' if scope == 'open' else 'org-wildcard'} :sub condition "
+                              f"— ANY {provider} workflow on the internet can assume it "
+                              f"| role {p['name']}")
+                    self._emit_federated_edge(g, host or "oidc", "oidc", p, st, scope, True)
+                elif provider and scope == "branch-wildcard":
+                    found = True
+                    self._add("WARN", "IAMPE-23", "IAMPRIVESC", role_res,
+                              f"Role trusts {provider} OIDC scoped to a repo but ANY "
+                              f"branch/PR can assume — verify | role {p['name']}")
+                    self._emit_federated_edge(g, host or "oidc", "oidc", p, st, scope, True)
+                elif not provider and scope == "open":
+                    found = True
+                    self._add("WARN", "IAMPE-23", "IAMPRIVESC", role_res,
+                              f"Role trusts OIDC issuer '{host or '?'}' with no :sub condition "
+                              f"— verify the issuer is single-tenant/private | role {p['name']}")
+            elif is_saml:
+                scoped = any(k.endswith("saml:aud") or k.endswith("saml:iss") for k in ckeys)
+                if not scoped:
+                    found = True
+                    self._add("WARN", "IAMPE-23", "IAMPRIVESC", role_res,
+                              f"Role SAML trust gated only by the IdP — add a "
+                              f"SAML:aud=https://signin.aws.amazon.com/saml condition "
+                              f"| role {p['name']}")
+        return found
+
     def _check_iam_privesc(self):
         self._section_header("IAMPRIVESC")
         self._log("Resource-aware path analysis + identity graph (CAN_ASSUME / "
@@ -5057,6 +5236,13 @@ class AWSLiveScanner:
                                   f"Role trust policy allows ANY AWS principal "
                                   f"(Principal '*') to assume it with no condition — "
                                   f"account takeover risk | role {p['name']}")
+
+        # 2b) Federated OIDC/SAML wildcard trust — anyone-can-assume (IAMPE-23)
+        for p in principals:
+            if p["type"] != "role":
+                continue
+            if self._check_federated_trust(p):
+                found = True
 
         # 3) Transitive escalation chains: principal → assume → … → can escalate (IAMPE-21)
         admin = self._admin_cap_id()
