@@ -164,7 +164,8 @@ CHECK_SEVERITY = {
     "IAM-05": "MEDIUM", "IAM-06": "HIGH", "IAM-10": "MEDIUM",
     "IAM-07": "MEDIUM", "IAM-08": "MEDIUM",
     "S3-01": "HIGH", "S3-03": "HIGH", "S3-05": "MEDIUM",
-    "VPC-01": "HIGH", "VPC-03": "MEDIUM",
+    "S3-07": "MEDIUM", "S3-08": "MEDIUM",
+    "VPC-01": "HIGH", "VPC-03": "MEDIUM", "VPC-04": "MEDIUM",
     "LOG-01": "CRITICAL", "LOG-03": "HIGH", "LOG-04": "CRITICAL", "LOG-05": "MEDIUM",
     "ENC-03": "MEDIUM",
     "KMS-03": "HIGH",
@@ -268,9 +269,12 @@ COMPLIANCE_MAP = {
     "S3-01": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "S3-03": {"CIS": "2.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "S3-05": {"CIS": "3.6", "PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "S3-07": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "S3-08": {"CIS": "2.1.3", "PCI-DSS": "10.5.3", "HIPAA": "164.312(c)(1)", "SOC2": "A1.2", "NIST": "CP-9"},
     # VPC
     "VPC-01": {"CIS": "5.2", "PCI-DSS": "1.3.2", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "VPC-03": {"CIS": "3.7", "PCI-DSS": "10.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
+    "VPC-04": {"CIS": "5.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     # Logging
     "LOG-01": {"CIS": "3.1", "PCI-DSS": "10.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "LOG-03": {"CIS": "3.5", "PCI-DSS": "10.5.3", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "CM-8"},
@@ -441,8 +445,11 @@ REMEDIATION_MAP = {
     "S3-01": "Enable account BPA: aws s3control put-public-access-block --account-id <ACCT> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "S3-03": "Enable bucket encryption: aws s3api put-bucket-encryption --bucket <BUCKET> --server-side-encryption-configuration '{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\"}}]}'",
     "S3-05": "Enable access logging: aws s3api put-bucket-logging --bucket <BUCKET> --bucket-logging-status '{\"LoggingEnabled\":{\"TargetBucket\":\"<LOG_BUCKET>\",\"TargetPrefix\":\"s3-logs/\"}}'",
+    "S3-07": "Attach a bucket policy that denies non-TLS requests (Effect=Deny, Condition Bool aws:SecureTransport=false) and apply it: aws s3api put-bucket-policy --bucket <BUCKET> --policy file://tls-only.json",
+    "S3-08": "Enable versioning for rollback protection against overwrite/ransomware: aws s3api put-bucket-versioning --bucket <BUCKET> --versioning-configuration Status=Enabled",
     "VPC-01": "Revoke risky SG rule: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
     "VPC-03": "Enable VPC Flow Logs: aws ec2 create-flow-logs --resource-type VPC --resource-ids <VPC_ID> --traffic-type ALL --log-destination-type cloud-watch-logs --log-group-name vpc-flow-logs",
+    "VPC-04": "Strip all rules from each default SG so it denies all traffic (CIS 5.4): aws ec2 revoke-security-group-ingress --group-id <SG_ID> --ip-permissions ... and aws ec2 revoke-security-group-egress --group-id <SG_ID> --ip-permissions ... ; migrate workloads to purpose-built SGs",
     "LOG-01": "Create multi-region trail: aws cloudtrail create-trail --name org-trail --s3-bucket-name <BUCKET> --is-multi-region-trail --enable-log-file-validation && aws cloudtrail start-logging --name org-trail",
     "LOG-03": "Start Config recorder: aws configservice start-configuration-recorder --configuration-recorder-name default",
     "LOG-04": "Enable GuardDuty: aws guardduty create-detector --enable",
@@ -1351,6 +1358,52 @@ class AWSLiveScanner:
             except Exception:
                 pass
 
+            # S3-07 — TLS-only (deny non-SecureTransport) bucket policy
+            try:
+                pol   = json.loads(s3.get_bucket_policy(Bucket=bname)["Policy"])
+                stmts = pol.get("Statement", [])
+                if isinstance(stmts, dict):
+                    stmts = [stmts]
+                if any(self._stmt_denies_insecure_transport(st) for st in stmts):
+                    self._add("PASS", "S3-07", "S3", bname,
+                              f"Bucket policy denies non-TLS access | {bname}")
+                else:
+                    self._add("WARN", "S3-07", "S3", bname,
+                              f"Bucket policy does NOT enforce TLS "
+                              f"(no aws:SecureTransport deny) | {bname}")
+            except Exception:
+                self._add("WARN", "S3-07", "S3", bname,
+                          f"No bucket policy enforcing TLS-only access | {bname}")
+
+            # S3-08 — Versioning (rollback protection vs overwrite/ransomware)
+            try:
+                ver = s3.get_bucket_versioning(Bucket=bname).get("Status")
+                if ver == "Enabled":
+                    self._add("PASS", "S3-08", "S3", bname,
+                              f"Versioning enabled | {bname}")
+                else:
+                    self._add("WARN", "S3-08", "S3", bname,
+                              f"Versioning not enabled — no rollback from object "
+                              f"overwrite/ransomware | {bname}")
+            except Exception:
+                pass
+
+    @staticmethod
+    def _stmt_denies_insecure_transport(st: Dict) -> bool:
+        """True if an IAM/bucket-policy statement denies requests made without TLS
+        (Effect=Deny + aws:SecureTransport=false under Bool/BoolIfExists)."""
+        if st.get("Effect") != "Deny":
+            return False
+        cond = st.get("Condition", {}) or {}
+        for op in ("Bool", "BoolIfExists"):
+            val = (cond.get(op) or {}).get("aws:SecureTransport")
+            if val is None:
+                continue
+            vals = val if isinstance(val, list) else [val]
+            if any(str(v).lower() == "false" for v in vals):
+                return True
+        return False
+
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 3: NETWORK SECURITY
     # ══════════════════════════════════════════════════════════════════════════
@@ -1366,10 +1419,21 @@ class AWSLiveScanner:
         }
 
         # VPC-01 — Security groups with risky ports open to 0.0.0.0/0 or ::/0
+        # VPC-04 — default Security Group must restrict all traffic (CIS 5.4)
         self._log("VPC-01: Security Groups — risky ports open to 0.0.0.0/0 or ::/0")
         found_any = False
+        default_seen = False
+        default_sg_issues = []
         try:
             for sg in ec2.describe_security_groups()["SecurityGroups"]:
+                if sg.get("GroupName") == "default":
+                    default_seen = True
+                    inbound  = sg.get("IpPermissions", [])
+                    outbound = sg.get("IpPermissionsEgress", [])
+                    if inbound or outbound:
+                        default_sg_issues.append(
+                            (f"{sg['GroupId']} (vpc {sg.get('VpcId', '?')})",
+                             len(inbound), len(outbound)))
                 for perm in sg.get("IpPermissions", []):
                     fp = perm.get("FromPort", 0)
                     tp = perm.get("ToPort", 65535)
@@ -1395,6 +1459,14 @@ class AWSLiveScanner:
         if not found_any:
             self._add("PASS", "VPC-01", "VPC", "all-sgs",
                       "No Security Groups expose high-risk ports to 0.0.0.0/0 or ::/0")
+
+        for res, ni, no in default_sg_issues:
+            self._add("WARN", "VPC-04", "VPC", res,
+                      f"Default SG has {ni} inbound / {no} outbound rule(s) — CIS 5.4 "
+                      f"requires it to restrict ALL traffic | {res}")
+        if default_seen and not default_sg_issues:
+            self._add("PASS", "VPC-04", "VPC", "default-sgs",
+                      "All default Security Groups restrict all traffic (no rules)")
 
         # VPC-03 — VPC Flow Logs
         self._log("VPC-03: VPC Flow Logs enabled on all VPCs")

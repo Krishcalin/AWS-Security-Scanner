@@ -2,6 +2,7 @@
 IAM-07/08 (root recent-use + unused-credential-45d), KMS-03 (pending-deletion/disabled
 CMK), ACM-04/05 (unhealthy status + renewal risk). Reuses the mocked-boto3 harness
 from test_live_scanner; no AWS credentials, no network."""
+import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -444,3 +445,106 @@ def test_elb_07_not_emitted_for_network_lb():
     assert A.CHECK_SEVERITY.get("ELB-07") == "MEDIUM"
     assert "ELB-07" in A.COMPLIANCE_MAP
     assert "aws " in A.REMEDIATION_MAP.get("ELB-07", "").lower()
+
+
+# ── S3-07 (TLS-only policy) / S3-08 (versioning) ─────────────────────────────
+def _s3_scanner(buckets, policies=None, versioning=None):
+    s = make_scanner(["S3"])
+    s3, s3c = MagicMock(), MagicMock()
+    ok_bpa = {"PublicAccessBlockConfiguration": {"BlockPublicAcls": True}}
+    s3c.get_public_access_block.return_value = ok_bpa
+    s3.get_public_access_block.return_value = ok_bpa
+    s3.list_buckets.return_value = {"Buckets": [{"Name": b} for b in buckets]}
+    s3.get_bucket_encryption.return_value = {"ServerSideEncryptionConfiguration": {
+        "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]}}
+    s3.get_bucket_logging.return_value = {"LoggingEnabled": {"TargetBucket": "x"}}
+    policies = policies or {}
+
+    def _pol(Bucket):
+        if Bucket in policies:
+            return {"Policy": policies[Bucket]}
+        raise RuntimeError("NoSuchBucketPolicy")
+    s3.get_bucket_policy.side_effect = _pol
+    versioning = versioning or {}
+    s3.get_bucket_versioning.side_effect = lambda Bucket: {"Status": versioning.get(Bucket)}
+    s._clients["s3:us-east-1"] = s3
+    s._clients["s3control:us-east-1"] = s3c
+    return s
+
+
+_TLS_POLICY = json.dumps({"Statement": [
+    {"Effect": "Deny", "Principal": "*", "Action": "s3:*",
+     "Condition": {"Bool": {"aws:SecureTransport": "false"}}}]})
+
+
+def test_stmt_denies_insecure_transport():
+    f = A.AWSLiveScanner._stmt_denies_insecure_transport
+    assert f({"Effect": "Deny", "Condition": {"Bool": {"aws:SecureTransport": "false"}}})
+    assert f({"Effect": "Deny", "Condition": {"BoolIfExists": {"aws:SecureTransport": ["false"]}}})
+    assert not f({"Effect": "Allow", "Condition": {"Bool": {"aws:SecureTransport": "false"}}})
+    assert not f({"Effect": "Deny", "Condition": {"Bool": {"aws:SecureTransport": "true"}}})
+    assert not f({"Effect": "Deny"})
+
+
+def test_s3_07_tls_policy_present_vs_absent():
+    s = _s3_scanner(["with-tls", "no-tls"], policies={"with-tls": _TLS_POLICY},
+                    versioning={"with-tls": "Enabled", "no-tls": "Enabled"})
+    s._check_s3()
+    p = {r.resource for r in s.results if r.check_id == "S3-07" and r.status == "PASS"}
+    w = {r.resource for r in s.results if r.check_id == "S3-07" and r.status == "WARN"}
+    assert p == {"with-tls"} and w == {"no-tls"}
+
+
+def test_s3_08_versioning():
+    s = _s3_scanner(["v-on", "v-off"], versioning={"v-on": "Enabled"})   # v-off -> None
+    s._check_s3()
+    p = {r.resource for r in s.results if r.check_id == "S3-08" and r.status == "PASS"}
+    w = {r.resource for r in s.results if r.check_id == "S3-08" and r.status == "WARN"}
+    assert p == {"v-on"} and w == {"v-off"}
+
+
+def test_s3_07_08_map_entries_complete():
+    for cid in ("S3-07", "S3-08"):
+        assert cid in A.COMPLIANCE_MAP
+        assert "aws " in A.REMEDIATION_MAP.get(cid, "").lower()
+
+
+# ── VPC-04 — default Security Group must restrict all traffic (CIS 5.4) ──────
+def _vpc_scanner(sgs, vpcs=None, flow_logs=None):
+    s = make_scanner(["VPC"])
+    ec2 = MagicMock()
+    ec2.describe_security_groups.return_value = {"SecurityGroups": sgs}
+    ec2.describe_vpcs.return_value = {"Vpcs": vpcs or []}
+    ec2.describe_flow_logs.return_value = {"FlowLogs": flow_logs or []}
+    s._clients["ec2:us-east-1"] = ec2
+    return s
+
+
+def test_vpc_04_default_sg_with_rules_warns():
+    s = _vpc_scanner([
+        {"GroupId": "sg-def", "GroupName": "default", "VpcId": "vpc-1",
+         "IpPermissions": [{"IpProtocol": "-1"}], "IpPermissionsEgress": [{"IpProtocol": "-1"}]},
+        {"GroupId": "sg-app", "GroupName": "app", "VpcId": "vpc-1",
+         "IpPermissions": [], "IpPermissionsEgress": []}])
+    s._check_vpc()
+    w = [r for r in s.results if r.check_id == "VPC-04" and r.status == "WARN"]
+    assert len(w) == 1 and "sg-def" in w[0].resource
+    assert not any(r.check_id == "VPC-04" and r.status == "PASS" for r in s.results)
+
+
+def test_vpc_04_hardened_default_sg_passes():
+    s = _vpc_scanner([{"GroupId": "sg-def", "GroupName": "default", "VpcId": "vpc-1",
+                       "IpPermissions": [], "IpPermissionsEgress": []}])
+    s._check_vpc()
+    assert any(r.check_id == "VPC-04" and r.status == "PASS" for r in s.results)
+    assert not any(r.check_id == "VPC-04" and r.status == "WARN" for r in s.results)
+
+
+def test_vpc_04_no_default_sg_no_finding():
+    s = _vpc_scanner([{"GroupId": "sg-app", "GroupName": "app", "VpcId": "vpc-1",
+                       "IpPermissions": [], "IpPermissionsEgress": []}])
+    s._check_vpc()
+    assert not any(r.check_id == "VPC-04" for r in s.results)   # no default SG seen -> no PASS/WARN
+    assert A.CHECK_SEVERITY.get("VPC-04") == "MEDIUM"
+    assert "VPC-04" in A.COMPLIANCE_MAP
+    assert "aws " in A.REMEDIATION_MAP.get("VPC-04", "").lower()
