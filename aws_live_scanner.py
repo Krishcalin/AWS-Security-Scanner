@@ -169,7 +169,8 @@ CHECK_SEVERITY = {
     "S3-07": "MEDIUM", "S3-08": "MEDIUM",
     "VPC-01": "HIGH", "VPC-03": "MEDIUM", "VPC-04": "MEDIUM",
     "LOG-01": "CRITICAL", "LOG-03": "HIGH", "LOG-04": "CRITICAL", "LOG-05": "MEDIUM",
-    "LOG-06": "MEDIUM",
+    "LOG-06": "MEDIUM", "LOG-07": "MEDIUM", "LOG-08": "MEDIUM", "LOG-09": "CRITICAL",
+    "LOG-10": "HIGH",
     "ENC-03": "MEDIUM",
     "KMS-02": "CRITICAL", "KMS-03": "HIGH", "KMS-04": "HIGH",
     "EC2-04": "HIGH", "EC2-05": "MEDIUM", "EC2-06": "HIGH",
@@ -285,6 +286,10 @@ COMPLIANCE_MAP = {
     "LOG-04": {"CIS": "4.15", "PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
     "LOG-06": {"CIS": "4.16", "PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
     "LOG-05": {"CIS": "4.16", "PCI-DSS": "11.5", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
+    "LOG-07": {"CIS": "3.7", "PCI-DSS": "10.3.2", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "AU-9"},
+    "LOG-08": {"CIS": "3.10", "PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "LOG-09": {"CIS": "3.3", "PCI-DSS": "10.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AU-9"},
+    "LOG-10": {"PCI-DSS": "10.7", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-5"},
     # KMS
     "ENC-03": {"CIS": "3.8", "PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
     "KMS-03": {"NIST": "SC-12", "SOC2": "CC6.1", "HIPAA": "164.312(a)(2)(iv)"},
@@ -465,6 +470,10 @@ REMEDIATION_MAP = {
     "LOG-04": "Enable GuardDuty: aws guardduty create-detector --enable",
     "LOG-06": "Turn on the missing GuardDuty protection plan(s): aws guardduty update-detector --detector-id <DETECTOR_ID> --features '[{\"Name\":\"<FEATURE>\",\"Status\":\"ENABLED\"}]' (e.g. S3_DATA_EVENTS, RUNTIME_MONITORING, EBS_MALWARE_PROTECTION)",
     "LOG-05": "Enable Security Hub: aws securityhub enable-security-hub --enable-default-standards",
+    "LOG-07": "Encrypt the trail with a KMS CMK: aws cloudtrail update-trail --name <TRAIL> --kms-key-id <CMK_ARN> (the CMK policy must allow cloudtrail.amazonaws.com kms:GenerateDataKey*)",
+    "LOG-08": "Add data-event logging: aws cloudtrail put-event-selectors --trail-name <TRAIL> --advanced-event-selectors '[{\"Name\":\"S3 data events\",\"FieldSelectors\":[{\"Field\":\"eventCategory\",\"Equals\":[\"Data\"]},{\"Field\":\"resources.type\",\"Equals\":[\"AWS::S3::Object\"]}]}]'",
+    "LOG-09": "Block public access on the trail bucket and strip public policy/ACL grants: aws s3api put-public-access-block --bucket <TRAIL_BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+    "LOG-10": "Inspect and repair the delivery failure: aws cloudtrail get-trail-status --name <TRAIL> (read LatestDeliveryError), fix the bucket policy / re-enable the KMS key, then aws cloudtrail start-logging --name <TRAIL>",
     "ENC-03": "Enable key rotation: aws kms enable-key-rotation --key-id <KEY_ID>",
     "KMS-03": "Cancel deletion if the CMK is still in use, or re-enable a disabled key: aws kms cancel-key-deletion --key-id <KEY_ID> ; aws kms enable-key --key-id <KEY_ID>",
     "KMS-02": "Remove the wildcard '*' principal from the KMS key policy (or gate it with a kms:CallerAccount / aws:PrincipalOrgID condition), then re-apply: aws kms put-key-policy --key-id <KEY_ID> --policy-name default --policy file://scoped-key-policy.json",
@@ -1778,6 +1787,152 @@ class AWSLiveScanner:
                 self._add("FAIL", "LOG-05", "LOGGING", "securityhub", str(e))
         except Exception as e:
             self._add("FAIL", "LOG-05", "LOGGING", "securityhub", str(e))
+
+        # LOG-07..LOG-10 — CloudTrail configuration depth
+        self._check_cloudtrail_config()
+
+    def _check_cloudtrail_config(self) -> None:
+        """LOG-07 (SSE-KMS) / LOG-08 (data events) / LOG-09 (trail-bucket public) /
+        LOG-10 (delivery health). Uses includeShadowTrails=True for full multi-region
+        coverage and dedups by TrailARN. Each sub-call in its own try/except."""
+        self._log("LOG-07/08/09/10: CloudTrail depth (SSE-KMS, data events, bucket, delivery)")
+        try:
+            ct = self._client("cloudtrail")
+            trails = ct.describe_trails(includeShadowTrails=True).get("trailList", [])
+        except Exception as e:
+            self._add("WARN", "LOG-07", "LOGGING", "cloudtrail", str(e))
+            return
+        unique = {}
+        for t in trails:
+            arn = t.get("TrailARN") or t.get("Name")
+            if arn and arn not in unique:
+                unique[arn] = t
+        for arn, t in unique.items():
+            name = t.get("Name", arn)
+            # LOG-07 — log-file SSE-KMS
+            if t.get("KmsKeyId"):
+                self._add("PASS", "LOG-07", "LOGGING", name, f"Trail '{name}' encrypted with a KMS CMK")
+            else:
+                self._add("FAIL", "LOG-07", "LOGGING", name,
+                          f"Trail '{name}' log files not encrypted with a KMS CMK "
+                          f"(default SSE-S3 only)")
+            # LOG-08 — data events
+            try:
+                es = ct.get_event_selectors(TrailName=arn)
+                has_data = any(s.get("DataResources") for s in es.get("EventSelectors", [])) or any(
+                    fs.get("Field") == "eventCategory" and "Data" in (fs.get("Equals") or [])
+                    for aes in es.get("AdvancedEventSelectors", [])
+                    for fs in aes.get("FieldSelectors", []))
+                if has_data:
+                    self._add("PASS", "LOG-08", "LOGGING", name,
+                              f"Trail '{name}' records data-plane events")
+                else:
+                    self._add("WARN", "LOG-08", "LOGGING", name,
+                              f"Trail '{name}' logs management events only; no S3/Lambda/"
+                              f"DynamoDB data-event visibility")
+            except Exception as e:
+                self._add("INFO", "LOG-08", "LOGGING", name, f"could not read event selectors: {e}")
+            # LOG-09 — trail S3 bucket not public
+            self._check_trail_bucket(t, name)
+            # LOG-10 — delivery health
+            try:
+                st = ct.get_trail_status(Name=arn)
+                if st.get("IsLogging"):
+                    err = st.get("LatestDeliveryError")
+                    ldt = st.get("LatestDeliveryTime")
+                    if err:
+                        self._add("FAIL", "LOG-10", "LOGGING", name,
+                                  f"Trail '{name}' log delivery FAILING: {err}")
+                    elif ldt is None:
+                        self._add("WARN", "LOG-10", "LOGGING", name,
+                                  f"Trail '{name}' has no log delivery yet")
+                    elif (datetime.now(timezone.utc) - ldt).total_seconds() > 24 * 3600:
+                        self._add("WARN", "LOG-10", "LOGGING", name,
+                                  f"Trail '{name}' last delivered "
+                                  f"{(datetime.now(timezone.utc) - ldt).days}d ago (stale)")
+                    else:
+                        self._add("PASS", "LOG-10", "LOGGING", name,
+                                  f"Trail '{name}' delivering logs healthily")
+            except Exception as e:
+                self._add("INFO", "LOG-10", "LOGGING", name, f"could not read trail status: {e}")
+
+    @staticmethod
+    def _is_access_denied(e) -> bool:
+        code = ""
+        if hasattr(e, "response"):
+            code = (getattr(e, "response", {}) or {}).get("Error", {}).get("Code", "")
+        return code in ("AccessDenied", "AccessDeniedException") or "AccessDenied" in str(e)
+
+    def _check_trail_bucket(self, t: Dict, name: str) -> None:
+        """LOG-09 — the CloudTrail log S3 bucket must not be public. AccessDenied =>
+        INFO (org/centralized-logging bucket in another account), NEVER a false FAIL."""
+        bucket = t.get("S3BucketName")
+        if not bucket:
+            self._add("INFO", "LOG-09", "LOGGING", name, f"Trail '{name}' has no S3 bucket configured")
+            return
+        s3 = self._client("s3")
+        s3c = self._client("s3control")
+        # account-level BPA is a superset; if fully on, the bucket cannot be public
+        try:
+            acct_bpa = s3c.get_public_access_block(AccountId=self.account).get(
+                "PublicAccessBlockConfiguration", {})
+            if acct_bpa and all(acct_bpa.values()):
+                self._add("PASS", "LOG-09", "LOGGING", bucket,
+                          f"Trail bucket '{bucket}' shielded by account-level BPA")
+                return
+        except Exception:
+            pass
+        # bucket-level BPA (AccessDenied here => cross-account central-logging bucket)
+        bpa_full = False
+        try:
+            b_bpa = s3.get_public_access_block(Bucket=bucket).get(
+                "PublicAccessBlockConfiguration", {})
+            bpa_full = bool(b_bpa) and all(b_bpa.values())
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._add("INFO", "LOG-09", "LOGGING", name,
+                          f"Trail bucket '{bucket}' owned by another account "
+                          f"(centralized logging) — cannot verify from here")
+                return
+            # NoSuchPublicAccessBlockConfiguration => owned, no BPA set => proceed
+        # bucket policy — look for an unconditioned public grant
+        public = False
+        try:
+            stmts = json.loads(s3.get_bucket_policy(Bucket=bucket)["Policy"]).get("Statement", [])
+            if isinstance(stmts, dict):
+                stmts = [stmts]
+            for st in stmts:
+                c = classify_resource_policy_stmt(st, self.account or "")
+                if c and c["kind"] == "public":
+                    public = True
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._add("INFO", "LOG-09", "LOGGING", name,
+                          f"Trail bucket '{bucket}' owned by another account "
+                          f"(centralized logging) — cannot verify from here")
+                return
+            if "NoSuchBucketPolicy" not in str(e) and "NoSuchBucket" in str(e):
+                self._add("FAIL", "LOG-09", "LOGGING", bucket,
+                          f"Trail bucket '{bucket}' does not exist — logs not being stored")
+                return
+            # NoSuchBucketPolicy => no policy => not public
+        if public:
+            g = self._ensure_graph()
+            barn = f"arn:aws:s3:::{bucket}".lower()
+            g.add_node("internet", "InternetSource", cidr="0.0.0.0/0")
+            g.add_node(barn, "S3Bucket", name=bucket)
+            g.add_edge("internet", barn, "EXPOSED_TO", basis="cloudtrail-bucket-policy",
+                       scan_source="cloudtrail")
+            self._add("FAIL", "LOG-09", "LOGGING", bucket,
+                      f"Trail log bucket '{bucket}' has a PUBLIC bucket policy — "
+                      f"audit logs readable/tamperable")
+        elif bpa_full:
+            self._add("PASS", "LOG-09", "LOGGING", bucket,
+                      f"Trail bucket '{bucket}' has Block Public Access enabled")
+        else:
+            self._add("WARN", "LOG-09", "LOGGING", bucket,
+                      f"Trail bucket '{bucket}' lacks full Block Public Access — "
+                      f"verify it is not exposed")
 
     # GuardDuty protection plans expected enabled for full threat coverage
     _GD_FEATURES = {

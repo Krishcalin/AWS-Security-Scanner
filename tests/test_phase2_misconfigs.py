@@ -278,3 +278,120 @@ def test_parse_trust_policy_carries_condition():
 def test_iampe_23_map_complete():
     assert A.CHECK_SEVERITY.get("IAMPE-23") == "CRITICAL" and "IAMPE-23" in A.COMPLIANCE_MAP
     assert "aws " in A.REMEDIATION_MAP.get("IAMPE-23", "").lower()
+
+
+# ── LOG-07..10 — CloudTrail configuration depth ──────────────────────────────
+from datetime import datetime as _dt2, timezone as _tz2, timedelta as _td2
+
+
+def _ct_scanner(trails):
+    s = make_scanner(["LOGGING"])
+    ct = MagicMock()
+    ct.describe_trails.return_value = {"trailList": trails}
+    ct.get_event_selectors.return_value = {"EventSelectors": [{"DataResources": []}]}
+    ct.get_trail_status.return_value = {"IsLogging": True, "LatestDeliveryError": "",
+                                        "LatestDeliveryTime": _dt2.now(_tz2.utc)}
+    s._clients["cloudtrail:us-east-1"] = ct
+    s3, s3c = MagicMock(), MagicMock()
+    s3c.get_public_access_block.return_value = {"PublicAccessBlockConfiguration": {
+        "BlockPublicAcls": True, "IgnorePublicAcls": True,
+        "BlockPublicPolicy": True, "RestrictPublicBuckets": True}}
+    s._clients["s3:us-east-1"] = s3
+    s._clients["s3control:us-east-1"] = s3c
+    return s, ct
+
+
+def _trail(name="t1", arn=None, kms=None, bucket="log-bkt"):
+    d = {"Name": name, "TrailARN": arn or f"arn:aws:cloudtrail:us-east-1:{OWN}:trail/{name}",
+         "IsMultiRegionTrail": True, "S3BucketName": bucket}
+    if kms:
+        d["KmsKeyId"] = kms
+    return d
+
+
+def test_log_07_kms_pass_and_dedup_shadow_trails():
+    t = _trail(kms="arn:aws:kms:us-east-1:1:key/k")
+    s, ct = _ct_scanner([t, dict(t)])          # same TrailARN twice (region shadows)
+    s._check_cloudtrail_config()
+    l7 = [r for r in s.results if r.check_id == "LOG-07"]
+    assert len(l7) == 1 and l7[0].status == "PASS"    # deduped to one finding
+
+
+def test_log_07_no_kms_fails():
+    s, ct = _ct_scanner([_trail(kms=None)])
+    s._check_cloudtrail_config()
+    assert any(r.check_id == "LOG-07" and r.status == "FAIL" for r in s.results)
+
+
+def test_log_08_data_events_pass_and_management_only_warn():
+    s, ct = _ct_scanner([_trail()])
+    ct.get_event_selectors.return_value = {"EventSelectors": [
+        {"DataResources": [{"Type": "AWS::S3::Object", "Values": ["arn:aws:s3:::x/"]}]}]}
+    s._check_cloudtrail_config()
+    assert any(r.check_id == "LOG-08" and r.status == "PASS" for r in s.results)
+    s2, ct2 = _ct_scanner([_trail()])          # default: management-only
+    s2._check_cloudtrail_config()
+    assert any(r.check_id == "LOG-08" and r.status == "WARN" for r in s2.results)
+
+
+def test_log_08_advanced_selectors_data_pass():
+    s, ct = _ct_scanner([_trail()])
+    ct.get_event_selectors.return_value = {"AdvancedEventSelectors": [
+        {"FieldSelectors": [{"Field": "eventCategory", "Equals": ["Data"]}]}]}
+    s._check_cloudtrail_config()
+    assert any(r.check_id == "LOG-08" and r.status == "PASS" for r in s.results)
+
+
+def test_log_09_account_bpa_passes():
+    s, ct = _ct_scanner([_trail()])
+    s._check_cloudtrail_config()
+    assert any(r.check_id == "LOG-09" and r.status == "PASS" for r in s.results)
+
+
+def test_log_09_public_bucket_policy_fails():
+    s, ct = _ct_scanner([_trail()])
+    s._clients["s3control:us-east-1"].get_public_access_block.return_value = {
+        "PublicAccessBlockConfiguration": {"BlockPublicAcls": False}}
+    s3 = s._clients["s3:us-east-1"]
+    s3.get_public_access_block.side_effect = RuntimeError("NoSuchPublicAccessBlockConfiguration")
+    s3.get_bucket_policy.return_value = {"Policy": json.dumps({"Statement": [
+        {"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject", "Resource": "*"}]})}
+    s._check_cloudtrail_config()
+    assert any(r.check_id == "LOG-09" and r.status == "FAIL" for r in s.results)
+    assert "EXPOSED_TO" in s.graph.stats()["edge_kinds"]
+
+
+def test_log_09_accessdenied_is_info_not_fail():
+    s, ct = _ct_scanner([_trail()])
+    s._clients["s3control:us-east-1"].get_public_access_block.side_effect = RuntimeError("AccessDenied")
+    s._clients["s3:us-east-1"].get_public_access_block.side_effect = RuntimeError("AccessDeniedException")
+    s._check_cloudtrail_config()
+    l9 = [r for r in s.results if r.check_id == "LOG-09"]
+    assert l9 and all(r.status == "INFO" for r in l9)   # cross-account central bucket -> INFO
+
+
+def test_log_10_delivery_error_fails_and_stale_warns():
+    s, ct = _ct_scanner([_trail()])
+    ct.get_trail_status.return_value = {"IsLogging": True,
+        "LatestDeliveryError": "AccessDenied writing to bucket",
+        "LatestDeliveryTime": _dt2.now(_tz2.utc)}
+    s._check_cloudtrail_config()
+    assert any(r.check_id == "LOG-10" and r.status == "FAIL" for r in s.results)
+    s2, ct2 = _ct_scanner([_trail()])
+    ct2.get_trail_status.return_value = {"IsLogging": True, "LatestDeliveryError": "",
+        "LatestDeliveryTime": _dt2.now(_tz2.utc) - _td2(days=3)}
+    s2._check_cloudtrail_config()
+    assert any(r.check_id == "LOG-10" and r.status == "WARN" for r in s2.results)
+
+
+def test_log_10_not_logging_no_finding():
+    s, ct = _ct_scanner([_trail()])
+    ct.get_trail_status.return_value = {"IsLogging": False}   # LOG-01 owns the logging-off finding
+    s._check_cloudtrail_config()
+    assert not any(r.check_id == "LOG-10" for r in s.results)
+
+
+def test_log_07_10_maps_complete():
+    for cid in ("LOG-07", "LOG-08", "LOG-09", "LOG-10"):
+        assert cid in A.CHECK_SEVERITY and cid in A.COMPLIANCE_MAP
+        assert "aws " in A.REMEDIATION_MAP.get(cid, "").lower()
