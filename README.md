@@ -1,32 +1,43 @@
 <p align="center">
-  <img src="docs/banner.svg" alt="AWS Security Scanner" width="800"/>
+  <img src="docs/banner.svg" alt="OverWatch — Agentless AWS CNAPP · Attack-Path Graph" width="800"/>
 </p>
 
 <p align="center">
-  <strong>Security scanners for AWS cloud environments -- live account audit and IaC static analysis</strong>
+  <strong>OverWatch</strong> — an agentless <strong>AWS CNAPP</strong>: it collapses a whole cloud estate into the ranked
+  handful of internet&nbsp;&rarr;&nbsp;exposed&nbsp;workload&nbsp;&rarr;&nbsp;exploitable&nbsp;CVE&nbsp;&rarr;&nbsp;over-privileged&nbsp;role&nbsp;&rarr;&nbsp;crown-jewel
+  attack paths and names the <strong>choke point</strong> that severs the most &mdash; plus an IaC static-analysis scanner.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"/>
   <img src="https://img.shields.io/badge/license-GPL--3.0-orange?style=flat-square" alt="GPL-3.0 License"/>
-  <img src="https://img.shields.io/badge/AWS-CIS%20Benchmark%20v3.0-ff9900?style=flat-square&logo=amazonaws&logoColor=white" alt="CIS AWS v3.0"/>
+  <img src="https://img.shields.io/badge/OverWatch-CNAPP%20v2.10.0-38bdf8?style=flat-square" alt="OverWatch CNAPP v2.10.0"/>
+  <img src="https://img.shields.io/badge/pillars-CSPM%20%7C%20CIEM%20%7C%20CWPP%20%7C%20DSPM%20%7C%20CDR-6366f1?style=flat-square" alt="CNAPP pillars"/>
   <img src="https://img.shields.io/badge/compliance-CIS%20%7C%20PCI--DSS%20%7C%20HIPAA%20%7C%20SOC2%20%7C%20NIST-purple?style=flat-square" alt="5 Compliance Frameworks"/>
   <img src="https://img.shields.io/badge/checks-200%2B-red?style=flat-square" alt="200+ Checks"/>
-  <img src="https://img.shields.io/badge/tests-202%20passing-brightgreen?style=flat-square" alt="202 Tests"/>
+  <img src="https://img.shields.io/badge/tests-571%20passing-brightgreen?style=flat-square" alt="571 Tests"/>
 </p>
 
 ---
 
 ## Overview
 
+**OverWatch** is the product name for the CNAPP: a full Cloud-Native Application Protection Platform for AWS
+(CSPM + CIEM + agentless CWPP + DSPM + CDR-lite) built around a unified security graph and toxic-combination
+**attack-path** correlation, with multi-account onboarding, choke-point remediation, and code-to-cloud mapping.
+It ships as the live scanner (`aws_live_scanner.py`) + its `aws_*` / `cnapp_*` engine modules, and a hosted
+platform backend (see [OverWatch — Hosted CNAPP Platform](#overwatch--hosted-cnapp-platform-multi-account-agentless)).
+
 This repository contains **two complementary AWS security scanners**:
 
 | Scanner | File | Type | Input | Checks |
 |---------|------|------|-------|--------|
+| **OverWatch** (Live CNAPP) | `aws_live_scanner.py` | Live AWS API audit + security graph + attack-path CNAPP | Running AWS account (multi-account via AssumeRole) | 160+ across 40 sections |
 | **IaC Security Scanner** | `aws_offline_scanner.py` | Static analysis | CloudFormation + Terraform files | 100+ (60+ TF regex + 42 CF structural) |
-| **Live Audit Scanner** | `aws_live_scanner.py` | Live AWS API audit + security graph + CNAPP | Running AWS account (multi-account via AssumeRole) | 160+ across 40 sections |
 
-Use the **IaC scanner** to catch misconfigurations in CloudFormation templates and Terraform files before deployment. Use the **live scanner** to audit a running AWS account for CIS Benchmark compliance.
+Use **OverWatch** to audit a running AWS estate — CIS/compliance posture, effective-permissions CIEM, agentless
+workload vulnerabilities, and the ranked attack paths + choke points. Use the **IaC scanner** to catch
+misconfigurations in CloudFormation templates and Terraform files before deployment.
 
 ---
 

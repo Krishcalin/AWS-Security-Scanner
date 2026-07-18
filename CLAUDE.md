@@ -1,13 +1,18 @@
-# CLAUDE.md -- AWS Security Scanner
+# CLAUDE.md -- AWS Security Scanner (OverWatch CNAPP)
 
 ## Project Overview
 
-Two complementary AWS security scanners, with the live scanner evolving toward a
-full **CNAPP** (Cloud-Native Application Protection Platform) — see the CNAPP
-blueprint/roadmap: the north star is AWS-deep **toxic-combination attack paths**
-computed over a unified security graph.
+**OverWatch** is the product/brand name for the CNAPP built here: a full AWS
+**Cloud-Native Application Protection Platform** (CSPM + CIEM + agentless CWPP +
+DSPM + CDR-lite) whose north star is AWS-deep **toxic-combination attack paths**
+over a unified security graph, with multi-account onboarding, choke-point
+remediation, and code-to-cloud mapping. It ships as the live scanner + its
+`aws_*` / `cnapp_*` engine modules + a hosted platform backend. (Brand assets:
+`docs/banner.svg`; palette navy `#0b1120`, cyan→indigo `#38bdf8`→`#6366f1`, crown
+gold `#f5b53d`, critical red `#ff3b5c`. Python module names stay `aws_*`/`cnapp_*` —
+no code rename.) The repo also includes a separate pre-deploy IaC static scanner.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **Live Audit Scanner** (`aws_live_scanner.py` v2.10.0) -- live AWS account audit via boto3 (160+ checks, 40 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing**, **agentless EBS side-scan (CWPP)**, **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**)
+- **OverWatch — Live CNAPP** (`aws_live_scanner.py` v2.10.0) -- live AWS account audit via boto3 (160+ checks, 40 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing**, **agentless EBS side-scan (CWPP)**, **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**, **hosted multi-account onboarding + live Postgres backend**)
 - **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
 - **Exposure Oracle** (`aws_exposure.py`) -- pure, dependency-free internet-reachability core (SG ∩ stateless NACL ∩ IGW route ∩ public-IP)
 - **Deep-Plane Core** (`aws_deepplane.py`) -- pure Inspector/Macie/GuardDuty/Access-Analyzer parsers + the CAN_READ_DATA object-probe matcher
