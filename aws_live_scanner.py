@@ -42,6 +42,7 @@ import sys
 import json
 import csv
 import io
+import re
 import gzip
 import base64
 import time
@@ -86,13 +87,14 @@ STATUS_ICON  = {"PASS": "[PASS]", "FAIL": "[FAIL]", "WARN": "[WARN]", "INFO": "[
 
 # ─── Section registry ─────────────────────────────────────────────────────────
 SECTIONS = [
-    "IAM", "S3", "VPC", "LOGGING", "KMS", "EC2",
+    "IAM", "S3", "VPC", "LOGGING", "CLOUDWATCH", "KMS", "EC2",
     "AMI", "ECR", "BACKUP", "RDS", "GLACIER", "SNS", "SQS",
     "CLOUDFRONT", "ROUTE53", "BEDROCK", "BEDROCK_AGENTS",
     "LAMBDA", "EKS", "ECS", "SECRETS", "WAF",
     "ELASTICACHE", "OPENSEARCH", "DYNAMODB", "STEPFUNCTIONS",
     "APIGATEWAY", "ELB", "EBS", "REDSHIFT", "EFS", "ACM",
     "SAGEMAKER", "COGNITO", "APIGATEWAYV2", "IAMPRIVESC", "EXPOSURE",
+    "COGNITO_IDENTITY",
     "VULN", "THREAT", "DATA", "CORRELATE",
 ]
 
@@ -101,6 +103,7 @@ SECTION_LABELS = {
     "S3":             "S3 SECURITY",
     "VPC":            "NETWORK SECURITY",
     "LOGGING":        "LOGGING & MONITORING",
+    "CLOUDWATCH":     "CLOUDWATCH ALARMS (CIS §4)",
     "KMS":            "ENCRYPTION & KMS",
     "EC2":            "COMPUTE SECURITY",
     "AMI":            "MACHINE IMAGES (AMI)",
@@ -134,6 +137,7 @@ SECTION_LABELS = {
     "APIGATEWAYV2":   "API GATEWAY (HTTP APIs)",
     "IAMPRIVESC":     "IAM PRIVILEGE ESCALATION",
     "EXPOSURE":       "INTERNET EXPOSURE & ATTACK PATHS",
+    "COGNITO_IDENTITY": "AMAZON COGNITO (IDENTITY POOLS)",
     "VULN":           "WORKLOAD VULNERABILITIES (INSPECTOR)",
     "THREAT":         "LIVE THREAT DETECTIONS (GUARDDUTY)",
     "DATA":           "DATA SECURITY & FLAGSHIP ATTACK PATHS",
@@ -168,9 +172,15 @@ CHECK_SEVERITY = {
     "S3-07": "MEDIUM", "S3-08": "MEDIUM",
     "VPC-01": "HIGH", "VPC-03": "MEDIUM", "VPC-04": "MEDIUM",
     "LOG-01": "CRITICAL", "LOG-03": "HIGH", "LOG-04": "CRITICAL", "LOG-05": "MEDIUM",
-    "LOG-06": "MEDIUM",
+    "LOG-06": "MEDIUM", "LOG-07": "MEDIUM", "LOG-08": "MEDIUM", "LOG-09": "CRITICAL",
+    "LOG-10": "HIGH",
+    "CW-01": "HIGH",
+    "CW-02": "MEDIUM", "CW-03": "MEDIUM", "CW-04": "MEDIUM", "CW-05": "MEDIUM",
+    "CW-06": "MEDIUM", "CW-07": "MEDIUM", "CW-08": "MEDIUM", "CW-09": "MEDIUM",
+    "CW-10": "MEDIUM", "CW-11": "MEDIUM", "CW-12": "MEDIUM", "CW-13": "MEDIUM",
+    "CW-14": "MEDIUM", "CW-15": "MEDIUM", "CW-16": "MEDIUM",
     "ENC-03": "MEDIUM",
-    "KMS-03": "HIGH",
+    "KMS-02": "CRITICAL", "KMS-03": "HIGH", "KMS-04": "HIGH",
     "EC2-04": "HIGH", "EC2-05": "MEDIUM", "EC2-06": "HIGH",
     "EC2-07": "HIGH", "EC2-08": "HIGH",
     "AMI-01": "HIGH",
@@ -197,6 +207,7 @@ CHECK_SEVERITY = {
     "ECS-01": "CRITICAL", "ECS-02": "HIGH", "ECS-03": "MEDIUM",
     "ECS-04": "HIGH", "ECS-05": "MEDIUM",
     "SEC-01": "HIGH", "SEC-02": "HIGH", "SEC-03": "MEDIUM", "SEC-04": "MEDIUM",
+    "SEC-05": "CRITICAL",
     "WAF-01": "HIGH", "WAF-02": "MEDIUM", "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
     "ELC-01": "HIGH", "ELC-02": "HIGH", "ELC-03": "HIGH", "ELC-04": "MEDIUM",
     "OSR-01": "HIGH", "OSR-02": "HIGH", "OSR-03": "MEDIUM",
@@ -213,6 +224,7 @@ CHECK_SEVERITY = {
     "ACM-04": "HIGH", "ACM-05": "MEDIUM",
     "SM-01": "HIGH", "SM-02": "MEDIUM", "SM-03": "MEDIUM", "SM-04": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
+    "COG-05": "HIGH", "COG-06": "CRITICAL",
     "AGW2-01": "MEDIUM", "AGW2-02": "HIGH", "AGW2-03": "LOW",
     # IAM privilege-escalation primitives
     "IAMPE-01": "CRITICAL", "IAMPE-02": "HIGH", "IAMPE-03": "CRITICAL",
@@ -222,7 +234,7 @@ CHECK_SEVERITY = {
     "IAMPE-14": "HIGH", "IAMPE-16": "HIGH", "IAMPE-18": "MEDIUM",
     "IAMPE-19": "CRITICAL", "IAMPE-20": "MEDIUM",
     # Graph-derived (Phase 1): transitive chains + dangerous trust
-    "IAMPE-21": "HIGH", "IAMPE-22": "HIGH",
+    "IAMPE-21": "HIGH", "IAMPE-22": "HIGH", "IAMPE-23": "CRITICAL",
     # Phase 2: effective internet exposure + attack paths
     "EXPOSURE-01": "HIGH", "EXPOSURE-02": "MEDIUM", "ATTACK-01": "CRITICAL",
     # Phase 3: deep-plane ingestion (vuln / data / threat) + flagship attack path
@@ -240,6 +252,7 @@ CHECK_SEVERITY = {
     "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "MEDIUM", "SQS-04": "LOW",
     "GLC-01": "CRITICAL", "GLC-02": "MEDIUM", "GLC-03": "LOW",
     "R53-01": "MEDIUM", "R53-02": "MEDIUM", "R53-03": "HIGH", "R53-04": "LOW", "R53-05": "MEDIUM",
+    "R53-06": "HIGH",
     "DDB-03": "MEDIUM", "DDB-04": "MEDIUM",
     "EKS-04": "MEDIUM", "EKS-05": "MEDIUM",
     "ECS-04": "HIGH", "ECS-05": "MEDIUM",
@@ -283,9 +296,31 @@ COMPLIANCE_MAP = {
     "LOG-04": {"CIS": "4.15", "PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
     "LOG-06": {"CIS": "4.16", "PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
     "LOG-05": {"CIS": "4.16", "PCI-DSS": "11.5", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
+    "LOG-07": {"CIS": "3.7", "PCI-DSS": "10.3.2", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "AU-9"},
+    "LOG-08": {"CIS": "3.10", "PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "LOG-09": {"CIS": "3.3", "PCI-DSS": "10.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AU-9"},
+    "LOG-10": {"PCI-DSS": "10.7", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-5"},
+    "CW-01": {"CIS": "4.1", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6(1)"},
+    "CW-02": {"CIS": "4.1", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SI-4"},
+    "CW-03": {"CIS": "4.2", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SI-4"},
+    "CW-04": {"CIS": "4.3", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AC-6(9)"},
+    "CW-05": {"CIS": "4.4", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-06": {"CIS": "4.5", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-07": {"CIS": "4.6", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SI-4"},
+    "CW-08": {"CIS": "4.7", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-09": {"CIS": "4.8", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-10": {"CIS": "4.9", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-11": {"CIS": "4.10", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-12": {"CIS": "4.11", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-13": {"CIS": "4.12", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-14": {"CIS": "4.13", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-15": {"CIS": "4.14", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-16": {"CIS": "4.15", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
     # KMS
     "ENC-03": {"CIS": "3.8", "PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
     "KMS-03": {"NIST": "SC-12", "SOC2": "CC6.1", "HIPAA": "164.312(a)(2)(iv)"},
+    "KMS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "KMS-04": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     # EC2
     "EC2-04": {"CIS": "5.6", "PCI-DSS": "2.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.1", "NIST": "CM-6"},
     "EC2-05": {"CIS": "5.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
@@ -408,6 +443,7 @@ COMPLIANCE_MAP = {
     "R53-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-20"},
     "R53-03": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-20"},
     "R53-05": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "R53-06": {"PCI-DSS": "2.4", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SC-20"},
     "DDB-03": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "DDB-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
     "EKS-04": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
@@ -416,6 +452,8 @@ COMPLIANCE_MAP = {
     "ECS-05": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SEC-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SEC-04": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "SEC-05": {"CIS": "1.16", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "IAMPE-23": {"CIS": "1.16", "PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "WAF-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "WAF-04": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "ELC-04": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
@@ -429,6 +467,8 @@ COMPLIANCE_MAP = {
     "ACM-04": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
     "ACM-05": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
     "COG-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CM-6"},
+    "COG-05": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-14"},
+    "COG-06": {"PCI-DSS": "7.2.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "AGW2-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SC-5"},
     "LMB-05": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
 }
@@ -459,8 +499,30 @@ REMEDIATION_MAP = {
     "LOG-04": "Enable GuardDuty: aws guardduty create-detector --enable",
     "LOG-06": "Turn on the missing GuardDuty protection plan(s): aws guardduty update-detector --detector-id <DETECTOR_ID> --features '[{\"Name\":\"<FEATURE>\",\"Status\":\"ENABLED\"}]' (e.g. S3_DATA_EVENTS, RUNTIME_MONITORING, EBS_MALWARE_PROTECTION)",
     "LOG-05": "Enable Security Hub: aws securityhub enable-security-hub --enable-default-standards",
+    "LOG-07": "Encrypt the trail with a KMS CMK: aws cloudtrail update-trail --name <TRAIL> --kms-key-id <CMK_ARN> (the CMK policy must allow cloudtrail.amazonaws.com kms:GenerateDataKey*)",
+    "LOG-08": "Add data-event logging: aws cloudtrail put-event-selectors --trail-name <TRAIL> --advanced-event-selectors '[{\"Name\":\"S3 data events\",\"FieldSelectors\":[{\"Field\":\"eventCategory\",\"Equals\":[\"Data\"]},{\"Field\":\"resources.type\",\"Equals\":[\"AWS::S3::Object\"]}]}]'",
+    "LOG-09": "Block public access on the trail bucket and strip public policy/ACL grants: aws s3api put-public-access-block --bucket <TRAIL_BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+    "LOG-10": "Inspect and repair the delivery failure: aws cloudtrail get-trail-status --name <TRAIL> (read LatestDeliveryError), fix the bucket policy / re-enable the KMS key, then aws cloudtrail start-logging --name <TRAIL>",
+    "CW-01": "Wire a multi-region trail to CloudWatch Logs so CIS section-4 metric filters can exist: aws cloudtrail update-trail --name <TRAIL> --is-multi-region-trail --cloud-watch-logs-log-group-arn <LOG_GROUP_ARN> --cloud-watch-logs-role-arn <ROLE_ARN> ; aws cloudtrail start-logging --name <TRAIL>",
+    "CW-02": "Add the CIS 4.1 (unauthorized API calls) metric filter + alarm + subscription: aws logs put-metric-filter --log-group-name <LG> --filter-name unauthorized-api-calls --filter-pattern '{($.errorCode=\"*UnauthorizedOperation\")||($.errorCode=\"AccessDenied*\")}' --metric-transformations metricName=UnauthorizedAPICalls,metricNamespace=CISBenchmark,metricValue=1 ; aws cloudwatch put-metric-alarm --alarm-name unauthorized-api-calls --metric-name UnauthorizedAPICalls --namespace CISBenchmark --statistic Sum --period 300 --threshold 1 --comparison-operator GreaterThanOrEqualToThreshold --evaluation-periods 1 --alarm-actions <SNS_TOPIC_ARN> ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-03": "Add the CIS 4.2 (console sign-in without MFA) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-04": "Add the CIS 4.3 (root account usage) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-05": "Add the CIS 4.4 (IAM policy changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-06": "Add the CIS 4.5 (CloudTrail config changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-07": "Add the CIS 4.6 (console auth failures) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-08": "Add the CIS 4.7 (CMK disable/deletion) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-09": "Add the CIS 4.8 (S3 bucket policy changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-10": "Add the CIS 4.9 (AWS Config changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-11": "Add the CIS 4.10 (security group changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-12": "Add the CIS 4.11 (network ACL changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-13": "Add the CIS 4.12 (network gateway changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-14": "Add the CIS 4.13 (route table changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-15": "Add the CIS 4.14 (VPC changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-16": "Add the CIS 4.15 (organization changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
     "ENC-03": "Enable key rotation: aws kms enable-key-rotation --key-id <KEY_ID>",
     "KMS-03": "Cancel deletion if the CMK is still in use, or re-enable a disabled key: aws kms cancel-key-deletion --key-id <KEY_ID> ; aws kms enable-key --key-id <KEY_ID>",
+    "KMS-02": "Remove the wildcard '*' principal from the KMS key policy (or gate it with a kms:CallerAccount / aws:PrincipalOrgID condition), then re-apply: aws kms put-key-policy --key-id <KEY_ID> --policy-name default --policy file://scoped-key-policy.json",
+    "KMS-04": "Remove the cross-account/Organization principal from the KMS key policy (or constrain it with aws:PrincipalOrgID + a trusted-account allowlist), then re-apply: aws kms put-key-policy --key-id <KEY_ID> --policy-name default --policy file://scoped-key-policy.json",
     "EC2-04": "Enforce IMDSv2: aws ec2 modify-instance-metadata-options --instance-id <INSTANCE_ID> --http-tokens required --http-endpoint enabled",
     "EC2-06": "Enable default EBS encryption: aws ec2 enable-ebs-encryption-by-default",
     "EC2-07": "Remove the secret from user-data and rotate it; move it to SSM Parameter Store / Secrets Manager referenced at boot: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --user-data file://sanitized-userdata.txt (stop the instance first)",
@@ -480,6 +542,7 @@ REMEDIATION_MAP = {
     "EKS-03": "Enable secrets encryption: aws eks associate-encryption-config --cluster-name <CLUSTER> --encryption-config '[{\"resources\":[\"secrets\"],\"provider\":{\"keyArn\":\"<KMS_ARN>\"}}]'",
     "SEC-01": "Enable rotation: aws secretsmanager rotate-secret --secret-id <SECRET_ID> --rotation-lambda-arn <LAMBDA_ARN> --rotation-rules AutomaticallyAfterDays=30",
     "SEC-02": "Update rotation schedule: aws secretsmanager rotate-secret --secret-id <SECRET_ID> --rotation-rules AutomaticallyAfterDays=90",
+    "SEC-05": "Remove the public/cross-account grant (or scope it with aws:PrincipalOrgID) and block public policies: aws secretsmanager put-resource-policy --secret-id <SECRET_ARN> --block-public-policy --resource-policy file://scoped-policy.json ; or drop it: aws secretsmanager delete-resource-policy --secret-id <SECRET_ARN>",
     "ELC-01": "Enable at-rest encryption on new cluster: aws elasticache create-replication-group --replication-group-id <ID> --at-rest-encryption-enabled",
     "ELC-02": "Enable in-transit encryption on new cluster: aws elasticache create-replication-group --replication-group-id <ID> --transit-encryption-enabled",
     "OSR-01": "Enforce HTTPS: aws opensearch update-domain-config --domain-name <DOMAIN> --domain-endpoint-options EnforceHTTPS=true,TLSSecurityPolicy=Policy-Min-TLS-1-2-2019-07",
@@ -521,6 +584,8 @@ REMEDIATION_MAP = {
     "COG-01": "Require MFA: aws cognito-idp set-user-pool-mfa-config --user-pool-id <POOL_ID> --mfa-configuration ON --software-token-mfa-configuration Enabled=true",
     "COG-02": "Strengthen password policy: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --policies PasswordPolicy='{MinimumLength=12,RequireUppercase=true,RequireLowercase=true,RequireNumbers=true,RequireSymbols=true}'",
     "COG-03": "Enable threat protection: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --user-pool-add-ons AdvancedSecurityMode=ENFORCED",
+    "COG-05": "Disable anonymous credential issuance (update-identity-pool is full-replace — re-supply the name and any login providers): aws cognito-identity update-identity-pool --identity-pool-id <REGION:GUID> --identity-pool-name <NAME> --no-allow-unauthenticated-identities",
+    "COG-06": "Scope the unauthenticated role to least privilege or drop it: aws iam detach-role-policy --role-name <UNAUTH_ROLE> --policy-arn arn:aws:iam::aws:policy/AdministratorAccess ; then attach a tightly scoped policy",
     "AGW2-01": "Enable access logging: aws apigatewayv2 update-stage --api-id <API_ID> --stage-name <STAGE> --access-log-settings DestinationArn=<LOG_GROUP_ARN>,Format='$context.requestId'",
     "AGW2-02": "Add an authorizer to routes: aws apigatewayv2 update-route --api-id <API_ID> --route-key '<ROUTE>' --authorization-type JWT --authorizer-id <AUTHORIZER_ID>",
     "IAMPE-01": "Find where the grant lives (aws iam list-entities-for-policy --policy-arn <ARN>), remove iam:CreatePolicyVersion, and constrain the principal: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
@@ -535,12 +600,14 @@ REMEDIATION_MAP = {
     "IAMPE-20": "Scope sts:AssumeRole to specific trusted role ARNs instead of '*': edit the policy Resource, then bound the principal: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
     "IAMPE-21": "Break the escalation chain at its weakest hop: remove the privesc-granting permission from the assumable target role, OR restrict who can assume it (aws iam update-assume-role-policy --role-name <ROLE> --policy-document <TIGHTER_TRUST>). Apply a permissions boundary to the chain's entry principal.",
     "IAMPE-22": "Restrict the role trust policy to specific principal ARNs (remove Principal '*'): aws iam update-assume-role-policy --role-name <ROLE> --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"<TRUSTED_ARN>\"},\"Action\":\"sts:AssumeRole\",\"Condition\":{\"StringEquals\":{\"sts:ExternalId\":\"<ID>\"}}}]}'",
+    "IAMPE-23": "Scope the federated OIDC trust to a specific repo+ref via the :sub condition (StringEquals, not just :aud): aws iam update-assume-role-policy --role-name <ROLE> --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Federated\":\"arn:aws:iam::<ACCT>:oidc-provider/token.actions.githubusercontent.com\"},\"Action\":\"sts:AssumeRoleWithWebIdentity\",\"Condition\":{\"StringEquals\":{\"token.actions.githubusercontent.com:aud\":\"sts.amazonaws.com\",\"token.actions.githubusercontent.com:sub\":\"repo:<ORG>/<REPO>:ref:refs/heads/main\"}}}]}'",
     "CNT-01": "Enable scan-on-push and pull existing findings: aws ecr put-image-scanning-configuration --repository-name <REPO> --image-scanning-configuration scanOnPush=true",
     "CNT-02": "Rebuild the image on a patched base and push the new digest; delete the vulnerable image: aws ecr batch-delete-image --repository-name <REPO> --image-ids imageDigest=<DIGEST>. Enable Inspector enhanced scanning for continuous coverage.",
     "AMI-01": "Revoke public/cross-account AMI sharing (a public AMI exposes its full disk snapshot): aws ec2 modify-image-attribute --image-id <AMI_ID> --launch-permission '{\"Remove\":[{\"Group\":\"all\"}]}' ; audit remaining account-level shares.",
     "GLC-01": "Remove public Glacier vault access policy: aws glacier set-vault-access-policy --vault-name <VAULT> --policy '{\"Policy\":\"<LEAST_PRIVILEGE_POLICY>\"}'",
     "SQS-02": "Restrict the queue policy to trusted principals: aws sqs set-queue-attributes --queue-url <URL> --attributes Policy='<LEAST_PRIVILEGE_POLICY>'",
     "R53-03": "Enable DNSSEC signing: aws route53 enable-hosted-zone-dnssec --hosted-zone-id <ZONE_ID>",
+    "R53-06": "Remove the obsolete record or repoint it at a live resource you control: aws route53 change-resource-record-sets --hosted-zone-id <ZONE_ID> --change-batch '{\"Changes\":[{\"Action\":\"DELETE\",\"ResourceRecordSet\":{...}}]}'. If an S3-website target was deleted, reclaim the name first: aws s3api create-bucket --bucket <BUCKET> --region <REGION>",
     "DDB-04": "Enable deletion protection: aws dynamodb update-table --table-name <TABLE> --deletion-protection-enabled",
     "ECS-04": "Recreate the task definition with awsvpc network mode (drop host mode): aws ecs register-task-definition --network-mode awsvpc --cli-input-json file://taskdef.json",
     "EXPOSURE-01": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0  (then re-add a scoped CIDR)",
@@ -780,14 +847,113 @@ def parse_trust_policy(doc) -> List[Dict]:
         actions = {str(a).lower() for a in _as_list(av)} if av else set()
         out.append({"effect": eff, "aws": aws, "service": svc, "federated": fed,
                     "wildcard": wildcard, "actions": actions,
-                    "has_condition": bool(st.get("Condition"))})
+                    "has_condition": bool(st.get("Condition")),
+                    "condition": st.get("Condition") or None})
     return out
 
 
 def _account_of(arn: str) -> str:
-    """Account id segment of an ARN (arn:partition:service:region:account:...)."""
-    parts = arn.split(":")
+    """Account id segment of an ARN (arn:partition:service:region:account:...).
+    Also normalizes a bare 12-digit account-id principal to itself."""
+    if isinstance(arn, str) and re.fullmatch(r"\d{12}", arn):
+        return arn
+    parts = arn.split(":") if isinstance(arn, str) else []
     return parts[4] if len(parts) >= 5 else ""
+
+
+# Condition keys that scope a grant to a specific account (own => not public/external)
+_ACCOUNT_SCOPE_KEYS = {"aws:sourceaccount", "aws:principalaccount", "kms:calleraccount",
+                       "aws:sourceowner", "s3:resourceaccount", "aws:resourceaccount"}
+_ORG_SCOPE_KEYS = {"aws:principalorgid", "aws:principalorgpaths"}
+
+
+def _flatten_condition_keys(condition) -> Dict[str, List[str]]:
+    """Lowercased condition-key -> values, flattened across POSITIVE-match operator
+    blocks only (StringEquals, ArnLike, StringLike, ForAllValues:*, *IfExists, …).
+    NEGATED operators (StringNotEquals/StringNotLike/ArnNotEquals/NotIpAddress/…) are
+    EXCLUDED: a wildcard principal gated only by 'StringNotEquals CallerAccount == own'
+    grants to the whole world EXCEPT the owner — it does NOT pin the grant to own, so
+    it must not be read as an account-scoping (private-making) condition."""
+    out: Dict[str, List[str]] = {}
+    if not isinstance(condition, dict):
+        return out
+    for op, block in condition.items():
+        base = str(op).lower()
+        if "notequals" in base or "notlike" in base or "notipaddress" in base:
+            continue
+        if not isinstance(block, dict):
+            continue
+        for k, v in block.items():
+            vals = v if isinstance(v, list) else [v]
+            out.setdefault(str(k).lower(), []).extend(str(x) for x in vals)
+    return out
+
+
+def classify_resource_policy_stmt(stmt: Dict, own_account: str) -> Optional[Dict]:
+    """Classify one resource-policy statement's exposure (KMS key policy, Secrets
+    resource policy, S3/SNS/SQS-style bucket policy). Returns None for non-Allow
+    or purely own-account/service statements. Otherwise a dict:
+      {kind: 'public'|'public_conditioned'|'org'|'cross_account',
+       external_accounts: [ids], org_id: str|None, has_condition: bool}
+    - public              = wildcard principal, no scoping condition (worst case)
+    - public_conditioned  = wildcard principal gated only by an unrecognized condition
+    - org                 = wildcard/principal gated by aws:PrincipalOrgID (org-shared)
+    - cross_account       = explicit external-account principal(s)
+    A wildcard gated by an account-scope condition pinned to own_account => None (private)."""
+    if not isinstance(stmt, dict) or stmt.get("Effect") != "Allow":
+        return None
+    principal = stmt.get("Principal")
+    not_principal = stmt.get("NotPrincipal")
+    cond = stmt.get("Condition")
+    ckeys = _flatten_condition_keys(cond)
+    has_cond = bool(cond)
+    org_vals = [v for k in _ORG_SCOPE_KEYS if k in ckeys for v in ckeys[k]]
+    acct_scope_vals = [v for k in _ACCOUNT_SCOPE_KEYS if k in ckeys for v in ckeys[k]]
+
+    # normalize AWS principals -> wildcard flag + list of raw principal strings
+    wildcard = False
+    aws_principals: List[str] = []
+    if principal == "*":
+        wildcard = True
+    elif isinstance(principal, dict):
+        aws_p = principal.get("AWS")
+        if aws_p is not None:
+            for v in (aws_p if isinstance(aws_p, list) else [aws_p]):
+                if v == "*":
+                    wildcard = True
+                else:
+                    aws_principals.append(v)
+        # Service / Federated / CanonicalUser principals are handled by callers
+    # Allow + NotPrincipal == "everyone except X" == effectively public
+    if not_principal is not None and principal is None:
+        wildcard = True
+
+    if wildcard:
+        if org_vals:
+            return {"kind": "org", "external_accounts": [], "org_id": org_vals[0],
+                    "has_condition": True}
+        if acct_scope_vals:
+            # pinned to a specific account via condition
+            if own_account and all(v == own_account for v in acct_scope_vals):
+                return None                                  # private (own account only)
+            return {"kind": "cross_account", "external_accounts": sorted(set(acct_scope_vals)),
+                    "org_id": None, "has_condition": True}
+        if has_cond:
+            return {"kind": "public_conditioned", "external_accounts": [], "org_id": None,
+                    "has_condition": True}
+        return {"kind": "public", "external_accounts": [], "org_id": None,
+                "has_condition": False}
+
+    # explicit AWS principals -> collect external accounts
+    external = sorted({acct for p in aws_principals
+                       if (acct := _account_of(p)) and acct != own_account})
+    if external:
+        if org_vals:
+            return {"kind": "org", "external_accounts": external, "org_id": org_vals[0],
+                    "has_condition": True}
+        return {"kind": "cross_account", "external_accounts": external, "org_id": None,
+                "has_condition": has_cond}
+    return None                                              # own-account only / service
 
 
 def evaluate_privesc_scoped(statements: List[Dict], boundary: Optional[List[Dict]] = None,
@@ -1010,7 +1176,8 @@ class AWSLiveScanner:
 
     # Sections that enumerate global (region-agnostic) resources — run once even
     # when --all-regions sweeps every enabled region for the rest.
-    GLOBAL_SECTIONS = {"IAM", "S3", "ROUTE53", "CLOUDFRONT", "IAMPRIVESC", "CORRELATE"}
+    GLOBAL_SECTIONS = {"IAM", "S3", "ROUTE53", "CLOUDFRONT", "IAMPRIVESC", "CORRELATE",
+                       "CLOUDWATCH"}
 
     def __init__(
         self,
@@ -1022,9 +1189,15 @@ class AWSLiveScanner:
     ):
         self.region   = region
         self.verbose  = verbose
-        self.sections = [s.upper() for s in sections] if sections else list(SECTIONS)
+        _req = [s.upper() for s in sections] if sections else list(SECTIONS)
+        # Run in canonical SECTIONS order regardless of --sections ordering: graph-building
+        # sections have dependencies (IAMPRIVESC must precede EXPOSURE/COGNITO_IDENTITY,
+        # which augment its graph; CORRELATE runs last). Unknown sections keep their order.
+        _idx = {s: i for i, s in enumerate(SECTIONS)}
+        self.sections = sorted(_req, key=lambda s: _idx.get(s, len(SECTIONS)))
         self.results:  List[Result] = []
         self.account   = ""
+        self.trusted_accounts: set = set()  # allowlist: cross-account grants to these are not flagged
         self._session  = session          # boto3.Session for assumed-role scans; None = ambient creds
         self.all_regions_scan = all_regions
         self.graph: Optional[SecurityGraph] = None
@@ -1676,6 +1849,159 @@ class AWSLiveScanner:
         except Exception as e:
             self._add("FAIL", "LOG-05", "LOGGING", "securityhub", str(e))
 
+        # LOG-07..LOG-10 — CloudTrail configuration depth
+        self._check_cloudtrail_config()
+
+    def _check_cloudtrail_config(self) -> None:
+        """LOG-07 (SSE-KMS) / LOG-08 (data events) / LOG-09 (trail-bucket public) /
+        LOG-10 (delivery health). Uses includeShadowTrails=True for full multi-region
+        coverage and dedups by TrailARN. Each sub-call in its own try/except."""
+        self._log("LOG-07/08/09/10: CloudTrail depth (SSE-KMS, data events, bucket, delivery)")
+        try:
+            ct = self._client("cloudtrail")
+            trails = ct.describe_trails(includeShadowTrails=True).get("trailList", [])
+        except Exception as e:
+            self._add("WARN", "LOG-07", "LOGGING", "cloudtrail", str(e))
+            return
+        unique = {}
+        for t in trails:
+            arn = t.get("TrailARN") or t.get("Name")
+            if arn and arn not in unique:
+                unique[arn] = t
+        for arn, t in unique.items():
+            name = t.get("Name", arn)
+            # LOG-07 — log-file SSE-KMS
+            if t.get("KmsKeyId"):
+                self._add("PASS", "LOG-07", "LOGGING", name, f"Trail '{name}' encrypted with a KMS CMK")
+            else:
+                self._add("FAIL", "LOG-07", "LOGGING", name,
+                          f"Trail '{name}' log files not encrypted with a KMS CMK "
+                          f"(default SSE-S3 only)")
+            # LOG-08 — data events
+            try:
+                es = ct.get_event_selectors(TrailName=arn)
+                has_data = any(s.get("DataResources") for s in es.get("EventSelectors", [])) or any(
+                    fs.get("Field") == "eventCategory" and "Data" in (fs.get("Equals") or [])
+                    for aes in es.get("AdvancedEventSelectors", [])
+                    for fs in aes.get("FieldSelectors", []))
+                if has_data:
+                    self._add("PASS", "LOG-08", "LOGGING", name,
+                              f"Trail '{name}' records data-plane events")
+                else:
+                    self._add("WARN", "LOG-08", "LOGGING", name,
+                              f"Trail '{name}' logs management events only; no S3/Lambda/"
+                              f"DynamoDB data-event visibility")
+            except Exception as e:
+                self._add("INFO", "LOG-08", "LOGGING", name, f"could not read event selectors: {e}")
+            # LOG-09 — trail S3 bucket not public
+            self._check_trail_bucket(t, name)
+            # LOG-10 — delivery health
+            try:
+                st = ct.get_trail_status(Name=arn)
+                if st.get("IsLogging"):
+                    err = st.get("LatestDeliveryError")
+                    ldt = st.get("LatestDeliveryTime")
+                    if err:
+                        self._add("FAIL", "LOG-10", "LOGGING", name,
+                                  f"Trail '{name}' log delivery FAILING: {err}")
+                    elif ldt is None:
+                        self._add("WARN", "LOG-10", "LOGGING", name,
+                                  f"Trail '{name}' has no log delivery yet")
+                    elif (datetime.now(timezone.utc) - ldt).total_seconds() > 24 * 3600:
+                        self._add("WARN", "LOG-10", "LOGGING", name,
+                                  f"Trail '{name}' last delivered "
+                                  f"{(datetime.now(timezone.utc) - ldt).days}d ago (stale)")
+                    else:
+                        self._add("PASS", "LOG-10", "LOGGING", name,
+                                  f"Trail '{name}' delivering logs healthily")
+            except Exception as e:
+                self._add("INFO", "LOG-10", "LOGGING", name, f"could not read trail status: {e}")
+
+    @staticmethod
+    def _is_access_denied(e) -> bool:
+        code = ""
+        if hasattr(e, "response"):
+            code = (getattr(e, "response", {}) or {}).get("Error", {}).get("Code", "")
+        return code in ("AccessDenied", "AccessDeniedException") or "AccessDenied" in str(e)
+
+    def _check_trail_bucket(self, t: Dict, name: str) -> None:
+        """LOG-09 — the CloudTrail log S3 bucket must not be public. AccessDenied =>
+        INFO (org/centralized-logging bucket in another account), NEVER a false FAIL."""
+        bucket = t.get("S3BucketName")
+        if not bucket:
+            self._add("INFO", "LOG-09", "LOGGING", name, f"Trail '{name}' has no S3 bucket configured")
+            return
+        s3 = self._client("s3")
+        s3c = self._client("s3control")
+        # Probe the BUCKET's own BPA FIRST. AccessDenied here => the bucket is owned by
+        # another account (org/centralized logging) — the scanning account's own BPA
+        # would NOT protect it, so we must not apply the account-level shortcut.
+        bpa_full = False
+        try:
+            b_bpa = s3.get_public_access_block(Bucket=bucket).get(
+                "PublicAccessBlockConfiguration", {})
+            bpa_full = bool(b_bpa) and all(b_bpa.values())
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._add("INFO", "LOG-09", "LOGGING", name,
+                          f"Trail bucket '{bucket}' owned by another account "
+                          f"(centralized logging) — cannot verify from here")
+                return
+            # NoSuchPublicAccessBlockConfiguration => owned, no bucket BPA => check account BPA
+        # bucket is readable (owned) — now the account-level BPA superset legitimately applies
+        try:
+            acct_bpa = s3c.get_public_access_block(AccountId=self.account).get(
+                "PublicAccessBlockConfiguration", {})
+            if acct_bpa and all(acct_bpa.values()):
+                self._add("PASS", "LOG-09", "LOGGING", bucket,
+                          f"Trail bucket '{bucket}' shielded by account-level BPA")
+                return
+        except Exception:
+            pass
+        # bucket policy — look for an unconditioned public grant
+        public = False
+        try:
+            stmts = json.loads(s3.get_bucket_policy(Bucket=bucket)["Policy"]).get("Statement", [])
+            if isinstance(stmts, dict):
+                stmts = [stmts]
+            for st in stmts:
+                c = classify_resource_policy_stmt(st, self.account or "")
+                if c and c["kind"] == "public":
+                    public = True
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._add("INFO", "LOG-09", "LOGGING", name,
+                          f"Trail bucket '{bucket}' owned by another account "
+                          f"(centralized logging) — cannot verify from here")
+                return
+            if "NoSuchBucketPolicy" not in str(e) and "NoSuchBucket" in str(e):
+                self._add("FAIL", "LOG-09", "LOGGING", bucket,
+                          f"Trail bucket '{bucket}' does not exist — logs not being stored")
+                return
+            # NoSuchBucketPolicy => no policy => not public
+        if public and not bpa_full:
+            g = self._ensure_graph()
+            barn = f"arn:aws:s3:::{bucket}".lower()
+            g.add_node("internet", "InternetSource", cidr="0.0.0.0/0")
+            g.add_node(barn, "S3Bucket", name=bucket)
+            g.add_edge("internet", barn, "EXPOSED_TO", basis="cloudtrail-bucket-policy",
+                       scan_source="cloudtrail")
+            self._add("FAIL", "LOG-09", "LOGGING", bucket,
+                      f"Trail log bucket '{bucket}' has a PUBLIC bucket policy — "
+                      f"audit logs readable/tamperable")
+        elif public:
+            # RestrictPublicBuckets (full bucket BPA) neutralizes the public grant
+            self._add("WARN", "LOG-09", "LOGGING", bucket,
+                      f"Trail bucket '{bucket}' has a latent public policy statement but "
+                      f"Block Public Access neutralizes it — remove the stale grant")
+        elif bpa_full:
+            self._add("PASS", "LOG-09", "LOGGING", bucket,
+                      f"Trail bucket '{bucket}' has Block Public Access enabled")
+        else:
+            self._add("WARN", "LOG-09", "LOGGING", bucket,
+                      f"Trail bucket '{bucket}' lacks full Block Public Access — "
+                      f"verify it is not exposed")
+
     # GuardDuty protection plans expected enabled for full threat coverage
     _GD_FEATURES = {
         "S3_DATA_EVENTS":         "S3 Protection",
@@ -1702,6 +2028,150 @@ class AWSLiveScanner:
             else:
                 self._add("WARN", "LOG-06", "LOGGING", f"{did}:{name}",
                           f"GuardDuty {label} DISABLED — reduced threat coverage | {did}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION: CLOUDWATCH ALARMS (CIS AWS Foundations Benchmark v3 §4)
+    # ══════════════════════════════════════════════════════════════════════════
+    # (check_id, CIS §, human name, required lowercased tokens a matching filter must
+    #  contain). CW-02..CW-16 == CIS 4.1..4.15 (4.16 = Security Hub == LOG-05).
+    _CIS4_CONTROLS = [
+        ("CW-02", "4.1",  "unauthorized API calls",          ["unauthorizedoperation", "accessdenied"]),
+        ("CW-03", "4.2",  "console sign-in without MFA",      ["consolelogin", "mfaused"]),
+        ("CW-04", "4.3",  "root account usage",              ["useridentity.type", "root"]),
+        ("CW-05", "4.4",  "IAM policy changes",              ["deleterolepolicy", "putrolepolicy"]),
+        ("CW-06", "4.5",  "CloudTrail configuration changes", ["createtrail", "deletetrail"]),
+        ("CW-07", "4.6",  "console authentication failures",  ["consolelogin", "failedauthentication"]),
+        ("CW-08", "4.7",  "CMK disable/scheduled deletion",   ["disablekey", "schedulekeydeletion"]),
+        ("CW-09", "4.8",  "S3 bucket policy changes",         ["putbucketpolicy", "deletebucketpolicy"]),
+        ("CW-10", "4.9",  "AWS Config changes",              ["stopconfigurationrecorder"]),
+        ("CW-11", "4.10", "security group changes",          ["authorizesecuritygroupingress", "revokesecuritygroupingress"]),
+        ("CW-12", "4.11", "network ACL changes",             ["createnetworkaclentry", "deletenetworkaclentry"]),
+        ("CW-13", "4.12", "network gateway changes",         ["createinternetgateway", "deleteinternetgateway"]),
+        ("CW-14", "4.13", "route table changes",             ["createroute", "deleteroutetable"]),
+        ("CW-15", "4.14", "VPC changes",                     ["createvpc", "deletevpc"]),
+        ("CW-16", "4.15", "organization changes",            ["organizations.amazonaws.com"]),
+    ]
+
+    @staticmethod
+    def _norm_filter(s: str) -> str:
+        """Normalize a metric-filter pattern for token matching: lowercase + strip all
+        whitespace, quotes and parentheses (so '($.errorCode = "AccessDenied*")' and
+        '$.errorCode="AccessDenied*"' compare equal)."""
+        return re.sub(r'[\s"\'()]', "", s or "").lower()
+
+    def _check_cloudwatch(self):
+        self._section_header("CLOUDWATCH")
+        self._log("CW-01..16: CloudWatch CIS v3 §4 metric-filter + alarm coverage")
+        try:
+            ct = self._client("cloudtrail")
+            trails = ct.describe_trails(includeShadowTrails=True).get("trailList", [])
+        except Exception as e:
+            self._add("WARN", "CW-01", "CLOUDWATCH", "cloudtrail", str(e))
+            return
+        unique = {}
+        for t in trails:
+            arn = t.get("TrailARN") or t.get("Name")
+            if arn and arn not in unique:
+                unique[arn] = t
+        # qualifying trails: multi-region + logging + wired to CloudWatch Logs
+        log_groups = []                        # (region, logGroupName, account)
+        for arn, t in unique.items():
+            if not t.get("IsMultiRegionTrail") or not t.get("CloudWatchLogsLogGroupArn"):
+                continue
+            try:
+                logging = ct.get_trail_status(Name=arn).get("IsLogging")
+            except Exception:
+                logging = None                 # GetTrailStatus denied — don't drop the trail
+            if logging is False:
+                continue                       # only skip when EXPLICITLY not logging
+            parts = t["CloudWatchLogsLogGroupArn"].split(":")
+            if len(parts) >= 7:
+                log_groups.append((parts[3], parts[6], parts[4]))
+        if not log_groups:
+            self._add("FAIL", "CW-01", "CLOUDWATCH", "cloudwatch",
+                      "No multi-region CloudTrail delivering to CloudWatch Logs — CIS §4 "
+                      "metric-filter alarms cannot exist")
+            return
+        # collect the union of metric filters across owner-account log groups
+        filters, owner_group_seen = [], False
+        for region, lg_name, acct in log_groups:
+            if acct and self.account and acct != self.account:
+                continue                       # org-trail log group in another account
+            owner_group_seen = True
+            try:
+                logs = self._client("logs", region=region)
+                for page in logs.get_paginator("describe_metric_filters").paginate(
+                        logGroupName=lg_name):
+                    for mf in page.get("metricFilters", []):
+                        pat = self._norm_filter(mf.get("filterPattern", ""))
+                        for mt in mf.get("metricTransformations", []):
+                            filters.append({"pat": pat, "metric": mt.get("metricName"),
+                                            "ns": mt.get("metricNamespace"), "region": region})
+            except Exception:
+                pass
+        if not owner_group_seen:
+            self._add("INFO", "CW-01", "CLOUDWATCH", "cloudwatch",
+                      "CloudTrail→CW-Logs monitoring is owned by the org/management account; "
+                      "CIS §4 metric filters are evaluated in the resource-owner account")
+            return
+        self._add("PASS", "CW-01", "CLOUDWATCH", "cloudwatch",
+                  f"CloudTrail→CloudWatch Logs present ({len(filters)} metric filters found)")
+        for cid, cis, name, tokens in self._CIS4_CONTROLS:
+            self._eval_cis4_control(cid, cis, name, tokens, filters)
+
+    def _eval_cis4_control(self, cid, cis, name, tokens, filters) -> None:
+        """3-state CIS §4 control: FAIL (no matching filter, or filter without an
+        alarm/SNS action), WARN (alarm+SNS but no confirmed subscription), PASS
+        (filter + alarm + ≥1 confirmed subscription)."""
+        # Boundary-aware: a token must not be immediately followed by another
+        # alphanumeric (so 'createroute' does NOT match inside 'createroutetable',
+        # nor 'createvpc' inside 'createvpcpeeringconnection').
+        def _has(pat, tok):
+            return re.search(re.escape(tok) + r"(?![a-z0-9])", pat) is not None
+        matched = [f for f in filters if all(_has(f["pat"], tok) for tok in tokens)]
+        if not matched:
+            self._add("FAIL", cid, "CLOUDWATCH", f"CIS-{cis}",
+                      f"No CloudWatch metric filter for {name} (CIS {cis})")
+            return
+        best = 0                               # 0 no-alarm/action, 1 no-subs, 2 ok
+        for f in matched:
+            try:
+                cw = self._client("cloudwatch", region=f["region"])
+                alarms = cw.describe_alarms_for_metric(
+                    Namespace=f["ns"], MetricName=f["metric"]).get("MetricAlarms", [])
+            except Exception:
+                alarms = []
+            for al in alarms:
+                if not al.get("ActionsEnabled", True):
+                    continue
+                sns_actions = [a for a in al.get("AlarmActions", []) if ":sns:" in a]
+                if not sns_actions:
+                    continue
+                best = max(best, 1)
+                for topic in sns_actions:
+                    tparts = topic.split(":")
+                    treg = tparts[3] if len(tparts) >= 4 else f["region"]
+                    try:
+                        sns = self._client("sns", region=treg)
+                        confirmed = False
+                        for page in sns.get_paginator("list_subscriptions_by_topic").paginate(
+                                TopicArn=topic):
+                            for sub in page.get("Subscriptions", []):
+                                if (sub.get("SubscriptionArn") or "").startswith("arn:"):
+                                    confirmed = True
+                        if confirmed:
+                            best = 2
+                    except Exception:
+                        pass
+        if best == 2:
+            self._add("PASS", cid, "CLOUDWATCH", f"CIS-{cis}",
+                      f"Metric filter + alarm + confirmed subscription for {name} (CIS {cis})")
+        elif best == 1:
+            self._add("WARN", cid, "CLOUDWATCH", f"CIS-{cis}",
+                      f"Alarm for {name} has no confirmed SNS subscription (CIS {cis})")
+        else:
+            self._add("FAIL", cid, "CLOUDWATCH", f"CIS-{cis}",
+                      f"Metric filter for {name} has no alarm/SNS action (CIS {cis})")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 5: ENCRYPTION & KMS
@@ -1731,6 +2201,9 @@ class AWSLiveScanner:
                                 self._add("FAIL", "KMS-03", "KMS", kid,
                                           f"CMK is disabled — ciphertext under this key "
                                           f"cannot be decrypted | {_dsc}")
+                            # KMS-02/04 — key-policy public / cross-account exposure
+                            if _st not in ("PendingDeletion", "PendingReplicaDeletion"):
+                                self._check_kms_key_policy(kms, kid, meta)
                         if (meta.get("KeyManager") == "CUSTOMER"
                                 and meta.get("KeyState") == "Enabled"):
                             found    = True
@@ -1751,6 +2224,73 @@ class AWSLiveScanner:
                           "No customer-managed KMS keys found")
         except Exception as e:
             self._add("FAIL", "ENC-03", "KMS", "kms", str(e))
+
+    def _check_kms_key_policy(self, kms, kid: str, meta: Dict) -> None:
+        """KMS-02 (public) / KMS-04 (cross-account or org) key-policy exposure. Its own
+        try/except so a GetKeyPolicy AccessDenied surfaces as WARN, not the KMS loop's
+        silent `except: pass`."""
+        try:
+            pol_str = kms.get_key_policy(KeyId=kid, PolicyName="default").get("Policy")
+            pol = json.loads(pol_str) if pol_str else {}
+        except Exception as e:
+            self._add("WARN", "KMS-02", "KMS", kid, f"could not evaluate key policy: {e}")
+            return
+        stmts = pol.get("Statement", [])
+        if isinstance(stmts, dict):
+            stmts = [stmts]
+        node = (meta.get("Arn") or kid).lower()
+        desc = meta.get("Description") or kid[:8]
+        trusted = getattr(self, "trusted_accounts", set())
+        public = public_cond = False
+        cross_accts: set = set()
+        org_id = None
+        for st in stmts:
+            c = classify_resource_policy_stmt(st, self.account or "")
+            if not c:
+                continue
+            if c["kind"] == "public":
+                public = True
+            elif c["kind"] == "public_conditioned":
+                public_cond = True
+            elif c["kind"] == "org":
+                org_id = c.get("org_id") or org_id
+            elif c["kind"] == "cross_account":
+                cross_accts.update(a for a in c["external_accounts"] if a not in trusted)
+        g = self._ensure_graph()
+        g.add_node(node, "KMSKey", key_id=kid, multi_region=meta.get("MultiRegion"),
+                   scan_source="kms-policy")
+        # KMS-02 (public)
+        if public:
+            g.add_node("principal:*", "AnyPrincipal")
+            g.add_edge("principal:*", node, "PUBLIC_KMS", basis="key-policy",
+                       scan_source="kms-policy")
+            self._add("FAIL", "KMS-02", "KMS", kid,
+                      f"KMS key policy grants PUBLIC access (wildcard principal, "
+                      f"unconditioned) | {desc}")
+        elif public_cond:
+            self._add("WARN", "KMS-02", "KMS", kid,
+                      f"KMS key policy wildcard principal gated only by an unrecognized "
+                      f"condition — manual review | {desc}")
+        else:
+            self._add("PASS", "KMS-02", "KMS", kid,
+                      f"KMS key policy has no public grant | {desc}")
+        # KMS-04 (cross-account / org)
+        if cross_accts:
+            for acct in sorted(cross_accts):
+                g.add_node("account:" + acct, "AWSAccount", account=acct, external=True,
+                           scan_source="kms-policy")
+                g.add_edge("account:" + acct, node, "SHARED_KMS", acct=acct,
+                           basis="key-policy", scan_source="kms-policy")
+            self._add("FAIL", "KMS-04", "KMS", kid,
+                      f"KMS key policy grants CROSS-ACCOUNT access to "
+                      f"{', '.join(sorted(cross_accts))} | {desc}")
+        elif org_id:
+            self._add("WARN", "KMS-04", "KMS", kid,
+                      f"KMS key policy shares to AWS Organization {org_id} — verify it "
+                      f"is your org | {desc}")
+        else:
+            self._add("PASS", "KMS-04", "KMS", kid,
+                      f"KMS key policy has no cross-account grant | {desc}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 6: COMPUTE / EC2
@@ -2837,6 +3377,218 @@ class AWSLiveScanner:
             self._add("WARN", "R53-05", "ROUTE53", "route53resolver",
                       f"Resolver checks — {e}")
 
+        # R53-06 — dangling DNS records / subdomain takeover
+        self._check_dangling_dns()
+
+    def _check_dangling_dns(self) -> None:
+        """R53-06 — dangling DNS records / subdomain-takeover risk. S3-website and
+        Elastic Beanstalk targets that no longer exist are CONFIRMED takeovers (FAIL +
+        internet-CAN_TAKEOVER edge); CloudFront/ELB/API-GW absence can be cross-account,
+        so WARN. Read-only: describe/list + a head_bucket existence probe only."""
+        self._log("R53-06: dangling DNS records / subdomain takeover")
+        try:
+            r53 = self._client("route53", region="us-east-1")
+            zones = []
+            for page in r53.get_paginator("list_hosted_zones").paginate():
+                zones.extend(page.get("HostedZones", []))
+        except Exception as e:
+            self._add("WARN", "R53-06", "ROUTE53", "route53", str(e))
+            return
+        public_zones = [z for z in zones if not z.get("Config", {}).get("PrivateZone", False)]
+        if not public_zones:
+            self._add("INFO", "R53-06", "ROUTE53", "route53", "No public hosted zones")
+            return
+        candidates, seen = [], set()
+        for z in public_zones:
+            zid = z["Id"].split("/")[-1]
+            zname = z.get("Name", "").rstrip(".")
+            try:
+                for page in r53.get_paginator("list_resource_record_sets").paginate(HostedZoneId=zid):
+                    for rr in page.get("ResourceRecordSets", []):
+                        rtype = rr.get("Type", "")
+                        alias = rr.get("AliasTarget")
+                        if alias:
+                            if alias.get("HostedZoneId") == zid:
+                                continue                        # intra-zone self-alias
+                            target = (alias.get("DNSName") or "").rstrip(".").lower()
+                        elif rtype == "CNAME" and rr.get("ResourceRecords"):
+                            target = (rr["ResourceRecords"][0].get("Value") or "").rstrip(".").lower()
+                        else:
+                            continue
+                        fqdn = rr.get("Name", "").rstrip(".").lower()
+                        # Route53 octal-escapes '*' as '\052' in record names
+                        if not target or "*" in fqdn or "\\052" in fqdn:
+                            continue
+                        key = (fqdn, target)
+                        if key not in seen:
+                            seen.add(key)
+                            candidates.append((fqdn, target, rtype, zname))
+            except Exception as e:
+                self._add("WARN", "R53-06", "ROUTE53", zname, f"could not list records: {e}")
+        flagged = sum(1 for c in candidates if self._classify_dangling(*c))
+        if flagged == 0 and candidates:
+            self._add("PASS", "R53-06", "ROUTE53", "route53",
+                      f"No dangling records across {len(public_zones)} public zone(s) "
+                      f"({len(candidates)} alias/CNAME records checked)")
+
+    def _classify_dangling(self, fqdn: str, target: str, rtype: str, zname: str) -> bool:
+        # matches CNAME form '<bucket>.s3-website-<region>...' AND the ALIAS bare
+        # regional endpoint 's3-website.<region>...' / 's3-website-<region>...'
+        if re.search(r"(^|\.)s3-website[.-]", target):
+            return self._dangling_s3(fqdn, target, rtype, zname)
+        if target.endswith(".elasticbeanstalk.com"):
+            return self._dangling_beanstalk(fqdn, target, rtype, zname)
+        if target.endswith(".cloudfront.net"):
+            return self._dangling_cloudfront(fqdn, target, rtype, zname)
+        if target.endswith(".elb.amazonaws.com"):
+            return self._dangling_elb(fqdn, target, rtype, zname)
+        if ".execute-api." in target:
+            self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                      f"API Gateway alias {target} — manually verify the API/custom domain "
+                      f"still exists | zone {zname}")
+            return True
+        return False
+
+    def _emit_dangling(self, fqdn, target, rtype, zname, service, confirmed) -> None:
+        g = self._ensure_graph()
+        g.add_node(fqdn, "DanglingDNSRecord", record_type=rtype, dangling_target=target,
+                   dangling_service=service, zone_name=zname,
+                   confidence="confirmed" if confirmed else "probable", scan_source="route53")
+        if confirmed:
+            g.add_node("internet", "InternetSource", cidr="0.0.0.0/0")
+            g.add_edge("internet", fqdn, "CAN_TAKEOVER", dangling_service=service,
+                       confidence="confirmed", scan_source="route53")
+
+    @staticmethod
+    def _s3_error_code(e) -> str:
+        if hasattr(e, "response"):
+            return ((getattr(e, "response", {}) or {}).get("Error", {}) or {}).get("Code", "")
+        s = str(e)
+        for c in ("NoSuchBucket", "NotFound", "AccessDenied", "Forbidden", "404", "403"):
+            if c in s:
+                return c
+        return ""
+
+    def _dangling_s3(self, fqdn, target, rtype, zname) -> bool:
+        bucket = fqdn                       # S3 website hosting requires bucket name == FQDN
+        s3 = self._client("s3")
+        try:
+            if bucket in {b["Name"].lower() for b in s3.list_buckets().get("Buckets", [])}:
+                return False                # bucket exists in this account
+        except Exception:
+            pass
+        try:
+            s3.head_bucket(Bucket=bucket)
+            return False                    # exists (200)
+        except Exception as e:
+            code = self._s3_error_code(e)
+            if code in ("404", "NoSuchBucket", "NotFound"):
+                self._emit_dangling(fqdn, target, rtype, zname, "s3-website", True)
+                self._add("FAIL", "R53-06", "ROUTE53", fqdn,
+                          f"S3-website bucket '{bucket}' does not exist — subdomain {fqdn} is "
+                          f"TAKEABLE (S3 names are globally re-registerable) | zone {zname}")
+                return True
+            if code in ("403", "Forbidden", "AccessDenied"):
+                self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                          f"S3-website bucket '{bucket}' exists outside this account — verify "
+                          f"ownership (possible takeover) | zone {zname}")
+                return True
+            self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                      f"could not confirm S3-website target {bucket} — manually verify | zone {zname}")
+            return True
+
+    def _dangling_beanstalk(self, fqdn, target, rtype, zname) -> bool:
+        m = re.search(r"\.([a-z]{2}-[a-z]+-\d+)\.elasticbeanstalk\.com$", target)
+        if not m:
+            self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                      f"legacy non-regionalized Elastic Beanstalk name {target} — manually "
+                      f"verify | zone {zname}")
+            return True
+        region = m.group(1)
+        try:
+            eb = self._client("elasticbeanstalk", region=region)
+            live, tok = set(), None
+            while True:
+                kw = {"NextToken": tok} if tok else {}
+                resp = eb.describe_environments(**kw)
+                for e in resp.get("Environments", []):
+                    if e.get("Status") not in ("Terminated", "Terminating"):
+                        cn = (e.get("CNAME") or "").rstrip(".").lower()
+                        if cn:
+                            live.add(cn)
+                tok = resp.get("NextToken")
+                if not tok:
+                    break
+        except Exception as e:
+            self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                      f"could not verify Elastic Beanstalk target {target}: {e} | zone {zname}")
+            return True
+        if target in live:
+            return False
+        self._emit_dangling(fqdn, target, rtype, zname, "elasticbeanstalk", True)
+        self._add("FAIL", "R53-06", "ROUTE53", fqdn,
+                  f"Elastic Beanstalk env for {target} is gone/terminated — subdomain {fqdn} "
+                  f"is TAKEABLE (EB CNAME re-registerable in {region}) | zone {zname}")
+        return True
+
+    def _dangling_cloudfront(self, fqdn, target, rtype, zname) -> bool:
+        try:
+            cf = self._client("cloudfront", region="us-east-1")
+            dom_aliases = {}
+            for page in cf.get_paginator("list_distributions").paginate():
+                for d in (page.get("DistributionList", {}) or {}).get("Items", []):
+                    dom_aliases[(d.get("DomainName") or "").lower()] = {
+                        a.lower() for a in (d.get("Aliases", {}) or {}).get("Items", [])}
+        except Exception as e:
+            self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                      f"could not verify CloudFront target {target}: {e} | zone {zname}")
+            return True
+        if target in dom_aliases:
+            if fqdn in dom_aliases[target]:
+                return False                # properly associated
+            self._emit_dangling(fqdn, target, rtype, zname, "cloudfront", False)
+            self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                      f"CloudFront distribution {target} exists but {fqdn} is NOT in its "
+                      f"alternate-domain list — serves error / takeover-adjacent | zone {zname}")
+            return True
+        self._emit_dangling(fqdn, target, rtype, zname, "cloudfront", False)
+        self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                  f"CloudFront target {target} not owned by this account — deleted or "
+                  f"cross-account; manually verify | zone {zname}")
+        return True
+
+    def _dangling_elb(self, fqdn, target, rtype, zname) -> bool:
+        norm = target[len("dualstack."):] if target.startswith("dualstack.") else target
+        m = re.search(r"\.([a-z]{2}-[a-z]+-\d+)\.elb\.amazonaws\.com$", norm)
+        if not m:
+            self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                      f"could not parse region from ELB target {target} — manually verify "
+                      f"| zone {zname}")
+            return True
+        region = m.group(1)
+        names = set()
+        try:
+            for page in self._client("elbv2", region=region).get_paginator(
+                    "describe_load_balancers").paginate():
+                for lb in page.get("LoadBalancers", []):
+                    names.add((lb.get("DNSName") or "").lower())
+        except Exception:
+            pass
+        try:
+            for page in self._client("elb", region=region).get_paginator(
+                    "describe_load_balancers").paginate():
+                for d in page.get("LoadBalancerDescriptions", []):
+                    names.add((d.get("DNSName") or "").lower())
+        except Exception:
+            pass
+        if norm in names:
+            return False
+        self._emit_dangling(fqdn, target, rtype, zname, "elb", False)
+        self._add("WARN", "R53-06", "ROUTE53", fqdn,
+                  f"ELB DNS name {target} not present in {region} — LB deleted; AWS may "
+                  f"recycle the name (takeover) | zone {zname}")
+        return True
+
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 15: AWS BEDROCK
     # ══════════════════════════════════════════════════════════════════════════
@@ -3476,6 +4228,69 @@ class AWSLiveScanner:
                 if age > 90:
                     self._add("WARN", "SEC-04", "SECRETS", sname,
                               f"Secret '{sname}' not accessed in {age} days")
+            # SEC-05 — resource policy public / cross-account exposure
+            self._check_secret_policy(sm, s)
+
+    def _check_secret_policy(self, sm, s: Dict) -> None:
+        """SEC-05 — Secrets Manager resource-policy public/cross-account exposure. Its
+        own try/except per secret so one AccessDenied never aborts the SECRETS section.
+        No resource policy attached => IAM-only access (the common case) => silent."""
+        arn = s.get("ARN", "")
+        sname = s.get("Name", arn)
+        try:
+            pol_str = sm.get_resource_policy(SecretId=arn).get("ResourcePolicy")
+        except Exception:
+            return
+        if not pol_str:
+            return
+        try:
+            stmts = json.loads(pol_str).get("Statement", [])
+        except Exception:
+            return
+        if isinstance(stmts, dict):
+            stmts = [stmts]
+        trusted = getattr(self, "trusted_accounts", set())
+        public = public_cond = False
+        cross: set = set()
+        org_id = None
+        for st in stmts:
+            c = classify_resource_policy_stmt(st, self.account or "")
+            if not c:
+                continue
+            if c["kind"] == "public":
+                public = True
+            elif c["kind"] == "public_conditioned":
+                public_cond = True
+            elif c["kind"] == "org":
+                org_id = c.get("org_id") or org_id
+            elif c["kind"] == "cross_account":
+                cross.update(a for a in c["external_accounts"] if a not in trusted)
+        if not (public or public_cond or cross or org_id):
+            return                              # same-account only — no noise
+        g = self._ensure_graph()
+        g.add_node(arn, "SecretsManagerSecret", name=sname, scan_source="secrets")
+        if public:
+            g.add_node("internet", "InternetSource", cidr="0.0.0.0/0")
+            g.add_edge("internet", arn, "SHARED_SECRET", public=True, scan_source="secrets")
+            self._add("FAIL", "SEC-05", "SECRETS", sname,
+                      f"Secret resource policy grants PUBLIC access (wildcard principal, "
+                      f"unconditioned) — readable by any AWS principal | {sname}")
+        elif cross:
+            for acct in sorted(cross):
+                g.add_node("account:" + acct, "AWSAccount", account=acct, external=True)
+                g.add_edge("account:" + acct, arn, "SHARED_SECRET", external_account=acct,
+                           scan_source="secrets")
+            self._add("FAIL", "SEC-05", "SECRETS", sname,
+                      f"Secret resource policy grants CROSS-ACCOUNT access to "
+                      f"{', '.join(sorted(cross))} | {sname}")
+        elif public_cond:
+            self._add("WARN", "SEC-05", "SECRETS", sname,
+                      f"Secret resource policy wildcard principal is condition-guarded — "
+                      f"verify it restricts access | {sname}")
+        elif org_id:
+            self._add("WARN", "SEC-05", "SECRETS", sname,
+                      f"Secret resource policy shares to AWS Organization {org_id} — "
+                      f"verify it is your org | {sname}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 21: AWS WAF
@@ -4380,6 +5195,104 @@ class AWSLiveScanner:
                           f"Deletion protection=OFF | {name}")
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SECTION: AMAZON COGNITO (IDENTITY POOLS) — cognito-identity, DISTINCT from
+    # the cognito-idp User Pools handled above. Runs AFTER EXPOSURE/IAMPRIVESC so
+    # the INTERNET->role edge survives IAMPRIVESC's graph rebuild.
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_cognito_identity(self):
+        self._section_header("COGNITO_IDENTITY")
+        self._log("COG-05/06: Cognito identity pools — anonymous AWS credential issuance")
+        try:
+            ci = self._client("cognito-identity")
+        except Exception as e:
+            self._add("INFO", "COG-05", "COGNITO_IDENTITY", "cognito-identity", str(e))
+            return
+        pools = []
+        try:
+            tok = None
+            while True:
+                kw = {"MaxResults": 60}            # MaxResults is REQUIRED for this API
+                if tok:
+                    kw["NextToken"] = tok
+                resp = ci.list_identity_pools(**kw)
+                pools.extend(resp.get("IdentityPools", []))
+                tok = resp.get("NextToken")
+                if not tok:
+                    break
+        except Exception as e:
+            self._add("WARN", "COG-05", "COGNITO_IDENTITY", "cognito-identity", str(e))
+            return
+        if not pools:
+            self._add("INFO", "COG-05", "COGNITO_IDENTITY", "cognito-identity",
+                      f"No Cognito identity pools found in {self.region}")
+            return
+        for pool in pools:
+            pid = pool.get("IdentityPoolId", "")
+            pname = pool.get("IdentityPoolName", pid)
+            try:
+                desc = ci.describe_identity_pool(IdentityPoolId=pid)
+            except Exception as e:
+                self._add("WARN", "COG-05", "COGNITO_IDENTITY", pname, f"describe failed: {e}")
+                continue
+            if not desc.get("AllowUnauthenticatedIdentities", False):
+                self._add("PASS", "COG-05", "COGNITO_IDENTITY", pname,
+                          f"Identity pool '{pname}' disallows unauthenticated access")
+                continue
+            try:
+                roles = ci.get_identity_pool_roles(IdentityPoolId=pid).get("Roles", {}) or {}
+            except Exception as e:
+                self._add("WARN", "COG-05", "COGNITO_IDENTITY", pname, f"get roles failed: {e}")
+                continue
+            unauth = roles.get("unauthenticated")
+            if not unauth:
+                self._add("WARN", "COG-05", "COGNITO_IDENTITY", pname,
+                          f"Identity pool '{pname}' allows unauthenticated identities but has "
+                          f"no unauthenticated role configured — latent misconfig | {pid}")
+                continue
+            self._add("FAIL", "COG-05", "COGNITO_IDENTITY", pname,
+                      f"Identity pool '{pname}' issues AWS credentials to ANONYMOUS internet "
+                      f"users (unauthenticated role {unauth.split('/')[-1]}) | {pid}")
+            g = self._ensure_graph()
+            g.add_node("internet", "InternetSource", cidr="0.0.0.0/0")
+            g.add_node(unauth, "IAMRole", name=unauth.split("/")[-1],
+                       account=_account_of(unauth) or None)
+            g.add_edge("internet", unauth, "CAN_ASSUME", has_condition=False,
+                       basis="cognito-unauth-identity-pool", pool_id=pid,
+                       scan_source="cognito-identity")
+            self._check_unauth_role_perms(unauth, pname, pid)
+
+    def _check_unauth_role_perms(self, unauth_arn: str, pname: str, pid: str) -> None:
+        """COG-06 — is the anonymous-assumable role over-permissioned? Graph
+        CAN_PRIVESC_TO (if IAMPRIVESC ran) OR an attached AWS-managed admin policy."""
+        g = self._ensure_graph()
+        privesc_edges = g.out_edges(unauth_arn, {"CAN_PRIVESC_TO"})
+        confirmed = any(self._edge_unconditioned(e) for e in privesc_edges)
+        conditioned_only = bool(privesc_edges) and not confirmed
+        if not confirmed and not conditioned_only and _account_of(unauth_arn) == self.account:
+            try:
+                iam = self._client("iam")
+                attached = iam.list_attached_role_policies(
+                    RoleName=unauth_arn.split("/")[-1]).get("AttachedPolicies", [])
+                admin = {"arn:aws:iam::aws:policy/AdministratorAccess",
+                         "arn:aws:iam::aws:policy/PowerUserAccess",
+                         "arn:aws:iam::aws:policy/IAMFullAccess"}
+                if any(p.get("PolicyArn") in admin for p in attached):
+                    confirmed = True
+            except Exception:
+                pass
+        if confirmed:
+            self._add("FAIL", "COG-06", "COGNITO_IDENTITY", pname,
+                      f"Unauthenticated role of pool '{pname}' is over-permissioned "
+                      f"(admin/privesc) — anonymous internet → admin | {pid}")
+        elif conditioned_only:
+            self._add("WARN", "COG-06", "COGNITO_IDENTITY", pname,
+                      f"Unauthenticated role of pool '{pname}' has a Condition-gated privesc "
+                      f"primitive — verify the condition is unsatisfiable | {pid}")
+        else:
+            self._add("PASS", "COG-06", "COGNITO_IDENTITY", pname,
+                      f"Unauthenticated role of pool '{pname}' shows no admin/privesc primitive")
+
+    # ══════════════════════════════════════════════════════════════════════════
     # SECTION 34: API GATEWAY (HTTP APIs / v2)
     # ══════════════════════════════════════════════════════════════════════════
     def _check_apigatewayv2(self):
@@ -4827,6 +5740,121 @@ class AWSLiveScanner:
         self.graph = g
         return g
 
+    # Multi-tenant public OIDC issuers: anyone on the internet can mint a token
+    _PUBLIC_OIDC_ISSUERS = {
+        "token.actions.githubusercontent.com": "GitHub Actions",
+        "gitlab.com":                          "GitLab CI",
+        "app.terraform.io":                    "Terraform Cloud",
+        "vstoken.dev.azure.com":               "Azure DevOps",
+        "api.bitbucket.org":                   "Bitbucket",
+    }
+
+    @staticmethod
+    def _oidc_sub_scope(sub_vals: List[str]) -> str:
+        """Classify how tightly an OIDC :sub condition is pinned:
+        'open' (no/wildcard sub), 'org-wildcard' (org or repo wildcarded),
+        'branch-wildcard' (concrete repo, wildcard ref/env), 'concrete'. Returns the
+        MOST-permissive class across all sub values."""
+        if not sub_vals:
+            return "open"
+        rank = {"open": 3, "org-wildcard": 2, "branch-wildcard": 1, "concrete": 0}
+        best = "concrete"
+        for v in sub_vals:
+            v = str(v)
+            if v == "*":
+                s = "open"
+            else:
+                # Strip the leading claim key generically (GitHub 'repo:', GitLab
+                # 'project_path:', Terraform 'organization:', …) so the org/repo (or
+                # group/project) identity segment is examined for ANY issuer, not just
+                # GitHub. A '*' in that identity segment => org-wildcard (FAIL); a '*'
+                # only in the trailing ref/branch/environment portion => branch-wildcard.
+                body = v.split(":", 1)[1] if ":" in v else v
+                id_spec = body.split(":", 1)[0]            # ORG/REPO or GROUP/PROJECT
+                rest = body[len(id_spec):]
+                if "*" in id_spec:
+                    s = "org-wildcard"
+                elif "*" in rest:
+                    s = "branch-wildcard"
+                else:
+                    s = "concrete"
+            if rank[s] > rank[best]:
+                best = s
+        return best
+
+    def _emit_federated_edge(self, g, provider_key: str, ptype: str, p: Dict,
+                             st: Dict, scope: str, public_issuer: bool) -> None:
+        node = "federated:" + provider_key
+        g.add_node(node, "FederatedPrincipal", provider=provider_key, provider_type=ptype,
+                   public=public_issuer, scan_source="iam-privesc")
+        g.add_edge(node, p["_node"], "FEDERATED_CAN_ASSUME",
+                   has_condition=st.get("has_condition", False), sub_scope=scope,
+                   provider_type=ptype, scan_source="iam-privesc")
+
+    def _check_federated_trust(self, p: Dict) -> bool:
+        """IAMPE-23 — role trusts a federated OIDC/SAML/Cognito provider with a missing
+        or wildcard subject condition (anyone-can-assume). Public multi-tenant issuers
+        (GitHub/GitLab/…) with an open or org-wildcard :sub are CRITICAL; a concrete
+        repo:ORG/REPO:ref:… sub is correctly scoped and NOT flagged."""
+        found = False
+        g = self._ensure_graph()
+        for st in p.get("trust", []):
+            if st.get("effect") != "Allow" or not st.get("federated"):
+                continue
+            feds = [str(f) for f in st["federated"]]
+            actions = st.get("actions", set())
+            ckeys = _flatten_condition_keys(st.get("condition"))
+            is_saml = any("saml-provider" in f for f in feds) or "sts:assumerolewithsaml" in actions
+            is_cognito = any(f == "cognito-identity.amazonaws.com" for f in feds)
+            is_oidc = (any("oidc-provider/" in f for f in feds)
+                       or "sts:assumerolewithwebidentity" in actions)
+            host = ""
+            for f in feds:
+                if "oidc-provider/" in f:
+                    host = f.split("oidc-provider/", 1)[1].lower()
+                    break
+            role_res = f"role:{p['name']}"
+            if is_cognito:
+                aud = [v for k, vs in ckeys.items() if k.endswith(":aud") for v in vs]
+                amr = [v for k, vs in ckeys.items() if k.endswith(":amr") for v in vs]
+                if not aud or any("unauthenticated" in str(v).lower() for v in amr):
+                    found = True
+                    self._add("WARN", "IAMPE-23", "IAMPRIVESC", role_res,
+                              f"Role trusts a Cognito identity pool with no aud / "
+                              f"unauthenticated amr — guest/any-pool assume | role {p['name']}")
+            elif is_oidc:
+                sub = [v for k, vs in ckeys.items() if k.endswith(":sub") for v in vs]
+                scope = self._oidc_sub_scope(sub)
+                provider = self._PUBLIC_OIDC_ISSUERS.get(host)
+                if provider and scope in ("open", "org-wildcard"):
+                    found = True
+                    self._add("FAIL", "IAMPE-23", "IAMPRIVESC", role_res,
+                              f"Role trusts {provider} OIDC with "
+                              f"{'no' if scope == 'open' else 'org-wildcard'} :sub condition "
+                              f"— ANY {provider} workflow on the internet can assume it "
+                              f"| role {p['name']}")
+                    self._emit_federated_edge(g, host or "oidc", "oidc", p, st, scope, True)
+                elif provider and scope == "branch-wildcard":
+                    found = True
+                    self._add("WARN", "IAMPE-23", "IAMPRIVESC", role_res,
+                              f"Role trusts {provider} OIDC scoped to a repo but ANY "
+                              f"branch/PR can assume — verify | role {p['name']}")
+                    self._emit_federated_edge(g, host or "oidc", "oidc", p, st, scope, True)
+                elif not provider and scope == "open":
+                    found = True
+                    self._add("WARN", "IAMPE-23", "IAMPRIVESC", role_res,
+                              f"Role trusts OIDC issuer '{host or '?'}' with no :sub condition "
+                              f"— verify the issuer is single-tenant/private | role {p['name']}")
+            elif is_saml:
+                scoped = any(k.endswith("saml:aud") or k.endswith("saml:iss") for k in ckeys)
+                if not scoped:
+                    found = True
+                    self._add("WARN", "IAMPE-23", "IAMPRIVESC", role_res,
+                              f"Role SAML trust gated only by the IdP — add a "
+                              f"SAML:aud=https://signin.aws.amazon.com/saml condition "
+                              f"| role {p['name']}")
+        return found
+
     def _check_iam_privesc(self):
         self._section_header("IAMPRIVESC")
         self._log("Resource-aware path analysis + identity graph (CAN_ASSUME / "
@@ -4890,6 +5918,13 @@ class AWSLiveScanner:
                                   f"Role trust policy allows ANY AWS principal "
                                   f"(Principal '*') to assume it with no condition — "
                                   f"account takeover risk | role {p['name']}")
+
+        # 2b) Federated OIDC/SAML wildcard trust — anyone-can-assume (IAMPE-23)
+        for p in principals:
+            if p["type"] != "role":
+                continue
+            if self._check_federated_trust(p):
+                found = True
 
         # 3) Transitive escalation chains: principal → assume → … → can escalate (IAMPE-21)
         admin = self._admin_cap_id()
@@ -5713,6 +6748,7 @@ class AWSLiveScanner:
             "S3":             self._check_s3,
             "VPC":            self._check_vpc,
             "LOGGING":        self._check_logging,
+            "CLOUDWATCH":     self._check_cloudwatch,
             "KMS":            self._check_kms,
             "EC2":            self._check_ec2,
             "AMI":            self._check_ami,
@@ -5746,6 +6782,7 @@ class AWSLiveScanner:
             "APIGATEWAYV2":   self._check_apigatewayv2,
             "IAMPRIVESC":     self._check_iam_privesc,
             "EXPOSURE":       self._check_exposure,
+            "COGNITO_IDENTITY": self._check_cognito_identity,
             "SIDESCAN":       self._check_side_scan,
             "VULN":           self._check_vuln,
             "THREAT":         self._check_threat,
