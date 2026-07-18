@@ -175,6 +175,7 @@ CHECK_SEVERITY = {
     "BCK-01": "MEDIUM",
     "RDS-01": "HIGH", "RDS-02": "CRITICAL", "RDS-03": "MEDIUM",
     "RDS-04": "MEDIUM", "RDS-05": "LOW", "RDS-06": "CRITICAL",
+    "RDS-08": "MEDIUM", "RDS-11": "HIGH",
     "GLC-01": "CRITICAL", "GLC-02": "MEDIUM", "GLC-03": "LOW",
     "SNS-01": "MEDIUM", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
     "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "MEDIUM", "SQS-04": "LOW",
@@ -201,7 +202,7 @@ CHECK_SEVERITY = {
     "SFN-01": "MEDIUM", "SFN-02": "LOW", "SFN-03": "MEDIUM",
     "APIGW-01": "MEDIUM", "APIGW-02": "MEDIUM", "APIGW-03": "HIGH", "APIGW-04": "LOW",
     "ELB-01": "MEDIUM", "ELB-02": "HIGH", "ELB-03": "MEDIUM",
-    "ELB-04": "LOW", "ELB-05": "MEDIUM",
+    "ELB-04": "LOW", "ELB-05": "MEDIUM", "ELB-07": "MEDIUM",
     "EBS-01": "HIGH", "EBS-02": "HIGH", "EBS-03": "MEDIUM", "EBS-04": "CRITICAL",
     "RS-01": "HIGH", "RS-02": "HIGH", "RS-03": "MEDIUM", "RS-04": "MEDIUM", "RS-05": "LOW",
     "EFS-01": "HIGH", "EFS-02": "MEDIUM", "EFS-03": "LOW",
@@ -290,6 +291,8 @@ COMPLIANCE_MAP = {
     "RDS-03": {"CIS": "2.3.3", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
     "RDS-04": {"CIS": "2.3.3", "PCI-DSS": "2.2.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CM-6"},
     "RDS-06": {"CIS": "2.3.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "RDS-08": {"PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2"},
+    "RDS-11": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     # CloudFront
     "CFN-01": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "CFN-02": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
@@ -327,6 +330,7 @@ COMPLIANCE_MAP = {
     "ELB-02": {"CIS": "4.10", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "ELB-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
     "ELB-05": {"PCI-DSS": "6.6", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "ELB-07": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     # EBS
     "EBS-01": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "EBS-02": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
@@ -452,6 +456,8 @@ REMEDIATION_MAP = {
     "RDS-02": "Disable public access: aws rds modify-db-instance --db-instance-identifier <DB_ID> --no-publicly-accessible",
     "RDS-04": "Enable deletion protection: aws rds modify-db-instance --db-instance-identifier <DB_ID> --deletion-protection",
     "RDS-06": "Remove public access from snapshot: aws rds modify-db-snapshot-attribute --db-snapshot-identifier <SNAP_ID> --attribute-name restore --values-to-remove all",
+    "RDS-08": "Enable IAM database authentication so short-lived IAM tokens replace static passwords: aws rds modify-db-instance --db-instance-identifier <DB_ID> --enable-iam-database-authentication --apply-immediately",
+    "RDS-11": "Recreate the snapshot encrypted (copy with a KMS key, then delete the plaintext one): aws rds copy-db-snapshot --source-db-snapshot-identifier <SNAP_ID> --target-db-snapshot-identifier <SNAP_ID>-enc --kms-key-id <KMS_KEY>",
     "CFN-01": "Enforce HTTPS: aws cloudfront update-distribution --id <DIST_ID> --default-cache-behavior '{\"ViewerProtocolPolicy\":\"https-only\"}'",
     "CFN-03": "Associate WAF: aws cloudfront update-distribution --id <DIST_ID> --web-acl-id <WAF_ACL_ARN>",
     "LMB-01": "Remove public access: aws lambda remove-permission --function-name <FUNC> --statement-id <SID>",
@@ -479,6 +485,7 @@ REMEDIATION_MAP = {
     "ELB-02": "Redirect HTTP to HTTPS: aws elbv2 modify-listener --listener-arn <LISTENER_ARN> --default-actions Type=redirect,RedirectConfig='{Protocol=HTTPS,Port=443,StatusCode=HTTP_301}'",
     "ELB-03": "Use strong TLS policy: aws elbv2 modify-listener --listener-arn <LISTENER_ARN> --ssl-policy ELBSecurityPolicy-TLS13-1-2-2021-06",
     "ELB-05": "Drop invalid headers: aws elbv2 modify-load-balancer-attributes --load-balancer-arn <LB_ARN> --attributes Key=routing.http.drop_invalid_header_fields.enabled,Value=true",
+    "ELB-07": "Harden HTTP desync mitigation against request smuggling: aws elbv2 modify-load-balancer-attributes --load-balancer-arn <LB_ARN> --attributes Key=routing.http.desync_mitigation_mode,Value=defensive",
     "EBS-01": "Enable default encryption: aws ec2 enable-ebs-encryption-by-default",
     "EBS-02": "Encrypt volume: aws ec2 create-snapshot --volume-id <VOL_ID> then aws ec2 copy-snapshot --source-snapshot-id <SNAP> --encrypted --kms-key-id <KMS> and restore a new encrypted volume",
     "EBS-03": "Encrypt snapshot: aws ec2 copy-snapshot --source-snapshot-id <SNAP_ID> --source-region <REGION> --encrypted --kms-key-id <KMS_KEY>",
@@ -1910,22 +1917,45 @@ class AWSLiveScanner:
                 self._add("WARN", "RDS-05", "RDS", iid,
                           f"No CloudWatch log exports | {iid}")
 
-        # RDS-06 — Public snapshot visibility
-        self._log("RDS-06: RDS snapshot public visibility")
+        # RDS-08 — IAM database authentication (defense-in-depth vs static passwords)
+        self._log("RDS-08: IAM database authentication enabled")
+        for db in _rds_instances():
+            iid    = db["DBInstanceIdentifier"]
+            engine = db.get("Engine", "")
+            # IAM auth only applies to MySQL/PostgreSQL/MariaDB/Aurora engines
+            if not any(e in engine for e in ("mysql", "postgres", "mariadb", "aurora")):
+                continue
+            if db.get("IAMDatabaseAuthenticationEnabled", False):
+                self._add("PASS", "RDS-08", "RDS", iid,
+                          f"IAM DB authentication=ON | {iid} ({engine})")
+            else:
+                self._add("WARN", "RDS-08", "RDS", iid,
+                          f"IAM DB authentication=OFF — relies on static DB passwords "
+                          f"| {iid} ({engine})")
+
+        # RDS-06 — Public snapshot visibility  +  RDS-11 — snapshot encryption at rest
+        self._log("RDS-06/RDS-11: RDS snapshot public visibility and encryption at rest")
         try:
             snaps        = rds.describe_db_snapshots(
                 SnapshotType="manual"
             )["DBSnapshots"]
             public_snaps = []
+            unencrypted  = 0
             for s in snaps:
+                sid = s["DBSnapshotIdentifier"]
+                if not s.get("Encrypted", False):
+                    unencrypted += 1
+                    self._add("FAIL", "RDS-11", "RDS", sid,
+                              f"Manual RDS snapshot NOT encrypted at rest: {sid} "
+                              f"— plaintext DB data if the snapshot is shared/leaked")
                 try:
                     attrs = rds.describe_db_snapshot_attributes(
-                        DBSnapshotIdentifier=s["DBSnapshotIdentifier"]
+                        DBSnapshotIdentifier=sid
                     )["DBSnapshotAttributesResult"]["DBSnapshotAttributes"]
                     for a in attrs:
                         if (a["AttributeName"] == "restore"
                                 and "all" in a.get("AttributeValues", [])):
-                            public_snaps.append(s["DBSnapshotIdentifier"])
+                            public_snaps.append(sid)
                 except Exception:
                     pass
             if public_snaps:
@@ -1936,6 +1966,9 @@ class AWSLiveScanner:
                 self._add("PASS", "RDS-06", "RDS", "snapshots",
                           f"No public RDS snapshots "
                           f"({len(snaps)} manual snapshots checked)")
+            if snaps and unencrypted == 0:
+                self._add("PASS", "RDS-11", "RDS", "snapshots",
+                          f"All {len(snaps)} manual RDS snapshots encrypted at rest")
         except Exception as e:
             self._add("FAIL", "RDS-06", "RDS", "rds-snapshots", str(e))
 
@@ -3648,6 +3681,16 @@ class AWSLiveScanner:
                 else:
                     self._add("FAIL", "ELB-05", "ELB", name,
                               f"Drop invalid headers=OFF | {name}")
+
+                # ELB-07 — HTTP desync mitigation mode (request-smuggling defense)
+                mode = attrs.get("routing.http.desync_mitigation_mode", "defensive")
+                if mode in ("defensive", "strictest"):
+                    self._add("PASS", "ELB-07", "ELB", name,
+                              f"Desync mitigation mode='{mode}' | {name}")
+                else:
+                    self._add("WARN", "ELB-07", "ELB", name,
+                              f"Desync mitigation mode='{mode}' — HTTP request-smuggling "
+                              f"exposure (recommend 'defensive' or 'strictest') | {name}")
 
             # Listener-level checks (TLS)
             try:

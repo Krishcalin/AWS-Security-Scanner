@@ -349,3 +349,98 @@ def test_cnt_02_map_entries_complete():
     assert A.CHECK_SEVERITY.get("CNT-02") == "HIGH"
     assert "CNT-02" in A.COMPLIANCE_MAP
     assert "aws " in A.REMEDIATION_MAP.get("CNT-02", "").lower()
+
+
+# ── RDS-08 (IAM DB auth) / RDS-11 (unencrypted snapshot) ─────────────────────
+def _rds_scanner(instances=None, snaps=None, snap_attrs=None):
+    s = make_scanner(["RDS"])
+    rds = MagicMock()
+    rds.get_paginator.return_value = MockPaginator("DBInstances", instances or [])
+    rds.describe_db_snapshots.return_value = {"DBSnapshots": snaps or []}
+    snap_attrs = snap_attrs or {}
+    rds.describe_db_snapshot_attributes.side_effect = lambda DBSnapshotIdentifier: {
+        "DBSnapshotAttributesResult": {
+            "DBSnapshotAttributes": snap_attrs.get(DBSnapshotIdentifier, [])}}
+    s._clients["rds:us-east-1"] = rds
+    return s
+
+
+def test_rds_08_iam_auth_only_supported_engines():
+    s = _rds_scanner(instances=[
+        {"DBInstanceIdentifier": "db-on", "Engine": "postgres",
+         "IAMDatabaseAuthenticationEnabled": True},
+        {"DBInstanceIdentifier": "db-off", "Engine": "mysql",
+         "IAMDatabaseAuthenticationEnabled": False},
+        {"DBInstanceIdentifier": "db-oracle", "Engine": "oracle-se2",
+         "IAMDatabaseAuthenticationEnabled": False}])   # engine has no IAM auth -> skipped
+    s._check_rds()
+    warns = [r for r in s.results if r.check_id == "RDS-08" and r.status == "WARN"]
+    assert {r.resource for r in warns} == {"db-off"}
+    assert any(r.check_id == "RDS-08" and r.status == "PASS" and r.resource == "db-on"
+               for r in s.results)
+    assert not any(r.check_id == "RDS-08" and r.resource == "db-oracle" for r in s.results)
+    assert A.CHECK_SEVERITY.get("RDS-08") == "MEDIUM"
+
+
+def test_rds_11_unencrypted_snapshot_fails():
+    s = _rds_scanner(snaps=[{"DBSnapshotIdentifier": "snap-enc", "Encrypted": True},
+                            {"DBSnapshotIdentifier": "snap-plain", "Encrypted": False}])
+    s._check_rds()
+    f = [r for r in s.results if r.check_id == "RDS-11" and r.status == "FAIL"]
+    assert {r.resource for r in f} == {"snap-plain"} and f[0].severity == "HIGH"
+    # not an all-clear PASS because one snapshot is unencrypted
+    assert not any(r.check_id == "RDS-11" and r.status == "PASS" for r in s.results)
+
+
+def test_rds_11_all_encrypted_passes():
+    s = _rds_scanner(snaps=[{"DBSnapshotIdentifier": "s1", "Encrypted": True},
+                            {"DBSnapshotIdentifier": "s2", "Encrypted": True}])
+    s._check_rds()
+    assert any(r.check_id == "RDS-11" and r.status == "PASS" for r in s.results)
+    assert not any(r.check_id == "RDS-11" and r.status == "FAIL" for r in s.results)
+
+
+def test_rds_08_11_map_entries_complete():
+    for cid in ("RDS-08", "RDS-11"):
+        assert cid in A.COMPLIANCE_MAP
+        assert "aws " in A.REMEDIATION_MAP.get(cid, "").lower()
+
+
+# ── ELB-07 — HTTP desync mitigation mode (request-smuggling defense) ─────────
+def _elb_scanner(lbs, attrs_by_arn=None, listeners=None):
+    s = make_scanner(["ELB"])
+    elb = MagicMock()
+    elb.describe_load_balancers.return_value = {"LoadBalancers": lbs}
+    attrs_by_arn = attrs_by_arn or {}
+    elb.describe_load_balancer_attributes.side_effect = lambda LoadBalancerArn: {
+        "Attributes": [{"Key": k, "Value": v}
+                       for k, v in attrs_by_arn.get(LoadBalancerArn, {}).items()]}
+    elb.describe_listeners.return_value = {"Listeners": listeners or []}
+    s._clients["elbv2:us-east-1"] = elb
+    return s
+
+
+def test_elb_07_flags_monitor_mode_only():
+    s = _elb_scanner(
+        [{"LoadBalancerArn": "arn:mon", "LoadBalancerName": "mon-lb", "Type": "application"},
+         {"LoadBalancerArn": "arn:str", "LoadBalancerName": "str-lb", "Type": "application"},
+         {"LoadBalancerArn": "arn:def", "LoadBalancerName": "def-lb", "Type": "application"}],
+        attrs_by_arn={"arn:mon": {"routing.http.desync_mitigation_mode": "monitor"},
+                      "arn:str": {"routing.http.desync_mitigation_mode": "strictest"}})
+                      # def-lb: attribute absent -> defaults to 'defensive' -> PASS
+    s._check_elb()
+    warns = [r for r in s.results if r.check_id == "ELB-07" and r.status == "WARN"]
+    passes = [r for r in s.results if r.check_id == "ELB-07" and r.status == "PASS"]
+    assert {r.resource for r in warns} == {"mon-lb"}
+    assert {r.resource for r in passes} == {"str-lb", "def-lb"}
+
+
+def test_elb_07_not_emitted_for_network_lb():
+    s = _elb_scanner(
+        [{"LoadBalancerArn": "arn:n", "LoadBalancerName": "net-lb", "Type": "network"}],
+        attrs_by_arn={"arn:n": {"routing.http.desync_mitigation_mode": "monitor"}})
+    s._check_elb()
+    assert not any(r.check_id == "ELB-07" for r in s.results)
+    assert A.CHECK_SEVERITY.get("ELB-07") == "MEDIUM"
+    assert "ELB-07" in A.COMPLIANCE_MAP
+    assert "aws " in A.REMEDIATION_MAP.get("ELB-07", "").lower()
