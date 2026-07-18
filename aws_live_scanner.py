@@ -94,6 +94,7 @@ SECTIONS = [
     "ELASTICACHE", "OPENSEARCH", "DYNAMODB", "STEPFUNCTIONS",
     "APIGATEWAY", "ELB", "EBS", "REDSHIFT", "EFS", "ACM",
     "SAGEMAKER", "COGNITO", "APIGATEWAYV2", "IAMPRIVESC", "EXPOSURE",
+    "COGNITO_IDENTITY",
     "VULN", "THREAT", "DATA", "CORRELATE",
 ]
 
@@ -135,6 +136,7 @@ SECTION_LABELS = {
     "APIGATEWAYV2":   "API GATEWAY (HTTP APIs)",
     "IAMPRIVESC":     "IAM PRIVILEGE ESCALATION",
     "EXPOSURE":       "INTERNET EXPOSURE & ATTACK PATHS",
+    "COGNITO_IDENTITY": "AMAZON COGNITO (IDENTITY POOLS)",
     "VULN":           "WORKLOAD VULNERABILITIES (INSPECTOR)",
     "THREAT":         "LIVE THREAT DETECTIONS (GUARDDUTY)",
     "DATA":           "DATA SECURITY & FLAGSHIP ATTACK PATHS",
@@ -216,6 +218,7 @@ CHECK_SEVERITY = {
     "ACM-04": "HIGH", "ACM-05": "MEDIUM",
     "SM-01": "HIGH", "SM-02": "MEDIUM", "SM-03": "MEDIUM", "SM-04": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
+    "COG-05": "HIGH", "COG-06": "CRITICAL",
     "AGW2-01": "MEDIUM", "AGW2-02": "HIGH", "AGW2-03": "LOW",
     # IAM privilege-escalation primitives
     "IAMPE-01": "CRITICAL", "IAMPE-02": "HIGH", "IAMPE-03": "CRITICAL",
@@ -440,6 +443,8 @@ COMPLIANCE_MAP = {
     "ACM-04": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
     "ACM-05": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
     "COG-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CM-6"},
+    "COG-05": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-14"},
+    "COG-06": {"PCI-DSS": "7.2.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "AGW2-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SC-5"},
     "LMB-05": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
 }
@@ -539,6 +544,8 @@ REMEDIATION_MAP = {
     "COG-01": "Require MFA: aws cognito-idp set-user-pool-mfa-config --user-pool-id <POOL_ID> --mfa-configuration ON --software-token-mfa-configuration Enabled=true",
     "COG-02": "Strengthen password policy: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --policies PasswordPolicy='{MinimumLength=12,RequireUppercase=true,RequireLowercase=true,RequireNumbers=true,RequireSymbols=true}'",
     "COG-03": "Enable threat protection: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --user-pool-add-ons AdvancedSecurityMode=ENFORCED",
+    "COG-05": "Disable anonymous credential issuance (update-identity-pool is full-replace — re-supply the name and any login providers): aws cognito-identity update-identity-pool --identity-pool-id <REGION:GUID> --identity-pool-name <NAME> --no-allow-unauthenticated-identities",
+    "COG-06": "Scope the unauthenticated role to least privilege or drop it: aws iam detach-role-policy --role-name <UNAUTH_ROLE> --policy-arn arn:aws:iam::aws:policy/AdministratorAccess ; then attach a tightly scoped policy",
     "AGW2-01": "Enable access logging: aws apigatewayv2 update-stage --api-id <API_ID> --stage-name <STAGE> --access-log-settings DestinationArn=<LOG_GROUP_ARN>,Format='$context.requestId'",
     "AGW2-02": "Add an authorizer to routes: aws apigatewayv2 update-route --api-id <API_ID> --route-key '<ROUTE>' --authorization-type JWT --authorizer-id <AUTHORIZER_ID>",
     "IAMPE-01": "Find where the grant lives (aws iam list-entities-for-policy --policy-arn <ARN>), remove iam:CreatePolicyVersion, and constrain the principal: aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>",
@@ -4771,6 +4778,98 @@ class AWSLiveScanner:
                           f"Deletion protection=OFF | {name}")
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SECTION: AMAZON COGNITO (IDENTITY POOLS) — cognito-identity, DISTINCT from
+    # the cognito-idp User Pools handled above. Runs AFTER EXPOSURE/IAMPRIVESC so
+    # the INTERNET->role edge survives IAMPRIVESC's graph rebuild.
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_cognito_identity(self):
+        self._section_header("COGNITO_IDENTITY")
+        self._log("COG-05/06: Cognito identity pools — anonymous AWS credential issuance")
+        try:
+            ci = self._client("cognito-identity")
+        except Exception as e:
+            self._add("INFO", "COG-05", "COGNITO_IDENTITY", "cognito-identity", str(e))
+            return
+        pools = []
+        try:
+            tok = None
+            while True:
+                kw = {"MaxResults": 60}            # MaxResults is REQUIRED for this API
+                if tok:
+                    kw["NextToken"] = tok
+                resp = ci.list_identity_pools(**kw)
+                pools.extend(resp.get("IdentityPools", []))
+                tok = resp.get("NextToken")
+                if not tok:
+                    break
+        except Exception as e:
+            self._add("WARN", "COG-05", "COGNITO_IDENTITY", "cognito-identity", str(e))
+            return
+        if not pools:
+            self._add("INFO", "COG-05", "COGNITO_IDENTITY", "cognito-identity",
+                      f"No Cognito identity pools found in {self.region}")
+            return
+        for pool in pools:
+            pid = pool.get("IdentityPoolId", "")
+            pname = pool.get("IdentityPoolName", pid)
+            try:
+                desc = ci.describe_identity_pool(IdentityPoolId=pid)
+            except Exception as e:
+                self._add("WARN", "COG-05", "COGNITO_IDENTITY", pname, f"describe failed: {e}")
+                continue
+            if not desc.get("AllowUnauthenticatedIdentities", False):
+                self._add("PASS", "COG-05", "COGNITO_IDENTITY", pname,
+                          f"Identity pool '{pname}' disallows unauthenticated access")
+                continue
+            try:
+                roles = ci.get_identity_pool_roles(IdentityPoolId=pid).get("Roles", {}) or {}
+            except Exception as e:
+                self._add("WARN", "COG-05", "COGNITO_IDENTITY", pname, f"get roles failed: {e}")
+                continue
+            unauth = roles.get("unauthenticated")
+            if not unauth:
+                self._add("WARN", "COG-05", "COGNITO_IDENTITY", pname,
+                          f"Identity pool '{pname}' allows unauthenticated identities but has "
+                          f"no unauthenticated role configured — latent misconfig | {pid}")
+                continue
+            self._add("FAIL", "COG-05", "COGNITO_IDENTITY", pname,
+                      f"Identity pool '{pname}' issues AWS credentials to ANONYMOUS internet "
+                      f"users (unauthenticated role {unauth.split('/')[-1]}) | {pid}")
+            g = self._ensure_graph()
+            g.add_node("internet", "InternetSource", cidr="0.0.0.0/0")
+            g.add_node(unauth, "IAMRole", name=unauth.split("/")[-1],
+                       account=_account_of(unauth) or None)
+            g.add_edge("internet", unauth, "CAN_ASSUME", has_condition=False,
+                       basis="cognito-unauth-identity-pool", pool_id=pid,
+                       scan_source="cognito-identity")
+            self._check_unauth_role_perms(unauth, pname, pid)
+
+    def _check_unauth_role_perms(self, unauth_arn: str, pname: str, pid: str) -> None:
+        """COG-06 — is the anonymous-assumable role over-permissioned? Graph
+        CAN_PRIVESC_TO (if IAMPRIVESC ran) OR an attached AWS-managed admin policy."""
+        g = self._ensure_graph()
+        over = bool(g.out_edges(unauth_arn, {"CAN_PRIVESC_TO"}))
+        if not over and _account_of(unauth_arn) == self.account:
+            try:
+                iam = self._client("iam")
+                attached = iam.list_attached_role_policies(
+                    RoleName=unauth_arn.split("/")[-1]).get("AttachedPolicies", [])
+                admin = {"arn:aws:iam::aws:policy/AdministratorAccess",
+                         "arn:aws:iam::aws:policy/PowerUserAccess",
+                         "arn:aws:iam::aws:policy/IAMFullAccess"}
+                if any(p.get("PolicyArn") in admin for p in attached):
+                    over = True
+            except Exception:
+                pass
+        if over:
+            self._add("FAIL", "COG-06", "COGNITO_IDENTITY", pname,
+                      f"Unauthenticated role of pool '{pname}' is over-permissioned "
+                      f"(admin/privesc) — anonymous internet → admin | {pid}")
+        else:
+            self._add("PASS", "COG-06", "COGNITO_IDENTITY", pname,
+                      f"Unauthenticated role of pool '{pname}' shows no admin/privesc primitive")
+
+    # ══════════════════════════════════════════════════════════════════════════
     # SECTION 34: API GATEWAY (HTTP APIs / v2)
     # ══════════════════════════════════════════════════════════════════════════
     def _check_apigatewayv2(self):
@@ -6254,6 +6353,7 @@ class AWSLiveScanner:
             "APIGATEWAYV2":   self._check_apigatewayv2,
             "IAMPRIVESC":     self._check_iam_privesc,
             "EXPOSURE":       self._check_exposure,
+            "COGNITO_IDENTITY": self._check_cognito_identity,
             "SIDESCAN":       self._check_side_scan,
             "VULN":           self._check_vuln,
             "THREAT":         self._check_threat,

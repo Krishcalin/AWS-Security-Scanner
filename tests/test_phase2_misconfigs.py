@@ -395,3 +395,72 @@ def test_log_07_10_maps_complete():
     for cid in ("LOG-07", "LOG-08", "LOG-09", "LOG-10"):
         assert cid in A.CHECK_SEVERITY and cid in A.COMPLIANCE_MAP
         assert "aws " in A.REMEDIATION_MAP.get(cid, "").lower()
+
+
+# ── COG-05 / COG-06 — Cognito identity pools (unauthenticated access) ─────────
+def _ci_scanner(pools, describe=None, roles=None):
+    s = make_scanner(["COGNITO_IDENTITY"])
+    s.graph = aws_graph.SecurityGraph()
+    ci = MagicMock()
+    ci.list_identity_pools.return_value = {"IdentityPools": pools}
+    describe = describe or {}
+    ci.describe_identity_pool.side_effect = lambda IdentityPoolId: describe.get(
+        IdentityPoolId, {"AllowUnauthenticatedIdentities": False})
+    roles = roles or {}
+    ci.get_identity_pool_roles.side_effect = lambda IdentityPoolId: {"Roles": roles.get(IdentityPoolId, {})}
+    s._clients["cognito-identity:us-east-1"] = ci
+    return s
+
+
+def test_cog_05_unauth_pool_fails_with_internet_edge():
+    role = f"arn:aws:iam::{OWN}:role/pool-unauth"
+    s = _ci_scanner(
+        [{"IdentityPoolId": "us-east-1:pool-open", "IdentityPoolName": "open"}],
+        describe={"us-east-1:pool-open": {"AllowUnauthenticatedIdentities": True}},
+        roles={"us-east-1:pool-open": {"unauthenticated": role, "authenticated": "arn:...:role/auth"}})
+    s._check_cognito_identity()
+    assert any(r.check_id == "COG-05" and r.status == "FAIL" and r.resource == "open" for r in s.results)
+    st = s.graph.stats()
+    assert "CAN_ASSUME" in st["edge_kinds"] and "InternetSource" in st["node_kinds"]
+
+
+def test_cog_05_no_unauth_disabled_passes():
+    s = _ci_scanner([{"IdentityPoolId": "us-east-1:p", "IdentityPoolName": "safe"}],
+                    describe={"us-east-1:p": {"AllowUnauthenticatedIdentities": False}})
+    s._check_cognito_identity()
+    assert any(r.check_id == "COG-05" and r.status == "PASS" for r in s.results)
+    assert not any(r.check_id == "COG-05" and r.status == "FAIL" for r in s.results)
+
+
+def test_cog_05_allow_unauth_but_no_role_warns():
+    s = _ci_scanner([{"IdentityPoolId": "us-east-1:p", "IdentityPoolName": "latent"}],
+                    describe={"us-east-1:p": {"AllowUnauthenticatedIdentities": True}},
+                    roles={"us-east-1:p": {}})           # no 'unauthenticated' role
+    s._check_cognito_identity()
+    assert any(r.check_id == "COG-05" and r.status == "WARN" for r in s.results)
+
+
+def test_cog_06_over_permissioned_unauth_role():
+    role = f"arn:aws:iam::{OWN}:role/pool-unauth"
+    s = _ci_scanner([{"IdentityPoolId": "us-east-1:p", "IdentityPoolName": "danger"}],
+                    describe={"us-east-1:p": {"AllowUnauthenticatedIdentities": True}},
+                    roles={"us-east-1:p": {"unauthenticated": role}})
+    iam = MagicMock()
+    iam.list_attached_role_policies.return_value = {"AttachedPolicies": [
+        {"PolicyName": "AdministratorAccess",
+         "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}]}
+    s._clients["iam:us-east-1"] = iam
+    s._check_cognito_identity()
+    assert any(r.check_id == "COG-06" and r.status == "FAIL" for r in s.results)
+
+
+def test_cog_05_no_pools_is_info():
+    s = _ci_scanner([])
+    s._check_cognito_identity()
+    assert any(r.check_id == "COG-05" and r.status == "INFO" for r in s.results)
+
+
+def test_cog_05_06_maps_complete():
+    assert A.CHECK_SEVERITY.get("COG-05") == "HIGH" and A.CHECK_SEVERITY.get("COG-06") == "CRITICAL"
+    for cid in ("COG-05", "COG-06"):
+        assert cid in A.COMPLIANCE_MAP and "aws " in A.REMEDIATION_MAP.get(cid, "").lower()
