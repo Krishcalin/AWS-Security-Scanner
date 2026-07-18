@@ -1106,6 +1106,9 @@ class AWSLiveScanner:
     # ── IAM credential report (cached) ───────────────────────────────────────
     def _get_credential_report(self) -> List[Dict]:
         if self._cred_report is not None:
+            # a pre-populated non-empty report counts as successfully obtained
+            if self._cred_report:
+                self._cred_report_ok = True
             return self._cred_report
         # None (not []) records "could not evaluate" so credential checks can tell an
         # empty account apart from an unavailable report and avoid a false all-clear.
@@ -1113,12 +1116,14 @@ class AWSLiveScanner:
         try:
             iam = self._client("iam")
             # generate_credential_report is async; poll its State rather than a fixed
-            # sleep (a fresh/large account is not COMPLETE within a few seconds).
-            for attempt in range(20):
+            # sleep (a fresh account is not COMPLETE immediately). Bounded to ~18s so a
+            # never-COMPLETE state can't stall the scan (old fixed sleep was 6s).
+            for attempt in range(10):
                 state = iam.generate_credential_report().get("State", "")
                 if state == "COMPLETE":
                     break
-                time.sleep(3)
+                if attempt < 9:
+                    time.sleep(2)
             resp    = iam.get_credential_report()
             content = base64.b64decode(resp["Content"]).decode("utf-8")
             self._cred_report = list(csv.DictReader(io.StringIO(content)))
@@ -1189,9 +1194,13 @@ class AWSLiveScanner:
                 self._add("FAIL", "IAM-04", "IAM", row["user"],
                           f"Console user WITHOUT MFA: {row['user']}")
                 no_mfa_found = True
-        if not no_mfa_found:
+        if not no_mfa_found and self._cred_report_ok:
             self._add("PASS", "IAM-04", "IAM", "all-users",
                       "All console users have MFA enabled")
+        elif not self._cred_report_ok:
+            self._add("WARN", "IAM-04", "IAM", "all-users",
+                      "Credential report unavailable — console-user MFA could not be "
+                      "evaluated (retry the scan)")
 
         # IAM-05 — Password policy
         self._log("IAM-05: Password policy")
@@ -1455,12 +1464,23 @@ class AWSLiveScanner:
         actions = actions if isinstance(actions, list) else [actions]
         if not any(a in ("*", "s3:*") for a in actions):
             return False
-        # (d) at least the object-level resource (bucket/*, an /* wildcard, or "*")
-        res = st.get("Resource", [])
-        res = res if isinstance(res, list) else [res]
+        # (d) at least the object-level resource is covered
         obj_arn = f"arn:aws:s3:::{bucket}/*" if bucket else None
-        return any(r == "*" or (isinstance(r, str) and r.endswith("/*")) or r == obj_arn
-                   for r in res)
+        res = st.get("Resource")
+        if res is not None:
+            res = res if isinstance(res, list) else [res]
+            return any(r == "*" or (isinstance(r, str) and r.endswith("/*")) or r == obj_arn
+                       for r in res)
+        # NotResource form: the deny covers everything EXCEPT the listed ARNs, so it is
+        # effective for this bucket unless a NotResource entry excludes its objects.
+        not_res = st.get("NotResource")
+        if not_res is not None:
+            not_res = not_res if isinstance(not_res, list) else [not_res]
+            excludes_objects = any(
+                r == "*" or r == obj_arn or (bucket and r == f"arn:aws:s3:::{bucket}")
+                for r in not_res)
+            return not excludes_objects
+        return False
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 3: NETWORK SECURITY
@@ -1481,9 +1501,13 @@ class AWSLiveScanner:
         self._log("VPC-01: Security Groups — risky ports open to 0.0.0.0/0 or ::/0")
         found_any = False
         default_seen = False
+        sg_error = False
         default_sg_issues = []
         try:
-            for sg in self._paginate_all(ec2, "describe_security_groups", "SecurityGroups"):
+            sgs = []
+            for page in ec2.get_paginator("describe_security_groups").paginate():
+                sgs.extend(page.get("SecurityGroups", []))
+            for sg in sgs:
                 if sg.get("GroupName") == "default":
                     default_seen = True
                     inbound  = sg.get("IpPermissions", [])
@@ -1512,9 +1536,10 @@ class AWSLiveScanner:
                                 )
                                 found_any = True
         except Exception as e:
+            sg_error = True
             self._add("FAIL", "VPC-01", "VPC", "security-groups", str(e))
 
-        if not found_any:
+        if not found_any and not sg_error:
             self._add("PASS", "VPC-01", "VPC", "all-sgs",
                       "No Security Groups expose high-risk ports to 0.0.0.0/0 or ::/0")
 
@@ -3837,7 +3862,9 @@ class AWSLiveScanner:
         elb = self._client("elbv2")
 
         try:
-            lbs = self._paginate_all(elb, "describe_load_balancers", "LoadBalancers")
+            lbs = []
+            for page in elb.get_paginator("describe_load_balancers").paginate():
+                lbs.extend(page.get("LoadBalancers", []))
         except Exception as e:
             self._add("WARN", "ELB-01", "ELB", "elb", str(e))
             return

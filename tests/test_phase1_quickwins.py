@@ -895,6 +895,54 @@ def test_vpc_04_default_sg_second_page():
                for r in s.results)
 
 
+# Pagination-fix regressions must NOT mask API errors as a false all-clear
+def test_vpc_01_api_error_surfaces_not_false_pass():
+    s = make_scanner(["VPC"])
+    ec2 = MagicMock()
+    ec2.get_paginator.side_effect = RuntimeError("AccessDenied: DescribeSecurityGroups")
+    ec2.describe_vpcs.return_value = {"Vpcs": []}
+    ec2.describe_flow_logs.return_value = {"FlowLogs": []}
+    s._clients["ec2:us-east-1"] = ec2
+    s._check_vpc()
+    assert any(r.check_id == "VPC-01" and r.status == "FAIL" for r in s.results)
+    # the error must NOT be masked by a false 'all-sgs' PASS
+    assert not any(r.check_id == "VPC-01" and r.status == "PASS" for r in s.results)
+
+
+def test_elb_api_error_surfaces_not_no_lbs():
+    s = make_scanner(["ELB"])
+    elb = MagicMock()
+    elb.get_paginator.side_effect = RuntimeError("AccessDenied: DescribeLoadBalancers")
+    s._clients["elbv2:us-east-1"] = elb
+    s._check_elb()
+    assert any(r.check_id == "ELB-01" and r.status == "WARN" for r in s.results)
+    # must NOT report 'No load balancers found' (INFO) when the call actually failed
+    assert not any(r.status == "INFO" and "No Application" in r.message for r in s.results)
+
+
+# IAM-04 must not emit a false 'all users have MFA' PASS when the report is unavailable
+def test_iam_04_unavailable_report_warns_not_false_pass():
+    s = _iam_scanner()
+    s._cred_report = []
+    s._cred_report_ok = False
+    with patch("aws_live_scanner.ClientError", MockClientError, create=True):
+        s._check_iam()
+    assert not any(r.check_id == "IAM-04" and r.status == "PASS" for r in s.results)
+    assert any(r.check_id == "IAM-04" and r.status == "WARN" for r in s.results)
+
+
+# S3-07 must not false-WARN on a genuinely-effective NotResource-based TLS deny
+def test_s3_07_notresource_deny_is_pass():
+    pol = json.dumps({"Statement": [
+        {"Effect": "Deny", "Principal": "*", "Action": "s3:*",
+         "NotResource": "arn:aws:s3:::other-bucket/*",
+         "Condition": {"Bool": {"aws:SecureTransport": "false"}}}]})
+    s = _s3_scanner(["mybucket"], policies={"mybucket": pol},
+                    versioning={"mybucket": "Enabled"})
+    s._check_s3()
+    assert any(r.check_id == "S3-07" and r.status == "PASS" for r in s.results)
+
+
 # ELB-07 pagination — a monitor-mode ALB on page 2 is still flagged
 def test_elb_07_lb_second_page():
     s = make_scanner(["ELB"])
