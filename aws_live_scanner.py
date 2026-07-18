@@ -42,6 +42,7 @@ import sys
 import json
 import csv
 import io
+import gzip
 import base64
 import time
 import fnmatch
@@ -70,7 +71,7 @@ import aws_unused
 import aws_sidescan
 import aws_graph_neptune
 
-VERSION = "2.10.0"
+VERSION = "2.11.1"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -86,7 +87,7 @@ STATUS_ICON  = {"PASS": "[PASS]", "FAIL": "[FAIL]", "WARN": "[WARN]", "INFO": "[
 # ─── Section registry ─────────────────────────────────────────────────────────
 SECTIONS = [
     "IAM", "S3", "VPC", "LOGGING", "KMS", "EC2",
-    "ECR", "BACKUP", "RDS", "GLACIER", "SNS", "SQS",
+    "AMI", "ECR", "BACKUP", "RDS", "GLACIER", "SNS", "SQS",
     "CLOUDFRONT", "ROUTE53", "BEDROCK", "BEDROCK_AGENTS",
     "LAMBDA", "EKS", "ECS", "SECRETS", "WAF",
     "ELASTICACHE", "OPENSEARCH", "DYNAMODB", "STEPFUNCTIONS",
@@ -102,6 +103,7 @@ SECTION_LABELS = {
     "LOGGING":        "LOGGING & MONITORING",
     "KMS":            "ENCRYPTION & KMS",
     "EC2":            "COMPUTE SECURITY",
+    "AMI":            "MACHINE IMAGES (AMI)",
     "ECR":            "CONTAINER SECURITY",
     "BACKUP":         "BACKUP & DR",
     "RDS":            "AMAZON RDS",
@@ -161,15 +163,22 @@ CHECK_SEVERITY = {
     "CWPP-01": "HIGH", "CWPP-02": "CRITICAL", "CWPP-03": "HIGH",
     "IAM-01": "CRITICAL", "IAM-02": "CRITICAL", "IAM-04": "HIGH",
     "IAM-05": "MEDIUM", "IAM-06": "HIGH", "IAM-10": "MEDIUM",
+    "IAM-07": "MEDIUM", "IAM-08": "MEDIUM",
     "S3-01": "HIGH", "S3-03": "HIGH", "S3-05": "MEDIUM",
-    "VPC-01": "HIGH", "VPC-03": "MEDIUM",
+    "S3-07": "MEDIUM", "S3-08": "MEDIUM",
+    "VPC-01": "HIGH", "VPC-03": "MEDIUM", "VPC-04": "MEDIUM",
     "LOG-01": "CRITICAL", "LOG-03": "HIGH", "LOG-04": "CRITICAL", "LOG-05": "MEDIUM",
+    "LOG-06": "MEDIUM",
     "ENC-03": "MEDIUM",
+    "KMS-03": "HIGH",
     "EC2-04": "HIGH", "EC2-05": "MEDIUM", "EC2-06": "HIGH",
-    "CNT-01": "MEDIUM",
+    "EC2-07": "HIGH", "EC2-08": "HIGH",
+    "AMI-01": "HIGH",
+    "CNT-01": "MEDIUM", "CNT-02": "HIGH",
     "BCK-01": "MEDIUM",
     "RDS-01": "HIGH", "RDS-02": "CRITICAL", "RDS-03": "MEDIUM",
     "RDS-04": "MEDIUM", "RDS-05": "LOW", "RDS-06": "CRITICAL",
+    "RDS-08": "MEDIUM", "RDS-11": "HIGH",
     "GLC-01": "CRITICAL", "GLC-02": "MEDIUM", "GLC-03": "LOW",
     "SNS-01": "MEDIUM", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
     "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "MEDIUM", "SQS-04": "LOW",
@@ -196,11 +205,12 @@ CHECK_SEVERITY = {
     "SFN-01": "MEDIUM", "SFN-02": "LOW", "SFN-03": "MEDIUM",
     "APIGW-01": "MEDIUM", "APIGW-02": "MEDIUM", "APIGW-03": "HIGH", "APIGW-04": "LOW",
     "ELB-01": "MEDIUM", "ELB-02": "HIGH", "ELB-03": "MEDIUM",
-    "ELB-04": "LOW", "ELB-05": "MEDIUM",
+    "ELB-04": "LOW", "ELB-05": "MEDIUM", "ELB-07": "MEDIUM",
     "EBS-01": "HIGH", "EBS-02": "HIGH", "EBS-03": "MEDIUM", "EBS-04": "CRITICAL",
     "RS-01": "HIGH", "RS-02": "HIGH", "RS-03": "MEDIUM", "RS-04": "MEDIUM", "RS-05": "LOW",
     "EFS-01": "HIGH", "EFS-02": "MEDIUM", "EFS-03": "LOW",
     "ACM-01": "HIGH", "ACM-02": "MEDIUM", "ACM-03": "LOW",
+    "ACM-04": "HIGH", "ACM-05": "MEDIUM",
     "SM-01": "HIGH", "SM-02": "MEDIUM", "SM-03": "MEDIUM", "SM-04": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
     "AGW2-01": "MEDIUM", "AGW2-02": "HIGH", "AGW2-03": "LOW",
@@ -217,6 +227,7 @@ CHECK_SEVERITY = {
     "EXPOSURE-01": "HIGH", "EXPOSURE-02": "MEDIUM", "ATTACK-01": "CRITICAL",
     # Phase 3: deep-plane ingestion (vuln / data / threat) + flagship attack path
     "VULN-01": "HIGH", "VULN-02": "CRITICAL", "VULN-03": "HIGH",
+    "VULN-04": "HIGH",
     "DATA-01": "MEDIUM", "DATA-02": "HIGH", "DATA-03": "MEDIUM",
     "EXTACCESS-01": "HIGH", "EXTACCESS-02": "MEDIUM", "EXTACCESS-03": "MEDIUM",
     "THREAT-01": "HIGH", "THREAT-02": "MEDIUM", "ATTACK-02": "CRITICAL",
@@ -253,31 +264,43 @@ COMPLIANCE_MAP = {
     "IAM-04": {"CIS": "1.10", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
     "IAM-05": {"CIS": "1.8", "PCI-DSS": "8.3.6", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "IA-5(1)"},
     "IAM-06": {"CIS": "1.14", "PCI-DSS": "8.6.3", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.2", "NIST": "IA-5(1)"},
+    "IAM-07": {"CIS": "1.7", "SOC2": "CC6.1", "NIST": "AC-6(5)"},
+    "IAM-08": {"CIS": "1.12", "PCI-DSS": "8.2.6", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "AC-2(3)"},
     "IAM-10": {"CIS": "1.20", "PCI-DSS": "11.5", "HIPAA": "164.312(b)", "SOC2": "CC7.1", "NIST": "AC-6"},
     # S3
     "S3-01": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "S3-03": {"CIS": "2.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "S3-05": {"CIS": "3.6", "PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "S3-07": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "S3-08": {"CIS": "2.1.3", "PCI-DSS": "10.5.3", "HIPAA": "164.312(c)(1)", "SOC2": "A1.2", "NIST": "CP-9"},
     # VPC
     "VPC-01": {"CIS": "5.2", "PCI-DSS": "1.3.2", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "VPC-03": {"CIS": "3.7", "PCI-DSS": "10.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
+    "VPC-04": {"CIS": "5.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     # Logging
     "LOG-01": {"CIS": "3.1", "PCI-DSS": "10.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "LOG-03": {"CIS": "3.5", "PCI-DSS": "10.5.3", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "CM-8"},
     "LOG-04": {"CIS": "4.15", "PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
+    "LOG-06": {"CIS": "4.16", "PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
     "LOG-05": {"CIS": "4.16", "PCI-DSS": "11.5", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
     # KMS
     "ENC-03": {"CIS": "3.8", "PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
+    "KMS-03": {"NIST": "SC-12", "SOC2": "CC6.1", "HIPAA": "164.312(a)(2)(iv)"},
     # EC2
     "EC2-04": {"CIS": "5.6", "PCI-DSS": "2.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.1", "NIST": "CM-6"},
     "EC2-05": {"CIS": "5.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EC2-08": {"CIS": "5.6", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EC2-06": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "EC2-07": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "IA-5"},
+    "AMI-01": {"CIS": "2.3.3", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     # RDS
     "RDS-01": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "RDS-02": {"CIS": "2.3.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "RDS-03": {"CIS": "2.3.3", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
     "RDS-04": {"CIS": "2.3.3", "PCI-DSS": "2.2.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CM-6"},
     "RDS-06": {"CIS": "2.3.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "RDS-08": {"PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2"},
+    "RDS-11": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     # CloudFront
     "CFN-01": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "CFN-02": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
@@ -315,6 +338,7 @@ COMPLIANCE_MAP = {
     "ELB-02": {"CIS": "4.10", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "ELB-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
     "ELB-05": {"PCI-DSS": "6.6", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "ELB-07": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     # EBS
     "EBS-01": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "EBS-02": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
@@ -356,6 +380,7 @@ COMPLIANCE_MAP = {
     "VULN-01": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "VULN-02": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5(2)"},
     "VULN-03": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "VULN-04": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "DATA-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "DATA-02": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "DATA-03": {"CIS": "2.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
@@ -368,6 +393,7 @@ COMPLIANCE_MAP = {
     "CHOKEPOINT-01": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "CA-8"},
     # ── Backfill: FAIL-capable checks previously missing a compliance mapping ──
     "CNT-01": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5"},
+    "CNT-02": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5"},
     "BCK-01": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
     "SNS-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SNS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
@@ -400,6 +426,8 @@ COMPLIANCE_MAP = {
     "ELB-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CM-6"},
     "RS-05": {"PCI-DSS": "8.2.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "IA-2"},
     "ACM-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
+    "ACM-04": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
+    "ACM-05": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
     "COG-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CM-6"},
     "AGW2-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SC-5"},
     "LMB-05": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
@@ -415,23 +443,34 @@ REMEDIATION_MAP = {
     "IAM-04": "Enable MFA for user: aws iam enable-mfa-device --user-name <USER> --serial-number <MFA_ARN> --authentication-code1 <CODE1> --authentication-code2 <CODE2>",
     "IAM-05": "Update password policy: aws iam update-account-password-policy --minimum-password-length 14 --require-symbols --require-numbers --require-uppercase-characters --max-password-age 90 --password-reuse-prevention 24",
     "IAM-06": "Deactivate stale key: aws iam update-access-key --access-key-id <KEY_ID> --status Inactive --user-name <USER>",
+    "IAM-07": "Stop using the root user for daily tasks (use IAM roles) and alarm on root usage: aws cloudwatch put-metric-alarm --alarm-name root-account-usage --metric-name RootAccountUsage --namespace CISBenchmark --statistic Sum --period 300 --threshold 1 --comparison-operator GreaterThanOrEqualToThreshold",
+    "IAM-08": "Disable credentials unused for 45+ days: aws iam update-access-key --access-key-id <KEY_ID> --status Inactive --user-name <USER> (and remove console access if the password is unused)",
     "IAM-10": "Create Access Analyzer: aws accessanalyzer create-analyzer --analyzer-name account-analyzer --type ACCOUNT --region <REGION>",
     "S3-01": "Enable account BPA: aws s3control put-public-access-block --account-id <ACCT> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "S3-03": "Enable bucket encryption: aws s3api put-bucket-encryption --bucket <BUCKET> --server-side-encryption-configuration '{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\"}}]}'",
     "S3-05": "Enable access logging: aws s3api put-bucket-logging --bucket <BUCKET> --bucket-logging-status '{\"LoggingEnabled\":{\"TargetBucket\":\"<LOG_BUCKET>\",\"TargetPrefix\":\"s3-logs/\"}}'",
+    "S3-07": "Attach a bucket policy that denies non-TLS requests (Effect=Deny, Condition Bool aws:SecureTransport=false) and apply it: aws s3api put-bucket-policy --bucket <BUCKET> --policy file://tls-only.json",
+    "S3-08": "Enable versioning for rollback protection against overwrite/ransomware: aws s3api put-bucket-versioning --bucket <BUCKET> --versioning-configuration Status=Enabled",
     "VPC-01": "Revoke risky SG rule: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
     "VPC-03": "Enable VPC Flow Logs: aws ec2 create-flow-logs --resource-type VPC --resource-ids <VPC_ID> --traffic-type ALL --log-destination-type cloud-watch-logs --log-group-name vpc-flow-logs",
+    "VPC-04": "Strip all rules from each default SG so it denies all traffic (CIS 5.4): aws ec2 revoke-security-group-ingress --group-id <SG_ID> --ip-permissions ... and aws ec2 revoke-security-group-egress --group-id <SG_ID> --ip-permissions ... ; migrate workloads to purpose-built SGs",
     "LOG-01": "Create multi-region trail: aws cloudtrail create-trail --name org-trail --s3-bucket-name <BUCKET> --is-multi-region-trail --enable-log-file-validation && aws cloudtrail start-logging --name org-trail",
     "LOG-03": "Start Config recorder: aws configservice start-configuration-recorder --configuration-recorder-name default",
     "LOG-04": "Enable GuardDuty: aws guardduty create-detector --enable",
+    "LOG-06": "Turn on the missing GuardDuty protection plan(s): aws guardduty update-detector --detector-id <DETECTOR_ID> --features '[{\"Name\":\"<FEATURE>\",\"Status\":\"ENABLED\"}]' (e.g. S3_DATA_EVENTS, RUNTIME_MONITORING, EBS_MALWARE_PROTECTION)",
     "LOG-05": "Enable Security Hub: aws securityhub enable-security-hub --enable-default-standards",
     "ENC-03": "Enable key rotation: aws kms enable-key-rotation --key-id <KEY_ID>",
+    "KMS-03": "Cancel deletion if the CMK is still in use, or re-enable a disabled key: aws kms cancel-key-deletion --key-id <KEY_ID> ; aws kms enable-key --key-id <KEY_ID>",
     "EC2-04": "Enforce IMDSv2: aws ec2 modify-instance-metadata-options --instance-id <INSTANCE_ID> --http-tokens required --http-endpoint enabled",
     "EC2-06": "Enable default EBS encryption: aws ec2 enable-ebs-encryption-by-default",
+    "EC2-07": "Remove the secret from user-data and rotate it; move it to SSM Parameter Store / Secrets Manager referenced at boot: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --user-data file://sanitized-userdata.txt (stop the instance first)",
+    "EC2-08": "Enforce IMDSv2 AND remove the public exposure (SSRF->credential path): aws ec2 modify-instance-metadata-options --instance-id <INSTANCE_ID> --http-tokens required --http-endpoint enabled ; then place the instance behind a load balancer / remove the public IP",
     "RDS-01": "Create encrypted copy: aws rds create-db-snapshot --db-instance-identifier <DB_ID> --db-snapshot-identifier pre-encrypt-snap && aws rds copy-db-snapshot --source-db-snapshot-identifier pre-encrypt-snap --target-db-snapshot-identifier encrypted-snap --kms-key-id <KMS_KEY>",
     "RDS-02": "Disable public access: aws rds modify-db-instance --db-instance-identifier <DB_ID> --no-publicly-accessible",
     "RDS-04": "Enable deletion protection: aws rds modify-db-instance --db-instance-identifier <DB_ID> --deletion-protection",
     "RDS-06": "Remove public access from snapshot: aws rds modify-db-snapshot-attribute --db-snapshot-identifier <SNAP_ID> --attribute-name restore --values-to-remove all",
+    "RDS-08": "Enable IAM database authentication so short-lived IAM tokens replace static passwords: aws rds modify-db-instance --db-instance-identifier <DB_ID> --enable-iam-database-authentication --apply-immediately",
+    "RDS-11": "Recreate the snapshot encrypted (copy with a KMS key, then delete the plaintext one): aws rds copy-db-snapshot --source-db-snapshot-identifier <SNAP_ID> --target-db-snapshot-identifier <SNAP_ID>-enc --kms-key-id <KMS_KEY>",
     "CFN-01": "Enforce HTTPS: aws cloudfront update-distribution --id <DIST_ID> --default-cache-behavior '{\"ViewerProtocolPolicy\":\"https-only\"}'",
     "CFN-03": "Associate WAF: aws cloudfront update-distribution --id <DIST_ID> --web-acl-id <WAF_ACL_ARN>",
     "LMB-01": "Remove public access: aws lambda remove-permission --function-name <FUNC> --statement-id <SID>",
@@ -459,6 +498,7 @@ REMEDIATION_MAP = {
     "ELB-02": "Redirect HTTP to HTTPS: aws elbv2 modify-listener --listener-arn <LISTENER_ARN> --default-actions Type=redirect,RedirectConfig='{Protocol=HTTPS,Port=443,StatusCode=HTTP_301}'",
     "ELB-03": "Use strong TLS policy: aws elbv2 modify-listener --listener-arn <LISTENER_ARN> --ssl-policy ELBSecurityPolicy-TLS13-1-2-2021-06",
     "ELB-05": "Drop invalid headers: aws elbv2 modify-load-balancer-attributes --load-balancer-arn <LB_ARN> --attributes Key=routing.http.drop_invalid_header_fields.enabled,Value=true",
+    "ELB-07": "Harden HTTP desync mitigation against request smuggling: aws elbv2 modify-load-balancer-attributes --load-balancer-arn <LB_ARN> --attributes Key=routing.http.desync_mitigation_mode,Value=defensive",
     "EBS-01": "Enable default encryption: aws ec2 enable-ebs-encryption-by-default",
     "EBS-02": "Encrypt volume: aws ec2 create-snapshot --volume-id <VOL_ID> then aws ec2 copy-snapshot --source-snapshot-id <SNAP> --encrypted --kms-key-id <KMS> and restore a new encrypted volume",
     "EBS-03": "Encrypt snapshot: aws ec2 copy-snapshot --source-snapshot-id <SNAP_ID> --source-region <REGION> --encrypted --kms-key-id <KMS_KEY>",
@@ -472,6 +512,8 @@ REMEDIATION_MAP = {
     "EFS-03": "Enable backups: aws efs put-backup-policy --file-system-id <FS_ID> --backup-policy Status=ENABLED",
     "ACM-01": "Renew/replace certificate before expiry: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS",
     "ACM-02": "Reissue with strong key: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS --key-algorithm RSA_2048",
+    "ACM-04": "Re-request the failed/revoked certificate: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS",
+    "ACM-05": "Migrate imported / non-auto-renewing certs to an ACM-managed (auto-renewing) certificate: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS",
     "SM-01": "Disable direct internet: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --direct-internet-access Disabled (recreate may be required; attach to a private subnet)",
     "SM-02": "Disable root access: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --root-access Disabled",
     "SM-03": "Set KMS key at creation: aws sagemaker create-notebook-instance --notebook-instance-name <NB> --kms-key-id <KMS_KEY> --instance-type ml.t3.medium --role-arn <ROLE>",
@@ -494,6 +536,8 @@ REMEDIATION_MAP = {
     "IAMPE-21": "Break the escalation chain at its weakest hop: remove the privesc-granting permission from the assumable target role, OR restrict who can assume it (aws iam update-assume-role-policy --role-name <ROLE> --policy-document <TIGHTER_TRUST>). Apply a permissions boundary to the chain's entry principal.",
     "IAMPE-22": "Restrict the role trust policy to specific principal ARNs (remove Principal '*'): aws iam update-assume-role-policy --role-name <ROLE> --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"<TRUSTED_ARN>\"},\"Action\":\"sts:AssumeRole\",\"Condition\":{\"StringEquals\":{\"sts:ExternalId\":\"<ID>\"}}}]}'",
     "CNT-01": "Enable scan-on-push and pull existing findings: aws ecr put-image-scanning-configuration --repository-name <REPO> --image-scanning-configuration scanOnPush=true",
+    "CNT-02": "Rebuild the image on a patched base and push the new digest; delete the vulnerable image: aws ecr batch-delete-image --repository-name <REPO> --image-ids imageDigest=<DIGEST>. Enable Inspector enhanced scanning for continuous coverage.",
+    "AMI-01": "Revoke public/cross-account AMI sharing (a public AMI exposes its full disk snapshot): aws ec2 modify-image-attribute --image-id <AMI_ID> --launch-permission '{\"Remove\":[{\"Group\":\"all\"}]}' ; audit remaining account-level shares.",
     "GLC-01": "Remove public Glacier vault access policy: aws glacier set-vault-access-policy --vault-name <VAULT> --policy '{\"Policy\":\"<LEAST_PRIVILEGE_POLICY>\"}'",
     "SQS-02": "Restrict the queue policy to trusted principals: aws sqs set-queue-attributes --queue-url <URL> --attributes Policy='<LEAST_PRIVILEGE_POLICY>'",
     "R53-03": "Enable DNSSEC signing: aws route53 enable-hosted-zone-dnssec --hosted-zone-id <ZONE_ID>",
@@ -505,6 +549,7 @@ REMEDIATION_MAP = {
     "VULN-01": "Patch the affected package to fixedInVersion, e.g. run the patch baseline: aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install, then re-scan in Inspector.",
     "VULN-02": "PRIORITIZE — this CVE is on the CISA KEV catalog (actively exploited). Patch immediately (aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install), and if internet-exposed isolate the host: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --groups <QUARANTINE_SG>",
     "VULN-03": "Rebuild the container image on a patched base and push; enable Inspector enhanced ECR scanning: aws inspector2 enable --resource-types ECR",
+    "VULN-04": "Update the vulnerable dependency in the Lambda deployment package/layer and redeploy: aws lambda update-function-code --function-name <FUNCTION> --zip-file fileb://patched.zip, then re-scan in Inspector.",
     "DATA-01": "Confirm the sensitive data is intended here; restrict access, enable default encryption with a CMK, and enable S3 Block Public Access on the bucket: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "DATA-02": "Remove public/external access from the crown-jewel bucket: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "DATA-03": "Enable default encryption on the crown-jewel bucket: aws s3api put-bucket-encryption --bucket <BUCKET> --server-side-encryption-configuration '{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\"}}]}'",
@@ -939,6 +984,26 @@ def diff_findings(current: List[Result], baseline_results: List[Dict]) -> Dict:
     }
 
 
+# ─── IAM credential-report age helpers (used by IAM-06/07/08) ────────────────
+def _cred_age_days(iso_ts: str) -> Optional[int]:
+    """Days since an IAM credential-report timestamp, or None when the field is
+    empty / 'N/A' / 'no_information' / 'not_supported' or unparseable."""
+    if not iso_ts or iso_ts in ("N/A", "no_information", "not_supported"):
+        return None
+    try:
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(iso_ts)).days
+    except Exception:
+        return None
+
+
+def _cred_idle_days(last_used: str, created: str) -> Optional[int]:
+    """How long a credential has been idle: days since last use, or (if never used)
+    days since it was created/rotated. None if neither timestamp is usable, so the
+    caller skips the credential rather than false-flagging it."""
+    d = _cred_age_days(last_used)
+    return d if d is not None else _cred_age_days(created)
+
+
 # ─── Scanner ──────────────────────────────────────────────────────────────────
 class AWSLiveScanner:
     """Live, read-only AWS security audit scanner."""
@@ -967,6 +1032,7 @@ class AWSLiveScanner:
         self.choke_points: List = []       # ranked ChokePoint objects
         self._clients: Dict[str, object] = {}
         self._cred_report:  Optional[List[Dict]] = None
+        self._cred_report_ok: bool = False
         self._all_regions:  Optional[List[str]]  = None
         self._iam_principals: Optional[List[Dict]] = None
         self._managed_policy_cache: Dict[str, tuple] = {}
@@ -1040,17 +1106,39 @@ class AWSLiveScanner:
     # ── IAM credential report (cached) ───────────────────────────────────────
     def _get_credential_report(self) -> List[Dict]:
         if self._cred_report is not None:
+            # a pre-populated non-empty report counts as successfully obtained
+            if self._cred_report:
+                self._cred_report_ok = True
             return self._cred_report
+        # None (not []) records "could not evaluate" so credential checks can tell an
+        # empty account apart from an unavailable report and avoid a false all-clear.
+        self._cred_report_ok = False
         try:
             iam = self._client("iam")
-            iam.generate_credential_report()
-            time.sleep(6)
+            # generate_credential_report is async; poll its State rather than a fixed
+            # sleep (a fresh account is not COMPLETE immediately). Bounded to ~18s so a
+            # never-COMPLETE state can't stall the scan (old fixed sleep was 6s).
+            for attempt in range(10):
+                state = iam.generate_credential_report().get("State", "")
+                if state == "COMPLETE":
+                    break
+                if attempt < 9:
+                    time.sleep(2)
             resp    = iam.get_credential_report()
             content = base64.b64decode(resp["Content"]).decode("utf-8")
             self._cred_report = list(csv.DictReader(io.StringIO(content)))
+            self._cred_report_ok = True
         except Exception as e:
-            self._log(f"Could not generate credential report: {e}")
-            self._cred_report = []
+            # one retry: get_credential_report can still be ReportInProgress
+            try:
+                time.sleep(5)
+                resp    = iam.get_credential_report()
+                content = base64.b64decode(resp["Content"]).decode("utf-8")
+                self._cred_report = list(csv.DictReader(io.StringIO(content)))
+                self._cred_report_ok = True
+            except Exception:
+                self._log(f"Could not generate credential report: {e}")
+                self._cred_report = []
         return self._cred_report
 
     # ── All enabled regions (cached) ─────────────────────────────────────────
@@ -1106,9 +1194,13 @@ class AWSLiveScanner:
                 self._add("FAIL", "IAM-04", "IAM", row["user"],
                           f"Console user WITHOUT MFA: {row['user']}")
                 no_mfa_found = True
-        if not no_mfa_found:
+        if not no_mfa_found and self._cred_report_ok:
             self._add("PASS", "IAM-04", "IAM", "all-users",
                       "All console users have MFA enabled")
+        elif not self._cred_report_ok:
+            self._add("WARN", "IAM-04", "IAM", "all-users",
+                      "Credential report unavailable — console-user MFA could not be "
+                      "evaluated (retry the scan)")
 
         # IAM-05 — Password policy
         self._log("IAM-05: Password policy")
@@ -1163,6 +1255,52 @@ class AWSLiveScanner:
                             self._add("PASS", "IAM-06", "IAM",
                                       f"{user}/{k}",
                                       f"{user} {k} age={age}d OK")
+
+        # IAM-07 — Root account recent use (CIS 1.7); zero new API (cached report)
+        self._log("IAM-07: Root account recent use")
+        report = self._get_credential_report()
+        root = next((r for r in report if r.get("user") == "<root_account>"), None)
+        if root:
+            recent = []
+            for f in ("password_last_used", "access_key_1_last_used_date",
+                      "access_key_2_last_used_date"):
+                d = _cred_age_days(root.get(f, ""))
+                if d is not None and d <= 30:
+                    recent.append(f"{f.replace('_last_used_date','').replace('_',' ')}={d}d")
+            if recent:
+                self._add("FAIL", "IAM-07", "IAM", "root",
+                          f"Root account used within 30 days ({', '.join(recent)}) — "
+                          f"CIS 1.7: use IAM roles, not root, for daily tasks")
+            else:
+                self._add("PASS", "IAM-07", "IAM", "root",
+                          "No root credential use in the last 30 days")
+        elif not self._cred_report_ok:
+            # never silently skip — tell the operator the root audit could not run
+            self._add("WARN", "IAM-07", "IAM", "root",
+                      "Credential report unavailable — IAM-07/08 root & unused-credential "
+                      "audit could not be evaluated (retry the scan)")
+
+        # IAM-08 — Credentials unused for 45+ days (CIS 1.12); zero new API
+        self._log("IAM-08: Credentials unused for 45+ days")
+        for row in self._get_credential_report():
+            user = row.get("user", "")
+            if user == "<root_account>":
+                continue
+            if row.get("password_enabled") == "true":
+                # never-used fallback = the password's own age (password_last_changed),
+                # not the user's age — a freshly set unused password isn't "45d unused".
+                idle = _cred_idle_days(row.get("password_last_used", ""),
+                                       row.get("password_last_changed", ""))
+                if idle is not None and idle > 45:
+                    self._add("FAIL", "IAM-08", "IAM", user,
+                              f"Console password unused {idle}d (>45) — disable it | {user}")
+            for k in ("access_key_1", "access_key_2"):
+                if row.get(f"{k}_active") == "true":
+                    idle = _cred_idle_days(row.get(f"{k}_last_used_date", ""),
+                                           row.get(f"{k}_last_rotated", ""))
+                    if idle is not None and idle > 45:
+                        self._add("FAIL", "IAM-08", "IAM", f"{user}/{k}",
+                                  f"{k} unused {idle}d (>45) — deactivate it | {user}")
 
         # IAM-10 — Access Analyzer in all regions
         self._log("IAM-10: Access Analyzer enabled in all regions")
@@ -1260,6 +1398,90 @@ class AWSLiveScanner:
             except Exception:
                 pass
 
+            # S3-07 — TLS-only (deny non-SecureTransport) bucket policy
+            try:
+                pol   = json.loads(s3.get_bucket_policy(Bucket=bname)["Policy"])
+                stmts = pol.get("Statement", [])
+                if isinstance(stmts, dict):
+                    stmts = [stmts]
+                if any(self._stmt_denies_insecure_transport(st, bname) for st in stmts):
+                    self._add("PASS", "S3-07", "S3", bname,
+                              f"Bucket policy denies non-TLS access | {bname}")
+                else:
+                    self._add("WARN", "S3-07", "S3", bname,
+                              f"Bucket policy does NOT enforce TLS "
+                              f"(no aws:SecureTransport deny) | {bname}")
+            except Exception:
+                self._add("WARN", "S3-07", "S3", bname,
+                          f"No bucket policy enforcing TLS-only access | {bname}")
+
+            # S3-08 — Versioning (rollback protection vs overwrite/ransomware)
+            try:
+                ver = s3.get_bucket_versioning(Bucket=bname).get("Status")
+                if ver == "Enabled":
+                    self._add("PASS", "S3-08", "S3", bname,
+                              f"Versioning enabled | {bname}")
+                else:
+                    self._add("WARN", "S3-08", "S3", bname,
+                              f"Versioning not enabled — no rollback from object "
+                              f"overwrite/ransomware | {bname}")
+            except Exception:
+                pass
+
+    @staticmethod
+    def _stmt_denies_insecure_transport(st: Dict, bucket: str = "") -> bool:
+        """True only if a bucket-policy statement EFFECTIVELY denies all non-TLS
+        access: Effect=Deny + aws:SecureTransport=false, applied to EVERY principal,
+        ALL S3 actions, and at least the object-level resource (bucket/*). A
+        narrowly-scoped deny (single action/principal/resource) does NOT count —
+        plaintext HTTP to other actions/objects would still be possible."""
+        if st.get("Effect") != "Deny":
+            return False
+        # (a) aws:SecureTransport=false condition (Bool / BoolIfExists, str or list)
+        cond = st.get("Condition", {}) or {}
+        has_cond = False
+        for op in ("Bool", "BoolIfExists"):
+            val = (cond.get(op) or {}).get("aws:SecureTransport")
+            if val is None:
+                continue
+            vals = val if isinstance(val, list) else [val]
+            if any(str(v).lower() == "false" for v in vals):
+                has_cond = True
+                break
+        if not has_cond:
+            return False
+        # (b) every principal ("*" or {"AWS": "*"})
+        princ = st.get("Principal")
+        if princ != "*":
+            if not isinstance(princ, dict):
+                return False
+            aws_p = princ.get("AWS")
+            aws_list = aws_p if isinstance(aws_p, list) else [aws_p]
+            if "*" not in aws_list:
+                return False
+        # (c) all S3 actions ("s3:*" or "*")
+        actions = st.get("Action", [])
+        actions = actions if isinstance(actions, list) else [actions]
+        if not any(a in ("*", "s3:*") for a in actions):
+            return False
+        # (d) at least the object-level resource is covered
+        obj_arn = f"arn:aws:s3:::{bucket}/*" if bucket else None
+        res = st.get("Resource")
+        if res is not None:
+            res = res if isinstance(res, list) else [res]
+            return any(r == "*" or (isinstance(r, str) and r.endswith("/*")) or r == obj_arn
+                       for r in res)
+        # NotResource form: the deny covers everything EXCEPT the listed ARNs, so it is
+        # effective for this bucket unless a NotResource entry excludes its objects.
+        not_res = st.get("NotResource")
+        if not_res is not None:
+            not_res = not_res if isinstance(not_res, list) else [not_res]
+            excludes_objects = any(
+                r == "*" or r == obj_arn or (bucket and r == f"arn:aws:s3:::{bucket}")
+                for r in not_res)
+            return not excludes_objects
+        return False
+
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 3: NETWORK SECURITY
     # ══════════════════════════════════════════════════════════════════════════
@@ -1275,10 +1497,25 @@ class AWSLiveScanner:
         }
 
         # VPC-01 — Security groups with risky ports open to 0.0.0.0/0 or ::/0
+        # VPC-04 — default Security Group must restrict all traffic (CIS 5.4)
         self._log("VPC-01: Security Groups — risky ports open to 0.0.0.0/0 or ::/0")
         found_any = False
+        default_seen = False
+        sg_error = False
+        default_sg_issues = []
         try:
-            for sg in ec2.describe_security_groups()["SecurityGroups"]:
+            sgs = []
+            for page in ec2.get_paginator("describe_security_groups").paginate():
+                sgs.extend(page.get("SecurityGroups", []))
+            for sg in sgs:
+                if sg.get("GroupName") == "default":
+                    default_seen = True
+                    inbound  = sg.get("IpPermissions", [])
+                    outbound = sg.get("IpPermissionsEgress", [])
+                    if inbound or outbound:
+                        default_sg_issues.append(
+                            (f"{sg['GroupId']} (vpc {sg.get('VpcId', '?')})",
+                             len(inbound), len(outbound)))
                 for perm in sg.get("IpPermissions", []):
                     fp = perm.get("FromPort", 0)
                     tp = perm.get("ToPort", 65535)
@@ -1299,11 +1536,20 @@ class AWSLiveScanner:
                                 )
                                 found_any = True
         except Exception as e:
+            sg_error = True
             self._add("FAIL", "VPC-01", "VPC", "security-groups", str(e))
 
-        if not found_any:
+        if not found_any and not sg_error:
             self._add("PASS", "VPC-01", "VPC", "all-sgs",
                       "No Security Groups expose high-risk ports to 0.0.0.0/0 or ::/0")
+
+        for res, ni, no in default_sg_issues:
+            self._add("WARN", "VPC-04", "VPC", res,
+                      f"Default SG has {ni} inbound / {no} outbound rule(s) — CIS 5.4 "
+                      f"requires it to restrict ALL traffic | {res}")
+        if default_seen and not default_sg_issues:
+            self._add("PASS", "VPC-04", "VPC", "default-sgs",
+                      "All default Security Groups restrict all traffic (no rules)")
 
         # VPC-03 — VPC Flow Logs
         self._log("VPC-03: VPC Flow Logs enabled on all VPCs")
@@ -1399,6 +1645,7 @@ class AWSLiveScanner:
                     if status == "ENABLED":
                         self._add("PASS", "LOG-04", "LOGGING", did,
                                   f"GuardDuty ENABLED | {did}")
+                        self._check_guardduty_features(did, d)
                     else:
                         self._add("FAIL", "LOG-04", "LOGGING", did,
                                   f"GuardDuty {status} | {did}")
@@ -1429,6 +1676,33 @@ class AWSLiveScanner:
         except Exception as e:
             self._add("FAIL", "LOG-05", "LOGGING", "securityhub", str(e))
 
+    # GuardDuty protection plans expected enabled for full threat coverage
+    _GD_FEATURES = {
+        "S3_DATA_EVENTS":         "S3 Protection",
+        "EKS_AUDIT_LOGS":         "EKS Audit Log Monitoring",
+        "EBS_MALWARE_PROTECTION": "Malware Protection (EBS)",
+        "RDS_LOGIN_EVENTS":       "RDS Protection",
+        "LAMBDA_NETWORK_LOGS":    "Lambda Protection",
+        "RUNTIME_MONITORING":     "Runtime Monitoring",
+    }
+
+    def _check_guardduty_features(self, did: str, detector: Dict) -> None:
+        """LOG-06 — GuardDuty protection plans. An ENABLED detector still leaves
+        S3/EKS/malware/RDS/Lambda/runtime coverage off unless each feature is
+        explicitly enabled. Silent on the legacy API that omits the feature list."""
+        feats = {f.get("Name"): f.get("Status") for f in detector.get("Features", [])}
+        if not feats:
+            return
+        for name, label in self._GD_FEATURES.items():
+            if name not in feats:
+                continue
+            if feats[name] == "ENABLED":
+                self._add("PASS", "LOG-06", "LOGGING", f"{did}:{name}",
+                          f"GuardDuty {label} ENABLED | {did}")
+            else:
+                self._add("WARN", "LOG-06", "LOGGING", f"{did}:{name}",
+                          f"GuardDuty {label} DISABLED — reduced threat coverage | {did}")
+
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 5: ENCRYPTION & KMS
     # ══════════════════════════════════════════════════════════════════════════
@@ -1444,6 +1718,19 @@ class AWSLiveScanner:
                     kid = key["KeyId"]
                     try:
                         meta = kms.describe_key(KeyId=kid)["KeyMetadata"]
+                        # KMS-03 — CMK pending deletion / disabled (data-access risk)
+                        if meta.get("KeyManager") == "CUSTOMER":
+                            _st = meta.get("KeyState")
+                            _dsc = meta.get("Description") or kid[:8]
+                            if _st in ("PendingDeletion", "PendingReplicaDeletion"):
+                                self._add("FAIL", "KMS-03", "KMS", kid,
+                                          f"CMK scheduled for deletion "
+                                          f"({meta.get('DeletionDate','')}) — irreversible "
+                                          f"data loss if still in use | {_dsc}")
+                            elif _st == "Disabled":
+                                self._add("FAIL", "KMS-03", "KMS", kid,
+                                          f"CMK is disabled — ciphertext under this key "
+                                          f"cannot be decrypted | {_dsc}")
                         if (meta.get("KeyManager") == "CUSTOMER"
                                 and meta.get("KeyState") == "Enabled"):
                             found    = True
@@ -1468,6 +1755,32 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 6: COMPUTE / EC2
     # ══════════════════════════════════════════════════════════════════════════
+    def _scan_ec2_user_data(self, ec2, iid: str, name: str) -> None:
+        """EC2-07 — secrets embedded in instance user-data. User-data is readable by
+        anything that can reach IMDS on the host (and via the console/API), so an
+        embedded credential is effectively plaintext-at-rest on every boot."""
+        try:
+            ud = ec2.describe_instance_attribute(
+                InstanceId=iid, Attribute="userData"
+            ).get("UserData", {}).get("Value")
+        except Exception:
+            return
+        if not ud:
+            return
+        try:
+            raw = base64.b64decode(ud)
+        except Exception:
+            return
+        if raw[:2] == b"\x1f\x8b":                     # gzip (cloud-init) — best-effort inflate
+            try:
+                raw = gzip.decompress(raw)
+            except Exception:
+                pass
+        for sec in aws_sidescan.scan_text_secrets(raw, source=f"userdata:{iid}"):
+            self._add("FAIL", "EC2-07", "EC2", name,
+                      f"Secret in user-data ({sec.kind}, preview {sec.match_preview}) "
+                      f"— readable via IMDS/console | {iid}")
+
     def _check_ec2(self):
         self._section_header("EC2")
         ec2 = self._client("ec2")
@@ -1499,6 +1812,19 @@ class AWSLiveScanner:
                                       f"IMDSv2 not enforced "
                                       f"(HttpTokens={tokens}) | {name}")
                             all_pass = False
+                        # EC2-08 — SSRF->credential choke: public IP + reachable IMDSv1
+                        # + an attached role to steal (all facts in hand; no extra API).
+                        endpoint = i.get("MetadataOptions", {}).get("HttpEndpoint", "enabled")
+                        has_role = bool(i.get("IamInstanceProfile"))
+                        if (tokens != "required" and endpoint == "enabled"
+                                and i.get("PublicIpAddress") and has_role):
+                            self._add("FAIL", "EC2-08", "EC2", name,
+                                      f"SSRF-to-credential exposure: public IP "
+                                      f"{i['PublicIpAddress']} + IMDSv1 "
+                                      f"(HttpTokens={tokens}) + attached IAM role — an SSRF "
+                                      f"on this host can read its role credentials | {name}")
+                        # EC2-07 — plaintext secret embedded in instance user-data
+                        self._scan_ec2_user_data(ec2, iid, name)
             if all_pass:
                 self._add("PASS", "EC2-04", "EC2", "all-instances",
                           "All EC2 instances enforce IMDSv2")
@@ -1547,6 +1873,60 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 7: CONTAINER SECURITY (ECR)
     # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 7b: MACHINE IMAGES (AMI)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_ami(self):
+        self._section_header("AMI")
+        self._log("AMI-01: self-owned AMIs shared publicly or cross-account "
+                  "(a public AMI exposes its full root-volume snapshot to every AWS account)")
+        try:
+            ec2    = self._client("ec2")
+            images = ec2.describe_images(Owners=["self"]).get("Images", [])
+        except Exception as e:
+            self._add("WARN", "AMI-01", "AMI", "ami", str(e))
+            return
+        if not images:
+            self._add("INFO", "AMI-01", "AMI", "ami", "No self-owned AMIs in this region")
+            return
+        exposed = 0
+        for img in images:
+            aid  = img.get("ImageId", "ami-?")
+            name = img.get("Name") or aid
+            label = f"{name} ({aid})" if name != aid else aid
+            if img.get("Public") is True:
+                exposed += 1
+                self._add("FAIL", "AMI-01", "AMI", label,
+                          f"AMI shared PUBLICLY — root-volume snapshot readable by any AWS "
+                          f"account | {aid}")
+                continue
+            # non-public: enumerate explicit cross-account launch shares
+            try:
+                perms = ec2.describe_image_attribute(
+                    ImageId=aid, Attribute="launchPermission"
+                ).get("LaunchPermissions", [])
+            except Exception:
+                perms = []
+            accounts = [p.get("UserId") for p in perms if p.get("UserId")]
+            # AMIs can also be shared to an entire AWS Organization / OU (GA feature) —
+            # readable by every account in it, so treat those as cross-account shares too.
+            orgs = [p.get("OrganizationArn") or p.get("OrganizationalUnitArn")
+                    for p in perms if p.get("OrganizationArn") or p.get("OrganizationalUnitArn")]
+            group_all = any(p.get("Group") == "all" for p in perms)
+            if group_all:
+                exposed += 1
+                self._add("FAIL", "AMI-01", "AMI", label,
+                          f"AMI launch permission grants Group=all (public) | {aid}")
+            elif accounts or orgs:
+                exposed += 1
+                shared = accounts + orgs
+                self._add("WARN", "AMI-01", "AMI", label,
+                          f"AMI shared with {len(shared)} external principal(s): "
+                          f"{', '.join(shared[:5])}{'…' if len(shared) > 5 else ''} | {aid}")
+        if exposed == 0:
+            self._add("PASS", "AMI-01", "AMI", "ami",
+                      f"All {len(images)} self-owned AMI(s) are private (no public/cross-account share)")
+
     def _check_ecr(self):
         self._section_header("ECR")
         self._log("CNT-01: ECR scan-on-push and encryption")
@@ -1571,8 +1951,64 @@ class AWSLiveScanner:
                 else:
                     self._add("FAIL", "CNT-01", "ECR", rname,
                               f"Scan-on-push=OFF enc={enc} | {rname}")
+                self._ingest_ecr_scan(ecr, repo)
         except Exception as e:
             self._add("WARN", "CNT-01", "ECR", "ecr", str(e))
+
+    def _ingest_ecr_scan(self, ecr, repo: Dict) -> None:
+        """CNT-02 — pull the ECR *native* image-scan findings for the newest image in a
+        repo and project HIGH/CRITICAL CVEs into the graph as ECRImage --HAS_VULN-->.
+        This is free basic-scan signal that surfaces even when Amazon Inspector
+        (enhanced scanning) is disabled. Bounded and fully best-effort."""
+        rname = repo["repositoryName"]
+        ruri  = repo.get("repositoryUri", rname)
+        try:
+            imgs: List[Dict] = []
+            for page in ecr.get_paginator("describe_images").paginate(
+                repositoryName=rname, filter={"tagStatus": "ANY"}
+            ):
+                imgs.extend(page.get("imageDetails", []))
+        except Exception:
+            return
+        if not imgs:
+            return
+        # imagePushedAt is a tz-aware datetime in real boto3 (and optional). Use a
+        # comparable epoch sentinel so a missing field can't raise TypeError.
+        _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        latest = max(imgs, key=lambda d: d.get("imagePushedAt") or _epoch)
+        digest = latest.get("imageDigest")
+        if not digest:
+            return
+        try:
+            resp = ecr.describe_image_scan_findings(
+                repositoryName=rname, imageId={"imageDigest": digest}
+            )
+        except Exception:
+            return   # ScanNotFoundException / not scanned yet — CNT-01 already flags this
+        sf = resp.get("imageScanFindings", {}) or {}
+        # normalise basic-scan (findings) and enhanced-scan (enhancedFindings) shapes
+        norm: List[tuple] = []
+        for f in sf.get("findings", []):
+            norm.append((f.get("name", ""), (f.get("severity") or "").upper()))
+        for ef in sf.get("enhancedFindings", []):
+            cve = (ef.get("packageVulnerabilityDetails", {}) or {}).get("vulnerabilityId", "")
+            norm.append((cve, (ef.get("severity") or "").upper()))
+        cves = [(c, sev) for c, sev in norm if c and sev in ("CRITICAL", "HIGH")]
+        if not cves:
+            return
+        g = self._ensure_graph()
+        node = f"{ruri}@{digest}"
+        g.add_node(node, "ECRImage", repository=rname, digest=digest, image_uri=ruri)
+        tags = latest.get("imageTags") or []
+        tag_s = f":{tags[0]}" if tags else ""
+        for cve, sev in cves[:100]:
+            # NB: prop key must NOT be "source"/"target"/"id"/"kind" — those collide
+            # with the node-link endpoint keys in SecurityGraph.to_dict().
+            g.add_node(cve, "Vulnerability", severity=sev, scan_source="ecr-native-scan")
+            g.add_edge(node, cve, "HAS_VULN", cve=cve, severity=sev, scan_source="ecr-native-scan")
+            self._add("FAIL", "CNT-02", "ECR", f"{rname}{tag_s}",
+                      f"container-image {sev} {cve} in newest image of {rname} "
+                      f"(ECR native scan) | {rname}@{digest[:19]}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 8: BACKUP & DR
@@ -1707,22 +2143,47 @@ class AWSLiveScanner:
                 self._add("WARN", "RDS-05", "RDS", iid,
                           f"No CloudWatch log exports | {iid}")
 
-        # RDS-06 — Public snapshot visibility
-        self._log("RDS-06: RDS snapshot public visibility")
+        # RDS-08 — IAM database authentication (defense-in-depth vs static passwords)
+        self._log("RDS-08: IAM database authentication enabled")
+        for db in _rds_instances():
+            iid    = db["DBInstanceIdentifier"]
+            engine = db.get("Engine", "")
+            # IAM auth only applies to MySQL/PostgreSQL/MariaDB/Aurora engines
+            if not any(e in engine for e in ("mysql", "postgres", "mariadb", "aurora")):
+                continue
+            if db.get("IAMDatabaseAuthenticationEnabled", False):
+                self._add("PASS", "RDS-08", "RDS", iid,
+                          f"IAM DB authentication=ON | {iid} ({engine})")
+            else:
+                self._add("WARN", "RDS-08", "RDS", iid,
+                          f"IAM DB authentication=OFF — relies on static DB passwords "
+                          f"| {iid} ({engine})")
+
+        # RDS-06 — Public snapshot visibility  +  RDS-11 — snapshot encryption at rest
+        self._log("RDS-06/RDS-11: RDS snapshot public visibility and encryption at rest")
         try:
-            snaps        = rds.describe_db_snapshots(
+            snaps = []
+            for page in rds.get_paginator("describe_db_snapshots").paginate(
                 SnapshotType="manual"
-            )["DBSnapshots"]
+            ):
+                snaps.extend(page.get("DBSnapshots", []))
             public_snaps = []
+            unencrypted  = 0
             for s in snaps:
+                sid = s["DBSnapshotIdentifier"]
+                if not s.get("Encrypted", False):
+                    unencrypted += 1
+                    self._add("FAIL", "RDS-11", "RDS", sid,
+                              f"Manual RDS snapshot NOT encrypted at rest: {sid} "
+                              f"— plaintext DB data if the snapshot is shared/leaked")
                 try:
                     attrs = rds.describe_db_snapshot_attributes(
-                        DBSnapshotIdentifier=s["DBSnapshotIdentifier"]
+                        DBSnapshotIdentifier=sid
                     )["DBSnapshotAttributesResult"]["DBSnapshotAttributes"]
                     for a in attrs:
                         if (a["AttributeName"] == "restore"
                                 and "all" in a.get("AttributeValues", [])):
-                            public_snaps.append(s["DBSnapshotIdentifier"])
+                            public_snaps.append(sid)
                 except Exception:
                     pass
             if public_snaps:
@@ -1733,6 +2194,9 @@ class AWSLiveScanner:
                 self._add("PASS", "RDS-06", "RDS", "snapshots",
                           f"No public RDS snapshots "
                           f"({len(snaps)} manual snapshots checked)")
+            if snaps and unencrypted == 0:
+                self._add("PASS", "RDS-11", "RDS", "snapshots",
+                          f"All {len(snaps)} manual RDS snapshots encrypted at rest")
         except Exception as e:
             self._add("FAIL", "RDS-06", "RDS", "rds-snapshots", str(e))
 
@@ -3398,7 +3862,9 @@ class AWSLiveScanner:
         elb = self._client("elbv2")
 
         try:
-            lbs = elb.describe_load_balancers().get("LoadBalancers", [])
+            lbs = []
+            for page in elb.get_paginator("describe_load_balancers").paginate():
+                lbs.extend(page.get("LoadBalancers", []))
         except Exception as e:
             self._add("WARN", "ELB-01", "ELB", "elb", str(e))
             return
@@ -3445,6 +3911,16 @@ class AWSLiveScanner:
                 else:
                     self._add("FAIL", "ELB-05", "ELB", name,
                               f"Drop invalid headers=OFF | {name}")
+
+                # ELB-07 — HTTP desync mitigation mode (request-smuggling defense)
+                mode = attrs.get("routing.http.desync_mitigation_mode", "defensive")
+                if mode in ("defensive", "strictest"):
+                    self._add("PASS", "ELB-07", "ELB", name,
+                              f"Desync mitigation mode='{mode}' | {name}")
+                else:
+                    self._add("WARN", "ELB-07", "ELB", name,
+                              f"Desync mitigation mode='{mode}' — HTTP request-smuggling "
+                              f"exposure (recommend 'defensive' or 'strictest') | {name}")
 
             # Listener-level checks (TLS)
             try:
@@ -3687,8 +4163,16 @@ class AWSLiveScanner:
         self._section_header("ACM")
         acm = self._client("acm")
 
+        # ListCertificates defaults to RSA_1024/RSA_2048 ONLY — must pass keyTypes to
+        # see ECDSA (EC_*) and RSA_3072/4096 certs — and it is paginated.
+        _ACM_KEY_TYPES = ["RSA_1024", "RSA_2048", "RSA_3072", "RSA_4096",
+                          "EC_prime256v1", "EC_secp384r1", "EC_secp521r1"]
         try:
-            certs = acm.list_certificates().get("CertificateSummaryList", [])
+            certs = []
+            for page in acm.get_paginator("list_certificates").paginate(
+                Includes={"keyTypes": _ACM_KEY_TYPES}
+            ):
+                certs.extend(page.get("CertificateSummaryList", []))
         except Exception as e:
             self._add("WARN", "ACM-01", "ACM", "acm", str(e))
             return
@@ -3744,6 +4228,24 @@ class AWSLiveScanner:
             else:
                 self._add("WARN", "ACM-03", "ACM", domain,
                           f"Certificate not associated with any resource | {domain}")
+
+            # ACM-04 — Unhealthy certificate status (TLS broken for the domain)
+            status = cert.get("Status", "")
+            if status in ("FAILED", "VALIDATION_TIMED_OUT", "REVOKED"):
+                self._add("FAIL", "ACM-04", "ACM", domain,
+                          f"Certificate status is {status} — TLS is broken for this "
+                          f"domain | {domain}")
+
+            # ACM-05 — Renewal risk (imported / ineligible for managed auto-renewal)
+            ctype = cert.get("Type", "")
+            if cert.get("RenewalEligibility") == "INELIGIBLE" and status == "ISSUED":
+                self._add("WARN", "ACM-05", "ACM", domain,
+                          f"Certificate is INELIGIBLE for managed renewal — it will "
+                          f"expire without action | {domain}")
+            elif ctype == "IMPORTED":
+                self._add("WARN", "ACM-05", "ACM", domain,
+                          f"Imported certificate — ACM will not auto-renew; rotate "
+                          f"manually before expiry | {domain}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 32: AMAZON SAGEMAKER
@@ -4644,14 +5146,18 @@ class AWSLiveScanner:
             rs = ((st.get("accounts") or [{}])[0]).get("resourceState") or {}
             ec2_on = (rs.get("ec2") or {}).get("status") == "ENABLED"
             ecr_on = (rs.get("ecr") or {}).get("status") == "ENABLED"
+            # lambda / lambdaCode scan plans are independently toggleable — without
+            # this, a Lambda-only Inspector account skips VULN-04 entirely.
+            lambda_on = ((rs.get("lambda") or {}).get("status") == "ENABLED"
+                         or (rs.get("lambdaCode") or {}).get("status") == "ENABLED")
         except Exception as e:
             self._add("INFO", "VULN-01", "VULN", "inspector2",
                       f"Amazon Inspector not enabled/accessible in {self.region}: {e}")
             return
-        if not (ec2_on or ecr_on):
+        if not (ec2_on or ecr_on or lambda_on):
             self._add("INFO", "VULN-01", "VULN", "inspector2",
-                      f"Amazon Inspector disabled in {self.region} (ec2/ecr not ENABLED) "
-                      "— no vulnerability signal")
+                      f"Amazon Inspector disabled in {self.region} (ec2/ecr/lambda not "
+                      "ENABLED) — no vulnerability signal")
             return
 
         g = self._ensure_graph()
@@ -4682,8 +5188,11 @@ class AWSLiveScanner:
             elif rtype == "AWS_ECR_CONTAINER_IMAGE" and rid:
                 node = rid
                 g.add_node(node, "ECRImage")
+            elif rtype == "AWS_LAMBDA_FUNCTION" and rid:
+                node = rid
+                g.add_node(node, "LambdaFunction", function_arn=rid)
             else:
-                continue                                    # defer Lambda plane
+                continue                                    # non-graphable resource
             g.add_node(v["cve"], "Vulnerability", severity=v["severity"], epss=v["epss"],
                        kev=v["kev"], exploit_available=v["exploit_available"],
                        fix_available=v["fix_available"])
@@ -4695,6 +5204,8 @@ class AWSLiveScanner:
                 fid, tag = "VULN-02", "KEV/in-the-wild"
             elif rtype == "AWS_ECR_CONTAINER_IMAGE":
                 fid, tag = "VULN-03", "container-image"
+            elif rtype == "AWS_LAMBDA_FUNCTION":
+                fid, tag = "VULN-04", "lambda-dependency"
             else:
                 fid, tag = "VULN-01", "exploitable" if aws_deepplane.is_exploitable(v) else "high/critical"
             self._add("FAIL", fid, "VULN", rid,
@@ -5204,6 +5715,7 @@ class AWSLiveScanner:
             "LOGGING":        self._check_logging,
             "KMS":            self._check_kms,
             "EC2":            self._check_ec2,
+            "AMI":            self._check_ami,
             "ECR":            self._check_ecr,
             "BACKUP":         self._check_backup,
             "RDS":            self._check_rds,
