@@ -238,6 +238,43 @@ def test_sidescan_app_dependency_end_to_end():
     assert any(v.cve == "CVE-2024-2" for v in res.vulns)
 
 
+# ── SBOM export (CycloneDX 1.5 + SPDX 2.3) ───────────────────────────────────
+def _sbom_inv():
+    return [ss._lang_pkg("npm", "lodash", "4.17.20"),
+            ss._lang_pkg("pypi", "django", "3.2.0"),
+            ss._lang_pkg("npm", "lodash", "4.17.20")]   # duplicate -> deduped
+
+
+def test_sbom_cyclonedx_shape_and_dedup():
+    doc = ss.sbom_cyclonedx(_sbom_inv(), created="2026-07-19T00:00:00Z",
+                            serial="urn:uuid:1111")
+    assert doc["bomFormat"] == "CycloneDX" and doc["specVersion"] == "1.5"
+    assert doc["serialNumber"] == "urn:uuid:1111"
+    assert len(doc["components"]) == 2                  # deduped
+    comp = next(c for c in doc["components"] if c["name"] == "lodash")
+    assert comp["type"] == "library" and comp["version"] == "4.17.20"
+    assert comp["purl"] == "pkg:npm/lodash@4.17.20" and comp["bom-ref"] == comp["purl"]
+
+
+def test_sbom_spdx_shape():
+    doc = ss.sbom_spdx(_sbom_inv(), created="2026-07-19T00:00:00Z", name="w")
+    assert doc["spdxVersion"] == "SPDX-2.3" and doc["SPDXID"] == "SPDXRef-DOCUMENT"
+    assert len(doc["packages"]) == 2
+    ids = {p["SPDXID"] for p in doc["packages"]}
+    assert ids == {"SPDXRef-Package-0", "SPDXRef-Package-1"}   # unique
+    p0 = doc["packages"][0]
+    assert p0["downloadLocation"] == "NOASSERTION"
+    assert p0["externalRefs"][0]["referenceType"] == "purl"
+
+
+def test_sbom_deterministic():
+    inv = _sbom_inv()
+    import json as _j
+    a = _j.dumps(ss.sbom_cyclonedx(inv, created="T"), sort_keys=True)
+    b = _j.dumps(ss.sbom_cyclonedx(inv, created="T"), sort_keys=True)
+    assert a == b                                       # same input -> identical output
+
+
 def test_sidescan_app_deps_without_os_release():
     # a scratch/app-only image with no /etc/os-release must still scan lockfiles
     ext = ss.DictExtractor({

@@ -1401,6 +1401,82 @@ def collect_app_packages(ext: FilesystemExtractor,
     return out
 
 
+# ── SBOM export (CycloneDX 1.5 + SPDX 2.3) ───────────────────────────────────
+# Pure + deterministic: timestamps/serial/namespace are passed in (never generated
+# here), so identical inventory -> byte-identical SBOM (testable, reproducible).
+def _sbom_components(packages: List[Package]) -> List[Package]:
+    seen, out = set(), []
+    for p in packages:
+        key = p.purl or (p.origin, p.name, p.version)
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
+
+
+def sbom_cyclonedx(packages: List[Package], *, created: Optional[str] = None,
+                   component_name: str = "scanned-workload",
+                   serial: Optional[str] = None) -> dict:
+    """CycloneDX 1.5 SBOM document (dict; caller json.dumps). Each Package -> a
+    library component with name/version/purl and a purl bom-ref."""
+    comps = _sbom_components(packages)
+    doc = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "version": 1,
+        "metadata": {"component": {"type": "container", "name": component_name}},
+        "components": [
+            {"type": "library",
+             "bom-ref": p.purl or f"{p.origin}:{p.name}@{p.version}",
+             "name": p.name, "version": p.version,
+             **({"purl": p.purl} if p.purl else {})}
+            for p in comps
+        ],
+    }
+    if serial:
+        doc["serialNumber"] = serial
+    if created:
+        doc["metadata"]["timestamp"] = created
+    return doc
+
+
+def sbom_spdx(packages: List[Package], *, created: Optional[str] = None,
+              name: str = "scanned-workload",
+              namespace: str = "https://overwatch.local/sbom/scanned-workload") -> dict:
+    """SPDX 2.3 SBOM document (dict; caller json.dumps). Each Package -> an SPDX
+    package with versionInfo + a PACKAGE-MANAGER purl externalRef."""
+    comps = _sbom_components(packages)
+    pkgs = []
+    for i, p in enumerate(comps):
+        entry = {
+            "SPDXID": f"SPDXRef-Package-{i}",
+            "name": p.name,
+            "versionInfo": p.version,
+            "downloadLocation": "NOASSERTION",
+            "licenseConcluded": "NOASSERTION",
+            "licenseDeclared": "NOASSERTION",
+            "copyrightText": "NOASSERTION",
+        }
+        if p.purl:
+            entry["externalRefs"] = [{
+                "referenceCategory": "PACKAGE-MANAGER",
+                "referenceType": "purl",
+                "referenceLocator": p.purl}]
+        pkgs.append(entry)
+    doc = {
+        "spdxVersion": "SPDX-2.3",
+        "dataLicense": "CC0-1.0",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "name": name,
+        "documentNamespace": namespace,
+        "creationInfo": {"creators": ["Tool: OverWatch-sidescan"]},
+        "packages": pkgs,
+    }
+    if created:
+        doc["creationInfo"]["created"] = created
+    return doc
+
+
 # ── secrets ───────────────────────────────────────────────────────────────────
 def shannon_entropy(s: str) -> float:
     if not s:
