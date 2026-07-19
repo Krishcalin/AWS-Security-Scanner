@@ -711,12 +711,12 @@ def _semver_parse(v: str):
     v = v.split("+", 1)[0]                     # SemVer §10: build metadata ignored
     core, _, pre = v.partition("-")
     nums = []
-    for part in (core.split(".") + ["0", "0", "0"])[:3]:
+    for part in core.split("."):
         try:
             nums.append(int(part))
         except ValueError:
             nums.append(0)
-    return nums, pre
+    return (nums or [0]), pre
 
 
 def _semver_pre_cmp(a: str, b: str) -> int:
@@ -745,6 +745,9 @@ def _semver_pre_cmp(a: str, b: str) -> int:
 def semver_vercmp(a: str, b: str) -> int:
     an, ap = _semver_parse(a)
     bn, bp = _semver_parse(b)
+    n = max(len(an), len(bn))                  # compare ALL core parts (pad shorter)
+    an = an + [0] * (n - len(an))
+    bn = bn + [0] * (n - len(bn))
     if an != bn:
         return (an > bn) - (an < bn)
     return _semver_pre_cmp(ap, bp)
@@ -827,7 +830,8 @@ def _pep440_key(v: str):
     _post = _NEG_INF if post is None else post
     _dev = _POS_INF if dev is None else dev
     _local = _NEG_INF if local is None else tuple(
-        (int(p), "") if p.isdigit() else (_NEG_INF, p) for p in re.split(r"[-_.]", local))
+        (int(p), "") if p.isdigit() else (_NEG_INF, p.lower())      # PEP 440 lowercases local
+        for p in re.split(r"[-_.]", local))
     return (epoch, release, _pre, _post, _dev, _local)
 
 
@@ -1139,7 +1143,10 @@ def parse_package_lock(data) -> List[Package]:
         for path, meta in d["packages"].items():
             if not path or not isinstance(meta, dict) or meta.get("link"):
                 continue                      # "" is the root project; link=workspace symlink
-            add(path.rsplit("node_modules/", 1)[-1], meta.get("version"))
+            # workspace members are keyed by on-disk path (no node_modules/) — use meta name
+            name = (path.rsplit("node_modules/", 1)[-1] if "node_modules/" in path
+                    else meta.get("name"))
+            add(name, meta.get("version"))
     else:
         def walk(deps):
             if not isinstance(deps, dict):
@@ -1164,6 +1171,9 @@ def parse_yarn_lock(data) -> List[Package]:
             continue
         if raw[0] not in (" ", "\t"):                 # block header (descriptor keys)
             hdr = raw.rstrip(":").strip()
+            if "@" not in hdr:                        # Berry structural key (__metadata:) — skip
+                descriptors = []
+                continue
             descriptors = [d.strip().strip('"') for d in hdr.split(",")]
             continue
         m = re.match(r'\s*version:?\s+"?([^"\s]+)"?\s*$', raw)
@@ -1258,23 +1268,61 @@ def parse_cargo_lock(data) -> List[Package]:
 
 def parse_go_mod(data) -> List[Package]:
     """Go go.mod require directives (MVS-selected versions; go.sum is NOT used —
-    it over-reports). Honors replace/exclude; strips the leading 'v'."""
+    it over-reports). Honors single-line AND factored-block replace/exclude, and
+    version-qualified replaces; strips the leading 'v'."""
     text = _asdict_text(data)
+    lines = text.splitlines()
     out: List[Package] = []
     seen = set()
-    replaces: Dict[str, Optional[Tuple[str, Optional[str]]]] = {}
-    for m in re.finditer(r'(?m)^\s*replace\s+(\S+)(?:\s+\S+)?\s+=>\s+(\S+)(?:\s+(\S+))?', text):
-        old, new, newv = m.group(1), m.group(2), m.group(3)
-        replaces[old] = (new, newv) if not new.startswith((".", "/")) else None
+    # replaces keyed by (path, lhs_version_or_None); value None = local-path replace
+    replaces: Dict[Tuple[str, Optional[str]], Optional[Tuple[str, Optional[str]]]] = {}
     excludes = set()
-    for m in re.finditer(r'(?m)^\s*exclude\s+(\S+)\s+(\S+)', text):
-        excludes.add((m.group(1), m.group(2)))
+
+    def record_replace(entry: str):
+        m = re.match(r'^(\S+)(?:\s+(\S+))?\s+=>\s+(\S+)(?:\s+(\S+))?\s*$',
+                     entry.split("//", 1)[0].strip())
+        if not m:
+            return
+        old, oldv, new, newv = m.group(1), m.group(2), m.group(3), m.group(4)
+        replaces[(old, oldv)] = None if new.startswith((".", "/")) else (new, newv)
+
+    def record_exclude(entry: str):
+        p = entry.split("//", 1)[0].split()
+        if len(p) >= 2:
+            excludes.add((p[0], p[1]))
+
+    # pass 1 — collect replace/exclude (single-line + factored block)
+    block = None
+    for line in lines:
+        s = line.strip()
+        if block == "replace":
+            if s == ")":
+                block = None
+            elif s:
+                record_replace(s)
+            continue
+        if block == "exclude":
+            if s == ")":
+                block = None
+            elif s:
+                record_exclude(s)
+            continue
+        if s.startswith("replace ("):
+            block = "replace"
+        elif s.startswith("exclude ("):
+            block = "exclude"
+        elif s.startswith("replace "):
+            record_replace(s[8:])
+        elif s.startswith("exclude "):
+            record_exclude(s[8:])
 
     def add(path, ver):
         if (path, ver) in excludes:
             return
-        if path in replaces:
-            r = replaces[path]
+        r_key = (path, ver) if (path, ver) in replaces else (
+            (path, None) if (path, None) in replaces else None)
+        if r_key is not None:
+            r = replaces[r_key]
             if r is None or r[1] is None:
                 return                        # replaced by a local path -> not a release
             path, ver = r[0], r[1]
@@ -1283,8 +1331,9 @@ def parse_go_mod(data) -> List[Package]:
             seen.add((path, v))
             out.append(_lang_pkg("go", path, v))
 
+    # pass 2 — requires
     in_block = False
-    for line in text.splitlines():
+    for line in lines:
         s = line.strip()
         if s.startswith("require ("):
             in_block = True
@@ -1341,8 +1390,11 @@ def parse_requirements(data) -> List[Package]:
         line = raw.split("#", 1)[0].strip()
         if not line or line.startswith("-"):
             continue
-        line = line.split(";", 1)[0].strip()          # drop env marker
-        m = re.match(r'^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*===?\s*([^\s,]+)\s*$', line)
+        line = line.split(";", 1)[0]                   # drop env marker
+        # drop pip-compile/pip-freeze --hash options and a trailing '\' continuation
+        # (a hash-pinned exact pin is still an exact pin — must not be silently dropped)
+        line = re.split(r'\s+(?:--hash|\\)', line, 1)[0].strip()
+        m = re.match(r'^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*===?\s*([^\s,;]+)\s*$', line)
         if not m or "*" in m.group(2):                # wildcard pin is a range
             continue
         nm, ver = _pep503(m.group(1)), m.group(2)

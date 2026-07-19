@@ -288,3 +288,82 @@ def test_sidescan_app_deps_without_os_release():
     res = ss.sidescan_filesystem(ext, feed, {}, set())
     assert res.os is None
     assert any(v.cve == "CVE-R" for v in res.vulns)   # app deps scanned despite no OS
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Regressions for the adversarial-verify fixes (7 unique defects)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# 1/3. go.mod factored (block-form) replace/exclude + version-qualified replace
+def test_go_mod_block_form_replace_and_exclude():
+    data = b'''module x
+require (
+    github.com/foo/bar v1.2.0
+    github.com/baz/qux v0.5.0
+    github.com/ex/cluded v1.0.0
+)
+replace (
+    github.com/foo/bar => github.com/myfork/bar v1.9.9
+    github.com/baz/qux => ./local
+)
+exclude (
+    github.com/ex/cluded v1.0.0
+)
+'''
+    pkgs = {(p.name, p.version) for p in ss.parse_go_mod(data)}
+    assert ("github.com/myfork/bar", "1.9.9") in pkgs   # block replace applied
+    assert not any(n == "github.com/baz/qux" for n, _ in pkgs)     # local-path replace -> dropped
+    assert not any(n == "github.com/ex/cluded" for n, _ in pkgs)   # block exclude applied
+    assert not any(v == "1.2.0" for _, v in pkgs)       # upstream (replaced) version not emitted
+
+
+def test_go_mod_version_qualified_replace_only_matching_version():
+    # replace applies to v1.0.0 only; required is v1.5.0 -> replace must NOT apply
+    data = b'''module x
+require example.com/a v1.5.0
+replace example.com/a v1.0.0 => example.com/b v2.0.0
+'''
+    pkgs = {(p.name, p.version) for p in ss.parse_go_mod(data)}
+    assert ("example.com/a", "1.5.0") in pkgs           # real dep kept
+    assert not any(n == "example.com/b" for n, _ in pkgs)
+
+
+# 2. requirements.txt: hash-pinned / continuation exact pins must be captured
+def test_requirements_hash_pinned_pins_captured():
+    data = (b"django==4.2.0 \\\n    --hash=sha256:aaaa\n"
+            b"requests==2.31.0 --hash=sha256:cccc\n"
+            b"flask==3.0.0\n")
+    pkgs = {(p.name, p.version) for p in ss.parse_requirements(data)}
+    assert ("django", "4.2.0") in pkgs and ("requests", "2.31.0") in pkgs and ("flask", "3.0.0") in pkgs
+
+
+# 4. yarn Berry __metadata block is not emitted as a package
+def test_yarn_berry_metadata_not_a_package():
+    data = (b'__metadata:\n  version: 6\n  cacheKey: 8\n\n'
+            b'"lodash@npm:^4.17.15":\n  version: 4.17.21\n')
+    pkgs = {(p.name, p.version) for p in ss.parse_yarn_lock(data)}
+    assert ("lodash", "4.17.21") in pkgs
+    assert not any(n == "__metadata" for n, _ in pkgs)
+
+
+# 5. package-lock v2/v3 workspace member uses meta name, not the on-disk path
+def test_package_lock_workspace_member_name():
+    data = (b'{"lockfileVersion":3,"packages":{'
+            b'"":{"name":"root"},'
+            b'"packages/app":{"name":"app","version":"1.0.0"},'
+            b'"node_modules/lodash":{"version":"4.17.20"}}}')
+    pkgs = {(p.name, p.version) for p in ss.parse_package_lock(data)}
+    assert ("app", "1.0.0") in pkgs                     # meta name, not "packages/app"
+    assert not any("/" in n for n, _ in pkgs)
+
+
+# 6. semver compares all core parts (no 4-part truncation)
+def test_semver_four_part_core():
+    assert ss.semver_vercmp("1.2.3.4", "1.2.3.5") == -1
+    assert ss.semver_vercmp("1.2.3.4", "1.2.3.4") == 0
+    assert ss.semver_vercmp("1.2", "1.2.0") == 0        # short still equal
+
+
+# 7. pep440 local-version case-insensitivity
+def test_pep440_local_case_insensitive():
+    assert ss.pep440_vercmp("1.0+ABC", "1.0+abc") == 0
