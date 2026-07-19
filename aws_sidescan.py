@@ -33,6 +33,7 @@ semver is WRONG for all three. See dpkg_vercmp / rpm_vercmp / apk_vercmp.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import struct
@@ -699,6 +700,144 @@ def apk_vercmp(a: str, b: str) -> int:
     return 0
 
 
+# ── language-ecosystem version comparators ───────────────────────────────────
+# semver (npm/Go/crates.io), PEP 440 (PyPI), Gem::Version (RubyGems). Each returns
+# strictly -1/0/1 as version_affected requires. dpkg/rpm/apk are WRONG for these
+# (prerelease/epoch/post/local ordering differs).
+def _semver_parse(v: str):
+    v = (v or "").strip()
+    if v[:1] in ("v", "V", "="):
+        v = v[1:]
+    v = v.split("+", 1)[0]                     # SemVer §10: build metadata ignored
+    core, _, pre = v.partition("-")
+    nums = []
+    for part in (core.split(".") + ["0", "0", "0"])[:3]:
+        try:
+            nums.append(int(part))
+        except ValueError:
+            nums.append(0)
+    return nums, pre
+
+
+def _semver_pre_cmp(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return 1                              # release > prerelease
+    if not b:
+        return -1
+    ai, bi = a.split("."), b.split(".")
+    for x, y in zip(ai, bi):
+        xd, yd = x.isdigit(), y.isdigit()
+        if xd and yd:
+            c = (int(x) > int(y)) - (int(x) < int(y))
+        elif xd:
+            c = -1                            # numeric identifier < alphanumeric
+        elif yd:
+            c = 1
+        else:
+            c = (x > y) - (x < y)
+        if c:
+            return c
+    return (len(ai) > len(bi)) - (len(ai) < len(bi))   # longer prerelease set wins
+
+
+def semver_vercmp(a: str, b: str) -> int:
+    an, ap = _semver_parse(a)
+    bn, bp = _semver_parse(b)
+    if an != bn:
+        return (an > bn) - (an < bn)
+    return _semver_pre_cmp(ap, bp)
+
+
+def _gem_canonical(v: str):
+    segs = [int(t) if t.isdigit() else t for t in re.findall(r"\d+|[A-Za-z]+", v or "")]
+    first_str = next((i for i, s in enumerate(segs) if isinstance(s, str)), len(segs))
+    num_part, str_part = segs[:first_str], segs[first_str:]
+    while num_part and num_part[-1] == 0:
+        num_part.pop()
+    while str_part and str_part[-1] == 0:
+        str_part.pop()
+    return num_part + str_part
+
+
+def gem_vercmp(a: str, b: str) -> int:
+    L, R = _gem_canonical(a), _gem_canonical(b)
+    for i in range(max(len(L), len(R))):
+        lhs = L[i] if i < len(L) else 0
+        rhs = R[i] if i < len(R) else 0
+        if lhs == rhs:
+            continue
+        l_str, r_str = isinstance(lhs, str), isinstance(rhs, str)
+        if l_str and not r_str:
+            return -1                         # string segment < numeric (prerelease low)
+        if r_str and not l_str:
+            return 1
+        return -1 if lhs < rhs else 1
+    return 0
+
+
+class _InfType:
+    def __init__(self, sign): self._s = sign
+    def __repr__(self): return "Inf" if self._s > 0 else "-Inf"
+    def __eq__(self, o): return isinstance(o, _InfType) and o._s == self._s
+    def __hash__(self): return hash(("_Inf", self._s))
+    def __lt__(self, o): return self._s < 0 and not (self == o)
+    def __le__(self, o): return self._s < 0 or self == o
+    def __gt__(self, o): return self._s > 0 and not (self == o)
+    def __ge__(self, o): return self._s > 0 or self == o
+
+
+_POS_INF, _NEG_INF = _InfType(1), _InfType(-1)
+_PEP440_RE = re.compile(r"""
+    ^\s*v?
+    (?:(?P<epoch>\d+)!)?
+    (?P<release>\d+(?:\.\d+)*)
+    (?P<pre>[-_.]?(?P<pre_l>a|b|c|rc|alpha|beta|pre|preview)[-_.]?(?P<pre_n>\d+)?)?
+    (?P<post>(?:-(?P<post_n1>\d+))|(?:[-_.]?(?P<post_l>post|rev|r)[-_.]?(?P<post_n>\d+)?))?
+    (?P<dev>[-_.]?dev[-_.]?(?P<dev_n>\d+)?)?
+    (?:\+(?P<local>[a-z0-9]+(?:[-_.][a-z0-9]+)*))?
+    \s*$
+""", re.VERBOSE | re.IGNORECASE)
+
+
+def _pep440_key(v: str):
+    m = _PEP440_RE.match(v or "")
+    if not m:
+        return None
+    epoch = int(m.group("epoch") or 0)
+    rel = [int(x) for x in m.group("release").split(".")]
+    while len(rel) > 1 and rel[-1] == 0:
+        rel.pop()
+    release = tuple(rel)
+    pre = None
+    if m.group("pre_l"):
+        l = m.group("pre_l").lower()
+        l = {"alpha": "a", "beta": "b", "c": "rc", "pre": "rc", "preview": "rc"}.get(l, l)
+        pre = (l, int(m.group("pre_n") or 0))
+    post = None
+    if m.group("post_n1") is not None:
+        post = int(m.group("post_n1"))
+    elif m.group("post_l"):
+        post = int(m.group("post_n") or 0)
+    dev = int(m.group("dev_n") or 0) if m.group("dev") else None
+    local = m.group("local")
+    _pre = _NEG_INF if (pre is None and post is None and dev is not None) else (
+        _POS_INF if pre is None else pre)
+    _post = _NEG_INF if post is None else post
+    _dev = _POS_INF if dev is None else dev
+    _local = _NEG_INF if local is None else tuple(
+        (int(p), "") if p.isdigit() else (_NEG_INF, p) for p in re.split(r"[-_.]", local))
+    return (epoch, release, _pre, _post, _dev, _local)
+
+
+def pep440_vercmp(a: str, b: str) -> int:
+    ka, kb = _pep440_key(a), _pep440_key(b)
+    if ka is None or kb is None:            # non-PEP440 (e.g. a URL/git ref) -> string fallback
+        return (a > b) - (a < b)
+    return (ka > kb) - (ka < kb)
+
+
 def cmp_for(origin: str) -> Callable[[str, str], int]:
     if origin == "dpkg":
         return dpkg_vercmp
@@ -706,6 +845,12 @@ def cmp_for(origin: str) -> Callable[[str, str], int]:
         return rpm_vercmp_str
     if origin == "apk":
         return apk_vercmp
+    if origin in ("npm", "go", "golang", "cargo", "crates.io"):
+        return semver_vercmp
+    if origin == "pypi":
+        return pep440_vercmp
+    if origin in ("gem", "rubygems"):
+        return gem_vercmp
     return dpkg_vercmp
 
 
@@ -913,14 +1058,347 @@ def _record_affects(rec: dict, pkg: Package, cmp) -> Tuple[bool, Optional[str]]:
         if aname not in (pkg.name.lower(), (pkg.source or "").lower()):
             continue
         for rng in aff.get("ranges", []):
-            if rng.get("type") == "ECOSYSTEM":
-                ok, fixed = version_affected(pkg.version, rng.get("events", []), cmp)
-                if ok:
-                    return True, fixed
+            rtype = rng.get("type")
+            # SEMVER ranges (npm/Go/crates.io) ALWAYS use the semver comparator,
+            # regardless of origin; ECOSYSTEM ranges use the origin's comparator.
+            if rtype == "SEMVER":
+                rcmp = semver_vercmp
+            elif rtype == "ECOSYSTEM":
+                rcmp = cmp
+            else:
+                continue                      # GIT ranges are not version-evaluable here
+            ok, fixed = version_affected(pkg.version, rng.get("events", []), rcmp)
+            if ok:
+                return True, fixed
         vlist = aff.get("versions") or []
-        if pkg.version in vlist or _to_evr(pkg.version).version in vlist:
+        if pkg.version in vlist:
+            return True, None
+        # EVR-stripping fallback is rpm/dpkg-only: a language prerelease like
+        # '1.2.3-beta' must NOT collapse to '1.2.3' and false-match versions:['1.2.3'].
+        if pkg.origin in ("rpm", "dpkg") and _to_evr(pkg.version).version in vlist:
             return True, None
     return False, None
+
+
+# ── language dependency lockfile parsers (app-dependency CVE = CWPP-06) ───────
+# Each yields the existing Package dataclass; the OSV pipeline (match_vulns/OSVFeed/
+# version_affected) is reused UNCHANGED. source=name suppresses match_vulns' Linux
+# binary-vs-source second query; arch="". ecosystem is the byte-exact OSV string.
+_OSV_ECO = {"npm": "npm", "pypi": "PyPI", "go": "Go", "gem": "RubyGems",
+            "cargo": "crates.io", "maven": "Maven"}
+
+
+def _pep503(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name or "").lower()
+
+
+def _lang_purl(origin: str, name: str, version: str) -> str:
+    if origin == "npm":
+        nm = ("%40" + name[1:]) if name.startswith("@") else name
+        return f"pkg:npm/{nm}@{version}"
+    if origin == "pypi":
+        return f"pkg:pypi/{name}@{version}"
+    if origin == "go":
+        return f"pkg:golang/{name}@v{version}"
+    if origin == "gem":
+        return f"pkg:gem/{name}@{version}"
+    if origin == "cargo":
+        return f"pkg:cargo/{name}@{version}"
+    if origin == "maven":
+        gid, _, aid = name.partition(":")
+        return f"pkg:maven/{gid}/{aid}@{version}"
+    return f"pkg:{origin}/{name}@{version}"
+
+
+def _lang_pkg(origin: str, name: str, version: str) -> Package:
+    return Package(name=name, version=version, arch="", source=name,
+                   source_version=version, ecosystem=_OSV_ECO[origin],
+                   purl=_lang_purl(origin, name, version), origin=origin)
+
+
+def _asdict_text(data) -> str:
+    return data.decode("utf-8", "replace") if isinstance(data, (bytes, bytearray)) else (data or "")
+
+
+def parse_package_lock(data) -> List[Package]:
+    """npm package-lock.json / npm-shrinkwrap.json (lockfileVersion 1 vs 2/3)."""
+    out: List[Package] = []
+    try:
+        d = json.loads(_asdict_text(data))
+    except Exception:
+        return out
+    seen = set()
+
+    def add(name, ver):
+        if name and ver and isinstance(ver, str) and (name, ver) not in seen:
+            seen.add((name, ver))
+            out.append(_lang_pkg("npm", name, ver))
+
+    lfv = d.get("lockfileVersion", 1)
+    if lfv >= 2 and isinstance(d.get("packages"), dict):
+        for path, meta in d["packages"].items():
+            if not path or not isinstance(meta, dict) or meta.get("link"):
+                continue                      # "" is the root project; link=workspace symlink
+            add(path.rsplit("node_modules/", 1)[-1], meta.get("version"))
+    else:
+        def walk(deps):
+            if not isinstance(deps, dict):
+                return
+            for name, node in deps.items():
+                if isinstance(node, dict):
+                    add(name, node.get("version"))
+                    walk(node.get("dependencies"))
+        walk(d.get("dependencies"))
+    return out
+
+
+def parse_yarn_lock(data) -> List[Package]:
+    """Yarn v1 classic (custom text) + Yarn Berry v2+ (YAML-ish). The resolved
+    exact version is the `version "x"` / `version: x` line; descriptors hold ranges."""
+    text = _asdict_text(data)
+    out: List[Package] = []
+    seen = set()
+    descriptors: List[str] = []
+    for raw in text.splitlines():
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        if raw[0] not in (" ", "\t"):                 # block header (descriptor keys)
+            hdr = raw.rstrip(":").strip()
+            descriptors = [d.strip().strip('"') for d in hdr.split(",")]
+            continue
+        m = re.match(r'\s*version:?\s+"?([^"\s]+)"?\s*$', raw)
+        if not m or not descriptors:
+            continue
+        ver = m.group(1)
+        for desc in descriptors:
+            # Berry protocol: name@npm:range / name@workspace:... — keep only npm/plain
+            if "@npm:" in desc:
+                name = desc.split("@npm:", 1)[0]
+            elif re.search(r"@(workspace|file|link|portal|patch|exec):", desc):
+                continue
+            else:
+                name = desc.rsplit("@", 1)[0]
+            name = name.strip()
+            if name and (name, ver) not in seen:
+                seen.add((name, ver))
+                out.append(_lang_pkg("npm", name, ver))
+        descriptors = []
+    return out
+
+
+def parse_pipfile_lock(data) -> List[Package]:
+    """Pipenv Pipfile.lock (JSON; default + develop, versions stored as '==X')."""
+    out: List[Package] = []
+    try:
+        d = json.loads(_asdict_text(data))
+    except Exception:
+        return out
+    seen = set()
+    for group in ("default", "develop"):
+        for name, meta in (d.get(group) or {}).items():
+            ver = meta.get("version") if isinstance(meta, dict) else None
+            if not ver or not isinstance(ver, str):
+                continue                      # VCS/editable entries have no version
+            v = ver[2:] if ver.startswith("==") else ver
+            nm = _pep503(name)
+            if (nm, v) not in seen:
+                seen.add((nm, v))
+                out.append(_lang_pkg("pypi", nm, v))
+    return out
+
+
+def parse_poetry_lock(data) -> List[Package]:
+    """Poetry poetry.lock (TOML [[package]]). Minimal stdlib-only regex reader
+    (3.10-compatible, no tomllib). Skips git/directory/file/url sources."""
+    text = _asdict_text(data)
+    out: List[Package] = []
+    seen = set()
+    for blk in re.split(r"(?m)^\[\[package\]\]\s*$", text)[1:]:
+        nm = re.search(r'(?m)^\s*name\s*=\s*"([^"]+)"', blk)
+        ver = re.search(r'(?m)^\s*version\s*=\s*"([^"]+)"', blk)
+        if not nm or not ver:
+            continue
+        if re.search(r'(?m)^\s*type\s*=\s*"(git|directory|file|url)"', blk):
+            continue                          # non-PyPI source
+        name, v = _pep503(nm.group(1)), ver.group(1)
+        if (name, v) not in seen:
+            seen.add((name, v))
+            out.append(_lang_pkg("pypi", name, v))
+    return out
+
+
+def _toml_packages(text: str):
+    """Yield {key: str-val} for each [[package]] block, stopping at the first
+    sub-table line. Enough for poetry.lock/Cargo.lock top-level string fields."""
+    for blk in re.split(r"(?m)^\[\[package\]\]\s*$", text)[1:]:
+        fields: Dict[str, str] = {}
+        for line in blk.splitlines():
+            if line.startswith("["):
+                break
+            m = re.match(r'\s*([A-Za-z0-9_-]+)\s*=\s*"([^"]*)"', line)
+            if m:
+                fields.setdefault(m.group(1), m.group(2))
+        if fields:
+            yield fields
+
+
+def parse_cargo_lock(data) -> List[Package]:
+    """Rust Cargo.lock (TOML [[package]]). Only real crates.io registry releases."""
+    out: List[Package] = []
+    seen = set()
+    for f in _toml_packages(_asdict_text(data)):
+        name, ver, src = f.get("name"), f.get("version"), f.get("source", "")
+        if not name or not ver or not src.startswith("registry+"):
+            continue                          # workspace crate / git+ / path+ -> skip
+        if (name, ver) not in seen:
+            seen.add((name, ver))
+            out.append(_lang_pkg("cargo", name, ver))
+    return out
+
+
+def parse_go_mod(data) -> List[Package]:
+    """Go go.mod require directives (MVS-selected versions; go.sum is NOT used —
+    it over-reports). Honors replace/exclude; strips the leading 'v'."""
+    text = _asdict_text(data)
+    out: List[Package] = []
+    seen = set()
+    replaces: Dict[str, Optional[Tuple[str, Optional[str]]]] = {}
+    for m in re.finditer(r'(?m)^\s*replace\s+(\S+)(?:\s+\S+)?\s+=>\s+(\S+)(?:\s+(\S+))?', text):
+        old, new, newv = m.group(1), m.group(2), m.group(3)
+        replaces[old] = (new, newv) if not new.startswith((".", "/")) else None
+    excludes = set()
+    for m in re.finditer(r'(?m)^\s*exclude\s+(\S+)\s+(\S+)', text):
+        excludes.add((m.group(1), m.group(2)))
+
+    def add(path, ver):
+        if (path, ver) in excludes:
+            return
+        if path in replaces:
+            r = replaces[path]
+            if r is None or r[1] is None:
+                return                        # replaced by a local path -> not a release
+            path, ver = r[0], r[1]
+        v = ver[1:] if ver[:1] == "v" else ver
+        if path and v and (path, v) not in seen:
+            seen.add((path, v))
+            out.append(_lang_pkg("go", path, v))
+
+    in_block = False
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("require ("):
+            in_block = True
+            continue
+        if in_block:
+            if s == ")":
+                in_block = False
+                continue
+            if s and not s.startswith("//"):
+                parts = s.split()
+                if len(parts) >= 2:
+                    add(parts[0], parts[1])
+        elif s.startswith("require "):
+            parts = s[8:].split()
+            if len(parts) >= 2:
+                add(parts[0], parts[1])
+    return out
+
+
+def parse_gemfile_lock(data) -> List[Package]:
+    """Ruby Gemfile.lock — the GEM section's specs: block (4-space-indented resolved
+    versions in parens). Strips a platform suffix (nokogiri (1.15.0-x86_64-linux))."""
+    text = _asdict_text(data)
+    out: List[Package] = []
+    seen = set()
+    section = None
+    in_specs = False
+    for line in text.splitlines():
+        if line and not line[0].isspace():
+            section = line.strip()
+            in_specs = False
+            continue
+        if section == "GEM" and line.strip() == "specs:":
+            in_specs = True
+            continue
+        if in_specs:
+            m = re.match(r'^    ([A-Za-z0-9._-]+) \(([^)]+)\)\s*$', line)
+            if m:
+                name = m.group(1)
+                ver = m.group(2).split("-", 1)[0]      # drop platform suffix
+                if (name, ver) not in seen:
+                    seen.add((name, ver))
+                    out.append(_lang_pkg("gem", name, ver))
+    return out
+
+
+def parse_requirements(data) -> List[Package]:
+    """pip requirements.txt — best-effort: only single '==' / '===' exact pins
+    (a manifest, not a lockfile; ranges and transitive deps are not captured)."""
+    text = _asdict_text(data)
+    out: List[Package] = []
+    seen = set()
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        line = line.split(";", 1)[0].strip()          # drop env marker
+        m = re.match(r'^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*===?\s*([^\s,]+)\s*$', line)
+        if not m or "*" in m.group(2):                # wildcard pin is a range
+            continue
+        nm, ver = _pep503(m.group(1)), m.group(2)
+        if (nm, ver) not in seen:
+            seen.add((nm, ver))
+            out.append(_lang_pkg("pypi", nm, ver))
+    return out
+
+
+_LOCKFILE_PARSERS = {
+    "package-lock.json":   parse_package_lock,
+    "npm-shrinkwrap.json": parse_package_lock,
+    "yarn.lock":           parse_yarn_lock,
+    "Pipfile.lock":        parse_pipfile_lock,
+    "poetry.lock":         parse_poetry_lock,
+    "Cargo.lock":          parse_cargo_lock,
+    "go.mod":              parse_go_mod,
+    "Gemfile.lock":        parse_gemfile_lock,
+    "requirements.txt":    parse_requirements,
+}
+
+
+def collect_app_packages(ext: FilesystemExtractor,
+                         roots=("/app", "/srv", "/opt", "/home", "/var/www",
+                                "/usr/src", "/usr/local/src", "/workspace", "/code", "/root"),
+                         max_files: int = 20000, max_file_bytes: int = 5_000_000,
+                         notes: Optional[List[str]] = None) -> List[Package]:
+    """Walk the extracted filesystem for language dependency lockfiles and return a
+    de-duplicated Package inventory (fed to the unchanged OSV matcher = CWPP-06).
+    Fail-open: a malformed lockfile becomes a note, never a crash or false-clean."""
+    out: List[Package] = []
+    seen = set()
+    for root in roots:
+        try:
+            for path in ext.walk(root, max_files):
+                base = path.rsplit("/", 1)[-1]
+                parser = _LOCKFILE_PARSERS.get(base)
+                if parser is None:
+                    continue
+                data = ext.read_file(path)
+                if not data or len(data) > max_file_bytes:
+                    continue
+                try:
+                    pkgs = parser(data)
+                except Exception as e:
+                    if notes is not None:
+                        notes.append(f"lockfile parse failed for {path}: {e}")
+                    continue
+                for p in pkgs:
+                    key = (p.origin, p.name, p.version)
+                    if key not in seen:
+                        seen.add(key)
+                        out.append(p)
+        except Exception:
+            continue
+    return out
 
 
 # ── secrets ───────────────────────────────────────────────────────────────────
@@ -1087,25 +1565,32 @@ def sidescan_filesystem(ext: FilesystemExtractor, feed: Optional[OSVFeed],
         if data:
             osr = parse_os_release(data)
             break
+
+    # OS package inventory (best-effort; may be empty for a scratch/app-only image)
+    packages: List[Package] = []
     if osr is None:
         notes.append("no /etc/os-release readable — OS package inventory skipped")
-        secrets = scan_secrets(ext) if do_secrets else []
-        return SideScanResult(os=None, packages=[], vulns=[], secrets=secrets, notes=notes)
-    if not osr.pkgmgr:
-        notes.append(f"unknown distro '{osr.id}' — package inventory skipped")
-        packages: List[Package] = []
+    elif not osr.pkgmgr:
+        notes.append(f"unknown distro '{osr.id}' — OS package inventory skipped")
+    elif not osr.ecosystem:
+        notes.append(f"no OSV ecosystem for '{osr.id}:{osr.version_id}' — OS packages unmatched")
+        try:
+            packages = collect_inventory(ext, osr)
+        except Unsupported as e:
+            notes.append(f"package DB not decodable ({e}) — OS inventory skipped for this host")
     else:
         try:
             packages = collect_inventory(ext, osr)
         except Unsupported as e:
-            notes.append(f"package DB not decodable ({e}) — inventory skipped for this host")
-            packages = []
+            notes.append(f"package DB not decodable ({e}) — OS inventory skipped for this host")
+
+    # language app-dependency inventory (independent of OS detection = CWPP-06)
+    packages = packages + collect_app_packages(ext, notes=notes)
+
     vulns: List[EnrichedMatch] = []
-    if not osr.ecosystem:
-        notes.append(f"no OSV ecosystem for '{osr.id}:{osr.version_id}' — CVE match skipped")
-    elif feed is None:
+    if feed is None:
         notes.append("no vulnerability feed (--vuln-db) — CVE match skipped; inventory only")
-    else:
+    elif packages:
         vulns = match_vulns(packages, feed, epss, kev, exploits, instance_id=instance_id)
     secrets = scan_secrets(ext) if do_secrets else []
     return SideScanResult(os=osr, packages=packages, vulns=vulns, secrets=secrets, notes=notes)
