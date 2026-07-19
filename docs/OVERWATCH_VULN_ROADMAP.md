@@ -108,12 +108,13 @@ Delivered as 28 checks across 6 families (branch `overwatch-phase2-misconfigs`),
 - ✅ CloudTrail depth `LOG-07` (SSE-KMS) / `LOG-08` (data events) / `LOG-09` (bucket public) / `LOG-10` (delivery health) — renumbered off the Phase-1 LOG-06 (GuardDuty plans)
 - New shared classifier `classify_resource_policy_stmt` (operator-aware public/cross-account/org) reused by KMS/SEC/LOG-09; `parse_trust_policy` now carries the raw `condition`.
 
-### Phase 3 — Vuln-engine unlock · **L**
+### Phase 3 — Vuln-engine unlock · **L** — 🟡 CORE SHIPPED (v2.13.0); live-I/O deferred
 Turn the flagship side-scan from test-only to live; the shared foundation Phases 4 & 8 reuse verbatim.
-- Implement `DissectExtractor` (userspace ext4/xfs, no kernel mount); un-stub `_LiveMountedSnapshots.__enter__` → CWPP-01/02/03 fire against live AWS
-- Implement `parse_rpmdb_bdb` (pure-Python Berkeley-DB walker → existing `parse_rpm_header_blob`)
-- Language-manifest parsers (npm/pip/poetry/maven/go/gem) → `Package(purl=…)` + semver comparator → `CWPP-06` agentless app-dependency CVE via the **unchanged** OSV matcher
-- Doubles as CycloneDX/SPDX SBOM export + component-reachability groundwork (`reachable_service` tag)
+- ✅ **Language-manifest → `CWPP-06` agentless app-dependency CVE** via the **unchanged** OSV matcher (the headline). 7 lockfile parsers (npm package-lock v1/v2/v3 + yarn v1/Berry, Pipfile.lock, poetry.lock, Cargo.lock, go.mod w/ replace-exclude, Gemfile.lock) + best-effort requirements.txt. 3 ecosystem-correct comparators (`semver_vercmp` npm/Go/crates, `pep440_vercmp` PyPI, `gem_vercmp` RubyGems) keyed by `cmp_for`. Two blocking matcher fixes: `_record_affects` now evaluates OSV **SEMVER** ranges (npm/Go were ~100% FN) and gates the EVR-strip fallback to rpm/dpkg. `collect_app_packages` walks the app tree; app deps scanned even on an OS-less scratch image.
+- ✅ **CycloneDX 1.5 + SPDX 2.3 SBOM export** (`sbom_cyclonedx`/`sbom_spdx`, pure + deterministic).
+- ⏸️ **DEFERRED — `parse_rpmdb_bdb`** (legacy RHEL7 Berkeley-DB walker): FP-risky binary format, needs a real captured fixture; still fails-open to an INFO note (never a false-clean).
+- ⏸️ **DEFERRED — live `DissectExtractor` / `_LiveMountedSnapshots`** (userspace ext4/xfs over an EBS snapshot): needs the `dissect` library + a real snapshot, so it can't be offline-tested — kept out until it can be validated in a lab (matches the Phase-6/7 deferral of live filesystem I/O). The engine already runs against ANY `FilesystemExtractor`.
+- Verified by a 3-agent scoping-research pass + a 10-defect (7-unique) read-only adversarial-verify pass (all fixed).
 
 ### Phase 4 — Container image + Lambda dependency scanning · **L**
 Agentless, Inspector-independent, reusing the Phase-3 extractor + SBOM pipeline.
