@@ -665,6 +665,12 @@ def test_oidc_sub_scope_issuer_generic():
     f = A.AWSLiveScanner._oidc_sub_scope
     assert f(["project_path:mygroup/*"]) == "org-wildcard"                 # GitLab group-wide
     assert f(["project_path:mygroup/myproject:ref_type:branch:ref:main"]) == "concrete"
+    # '/'-delimited issuer (Azure DevOps): org+project concrete, only connection wildcarded
+    assert f(["sc://myorg/myproject/*"]) == "branch-wildcard"              # not over-flagged
+    assert f(["sc://myorg/*"]) == "org-wildcard"                          # project wildcarded
+    # GitHub grammar unchanged
+    assert f(["repo:my-org/my-repo:environment:*"]) == "branch-wildcard"
+    assert f(["repo:my-org/*"]) == "org-wildcard"
 
 
 def test_iampe_23_gitlab_group_wildcard_fails():
