@@ -1851,6 +1851,24 @@ def to_has_vuln_edges(instance_arn: str, matches: List[EnrichedMatch],
     return out
 
 
+def emit_node_vuln_edges(graph, node_id: str, node_kind: str,
+                         matches: List[EnrichedMatch], snapshot_id: str = "",
+                         **node_props) -> int:
+    """Emit HAS_VULN edges from an arbitrary-kind node (ECRImage / LambdaFunction /
+    EC2Instance) to Vulnerability nodes. MERGE-idempotent, so it converges byte-for-byte
+    with the Inspector paths that build the same node ids (CWPP-05 / LMB-07 / VULN-*)."""
+    graph.add_node(node_id, node_kind, **node_props)
+    n = 0
+    for e in to_has_vuln_edges(node_id, matches, snapshot_id):
+        graph.add_node(e.cve, "Vulnerability", severity=e.props["severity"],
+                       epss=e.props["epss"], kev=e.props["kev"],
+                       exploit_available=e.props["exploit_available"],
+                       fix_available=e.props["fix_available"])
+        graph.add_edge(node_id, e.cve, "HAS_VULN", **e.props)
+        n += 1
+    return n
+
+
 def emit_vuln_edges(graph, instance_arn: str, instance_id: str,
                     matches: List[EnrichedMatch], snapshot_id: str = "") -> int:
     """Mutate the SecurityGraph directly (MERGE-idempotent, converges with

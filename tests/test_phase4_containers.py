@@ -11,8 +11,11 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import json
 import aws_sidescan as ss
 import aws_sidescan_lambda as lam
+import aws_sidescan_image as img
+import aws_graph
 
 
 def _zip(files):
@@ -224,3 +227,88 @@ def test_fetch_lambda_get_function_error_raises():
         assert False, "should raise LambdaArtifactUnavailable"
     except lam.LambdaArtifactUnavailable:
         pass
+
+
+# ── live ECR layer-fetch bridge (mock-testable up to the network) ────────────
+def test_fetch_ecr_layers_single_manifest_skips_config():
+    ecr = MagicMock()
+    manifest = json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "config": {"mediaType": "application/vnd.oci.image.config.v1+json", "digest": "sha256:cfg"},
+        "layers": [{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": "sha256:l1"},
+                   {"mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip", "digest": "sha256:l2"}]})
+    ecr.batch_get_image.return_value = {"images": [{"imageManifest": manifest}]}
+    ecr.get_download_url_for_layer.side_effect = \
+        lambda repositoryName, layerDigest: {"downloadUrl": f"https://{layerDigest}"}
+    blobs = {"https://sha256:l1": b"L1", "https://sha256:l2": b"L2"}
+    layers = img.fetch_ecr_layers(ecr, "app", {"imageDigest": "sha256:d"}, http_get=lambda u: blobs[u])
+    assert layers == [b"L1", b"L2"]                         # config not fetched, order preserved
+
+
+def test_fetch_ecr_layers_manifest_list_selects_amd64():
+    ecr = MagicMock()
+    index = json.dumps({"mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [{"digest": "sha256:arm", "platform": {"os": "linux", "architecture": "arm64"}},
+                      {"digest": "sha256:amd", "platform": {"os": "linux", "architecture": "amd64"}}]})
+    child = json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "layers": [{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": "sha256:cl"}]})
+
+    def _bgi(repositoryName, imageIds, acceptedMediaTypes):
+        if imageIds[0].get("imageDigest") == "sha256:amd":
+            return {"images": [{"imageManifest": child}]}
+        return {"images": [{"imageManifest": index}]}
+    ecr.batch_get_image.side_effect = _bgi
+    ecr.get_download_url_for_layer.return_value = {"downloadUrl": "https://cl"}
+    layers = img.fetch_ecr_layers(ecr, "app", {"imageDigest": "sha256:top"}, http_get=lambda u: b"CL")
+    assert layers == [b"CL"]                                # amd64 child selected
+
+
+def test_fetch_ecr_layers_skips_foreign_and_zstd():
+    ecr = MagicMock()
+    manifest = json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json", "layers": [
+        {"mediaType": "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip", "digest": "sha256:f"},
+        {"mediaType": "application/vnd.oci.image.layer.v1.tar+zstd", "digest": "sha256:z"},
+        {"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": "sha256:good"}]})
+    ecr.batch_get_image.return_value = {"images": [{"imageManifest": manifest}]}
+    ecr.get_download_url_for_layer.return_value = {"downloadUrl": "https://good"}
+    notes = []
+    layers = img.fetch_ecr_layers(ecr, "app", {"imageDigest": "d"},
+                                  http_get=lambda u: b"GOOD", notes=notes)
+    assert layers == [b"GOOD"] and any("zstd" in n for n in notes)
+
+
+def test_fetch_ecr_layers_image_not_found_raises():
+    ecr = MagicMock()
+    ecr.batch_get_image.return_value = {"images": []}
+    try:
+        img.fetch_ecr_layers(ecr, "app", {"imageDigest": "x"}, http_get=lambda u: b"")
+        assert False, "should raise ImageFetchUnavailable"
+    except img.ImageFetchUnavailable:
+        pass
+
+
+def test_emit_node_vuln_edges_ecr_image():
+    g = aws_graph.SecurityGraph()
+    matches = [ss.EnrichedMatch(cve="CVE-1", osv_id="OSV-1", package="lodash",
+               installed_version="4.17.20", fixed_version="4.17.21", severity="HIGH",
+               cvss_base=7.5, epss=0.1, kev=False, exploit_available=None, ecosystem="npm")]
+    n = ss.emit_node_vuln_edges(g, "img@sha256:x", "ECRImage", matches, repository="app")
+    st = g.stats()
+    assert n == 1 and "ECRImage" in st["node_kinds"] and "HAS_VULN" in st["edge_kinds"]
+
+
+def test_fetch_to_extractor_end_to_end_image_cve():
+    base = _layer({"etc/os-release": b"ID=ubuntu\nVERSION_ID=22.04\n", "var/lib/dpkg/status": b""})
+    app = _layer({"app/package-lock.json":
+                  b'{"lockfileVersion":3,"packages":{"node_modules/lodash":{"version":"4.17.20"}}}'})
+    ecr = MagicMock()
+    manifest = json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json", "layers": [
+        {"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": "sha256:base"},
+        {"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": "sha256:app"}]})
+    ecr.batch_get_image.return_value = {"images": [{"imageManifest": manifest}]}
+    ecr.get_download_url_for_layer.side_effect = \
+        lambda repositoryName, layerDigest: {"downloadUrl": f"https://{layerDigest}"}
+    blobs = {"https://sha256:base": base, "https://sha256:app": app}
+    layers = img.fetch_ecr_layers(ecr, "app", {"imageDigest": "sha256:top"}, http_get=lambda u: blobs[u])
+    res = ss.sidescan_filesystem(ss.ImageLayerExtractor(layers),
+                                 ss.OSVFeed.from_records([_LODASH_OSV]), {}, set())
+    assert any(v.cve == "CVE-2024-2" for v in res.vulns)    # ECR image -> layers -> CVE
