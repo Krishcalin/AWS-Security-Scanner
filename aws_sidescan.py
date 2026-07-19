@@ -1536,6 +1536,49 @@ def parse_requirements(data) -> List[Package]:
     return out
 
 
+# Installed-package metadata (no lockfile needed) — container/Lambda artifacts often
+# ship the INSTALLED tree (node_modules, site-packages, gems) with no lockfile.
+def parse_node_package_json(data) -> List[Package]:
+    """An INSTALLED node_modules/<pkg>/package.json -> [Package] (npm). Only valid
+    under node_modules/ (there the version is the exact resolved release)."""
+    try:
+        d = json.loads(_asdict_text(data))
+    except Exception:
+        return []
+    name, ver = d.get("name"), d.get("version")
+    if not name or not isinstance(ver, str) or not ver:
+        return []
+    return [_lang_pkg("npm", name, ver)]
+
+
+def parse_python_metadata(data) -> List[Package]:
+    """An installed *.dist-info/METADATA or *.egg-info/PKG-INFO (RFC822 headers) ->
+    [Package] (PyPI)."""
+    name = ver = None
+    for line in _asdict_text(data).splitlines():
+        if not line.strip():
+            break                             # blank line ends the header block
+        if line.startswith("Name:") and name is None:
+            name = line[5:].strip()
+        elif line.startswith("Version:") and ver is None:
+            ver = line[8:].strip()
+    if not name or not ver:
+        return []
+    return [_lang_pkg("pypi", _pep503(name), ver)]
+
+
+def parse_gemspec_name(path: str) -> List[Package]:
+    """An installed specifications/<name>-<version>[-platform].gemspec -> [Package]
+    (RubyGems), taken from the filename (the gemspec body is executable Ruby)."""
+    base = path.rsplit("/", 1)[-1]
+    if not base.endswith(".gemspec"):
+        return []
+    m = re.match(r'^(.+?)-(\d[\w.]*)', base[:-len(".gemspec")])
+    if not m:
+        return []
+    return [_lang_pkg("gem", m.group(1), m.group(2))]
+
+
 _LOCKFILE_PARSERS = {
     "package-lock.json":   parse_package_lock,
     "npm-shrinkwrap.json": parse_package_lock,
@@ -1550,36 +1593,50 @@ _LOCKFILE_PARSERS = {
 
 
 def collect_app_packages(ext: FilesystemExtractor,
-                         roots=("/app", "/srv", "/opt", "/home", "/var/www",
+                         roots=("/app", "/srv", "/opt", "/var/task", "/home", "/var/www",
                                 "/usr/src", "/usr/local/src", "/workspace", "/code", "/root"),
                          max_files: int = 20000, max_file_bytes: int = 5_000_000,
                          notes: Optional[List[str]] = None) -> List[Package]:
-    """Walk the extracted filesystem for language dependency lockfiles and return a
-    de-duplicated Package inventory (fed to the unchanged OSV matcher = CWPP-06).
-    Fail-open: a malformed lockfile becomes a note, never a crash or false-clean."""
+    """Walk the extracted filesystem for language dependency lockfiles AND installed-
+    package metadata (node_modules/*/package.json, *.dist-info/METADATA, *.egg-info/
+    PKG-INFO, gems specifications/*.gemspec) and return a de-duplicated Package
+    inventory (fed to the unchanged OSV matcher = CWPP-06). Installed metadata gives
+    recall on container/Lambda artifacts that ship no lockfile. Fail-open."""
     out: List[Package] = []
     seen = set()
+
+    def _emit(pkgs):
+        for p in pkgs:
+            key = (p.origin, p.name, p.version)
+            if key not in seen:
+                seen.add(key)
+                out.append(p)
+
     for root in roots:
         try:
             for path in ext.walk(root, max_files):
                 base = path.rsplit("/", 1)[-1]
                 parser = _LOCKFILE_PARSERS.get(base)
-                if parser is None:
+                if parser is not None:
+                    fn = parser
+                elif base == "package.json" and "node_modules/" in path:
+                    fn = parse_node_package_json
+                elif (base == "METADATA" and ".dist-info/" in path) or \
+                     (base == "PKG-INFO" and ".egg-info/" in path):
+                    fn = parse_python_metadata
+                elif base.endswith(".gemspec") and "specifications/" in path:
+                    _emit(parse_gemspec_name(path))          # from filename, no read
+                    continue
+                else:
                     continue
                 data = ext.read_file(path)
                 if not data or len(data) > max_file_bytes:
                     continue
                 try:
-                    pkgs = parser(data)
+                    _emit(fn(data))
                 except Exception as e:
                     if notes is not None:
-                        notes.append(f"lockfile parse failed for {path}: {e}")
-                    continue
-                for p in pkgs:
-                    key = (p.origin, p.name, p.version)
-                    if key not in seen:
-                        seen.add(key)
-                        out.append(p)
+                        notes.append(f"manifest parse failed for {path}: {e}")
         except Exception:
             continue
     return out

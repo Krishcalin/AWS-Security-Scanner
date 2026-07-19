@@ -95,6 +95,39 @@ def test_image_extractor_is_filesystem_extractor():
     assert "/etc/os-release" in list(ext.walk("/etc", 100))
 
 
+# ── installed-package metadata (no lockfile) — the recall lever ──────────────
+def test_parse_node_package_json():
+    pkgs = ss.parse_node_package_json(b'{"name":"lodash","version":"4.17.20"}')
+    assert (pkgs[0].name, pkgs[0].version, pkgs[0].origin) == ("lodash", "4.17.20", "npm")
+    assert ss.parse_node_package_json(b'{"name":"x"}') == []          # no version
+
+
+def test_parse_python_metadata():
+    meta = b"Metadata-Version: 2.1\nName: Django\nVersion: 3.2.0\nSummary: x\n\nbody\n"
+    pkgs = ss.parse_python_metadata(meta)
+    assert (pkgs[0].name, pkgs[0].version) == ("django", "3.2.0")     # PEP503-normalized
+
+
+def test_parse_gemspec_name():
+    assert ss.parse_gemspec_name("x/specifications/rails-7.0.0.gemspec")[0].name == "rails"
+    nk = ss.parse_gemspec_name("specifications/nokogiri-1.15.0-x86_64-linux.gemspec")
+    assert (nk[0].name, nk[0].version) == ("nokogiri", "1.15.0")      # platform ignored
+
+
+def test_image_installed_metadata_no_lockfile():
+    # a distroless-style image: no lockfile, just the installed trees
+    layer = _layer({
+        "app/node_modules/lodash/package.json": b'{"name":"lodash","version":"4.17.20"}',
+        "usr/lib/python3.11/site-packages/django-3.2.0.dist-info/METADATA":
+            b"Name: Django\nVersion: 3.2.0\n\n",   # under /usr/lib -> not a default root
+        "opt/lib/ruby/gems/3.2.0/specifications/rails-7.0.0.gemspec": b"# ruby",
+    })
+    pkgs = ss.collect_app_packages(ss.ImageLayerExtractor([layer]))
+    names = {(p.name, p.origin) for p in pkgs}
+    assert ("lodash", "npm") in names               # node_modules/*/package.json
+    assert ("rails", "gem") in names                # gemspec under /opt (a default root)
+
+
 def test_image_end_to_end_app_dependency_cve():
     base = _layer({"etc/os-release": b"ID=ubuntu\nVERSION_ID=22.04\n",
                    "var/lib/dpkg/status": b""})
