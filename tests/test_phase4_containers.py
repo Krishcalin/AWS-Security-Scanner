@@ -6,10 +6,29 @@ import io
 import os
 import sys
 import tarfile
+import zipfile
+from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import aws_sidescan as ss
+import aws_sidescan_lambda as lam
+
+
+def _zip(files):
+    buf = io.BytesIO()
+    zf = zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED)
+    for path, data in files.items():
+        zf.writestr(path, data)
+    zf.close()
+    return buf.getvalue()
+
+
+_LODASH_OSV = {"id": "CVE-2024-2", "aliases": ["CVE-2024-2"],
+               "affected": [{"package": {"ecosystem": "npm", "name": "lodash"},
+                             "ranges": [{"type": "SEMVER",
+                                         "events": [{"introduced": "4.0.0"}, {"fixed": "4.17.21"}]}]}],
+               "severity": [{"type": "CVSS_V3", "score": "7.5"}]}
 
 
 def _layer(files=None, whiteouts=(), opaque_dirs=(), symlinks=()):
@@ -142,3 +161,66 @@ def test_image_end_to_end_app_dependency_cve():
     res = ss.sidescan_filesystem(ext, feed, {}, set())
     assert any(p.name == "lodash" for p in res.packages)
     assert any(v.cve == "CVE-2024-2" for v in res.vulns)      # image CVE via unchanged pipeline
+
+
+# ── Lambda artifact extractor (LMB-07) ───────────────────────────────────────
+def test_merge_lambda_artifact_roots():
+    fn = _zip({"index.js": b"x", "node_modules/lodash/package.json":
+               b'{"name":"lodash","version":"1.0.0"}'})
+    layer = _zip({"nodejs/node_modules/ws/package.json": b'{"name":"ws","version":"8.0.0"}'})
+    m = lam.merge_lambda_artifact(fn, [layer])
+    assert "/var/task/index.js" in m                         # function code -> /var/task
+    assert "/opt/nodejs/node_modules/ws/package.json" in m   # layer -> /opt
+
+
+def test_merge_lambda_layer_overwrites_earlier():
+    m = lam.merge_lambda_artifact(None, [_zip({"nodejs/x": b"L1"}), _zip({"nodejs/x": b"L2"})])
+    assert m["/opt/nodejs/x"] == b"L2"                        # later layer wins
+
+
+def test_lambda_artifact_end_to_end():
+    fn = _zip({"node_modules/lodash/package.json": b'{"name":"lodash","version":"4.17.20"}'})
+    ext = lam.LambdaArtifactExtractor(fn)
+    feed = ss.OSVFeed.from_records([_LODASH_OSV])
+    res = ss.sidescan_filesystem(ext, feed, {}, set())
+    assert any(v.cve == "CVE-2024-2" for v in res.vulns)     # Lambda dep CVE via unchanged pipeline
+
+
+def test_lambda_artifact_bad_zip_fail_open():
+    notes = []
+    m = lam.merge_lambda_artifact(b"not-a-zip", notes=notes)
+    assert m == {} and notes
+
+
+def test_lambda_artifact_traversal_guard():
+    m = lam.merge_lambda_artifact(_zip({"../evil": b"x", "ok.py": b"y"}))
+    assert "/var/task/ok.py" in m and not any("evil" in k for k in m)
+
+
+def test_fetch_lambda_artifact_zip():
+    lmb = MagicMock()
+    lmb.get_function.return_value = {
+        "Configuration": {"PackageType": "Zip", "Layers": [{"Arn": "arn:layer:1"}]},
+        "Code": {"Location": "https://code"}}
+    lmb.get_layer_version_by_arn.return_value = {"Content": {"Location": "https://layer"}}
+    blobs = {"https://code": b"CODEZIP", "https://layer": b"LAYERZIP"}
+    fz, lz, pt = lam.fetch_lambda_artifact(lmb, "fn", http_get=lambda u: blobs[u])
+    assert fz == b"CODEZIP" and lz == [b"LAYERZIP"] and pt == "Zip"
+
+
+def test_fetch_lambda_image_packagetype_routes_to_ecr():
+    lmb = MagicMock()
+    lmb.get_function.return_value = {"Configuration": {"PackageType": "Image"},
+                                     "Code": {"ImageUri": "1.dkr.ecr..."}}
+    fz, lz, pt = lam.fetch_lambda_artifact(lmb, "fn", http_get=lambda u: b"")
+    assert pt == "Image" and fz is None and lz == []
+
+
+def test_fetch_lambda_get_function_error_raises():
+    lmb = MagicMock()
+    lmb.get_function.side_effect = RuntimeError("AccessDenied")
+    try:
+        lam.fetch_lambda_artifact(lmb, "fn", http_get=lambda u: b"")
+        assert False, "should raise LambdaArtifactUnavailable"
+    except lam.LambdaArtifactUnavailable:
+        pass
