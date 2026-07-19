@@ -33,10 +33,12 @@ semver is WRONG for all three. See dpkg_vercmp / rpm_vercmp / apk_vercmp.
 
 from __future__ import annotations
 
+import io
 import json
 import math
 import re
 import struct
+import tarfile
 from dataclasses import dataclass, field
 from typing import (AbstractSet, Callable, Dict, Iterator, List, Mapping,
                     Optional, Protocol, Tuple)
@@ -90,6 +92,136 @@ class DictExtractor:
         if b is None:
             return None
         return FileStat(size=len(b), mode=0o600, mtime=0, is_symlink=False)
+
+
+# ── OCI/Docker image-layer overlay (container-image side-scan = CWPP-05) ───────
+def _norm_tar_path(name: str) -> Optional[str]:
+    """Normalize a tar member name to a relative path; None if it escapes ('..')."""
+    parts: List[str] = []
+    for seg in (name or "").replace("\\", "/").split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            return None                       # tar-slip guard
+        parts.append(seg)
+    return "/".join(parts)
+
+
+def merge_layers(layers: List[bytes], *, max_file_bytes: int = 10_000_000,
+                 max_total_bytes: int = 1_000_000_000, max_entries: int = 500_000,
+                 notes: Optional[List[str]] = None) -> Dict[str, bytes]:
+    """Overlay OCI/Docker image layers (each a gzip/tar changeset, BOTTOM-TO-TOP)
+    into a merged absolute-path -> content map, honoring whiteouts. PURE and
+    fail-open: an unreadable layer/member becomes a note, never a crash. Feeds
+    ImageLayerExtractor so the UNCHANGED sidescan pipeline runs on the image."""
+    merged: Dict[str, bytes] = {}
+    symlinks: List[Tuple[str, str]] = []
+    total = 0
+    entries = 0
+    for blob in layers:
+        if entries >= max_entries:
+            break
+        try:
+            tf = tarfile.open(fileobj=io.BytesIO(blob), mode="r:*")
+        except Exception as e:
+            if notes is not None:
+                notes.append(f"image layer unreadable: {e}")
+            continue
+        files_this: Dict[str, bytes] = {}
+        layer_files: Dict[str, bytes] = {}    # for in-layer hardlink resolution
+        opaque: List[str] = []
+        whiteout: List[str] = []
+        try:
+            members = tf.getmembers()
+        except Exception:
+            members = []
+        for m in members:
+            entries += 1
+            if entries > max_entries:
+                break
+            try:
+                name = m.name
+                base = name.rsplit("/", 1)[-1]
+                dirn = name[:len(name) - len(base)].rstrip("/")
+                if base == ".wh..wh..opq":
+                    d = _norm_tar_path(dirn)
+                    if d is not None:
+                        opaque.append(d)
+                    continue
+                if base.startswith(".wh.") and len(base) > 4:
+                    tgt = _norm_tar_path((dirn + "/" + base[4:]) if dirn else base[4:])
+                    if tgt is not None:
+                        whiteout.append(tgt)
+                    continue
+                rel = _norm_tar_path(name)
+                if rel is None or m.isdir() or m.ischr() or m.isblk() or m.isfifo():
+                    continue
+                if m.issym():
+                    symlinks.append(("/" + rel, m.linkname))
+                    continue
+                if m.islnk():
+                    src = _norm_tar_path(m.linkname)
+                    if src in layer_files:
+                        files_this[rel] = layer_files[src]
+                    continue
+                if m.isfile():
+                    if (m.size or 0) > max_file_bytes or total > max_total_bytes:
+                        continue
+                    f = tf.extractfile(m)
+                    if f is None:
+                        continue
+                    data = f.read(max_file_bytes + 1)
+                    if len(data) > max_file_bytes:
+                        continue
+                    files_this[rel] = data
+                    layer_files[rel] = data
+                    total += len(data)
+            except Exception:
+                continue
+        # whiteouts hit LOWER layers only: delete from `merged` BEFORE folding this layer
+        for d in opaque:
+            pref = "/" + d
+            for k in [k for k in merged if k == pref or k.startswith(pref + "/")]:
+                del merged[k]
+        for t in whiteout:
+            p = "/" + t
+            for k in [k for k in merged if k == p or k.startswith(p + "/")]:
+                del merged[k]
+        for rel, data in files_this.items():
+            merged["/" + rel] = data
+        try:
+            tf.close()
+        except Exception:
+            pass
+    # best-effort single-hop symlink resolution (bake target bytes into the link path)
+    for linkpath, target in symlinks:
+        base = linkpath.rsplit("/", 1)[0]
+        if target.startswith("/"):
+            resolved = "/" + "/".join(s for s in target.split("/") if s and s != ".")
+        else:
+            parts = [s for s in base.strip("/").split("/") if s]
+            for seg in target.split("/"):
+                if seg in ("", "."):
+                    continue
+                if seg == "..":
+                    if parts:
+                        parts.pop()
+                else:
+                    parts.append(seg)
+            resolved = "/" + "/".join(parts)
+        if resolved in merged:
+            merged[linkpath] = merged[resolved]
+    return merged
+
+
+class ImageLayerExtractor(DictExtractor):
+    """FilesystemExtractor over a merged OCI/Docker image (layers bottom-to-top).
+    Subclasses DictExtractor so read_file/exists/walk/stat are the already-validated
+    pure implementations — an image scans byte-identically to the test double."""
+
+    def __init__(self, layers: List[bytes], *, notes: Optional[List[str]] = None,
+                 **caps):
+        super().__init__(merge_layers(layers, notes=notes, **caps))
 
 
 # ── data shapes ──────────────────────────────────────────────────────────────
