@@ -5765,19 +5765,19 @@ class AWSLiveScanner:
                 s = "open"
             else:
                 # Strip the leading claim key generically (GitHub 'repo:', GitLab
-                # 'project_path:', Terraform 'organization:', …) so the org/repo (or
-                # group/project) identity segment is examined for ANY issuer, not just
-                # GitHub. A '*' in that identity segment => org-wildcard (FAIL); a '*'
-                # only in the trailing ref/branch/environment portion => branch-wildcard.
+                # 'project_path:', Azure DevOps 'sc:', …) then flatten the identity path
+                # (both ':' and '/' separators) into components. A wildcard within the
+                # first 2 identity components (org/repo, group/project) => org-wildcard
+                # (FAIL); a wildcard only in a later ref/branch/env/connection segment
+                # (org+repo concrete) => branch-wildcard. Works for ':'- and '/'-delimited
+                # issuers alike, so a project-scoped Azure/Bitbucket sub isn't over-flagged.
                 body = v.split(":", 1)[1] if ":" in v else v
-                id_spec = body.split(":", 1)[0]            # ORG/REPO or GROUP/PROJECT
-                rest = body[len(id_spec):]
-                if "*" in id_spec:
-                    s = "org-wildcard"
-                elif "*" in rest:
-                    s = "branch-wildcard"
-                else:
-                    s = "concrete"
+                comps = [c for c in body.replace(":", "/").split("/") if c]
+                s = "concrete"
+                for i, c in enumerate(comps):
+                    if "*" in c:
+                        s = "org-wildcard" if i < 2 else "branch-wildcard"
+                        break
             if rank[s] > rank[best]:
                 best = s
         return best
