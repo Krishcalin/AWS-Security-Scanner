@@ -1410,6 +1410,7 @@ class AWSLiveScanner:
         # CloudFront is GLOBAL but EXPOSURE runs per-region; guard so --all-regions does
         # not re-emit the same distributions once per region (the graph merges anyway).
         self._l7_cf_done = False
+        self._identity_fusion_done = False          # IDENTITY-01 is global (IAM); run once
 
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
@@ -7696,6 +7697,11 @@ class AWSLiveScanner:
         # their HAS_VULN edges reachable_service=True (component-level exploitability).
         self._reachable_workloads = {self._instance_arn(i) for i in exposed_instances}
 
+        # Phase 7 identity fusion: a stale/long-unused admin access key = a pre-auth
+        # account-takeover path (draws internet -EXPOSED_TO-> IAMUser -> ...-> admin).
+        if self._build_identity_fusion(g, admin):
+            any_finding = True
+
         if not any_finding:
             self._add("PASS", "EXPOSURE-02", "EXPOSURE", "all-enis",
                       f"No internet-reachable workloads across {len(enis)} interface(s)")
@@ -8032,6 +8038,59 @@ class AWSLiveScanner:
                 pass
             self._add("INFO", "EXPOSURE-03", "EXPOSURE", name,
                       f"Internet-facing {proto} API {name} ({aid}) — internet entry | {name}")
+        return found
+
+    # ── Phase 7 — identity fusion (stale admin key = pre-auth account takeover) ────
+    def _build_identity_fusion(self, g, admin) -> bool:
+        """IDENTITY-01 — a stale/long-unused ACTIVE access key on an admin-capable IAM
+        user is a PRE-AUTH account-takeover path: the key IS the entry (no workload
+        compromise, no exploit). Draws ``internet -EXPOSED_TO-> IAMUser`` so
+        ``enumerate_paths`` finds internet -> user -> CAN_PRIVESC_TO/CAN_ASSUME -> admin
+        (ATTACK-01 semantics, no vuln needed). Admin-capability reuses the SAME graph test
+        as ATTACK-01, so a boundary/SCP-neutralized user is correctly NOT flagged — which is
+        what makes this distinct from (not a duplicate of) IAM-06/08. Global (IAM) -> once."""
+        if self._identity_fusion_done:
+            return False
+        report = self._get_credential_report()
+        if not self._cred_report_ok:
+            return False                            # report unavailable -> IAM-07 already WARNs
+        self._identity_fusion_done = True
+        kinds = {"CAN_PRIVESC_TO", "CAN_ASSUME"}
+        found = False
+        for row in report:
+            user = row.get("user", "")
+            if user in ("<root_account>", ""):
+                continue                            # root is not an enumerated IAMUser node
+            arn = row.get("arn", "")
+            if not arn or g.node(arn) is None:
+                continue                            # not an enumerated principal in the graph
+            confirmed = admin in g.reachable(arn, kinds, max_hops=6,
+                                             edge_filter=self._edge_unconditioned)
+            conditioned = (not confirmed) and (admin in g.reachable(arn, kinds, max_hops=6))
+            if not (confirmed or conditioned):
+                continue                            # not admin-capable -> not a takeover path
+            reasons = []
+            for k in ("access_key_1", "access_key_2"):
+                if row.get(f"{k}_active") != "true":
+                    continue
+                age = _cred_age_days(row.get(f"{k}_last_rotated", ""))
+                idle = _cred_idle_days(row.get(f"{k}_last_used_date", ""),
+                                       row.get(f"{k}_last_rotated", ""))
+                if age is not None and age > 90:
+                    reasons.append(f"{k} unrotated {age}d")
+                elif idle is not None and idle > 45:
+                    reasons.append(f"{k} unused {idle}d")
+            if not reasons:
+                continue                            # active keys are fresh + in use -> skip
+            g.add_edge("internet", arn, "EXPOSED_TO", basis="static-credential",
+                       confidence="exposed-secret")
+            found = True
+            status = "FAIL" if confirmed else "WARN"
+            note = "" if confirmed else " (admin reachable ONLY via a Condition-guarded hop)"
+            self._add(status, "IDENTITY-01", "EXPOSURE", user,
+                      f"Admin-capable IAM user {user} holds an ACTIVE long-lived access key "
+                      f"({'; '.join(reasons)}){note} — a static credential to an administrator "
+                      f"identity is a pre-auth account-takeover path | {user}")
         return found
 
     # ══════════════════════════════════════════════════════════════════════════
