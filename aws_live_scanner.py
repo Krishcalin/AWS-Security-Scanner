@@ -214,6 +214,7 @@ CHECK_SEVERITY = {
     "SEC-05": "CRITICAL",
     "WAF-01": "HIGH", "WAF-02": "MEDIUM", "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
     "ELC-01": "HIGH", "ELC-02": "HIGH", "ELC-03": "HIGH", "ELC-04": "MEDIUM",
+    "ELC-05": "HIGH", "ELC-06": "MEDIUM",
     "OSR-01": "HIGH", "OSR-02": "HIGH", "OSR-03": "MEDIUM",
     "OSR-04": "HIGH", "OSR-05": "HIGH",
     "DDB-01": "HIGH", "DDB-02": "HIGH", "DDB-03": "MEDIUM", "DDB-04": "MEDIUM",
@@ -470,6 +471,8 @@ COMPLIANCE_MAP = {
     "WAF-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "WAF-04": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "ELC-04": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
+    "ELC-05": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "ELC-06": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "OSR-03": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "SFN-01": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "SFN-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
@@ -564,6 +567,8 @@ REMEDIATION_MAP = {
     "SEC-05": "Remove the public/cross-account grant (or scope it with aws:PrincipalOrgID) and block public policies: aws secretsmanager put-resource-policy --secret-id <SECRET_ARN> --block-public-policy --resource-policy file://scoped-policy.json ; or drop it: aws secretsmanager delete-resource-policy --secret-id <SECRET_ARN>",
     "ELC-01": "Enable at-rest encryption on new cluster: aws elasticache create-replication-group --replication-group-id <ID> --at-rest-encryption-enabled",
     "ELC-02": "Enable in-transit encryption on new cluster: aws elasticache create-replication-group --replication-group-id <ID> --transit-encryption-enabled",
+    "ELC-05": "Upgrade the cache to a supported engine version: aws elasticache modify-replication-group --replication-group-id <ID> --engine-version <SUPPORTED_VERSION> --apply-immediately",
+    "ELC-06": "Attach an RBAC user group (Redis/Valkey 6+): aws elasticache modify-replication-group --replication-group-id <ID> --user-group-ids-to-add <USER_GROUP_ID> --apply-immediately",
     "OSR-01": "Enforce HTTPS: aws opensearch update-domain-config --domain-name <DOMAIN> --domain-endpoint-options EnforceHTTPS=true,TLSSecurityPolicy=Policy-Min-TLS-1-2-2019-07",
     "OSR-02": "Enable encryption at rest: aws opensearch update-domain-config --domain-name <DOMAIN> --encrypt-at-rest-options Enabled=true",
     "OSR-04": "Configure VPC: aws opensearch update-domain-config --domain-name <DOMAIN> --vpc-options SubnetIds=<SUBNETS>,SecurityGroupIds=<SGS>",
@@ -4701,18 +4706,20 @@ class AWSLiveScanner:
         self._section_header("ELASTICACHE")
         ec = self._client("elasticache")
 
+        # ELC-01..04 + ELC-06 — Redis/Valkey replication groups. Do NOT early-return on
+        # empty/error: ELC-05 (engine EOL, below) must still run — it covers Memcached
+        # (which has no replication group at all) via describe_cache_clusters.
         try:
             clusters = ec.describe_replication_groups().get(
                 "ReplicationGroups", [])
         except Exception as e:
             self._add("WARN", "ELC-01", "ELASTICACHE", "elasticache", str(e))
-            return
-        if not clusters:
+            clusters = None
+        if clusters is not None and not clusters:
             self._add("INFO", "ELC-01", "ELASTICACHE", "elasticache",
                       "No ElastiCache replication groups found")
-            return
 
-        for rg in clusters:
+        for rg in (clusters or []):
             rgid = rg.get("ReplicationGroupId", "unknown")
             # ELC-01 — Encryption at rest
             if rg.get("AtRestEncryptionEnabled", False):
@@ -4742,6 +4749,61 @@ class AWSLiveScanner:
             else:
                 self._add("WARN", "ELC-04", "ELASTICACHE", rgid,
                           f"Auto failover=OFF | {rgid}")
+            # ELC-06 — Redis/Valkey RBAC (user groups). Replication groups are Redis/Valkey
+            # only (Memcached has none), so absent/empty UserGroupIds means no per-user
+            # access control — the cache falls back to an AUTH token or network-only.
+            engine = (rg.get("Engine") or "redis").lower()
+            if engine in ("redis", "valkey"):
+                if rg.get("UserGroupIds"):
+                    self._add("PASS", "ELC-06", "ELASTICACHE", rgid,
+                              f"RBAC user group attached | {rgid}")
+                else:
+                    self._add("FAIL", "ELC-06", "ELASTICACHE", rgid,
+                              f"No RBAC user group — no per-user access control "
+                              f"(relies on AUTH token / network isolation) | {rgid}")
+
+        # ELC-05 — Engine end-of-life. describe_replication_groups carries NO EngineVersion
+        # (verified), so this uses describe_cache_clusters. Dedup by replication group so an
+        # N-node Redis cluster yields ONE finding/edge; standalone Memcached (never in a
+        # replication group) is covered here. Inline-paginate in OWN try/except.
+        self._log("ELC-05: ElastiCache engine end-of-life")
+        try:
+            cache_clusters = []
+            for page in ec.get_paginator("describe_cache_clusters").paginate():
+                cache_clusters.extend(page.get("CacheClusters", []))
+        except Exception as e:
+            self._add("WARN", "ELC-05", "ELASTICACHE", "elasticache",
+                      f"describe_cache_clusters failed (engine EOL not evaluated): {e}")
+            cache_clusters = None
+        if cache_clusters is not None:
+            if not cache_clusters:
+                self._add("INFO", "ELC-05", "ELASTICACHE", "elasticache",
+                          "No ElastiCache clusters found in this region")
+            seen: set = set()
+            for cc in cache_clusters:
+                rgid = cc.get("ReplicationGroupId")
+                ccid = cc.get("CacheClusterId", "unknown")
+                key  = rgid or ccid
+                if key in seen:
+                    continue
+                seen.add(key)
+                engine = cc.get("Engine", "")
+                ev     = cc.get("EngineVersion", "")
+                node_id = cc.get("ARN", key)
+                verdict, matches = self._eol_check("elasticache", engine, ev)
+                if verdict == "EOL":
+                    self._add("FAIL", "ELC-05", "ELASTICACHE", key,
+                              f"Engine END-OF-LIFE: {engine} {ev} "
+                              f"(upgrade to >= {matches[0].fixed_version}) | {key}")
+                    self._stash_eol_edge(node_id, "ElastiCacheCluster", matches,
+                                         engine=engine, engine_version=ev, region=self.region,
+                                         replication_group_id=(rgid or ""))
+                elif verdict == "OK":
+                    self._add("PASS", "ELC-05", "ELASTICACHE", key,
+                              f"Engine supported: {engine} {ev} | {key}")
+                else:
+                    self._add("INFO", "ELC-05", "ELASTICACHE", key,
+                              f"Engine EOL not evaluable: {engine} {ev} | {key}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 23: AMAZON OPENSEARCH
