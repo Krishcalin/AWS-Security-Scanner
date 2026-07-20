@@ -991,10 +991,17 @@ def parse_ecr_image_ref(ref: str) -> Optional[Dict]:
 def ecr_image_node_ids(account: str, region: str, repo: str, digest: str) -> tuple:
     """Both ECRImage node-id conventions for the SAME image — CNT-02's
     repositoryUri@digest AND Inspector's repository ARN — so RUNS_IMAGE dual-emits
-    and joins whichever producer (native scan or Inspector) created the node."""
-    repo_uri = f"{account}.dkr.ecr.{region}.amazonaws.com/{repo}"
+    and joins whichever producer (native scan or Inspector) created the node. Partition/
+    host suffix are derived from the region so China/GovCloud ids match their producers."""
+    if region.startswith("cn-"):
+        partition, host = "aws-cn", "amazonaws.com.cn"
+    elif region.startswith("us-gov-"):
+        partition, host = "aws-us-gov", "amazonaws.com"
+    else:
+        partition, host = "aws", "amazonaws.com"
+    repo_uri = f"{account}.dkr.ecr.{region}.{host}/{repo}"
     return (f"{repo_uri}@{digest}",
-            f"arn:aws:ecr:{region}:{account}:repository/{repo}/{digest}")
+            f"arn:{partition}:ecr:{region}:{account}:repository/{repo}/{digest}")
 
 
 def evaluate_privesc_scoped(statements: List[Dict], boundary: Optional[List[Dict]] = None,

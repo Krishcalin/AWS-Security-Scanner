@@ -114,8 +114,10 @@ def merge_layers(layers: List[bytes], *, max_file_bytes: int = 10_000_000,
     into a merged absolute-path -> content map, honoring whiteouts. PURE and
     fail-open: an unreadable layer/member becomes a note, never a crash. Feeds
     ImageLayerExtractor so the UNCHANGED sidescan pipeline runs on the image."""
-    merged: Dict[str, bytes] = {}
-    symlinks: List[Tuple[str, str]] = []
+    # merged values are bytes (a real file) OR ("\x00sym", target) (a symlink), so that
+    # symlinks participate in per-layer overlay: an upper real file / whiteout at the
+    # same path overrides the lower symlink (fixed vs an end-of-merge unconditional bake).
+    merged: Dict = {}
     total = 0
     entries = 0
     for blob in layers:
@@ -157,7 +159,7 @@ def merge_layers(layers: List[bytes], *, max_file_bytes: int = 10_000_000,
                 if rel is None or m.isdir() or m.ischr() or m.isblk() or m.isfifo():
                     continue
                 if m.issym():
-                    symlinks.append(("/" + rel, m.linkname))
+                    files_this[rel] = ("\x00sym", m.linkname)   # symlink marker (per-layer)
                     continue
                 if m.islnk():
                     src = _norm_tar_path(m.linkname)
@@ -180,6 +182,9 @@ def merge_layers(layers: List[bytes], *, max_file_bytes: int = 10_000_000,
                 continue
         # whiteouts hit LOWER layers only: delete from `merged` BEFORE folding this layer
         for d in opaque:
+            if d == "":
+                merged.clear()                   # root opaque clears the whole lower tree
+                continue
             pref = "/" + d
             for k in [k for k in merged if k == pref or k.startswith(pref + "/")]:
                 del merged[k]
@@ -187,19 +192,22 @@ def merge_layers(layers: List[bytes], *, max_file_bytes: int = 10_000_000,
             p = "/" + t
             for k in [k for k in merged if k == p or k.startswith(p + "/")]:
                 del merged[k]
-        for rel, data in files_this.items():
-            merged["/" + rel] = data
+        merged.update({"/" + rel: v for rel, v in files_this.items()})
         try:
             tf.close()
         except Exception:
             pass
-    # best-effort single-hop symlink resolution (bake target bytes into the link path)
-    for linkpath, target in symlinks:
-        base = linkpath.rsplit("/", 1)[0]
+    # Resolve surviving symlink markers (single hop): bake target bytes ONLY when the
+    # target is a real file; drop unresolved / symlink-to-symlink. A symlink whited-out
+    # or overwritten by a real file in an upper layer never reaches here.
+    for linkpath, val in list(merged.items()):
+        if not (isinstance(val, tuple) and val[0] == "\x00sym"):
+            continue
+        target = val[1]
         if target.startswith("/"):
             resolved = "/" + "/".join(s for s in target.split("/") if s and s != ".")
         else:
-            parts = [s for s in base.strip("/").split("/") if s]
+            parts = [s for s in linkpath.rsplit("/", 1)[0].strip("/").split("/") if s]
             for seg in target.split("/"):
                 if seg in ("", "."):
                     continue
@@ -209,8 +217,11 @@ def merge_layers(layers: List[bytes], *, max_file_bytes: int = 10_000_000,
                 else:
                     parts.append(seg)
             resolved = "/" + "/".join(parts)
-        if resolved in merged:
-            merged[linkpath] = merged[resolved]
+        tv = merged.get(resolved)
+        if isinstance(tv, bytes):
+            merged[linkpath] = tv
+        else:
+            del merged[linkpath]                 # unresolved / points at a symlink -> drop
     return merged
 
 
@@ -1556,8 +1567,10 @@ def parse_python_metadata(data) -> List[Package]:
     [Package] (PyPI)."""
     name = ver = None
     for line in _asdict_text(data).splitlines():
-        if not line.strip():
-            break                             # blank line ends the header block
+        if not line:
+            break                             # a truly-empty line ends the header block
+        if line[:1] in (" ", "\t"):
+            continue                          # folded continuation line (may be blank-ish)
         if line.startswith("Name:") and name is None:
             name = line[5:].strip()
         elif line.startswith("Version:") and ver is None:
@@ -1573,7 +1586,10 @@ def parse_gemspec_name(path: str) -> List[Package]:
     base = path.rsplit("/", 1)[-1]
     if not base.endswith(".gemspec"):
         return []
-    m = re.match(r'^(.+?)-(\d[\w.]*)', base[:-len(".gemspec")])
+    # <name>-<version>[-<platform>]; name may itself contain '-<digit>' segments, so the
+    # version is the LAST dash-then-digit token (greedy name), platform stripped.
+    m = re.match(r'^(.+)-(\d[\d.]*(?:\.[A-Za-z][\w.]*)?)(?:-[A-Za-z][\w.]*(?:-[\w.]+)*)?$',
+                 base[:-len(".gemspec")])
     if not m:
         return []
     return [_lang_pkg("gem", m.group(1), m.group(2))]
@@ -1594,8 +1610,9 @@ _LOCKFILE_PARSERS = {
 
 def collect_app_packages(ext: FilesystemExtractor,
                          roots=("/app", "/srv", "/opt", "/var/task", "/home", "/var/www",
-                                "/usr/src", "/usr/local/src", "/workspace", "/code", "/root"),
-                         max_files: int = 20000, max_file_bytes: int = 5_000_000,
+                                "/usr/src", "/usr/local/src", "/usr/local/lib", "/usr/lib",
+                                "/usr/lib64", "/usr/local/bundle", "/workspace", "/code", "/root"),
+                         max_files: int = 200000, max_file_bytes: int = 5_000_000,
                          notes: Optional[List[str]] = None) -> List[Package]:
     """Walk the extracted filesystem for language dependency lockfiles AND installed-
     package metadata (node_modules/*/package.json, *.dist-info/METADATA, *.egg-info/
@@ -1614,12 +1631,19 @@ def collect_app_packages(ext: FilesystemExtractor,
 
     for root in roots:
         try:
+            walked = 0
             for path in ext.walk(root, max_files):
+                walked += 1
                 base = path.rsplit("/", 1)[-1]
                 parser = _LOCKFILE_PARSERS.get(base)
                 if parser is not None:
                     fn = parser
                 elif base == "package.json" and "node_modules/" in path:
+                    # only an npm PACKAGE ROOT: <name>/package.json or @scope/<name>/
+                    # package.json — NOT a test fixture / vendored copy deeper in the tree
+                    tail = path.rsplit("node_modules/", 1)[-1].split("/")
+                    if not (len(tail) == 2 or (len(tail) == 3 and tail[0].startswith("@"))):
+                        continue
                     fn = parse_node_package_json
                 elif (base == "METADATA" and ".dist-info/" in path) or \
                      (base == "PKG-INFO" and ".egg-info/" in path):
@@ -1637,6 +1661,9 @@ def collect_app_packages(ext: FilesystemExtractor,
                 except Exception as e:
                     if notes is not None:
                         notes.append(f"manifest parse failed for {path}: {e}")
+            if walked >= max_files and notes is not None:
+                notes.append(f"app-package walk truncated at max_files={max_files} under "
+                             f"{root} — inventory may be incomplete")
         except Exception:
             continue
     return out

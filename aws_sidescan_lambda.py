@@ -48,10 +48,17 @@ def merge_lambda_artifact(function_zip: Optional[bytes], layer_zips=(), *,
                 rel = _norm_tar_path(info.filename)      # strip ./, leading /, reject ..
                 if not rel:
                     continue
-                if info.file_size > max_file_bytes or total > max_total_bytes:
-                    continue
-                data = zf.read(info)
+                if total > max_total_bytes:
+                    if notes is not None:
+                        notes.append(f"lambda artifact total cap {max_total_bytes} reached — truncated")
+                    return
+                # Read through a BOUNDED stream — do NOT trust info.file_size (a crafted
+                # zip can understate it and force full-stream decompression = zip-bomb DoS).
+                with zf.open(info) as fh:
+                    data = fh.read(max_file_bytes + 1)
                 if len(data) > max_file_bytes:
+                    if notes is not None:
+                        notes.append(f"lambda artifact entry >{max_file_bytes}B skipped: {rel}")
                     continue
                 merged[prefix + "/" + rel] = data
                 total += len(data)

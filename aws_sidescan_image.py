@@ -36,11 +36,10 @@ def _select_child_digest(index: Dict, os_: str = "linux", arch: str = "amd64") -
         p = m.get("platform", {}) or {}
         if p.get("os") == os_ and p.get("architecture") == arch:
             return m.get("digest")
-    for m in index.get("manifests", []):       # fallback: first concrete-platform child
-        p = m.get("platform", {}) or {}
-        if p.get("os") not in ("unknown", None):
+    for m in index.get("manifests", []):       # fallback: any LINUX child (never windows/darwin)
+        if (m.get("platform", {}) or {}).get("os") == os_:
             return m.get("digest")
-    return None
+    return None                                # non-linux-only image -> None (surfaces a note)
 
 
 def fetch_ecr_layers(ecr_client, repository_name: str, image_id: Dict, *,
@@ -89,12 +88,18 @@ def fetch_ecr_layers(ecr_client, repository_name: str, image_id: Dict, *,
         digest = layer.get("digest")
         if not digest:
             continue
+        # FAIL-CLOSED: a dropped middle layer silently corrupts the overlay (stale
+        # vulnerable version => false alarm; missing package DB => false clean), so a
+        # layer download failure aborts the whole image scan rather than returning a
+        # partial rootfs (mirrors the manifest-fetch fail-closed contract).
         try:
             url = ecr_client.get_download_url_for_layer(
                 repositoryName=repository_name, layerDigest=digest).get("downloadUrl")
-            if url:
-                layers.append(http_get(url))
+            if not url:
+                raise ImageFetchUnavailable(f"no download URL for layer {digest}")
+            layers.append(http_get(url))
+        except ImageFetchUnavailable:
+            raise
         except Exception as e:
-            if notes is not None:
-                notes.append(f"layer fetch failed ({digest}): {e}")
+            raise ImageFetchUnavailable(f"layer fetch failed ({digest}): {e}")
     return layers
