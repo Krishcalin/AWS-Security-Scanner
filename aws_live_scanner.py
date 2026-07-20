@@ -73,7 +73,7 @@ import aws_sidescan
 import aws_engine_eol
 import aws_graph_neptune
 
-VERSION = "2.15.0"
+VERSION = "2.16.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -184,6 +184,7 @@ CHECK_SEVERITY = {
     "KMS-02": "CRITICAL", "KMS-03": "HIGH", "KMS-04": "HIGH",
     "EC2-04": "HIGH", "EC2-05": "MEDIUM", "EC2-06": "HIGH",
     "EC2-07": "HIGH", "EC2-08": "HIGH",
+    "SSM-01": "HIGH", "SSM-02": "HIGH", "LT-01": "HIGH", "ASG-01": "HIGH",
     "AMI-01": "HIGH",
     "CNT-01": "MEDIUM", "CNT-02": "HIGH", "CNT-03": "CRITICAL", "CNT-04": "MEDIUM",
     "CNT-05": "LOW",
@@ -332,6 +333,10 @@ COMPLIANCE_MAP = {
     "EC2-04": {"CIS": "5.6", "PCI-DSS": "2.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.1", "NIST": "CM-6"},
     "EC2-05": {"CIS": "5.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EC2-08": {"CIS": "5.6", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SSM-01": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "CM-8"},
+    "SSM-02": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "LT-01": {"CIS": "5.6", "PCI-DSS": "2.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.1", "NIST": "CM-6"},
+    "ASG-01": {"CIS": "5.6", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EC2-06": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "EC2-07": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "IA-5"},
     "AMI-01": {"CIS": "2.3.3", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
@@ -553,6 +558,10 @@ REMEDIATION_MAP = {
     "EC2-06": "Enable default EBS encryption: aws ec2 enable-ebs-encryption-by-default",
     "EC2-07": "Remove the secret from user-data and rotate it; move it to SSM Parameter Store / Secrets Manager referenced at boot: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --user-data file://sanitized-userdata.txt (stop the instance first)",
     "EC2-08": "Enforce IMDSv2 AND remove the public exposure (SSRF->credential path): aws ec2 modify-instance-metadata-options --instance-id <INSTANCE_ID> --http-tokens required --http-endpoint enabled ; then place the instance behind a load balancer / remove the public IP",
+    "SSM-01": "Attach the SSM core policy to the instance role and confirm the agent registers: aws iam attach-role-policy --role-name <INSTANCE_ROLE> --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore ; aws ssm describe-instance-information",
+    "SSM-02": "Install the patch baseline via Patch Manager: aws ssm send-command --document-name AWS-RunPatchBaseline --parameters Operation=Install --instance-ids <INSTANCE_ID>",
+    "LT-01": "Publish a new default launch-template version requiring IMDSv2: aws ec2 create-launch-template-version --launch-template-id <LT_ID> --source-version <N> --launch-template-data '{\"MetadataOptions\":{\"HttpTokens\":\"required\",\"HttpEndpoint\":\"enabled\"}}' ; aws ec2 modify-launch-template --launch-template-id <LT_ID> --default-version <NEW_VERSION>",
+    "ASG-01": "Point the ASG at an IMDSv2 launch-template version and refresh: aws autoscaling update-auto-scaling-group --auto-scaling-group-name <ASG> --launch-template LaunchTemplateId=<LT_ID>,Version='$Latest' ; aws autoscaling start-instance-refresh --auto-scaling-group-name <ASG>",
     "RDS-01": "Create encrypted copy: aws rds create-db-snapshot --db-instance-identifier <DB_ID> --db-snapshot-identifier pre-encrypt-snap && aws rds copy-db-snapshot --source-db-snapshot-identifier pre-encrypt-snap --target-db-snapshot-identifier encrypted-snap --kms-key-id <KMS_KEY>",
     "RDS-02": "Disable public access: aws rds modify-db-instance --db-instance-identifier <DB_ID> --no-publicly-accessible",
     "RDS-04": "Enable deletion protection: aws rds modify-db-instance --db-instance-identifier <DB_ID> --deletion-protection",
@@ -2501,6 +2510,217 @@ class AWSLiveScanner:
                                       f"{name} — verify if intentional")
         except Exception as e:
             self._add("FAIL", "EC2-05", "EC2", "ec2", str(e))
+
+        # ── Phase 6 compute depth: SSM patch posture + launch-template/ASG IMDSv2
+        # scale-out drift. Each sub-check is self-guarding; isolate so one failing does
+        # not skip the others (findings emit under section="EC2").
+        for _cid, _fn in (("SSM-01", self._check_ssm),
+                          ("LT-01", self._check_launch_templates),
+                          ("ASG-01", self._check_asg)):
+            try:
+                _fn()
+            except Exception as e:
+                self._add("WARN", _cid, "EC2", "ec2",
+                          f"compute-depth sub-check {_fn.__name__} failed: {e}")
+
+    # ── Phase 6: helper reused by _check_launch_templates + _check_asg ────────────
+    def _lt_http_tokens(self, ec2, lt_id: str, version) -> Optional[str]:
+        """The HttpTokens value ('required'/'optional') of a launch-template version, or
+        None if it could not be resolved. An ABSENT MetadataOptions block means IMDSv1
+        ('optional') — the killer under-report if treated as unknown. `version` may be a
+        number or the literals '$Default'/'$Latest' (describe_launch_template_versions
+        accepts all three)."""
+        resp = ec2.describe_launch_template_versions(
+            LaunchTemplateId=lt_id, Versions=[str(version)])
+        vers = resp.get("LaunchTemplateVersions", [])
+        if not vers:
+            return None
+        md = (vers[0].get("LaunchTemplateData") or {}).get("MetadataOptions") or {}
+        return md.get("HttpTokens", "optional")
+
+    def _check_ssm(self):
+        """SSM-01 unmanaged running instances (patch blind spot) + SSM-02 patch compliance.
+        Both inline-paginate in their OWN try/except (never _paginate_all); SSM read failure
+        is WARN, never a false PASS; managed-but-unscanned is INFO (unknown), not compliant."""
+        ec2 = self._client("ec2")
+        ssm = self._client("ssm")
+
+        # SSM-01 — running EC2 not covered by SSM
+        self._log("SSM-01: running EC2 instances not managed by AWS Systems Manager")
+        try:
+            ec2_ids = set()
+            for page in ec2.get_paginator("describe_instances").paginate(
+                Filters=[{"Name": "instance-state-name", "Values": ["running"]}]):
+                for res in page.get("Reservations", []):
+                    for i in res.get("Instances", []):
+                        ec2_ids.add(i["InstanceId"])
+        except Exception as e:
+            self._add("WARN", "SSM-01", "EC2", "ssm",
+                      f"describe_instances failed (SSM coverage not evaluated): {e}")
+            return
+        if not ec2_ids:
+            self._add("INFO", "SSM-01", "EC2", "ssm", "No running EC2 instances in this region")
+            return
+        try:
+            managed = set()
+            for page in ssm.get_paginator("describe_instance_information").paginate():
+                for info in page.get("InstanceInformationList", []):
+                    # only EC2 (not on-prem mi-* nodes) that are actually reachable
+                    if (info.get("ResourceType") == "EC2Instance"
+                            and info.get("PingStatus") == "Online"):
+                        managed.add(info["InstanceId"])
+        except Exception as e:
+            self._add("WARN", "SSM-01", "EC2", "ssm",
+                      f"SSM coverage UNDETERMINED (describe_instance_information failed): {e}")
+            return
+        unmanaged = ec2_ids - managed
+        for iid in sorted(unmanaged):
+            self._add("FAIL", "SSM-01", "EC2", iid,
+                      f"Running EC2 not SSM-managed — cannot be patch-audited or centrally "
+                      f"patched | {iid}")
+        if not unmanaged:
+            self._add("PASS", "SSM-01", "EC2", "ec2",
+                      f"All {len(ec2_ids)} running instances are SSM-managed")
+
+        # SSM-02 — missing critical/security patches on the managed instances
+        self._log("SSM-02: SSM-managed instances missing critical/security patches")
+        managed_ec2 = sorted(ec2_ids & managed)
+        if not managed_ec2:
+            return
+        states, read_err = {}, False
+        for i in range(0, len(managed_ec2), 50):        # InstanceIds capped at 50/call
+            batch = managed_ec2[i:i + 50]
+            try:
+                resp = ssm.describe_instance_patch_states(InstanceIds=batch)
+                for st in resp.get("InstancePatchStates", []):
+                    states[st["InstanceId"]] = st
+            except Exception as e:
+                read_err = True
+                self._add("WARN", "SSM-02", "EC2", "ssm",
+                          f"patch-state read failed for a batch: {e}")
+        bad, unknown = 0, 0
+        for iid in managed_ec2:
+            st = states.get(iid)
+            if st is None:                              # never scanned / no baseline -> unknown
+                unknown += 1
+                self._add("INFO", "SSM-02", "EC2", iid,
+                          f"No patch state (never scanned / no baseline) | {iid}")
+                continue
+            crit = st.get("CriticalNonCompliantCount", 0)
+            sec = st.get("SecurityNonCompliantCount", 0)
+            missing = st.get("MissingCount", 0)
+            pending = st.get("InstalledPendingRebootCount", 0)
+            if crit or sec:
+                bad += 1
+                self._add("FAIL", "SSM-02", "EC2", iid,
+                          f"Non-compliant patches: {crit} critical, {sec} security | {iid}")
+            elif missing:
+                self._add("WARN", "SSM-02", "EC2", iid, f"{missing} missing patches | {iid}")
+            elif pending:
+                self._add("WARN", "SSM-02", "EC2", iid, f"Patched, awaiting reboot | {iid}")
+        # AGGREGATE-PASS-MUST-COUNT: only all-clear when every managed instance was
+        # actually evaluated compliant (no unknown, no read error).
+        if managed_ec2 and bad == 0 and unknown == 0 and not read_err:
+            self._add("PASS", "SSM-02", "EC2", "ec2",
+                      f"All {len(managed_ec2)} managed instances patch-compliant")
+        elif bad == 0 and (unknown or read_err):
+            self._add("WARN", "SSM-02", "EC2", "ssm",
+                      f"Patch compliance UNDETERMINED for {unknown} of {len(managed_ec2)} "
+                      f"managed instances (unscanned / read denied)")
+
+    def _check_launch_templates(self):
+        """LT-01 — a launch template whose $Default version permits IMDSv1: every instance
+        launched from it is SSRF-to-credential exploitable."""
+        self._log("LT-01: launch-template default version permits IMDSv1")
+        ec2 = self._client("ec2")
+        try:
+            templates = []
+            for page in ec2.get_paginator("describe_launch_templates").paginate():
+                templates.extend(page.get("LaunchTemplates", []))
+        except Exception as e:
+            self._add("WARN", "LT-01", "EC2", "launch-templates",
+                      f"describe_launch_templates failed: {e}")
+            return
+        if not templates:
+            self._add("INFO", "LT-01", "EC2", "launch-templates",
+                      "No launch templates in this region")
+            return
+        resolved, bad, unresolved = 0, 0, 0
+        for lt in templates:
+            lt_id = lt.get("LaunchTemplateId")
+            name = lt.get("LaunchTemplateName", lt_id)
+            try:
+                tokens = self._lt_http_tokens(ec2, lt_id, "$Default")
+            except Exception:
+                tokens = None
+            if tokens is None:
+                unresolved += 1
+                self._add("WARN", "LT-01", "EC2", name,
+                          f"Could not resolve $Default version IMDS config | {name}")
+                continue
+            resolved += 1
+            if tokens != "required":
+                bad += 1
+                self._add("FAIL", "LT-01", "EC2", name,
+                          f"Launch template $Default permits IMDSv1 (HttpTokens={tokens}) — "
+                          f"instances launched from it are SSRF-to-credential exploitable | {name}")
+        if templates and bad == 0 and unresolved == 0:
+            self._add("PASS", "LT-01", "EC2", "launch-templates",
+                      f"All {resolved} launch templates require IMDSv2")
+
+    def _check_asg(self):
+        """ASG-01 — an Auto Scaling group whose effective launch spec permits IMDSv1
+        re-creates IMDSv1 instances on scale-out, silently undoing per-instance remediation."""
+        self._log("ASG-01: Auto Scaling group re-spawns IMDSv1 instances")
+        asg = self._client("autoscaling")
+        ec2 = self._client("ec2")
+        try:
+            groups = []
+            for page in asg.get_paginator("describe_auto_scaling_groups").paginate():
+                groups.extend(page.get("AutoScalingGroups", []))
+        except Exception as e:
+            self._add("WARN", "ASG-01", "EC2", "asg",
+                      f"describe_auto_scaling_groups failed: {e}")
+            return
+        if not groups:
+            self._add("INFO", "ASG-01", "EC2", "asg", "No Auto Scaling groups in this region")
+            return
+        bad, unresolved = 0, 0
+        for g in groups:
+            gname = g.get("AutoScalingGroupName", "unknown")
+            tokens = None
+            try:
+                lt_spec = None
+                if g.get("LaunchTemplate"):                       # direct launch template
+                    lt_spec = g["LaunchTemplate"]
+                elif g.get("MixedInstancesPolicy"):               # mixed-instances policy
+                    lt_spec = ((g["MixedInstancesPolicy"].get("LaunchTemplate") or {})
+                               .get("LaunchTemplateSpecification"))
+                if lt_spec and lt_spec.get("LaunchTemplateId"):
+                    tokens = self._lt_http_tokens(
+                        ec2, lt_spec["LaunchTemplateId"], lt_spec.get("Version") or "$Default")
+                elif g.get("LaunchConfigurationName"):            # legacy launch config
+                    lc = asg.describe_launch_configurations(
+                        LaunchConfigurationNames=[g["LaunchConfigurationName"]]
+                    ).get("LaunchConfigurations", [])
+                    if lc:
+                        # launch configs predate IMDSv2 default: absent MetadataOptions = IMDSv1
+                        tokens = (lc[0].get("MetadataOptions") or {}).get("HttpTokens", "optional")
+            except Exception:
+                tokens = None
+            if tokens is None:
+                unresolved += 1
+                self._add("WARN", "ASG-01", "EC2", gname,
+                          f"Could not resolve launch-spec IMDS config | {gname}")
+                continue
+            if tokens != "required":
+                bad += 1
+                self._add("FAIL", "ASG-01", "EC2", gname,
+                          f"ASG scale-out re-creates IMDSv1 instances (HttpTokens={tokens}) — "
+                          f"silently undoes per-instance remediation | {gname}")
+        if groups and bad == 0 and unresolved == 0:
+            self._add("PASS", "ASG-01", "EC2", "asg",
+                      f"All {len(groups)} Auto Scaling groups enforce IMDSv2 on scale-out")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 7: CONTAINER SECURITY (ECR)
