@@ -50,7 +50,7 @@ import fnmatch
 import argparse
 from urllib.parse import unquote
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
@@ -70,6 +70,7 @@ import aws_effperm
 import aws_state
 import aws_unused
 import aws_sidescan
+import aws_engine_eol
 import aws_graph_neptune
 
 VERSION = "2.14.0"
@@ -189,7 +190,9 @@ CHECK_SEVERITY = {
     "BCK-01": "MEDIUM",
     "RDS-01": "HIGH", "RDS-02": "CRITICAL", "RDS-03": "MEDIUM",
     "RDS-04": "MEDIUM", "RDS-05": "LOW", "RDS-06": "CRITICAL",
-    "RDS-08": "MEDIUM", "RDS-11": "HIGH",
+    "RDS-08": "MEDIUM", "RDS-11": "HIGH", "RDS-12": "HIGH",
+    "AUR-01": "HIGH", "AUR-02": "MEDIUM", "AUR-03": "HIGH",
+    "AUR-04": "CRITICAL", "AUR-05": "HIGH",
     "GLC-01": "CRITICAL", "GLC-02": "MEDIUM", "GLC-03": "LOW",
     "SNS-01": "MEDIUM", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
     "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "MEDIUM", "SQS-04": "LOW",
@@ -337,6 +340,12 @@ COMPLIANCE_MAP = {
     "RDS-06": {"CIS": "2.3.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "RDS-08": {"PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2"},
     "RDS-11": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "RDS-12": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "AUR-01": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "AUR-02": {"PCI-DSS": "10.5.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.1", "NIST": "CP-9"},
+    "AUR-03": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "AUR-04": {"CIS": "2.3.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "AUR-05": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     # CloudFront
     "CFN-01": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "CFN-02": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
@@ -537,6 +546,12 @@ REMEDIATION_MAP = {
     "RDS-06": "Remove public access from snapshot: aws rds modify-db-snapshot-attribute --db-snapshot-identifier <SNAP_ID> --attribute-name restore --values-to-remove all",
     "RDS-08": "Enable IAM database authentication so short-lived IAM tokens replace static passwords: aws rds modify-db-instance --db-instance-identifier <DB_ID> --enable-iam-database-authentication --apply-immediately",
     "RDS-11": "Recreate the snapshot encrypted (copy with a KMS key, then delete the plaintext one): aws rds copy-db-snapshot --source-db-snapshot-identifier <SNAP_ID> --target-db-snapshot-identifier <SNAP_ID>-enc --kms-key-id <KMS_KEY>",
+    "RDS-12": "Upgrade the instance to a supported engine version: aws rds modify-db-instance --db-instance-identifier <DB_ID> --engine-version <SUPPORTED_VERSION> --allow-major-version-upgrade --apply-immediately",
+    "AUR-01": "Aurora encryption at rest can only be set at creation — snapshot the cluster and restore with a KMS key: aws rds restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAP> --engine <ENGINE> --kms-key-id <KMS_KEY>",
+    "AUR-02": "Enable deletion protection on the cluster: aws rds modify-db-cluster --db-cluster-identifier <CLUSTER_ID> --deletion-protection --apply-immediately",
+    "AUR-03": "Upgrade the cluster to a supported engine version: aws rds modify-db-cluster --db-cluster-identifier <CLUSTER_ID> --engine-version <SUPPORTED_VERSION> --allow-major-version-upgrade --apply-immediately",
+    "AUR-04": "Remove public restore access from the cluster snapshot: aws rds modify-db-cluster-snapshot-attribute --db-cluster-snapshot-identifier <SNAP_ID> --attribute-name restore --values-to-remove all",
+    "AUR-05": "Recreate the cluster snapshot encrypted with a KMS key: aws rds copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier <SNAP_ID> --target-db-cluster-snapshot-identifier <SNAP_ID>-enc --kms-key-id <KMS_KEY>",
     "CFN-01": "Enforce HTTPS: aws cloudfront update-distribution --id <DIST_ID> --default-cache-behavior '{\"ViewerProtocolPolicy\":\"https-only\"}'",
     "CFN-03": "Associate WAF: aws cloudfront update-distribution --id <DIST_ID> --web-acl-id <WAF_ACL_ARN>",
     "LMB-01": "Remove public access: aws lambda remove-permission --function-name <FUNC> --statement-id <SID>",
@@ -1279,6 +1294,12 @@ class AWSLiveScanner:
         self._sidescan_extractor_opener = None      # test seam: (vol_ids, iid) -> CM
         self._remediation_report: Optional[Dict] = None   # Phase 7 --remediate
         self._code_to_cloud_meta: Optional[Dict] = None
+        # ── Phase 5b: managed-service engine-EOL axis ────────────────────────
+        self._today: Optional[date] = None   # test clock seam; None -> utcnow().date()
+        # Stashed (node_id, node_kind, matches, node_props) HAS_VULN payloads from EOL
+        # checks. Emitted LATE (in _check_vuln, after IAMPRIVESC hard-replaces the graph)
+        # so the identity-graph rebuild can't clobber them.
+        self._eol_graph_payloads: List[tuple] = []
 
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
@@ -2712,6 +2733,28 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 9: AMAZON RDS
     # ══════════════════════════════════════════════════════════════════════════
+    # ── Phase 5b: managed-service engine-EOL helpers ──────────────────────────
+    def _scan_date(self) -> date:
+        """The date EOL verdicts are evaluated against — injectable for deterministic
+        tests (self._today), else today (UTC)."""
+        return self._today or datetime.now(timezone.utc).date()
+
+    def _stash_eol_edge(self, node_id: str, node_kind: str, matches, **node_props):
+        """Queue a HAS_VULN payload for LATE emission (after IAMPRIVESC rebuilds the
+        graph). Findings themselves are added inline via self._add; only the graph edge
+        is deferred, because _build_identity_graph does a hard graph replace."""
+        if node_id and matches:
+            self._eol_graph_payloads.append((node_id, node_kind, list(matches), node_props))
+
+    def _eol_check(self, service: str, engine: str, version: str):
+        """Evaluate one managed engine version. Returns (verdict, matches):
+        verdict in {'EOL','OK','UNKNOWN'}; matches is the synthetic EnrichedMatch list."""
+        if not aws_engine_eol.evaluable(service, engine, version):
+            return "UNKNOWN", []
+        matches = aws_engine_eol.managed_engine_cve(
+            service, engine, version, today=self._scan_date())
+        return ("EOL" if matches else "OK"), matches
+
     def _check_rds(self):
         self._section_header("RDS")
         rds = self._client("rds")
@@ -2869,6 +2912,141 @@ class AWSLiveScanner:
                           f"All {len(snaps)} manual RDS snapshots encrypted at rest")
         except Exception as e:
             self._add("FAIL", "RDS-06", "RDS", "rds-snapshots", str(e))
+
+        # RDS-12 — Instance engine end-of-life (Aurora skipped here; AUR-03 covers it at
+        # the cluster level). Inline-paginate in OWN try/except — do NOT reuse
+        # _rds_instances() which swallows API errors (false-clean trap).
+        self._log("RDS-12: RDS instance engine end-of-life / past standard support")
+        try:
+            instances = []
+            for page in rds.get_paginator("describe_db_instances").paginate():
+                instances.extend(page.get("DBInstances", []))
+        except Exception as e:
+            self._add("WARN", "RDS-12", "RDS", "rds",
+                      f"describe_db_instances failed (engine EOL not evaluated): {e}")
+            instances = None
+        if instances is not None:
+            if not instances:
+                self._add("INFO", "RDS-12", "RDS", "rds", "No RDS instances found in this region")
+            for db in instances:
+                engine = db.get("Engine", "")
+                if engine.startswith("aurora"):
+                    continue
+                iid = db["DBInstanceIdentifier"]
+                ev  = db.get("EngineVersion", "")
+                verdict, matches = self._eol_check("rds", engine, ev)
+                if verdict == "EOL":
+                    self._add("FAIL", "RDS-12", "RDS", iid,
+                              f"Engine END-OF-LIFE: {engine} {ev} past standard support "
+                              f"(upgrade to >= {matches[0].fixed_version}) | {iid}")
+                    self._stash_eol_edge(db.get("DBInstanceArn", iid), "RDSInstance", matches,
+                                         engine=engine, engine_version=ev, region=self.region)
+                elif verdict == "OK":
+                    self._add("PASS", "RDS-12", "RDS", iid,
+                              f"Engine supported: {engine} {ev} | {iid}")
+                else:
+                    self._add("INFO", "RDS-12", "RDS", iid,
+                              f"Engine EOL not evaluable: {engine} {ev} | {iid}")
+
+        # AUR-01/02/03 — Aurora / Multi-AZ DB CLUSTER: encryption, deletion protection,
+        # engine EOL. describe_db_clusters is a SEPARATE plane from describe_db_instances —
+        # today's RDS-01..11 never see a cluster, so Aurora Serverless-v1 / headless
+        # clusters are entirely unscanned without this.
+        self._log("AUR-01/02/03: Aurora cluster encryption, deletion protection, engine EOL")
+        try:
+            clusters = []
+            for page in rds.get_paginator("describe_db_clusters").paginate():
+                clusters.extend(page.get("DBClusters", []))
+        except Exception as e:
+            self._add("WARN", "AUR-01", "RDS", "rds", f"describe_db_clusters failed: {e}")
+            clusters = None
+        if clusters is not None:
+            if not clusters:
+                self._add("INFO", "AUR-01", "RDS", "rds",
+                          "No Aurora/Multi-AZ DB clusters found in this region")
+            for cl in clusters:
+                cid    = cl.get("DBClusterIdentifier", "unknown")
+                carn   = cl.get("DBClusterArn", cid)
+                engine = cl.get("Engine", "")
+                ev     = cl.get("EngineVersion", "")
+                # AUR-01 cluster encryption at rest
+                if cl.get("StorageEncrypted", False):
+                    self._add("PASS", "AUR-01", "RDS", cid,
+                              f"Cluster storage encryption=ON | {cid} ({engine})")
+                else:
+                    self._add("FAIL", "AUR-01", "RDS", cid,
+                              f"Cluster storage encryption=OFF | {cid} ({engine})")
+                # AUR-02 cluster deletion protection (authoritative for Aurora; distinct from RDS-04)
+                if cl.get("DeletionProtection", False):
+                    self._add("PASS", "AUR-02", "RDS", cid,
+                              f"Cluster deletion protection=ON | {cid}")
+                else:
+                    self._add("FAIL", "AUR-02", "RDS", cid,
+                              f"Cluster deletion protection=OFF | {cid}")
+                # AUR-03 cluster engine EOL
+                verdict, matches = self._eol_check("rds", engine, ev)
+                if verdict == "EOL":
+                    self._add("FAIL", "AUR-03", "RDS", cid,
+                              f"Cluster engine END-OF-LIFE: {engine} {ev} "
+                              f"(upgrade to >= {matches[0].fixed_version}) | {cid}")
+                    self._stash_eol_edge(carn, "RDSCluster", matches,
+                                         engine=engine, engine_version=ev, region=self.region)
+                elif verdict == "OK":
+                    self._add("PASS", "AUR-03", "RDS", cid,
+                              f"Cluster engine supported: {engine} {ev} | {cid}")
+                else:
+                    self._add("INFO", "AUR-03", "RDS", cid,
+                              f"Cluster engine EOL not evaluable: {engine} {ev} | {cid}")
+
+        # AUR-04/05 — Aurora CLUSTER snapshots: public visibility + encryption at rest.
+        # Distinct API + id-namespace from instance snapshots (RDS-06/11) — zero overlap.
+        self._log("AUR-04/05: Aurora cluster snapshot public visibility and encryption")
+        try:
+            csnaps = []
+            for page in rds.get_paginator("describe_db_cluster_snapshots").paginate(
+                SnapshotType="manual"
+            ):
+                csnaps.extend(page.get("DBClusterSnapshots", []))
+        except Exception as e:
+            self._add("WARN", "AUR-04", "RDS", "rds",
+                      f"describe_db_cluster_snapshots failed: {e}")
+            csnaps = None
+        if csnaps is not None:
+            if not csnaps:
+                self._add("INFO", "AUR-04", "RDS", "cluster-snapshots",
+                          "No manual Aurora/RDS cluster snapshots in this region")
+            public_c = 0
+            unenc_c  = 0
+            for s in csnaps:
+                sid = s["DBClusterSnapshotIdentifier"]
+                # AUR-05 cluster-snapshot encryption (field is StorageEncrypted — the
+                # cluster-snapshot shape differs from the instance-snapshot 'Encrypted')
+                if not s.get("StorageEncrypted", False):
+                    unenc_c += 1
+                    self._add("FAIL", "AUR-05", "RDS", sid,
+                              f"Manual Aurora cluster snapshot NOT encrypted at rest: {sid} "
+                              f"— plaintext DB data if shared/leaked")
+                # AUR-04 public visibility — OWN try/except per snapshot (surface the error,
+                # do NOT silently `pass` like RDS-06 which can mis-read a public snapshot as private)
+                try:
+                    attrs = rds.describe_db_cluster_snapshot_attributes(
+                        DBClusterSnapshotIdentifier=sid
+                    )["DBClusterSnapshotAttributesResult"]["DBClusterSnapshotAttributes"]
+                    if any(a.get("AttributeName") == "restore"
+                           and "all" in a.get("AttributeValues", []) for a in attrs):
+                        public_c += 1
+                        self._add("FAIL", "AUR-04", "RDS", sid,
+                                  f"Aurora cluster snapshot PUBLICLY RESTORABLE by any AWS "
+                                  f"account: {sid} — CRITICAL")
+                except Exception as e:
+                    self._add("WARN", "AUR-04", "RDS", sid,
+                              f"cluster-snapshot attribute read failed: {e}")
+            if csnaps and public_c == 0:
+                self._add("PASS", "AUR-04", "RDS", "cluster-snapshots",
+                          f"No public Aurora cluster snapshots ({len(csnaps)} manual checked)")
+            if csnaps and unenc_c == 0:
+                self._add("PASS", "AUR-05", "RDS", "cluster-snapshots",
+                          f"All {len(csnaps)} manual Aurora cluster snapshots encrypted at rest")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 10: AMAZON S3 GLACIER
