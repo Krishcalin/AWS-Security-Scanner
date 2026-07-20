@@ -116,11 +116,13 @@ Turn the flagship side-scan from test-only to live; the shared foundation Phases
 - ⏸️ **DEFERRED — live `DissectExtractor` / `_LiveMountedSnapshots`** (userspace ext4/xfs over an EBS snapshot): needs the `dissect` library + a real snapshot, so it can't be offline-tested — kept out until it can be validated in a lab (matches the Phase-6/7 deferral of live filesystem I/O). The engine already runs against ANY `FilesystemExtractor`.
 - Verified by a 3-agent scoping-research pass + a 10-defect (7-unique) read-only adversarial-verify pass (all fixed).
 
-### Phase 4 — Container image + Lambda dependency scanning · **L**
-Agentless, Inspector-independent, reusing the Phase-3 extractor + SBOM pipeline.
-- `ImageLayerExtractor` (pull ECR layers, overlay/whiteout) → `CWPP-05` + HAS_VULN on `ECRImage`
-- `LambdaArtifactExtractor` (download function zip + layers) → `LMB-07` vulnerable dependency
-- `RUNS_IMAGE` edges (ECS/EKS images → `ECRImage`) so image CVEs drive attack paths; ECR hygiene (`CNT-04/05`)
+### Phase 4 — Container image + Lambda dependency scanning · **L** — ✅ SHIPPED (v2.14.0)
+Agentless, Inspector-independent, reusing the Phase-3 extractor + SBOM pipeline verbatim.
+- ✅ **`ImageLayerExtractor`** (`aws_sidescan.merge_layers`) — OCI/Docker gzip-tar layer overlay + whiteout (`.wh.`/`.wh..wh..opq`) → merged rootfs via the `FilesystemExtractor` Protocol → the whole Phase-3 pipeline → **`CWPP-05`** HAS_VULN on `ECRImage`. `aws_sidescan_image.fetch_ecr_layers` is the live bridge (batch_get_image → manifest-list linux/amd64 → get_download_url_for_layer via injected http_get, fail-closed).
+- ✅ **`LambdaArtifactExtractor`** (`aws_sidescan_lambda`) — function zip → `/var/task`, layers → `/opt` → **`LMB-07`** vulnerable dependency; `fetch_lambda_artifact` live seam.
+- ✅ **Installed-package-metadata recall** (`package.json`/`METADATA`/`.gemspec`) so images/Lambda with no lockfile still inventory — also lifts EBS recall.
+- ✅ **`RUNS_IMAGE`** edges (ECS task-def images → `ECRImage`, dual-emit to both node-id conventions so image CVEs join attack paths) + ECR hygiene **`CNT-03`** (repo policy public/cross-account) / **`CNT-04`** (tag immutability) / **`CNT-05`** (lifecycle). EKS pod→image deferred (needs the k8s API).
+- 3-agent scoping research + a 12-defect (1 blocker) read-only adversarial-verify (all fixed). The pure extractors subclass `DictExtractor`, so an image/Lambda scans byte-identically to the test double.
 
 ### Phase 5 — Managed-service vulnerability axis · **M**
 The "vulnerable managed service" signal + the invisible Aurora cluster shape.
