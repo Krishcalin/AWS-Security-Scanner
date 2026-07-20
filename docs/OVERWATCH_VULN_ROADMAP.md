@@ -148,12 +148,27 @@ by a read-only adversarial-verify (3 confirmed defects, all fixed) + a fix-verif
   epilogue) *after* IAMPRIVESC hard-replaces the graph, so they survive the rebuild. Managed nodes are
   intentionally correlate-**inert** in Phase 5 (attack-path participation is the Phase-7 unlock).
 
-### Phase 6 — Per-service misconfig depth · **L**
-Close the FSBP breadth backlog — partial → thorough, service by service.
-- Compute: `_check_ami`, `_check_ssm` patch-state, `_check_launch_templates/asg` (IMDSv2 scale-out drift)
-- Storage: S3 policy-layer eval, Backup Vault Lock, RDS PI encryption, DynamoDB resource-policy
-- Containers: ECS escape primitives, EKS nodegroup→EC2 graphing, code-signing
-- Network: Classic ELB, NACL/egress/peering, WAF rule quality, CloudFront depth; AI/ML: SageMaker depth
+### Phase 6 — Per-service misconfig depth · **L** — ✅ SHIPPED (v2.16.0)
+Closed the FSBP/CIS breadth backlog — **26 checks** folded into existing `_check_*` methods (NO new
+SECTIONS, so `len(SECTIONS)==43` is untouched), scoped by a 7-agent research pass (botocore shapes
+verified offline) and hardened by a read-only adversarial-verify. **All findings-only** — every
+section runs before IAMPRIVESC's graph hard-replace, so graph edges are deferred to Phase 7.
+- ✅ **Compute**: `SSM-01/02` (unmanaged instances + missing critical/security patches),
+  `LT-01` launch-template IMDSv1, `ASG-01` the IMDSv2 **scale-out drift** (an ASG whose template
+  allows IMDSv1 re-spawns v1 instances after you fix the live hosts), `AMI-02/03` (unencrypted
+  snapshot, stale/past-deprecation).
+- ✅ **Storage**: `S3-09/10` bucket-policy public (BPA-neutralization aware) + cross-account,
+  `DDB-05` table resource-policy, `BCK-02/03` Vault Lock immutability + vault-policy exposure.
+- ✅ **Containers**: `ECS-06/07/08` escape primitives (host namespaces / sensitive hostPath + docker.sock
+  / dangerous capabilities), `EKS-06` world-open worker-node SSH, `CNT-06` ECR registry signing,
+  `LMB-06` Lambda code-signing enforcement.
+- ✅ **Network**: `CLB-01/02` Classic-ELB plaintext + weak SSL policy (elb v1), `VPC-05` NACL
+  admin-port ingress (stateless RuleNumber first-match-wins), `VPC-06` cross-account peering,
+  `WAF-05` managed-rule-group baseline, `CFN-06` CloudFront origin-side TLS.
+- ✅ **AI/ML**: `SM-05/06/07` SageMaker Studio public egress + home-EFS CMK + endpoint-config CMK.
+- Recurring hardening applied throughout: inline-paginate in own try/except (never the swallowing
+  `_paginate_all`), empty→INFO, and **aggregate-PASS-must-count-evaluated-vs-unknown** (denied reads
+  downgrade a summary all-clear to WARN).
 
 ### Phase 7 — L7 reachability + attack-path fusion + DSPM · **M**
 Wire every new node into the attack-path engine — the CNAPP differentiator.

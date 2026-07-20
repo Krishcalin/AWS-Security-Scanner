@@ -73,7 +73,7 @@ import aws_sidescan
 import aws_engine_eol
 import aws_graph_neptune
 
-VERSION = "2.15.0"
+VERSION = "2.16.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -170,8 +170,9 @@ CHECK_SEVERITY = {
     "IAM-05": "MEDIUM", "IAM-06": "HIGH", "IAM-10": "MEDIUM",
     "IAM-07": "MEDIUM", "IAM-08": "MEDIUM",
     "S3-01": "HIGH", "S3-03": "HIGH", "S3-05": "MEDIUM",
-    "S3-07": "MEDIUM", "S3-08": "MEDIUM",
+    "S3-07": "MEDIUM", "S3-08": "MEDIUM", "S3-09": "HIGH", "S3-10": "HIGH",
     "VPC-01": "HIGH", "VPC-03": "MEDIUM", "VPC-04": "MEDIUM",
+    "VPC-05": "HIGH", "VPC-06": "MEDIUM",
     "LOG-01": "CRITICAL", "LOG-03": "HIGH", "LOG-04": "CRITICAL", "LOG-05": "MEDIUM",
     "LOG-06": "MEDIUM", "LOG-07": "MEDIUM", "LOG-08": "MEDIUM", "LOG-09": "CRITICAL",
     "LOG-10": "HIGH",
@@ -184,10 +185,12 @@ CHECK_SEVERITY = {
     "KMS-02": "CRITICAL", "KMS-03": "HIGH", "KMS-04": "HIGH",
     "EC2-04": "HIGH", "EC2-05": "MEDIUM", "EC2-06": "HIGH",
     "EC2-07": "HIGH", "EC2-08": "HIGH",
+    "SSM-01": "HIGH", "SSM-02": "HIGH", "LT-01": "HIGH", "ASG-01": "HIGH",
+    "AMI-02": "MEDIUM", "AMI-03": "MEDIUM",
     "AMI-01": "HIGH",
     "CNT-01": "MEDIUM", "CNT-02": "HIGH", "CNT-03": "CRITICAL", "CNT-04": "MEDIUM",
-    "CNT-05": "LOW",
-    "BCK-01": "MEDIUM",
+    "CNT-05": "LOW", "CNT-06": "MEDIUM",
+    "BCK-01": "MEDIUM", "BCK-02": "HIGH", "BCK-03": "CRITICAL",
     "RDS-01": "HIGH", "RDS-02": "CRITICAL", "RDS-03": "MEDIUM",
     "RDS-04": "MEDIUM", "RDS-05": "LOW", "RDS-06": "CRITICAL",
     "RDS-08": "MEDIUM", "RDS-11": "HIGH", "RDS-12": "HIGH",
@@ -197,7 +200,7 @@ CHECK_SEVERITY = {
     "SNS-01": "MEDIUM", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
     "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "MEDIUM", "SQS-04": "LOW",
     "CFN-01": "HIGH", "CFN-02": "HIGH", "CFN-03": "HIGH",
-    "CFN-04": "MEDIUM", "CFN-05": "HIGH",
+    "CFN-04": "MEDIUM", "CFN-05": "HIGH", "CFN-06": "MEDIUM",
     "R53-01": "MEDIUM", "R53-02": "MEDIUM", "R53-03": "HIGH",
     "R53-04": "LOW", "R53-05": "MEDIUM",
     "BDR-01": "HIGH", "BDR-02": "HIGH", "BDR-03": "MEDIUM",
@@ -205,7 +208,7 @@ CHECK_SEVERITY = {
     "AGT-01": "MEDIUM", "AGT-02": "HIGH", "AGT-03": "MEDIUM",
     "AGT-04": "HIGH", "AGT-05": "HIGH",
     "LMB-01": "HIGH", "LMB-02": "MEDIUM", "LMB-03": "HIGH",
-    "LMB-04": "MEDIUM", "LMB-05": "MEDIUM",
+    "LMB-04": "MEDIUM", "LMB-05": "MEDIUM", "LMB-06": "MEDIUM",
     "EKS-01": "HIGH", "EKS-02": "HIGH", "EKS-03": "MEDIUM",
     "EKS-04": "MEDIUM", "EKS-05": "MEDIUM",
     "ECS-01": "CRITICAL", "ECS-02": "HIGH", "ECS-03": "MEDIUM",
@@ -213,15 +216,18 @@ CHECK_SEVERITY = {
     "SEC-01": "HIGH", "SEC-02": "HIGH", "SEC-03": "MEDIUM", "SEC-04": "MEDIUM",
     "SEC-05": "CRITICAL",
     "WAF-01": "HIGH", "WAF-02": "MEDIUM", "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
+    "WAF-05": "MEDIUM",
     "ELC-01": "HIGH", "ELC-02": "HIGH", "ELC-03": "HIGH", "ELC-04": "MEDIUM",
     "ELC-05": "HIGH", "ELC-06": "MEDIUM",
     "OSR-01": "HIGH", "OSR-02": "HIGH", "OSR-03": "MEDIUM",
     "OSR-04": "HIGH", "OSR-05": "HIGH", "OSR-06": "MEDIUM", "OSR-07": "HIGH",
     "DDB-01": "HIGH", "DDB-02": "HIGH", "DDB-03": "MEDIUM", "DDB-04": "MEDIUM",
+    "DDB-05": "CRITICAL",
     "SFN-01": "MEDIUM", "SFN-02": "LOW", "SFN-03": "MEDIUM",
     "APIGW-01": "MEDIUM", "APIGW-02": "MEDIUM", "APIGW-03": "HIGH", "APIGW-04": "LOW",
     "ELB-01": "MEDIUM", "ELB-02": "HIGH", "ELB-03": "MEDIUM",
     "ELB-04": "LOW", "ELB-05": "MEDIUM", "ELB-07": "MEDIUM",
+    "CLB-01": "HIGH", "CLB-02": "MEDIUM",
     "EBS-01": "HIGH", "EBS-02": "HIGH", "EBS-03": "MEDIUM", "EBS-04": "CRITICAL",
     "RS-01": "HIGH", "RS-02": "HIGH", "RS-03": "MEDIUM", "RS-04": "MEDIUM", "RS-05": "LOW",
     "RS-06": "HIGH", "RS-07": "MEDIUM",
@@ -230,6 +236,7 @@ CHECK_SEVERITY = {
     "ACM-01": "HIGH", "ACM-02": "MEDIUM", "ACM-03": "LOW",
     "ACM-04": "HIGH", "ACM-05": "MEDIUM",
     "SM-01": "HIGH", "SM-02": "MEDIUM", "SM-03": "MEDIUM", "SM-04": "MEDIUM",
+    "SM-05": "HIGH", "SM-06": "MEDIUM", "SM-07": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
     "COG-05": "HIGH", "COG-06": "CRITICAL",
     "AGW2-01": "MEDIUM", "AGW2-02": "HIGH", "AGW2-03": "LOW",
@@ -261,8 +268,9 @@ CHECK_SEVERITY = {
     "R53-01": "MEDIUM", "R53-02": "MEDIUM", "R53-03": "HIGH", "R53-04": "LOW", "R53-05": "MEDIUM",
     "R53-06": "HIGH",
     "DDB-03": "MEDIUM", "DDB-04": "MEDIUM",
-    "EKS-04": "MEDIUM", "EKS-05": "MEDIUM",
+    "EKS-04": "MEDIUM", "EKS-05": "MEDIUM", "EKS-06": "HIGH",
     "ECS-04": "HIGH", "ECS-05": "MEDIUM",
+    "ECS-06": "HIGH", "ECS-07": "CRITICAL", "ECS-08": "HIGH",
     "SEC-03": "MEDIUM", "SEC-04": "MEDIUM",
     "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
     "ELC-04": "MEDIUM", "OSR-03": "MEDIUM",
@@ -293,10 +301,14 @@ COMPLIANCE_MAP = {
     "S3-05": {"CIS": "3.6", "PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "S3-07": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "S3-08": {"CIS": "2.1.3", "PCI-DSS": "10.5.3", "HIPAA": "164.312(c)(1)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "S3-09": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "S3-10": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     # VPC
     "VPC-01": {"CIS": "5.2", "PCI-DSS": "1.3.2", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "VPC-03": {"CIS": "3.7", "PCI-DSS": "10.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
     "VPC-04": {"CIS": "5.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "VPC-05": {"CIS": "5.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "VPC-06": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     # Logging
     "LOG-01": {"CIS": "3.1", "PCI-DSS": "10.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "LOG-03": {"CIS": "3.5", "PCI-DSS": "10.5.3", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "CM-8"},
@@ -332,9 +344,15 @@ COMPLIANCE_MAP = {
     "EC2-04": {"CIS": "5.6", "PCI-DSS": "2.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.1", "NIST": "CM-6"},
     "EC2-05": {"CIS": "5.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EC2-08": {"CIS": "5.6", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SSM-01": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "CM-8"},
+    "SSM-02": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "LT-01": {"CIS": "5.6", "PCI-DSS": "2.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.1", "NIST": "CM-6"},
+    "ASG-01": {"CIS": "5.6", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EC2-06": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "EC2-07": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "IA-5"},
     "AMI-01": {"CIS": "2.3.3", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "AMI-02": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "AMI-03": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     # RDS
     "RDS-01": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "RDS-02": {"CIS": "2.3.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
@@ -353,6 +371,7 @@ COMPLIANCE_MAP = {
     "CFN-01": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "CFN-02": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
     "CFN-03": {"PCI-DSS": "6.6", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "CFN-06": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
     # New sections
     "LMB-01": {"CIS": "2.7.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "LMB-02": {"CIS": "2.7.2", "PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
@@ -389,6 +408,8 @@ COMPLIANCE_MAP = {
     "ELB-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
     "ELB-05": {"PCI-DSS": "6.6", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "ELB-07": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "CLB-01": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "CLB-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     # EBS
     "EBS-01": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "EBS-02": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
@@ -417,6 +438,9 @@ COMPLIANCE_MAP = {
     "SM-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "SM-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SM-04": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SM-05": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SM-06": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "SM-07": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     # Cognito
     "COG-01": {"CIS": "1.5", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
     "COG-02": {"PCI-DSS": "8.3.6", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "IA-5(1)"},
@@ -453,7 +477,10 @@ COMPLIANCE_MAP = {
     "CNT-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "CNT-04": {"PCI-DSS": "6.3.2", "HIPAA": "164.312(c)(1)", "SOC2": "CC7.1", "NIST": "CM-5"},
     "CNT-05": {"PCI-DSS": "6.3.2", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "CNT-06": {"PCI-DSS": "6.3.2", "SOC2": "CC7.1", "NIST": "SI-7"},
     "BCK-01": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "BCK-02": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "BCK-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "SNS-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SNS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "SNS-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
@@ -470,16 +497,22 @@ COMPLIANCE_MAP = {
     "R53-06": {"PCI-DSS": "2.4", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SC-20"},
     "DDB-03": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "DDB-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "DDB-05": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "EKS-04": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "EKS-05": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EKS-06": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "ECS-04": {"PCI-DSS": "2.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "CM-7"},
     "ECS-05": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "ECS-06": {"PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
+    "ECS-07": {"PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
+    "ECS-08": {"PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-6"},
     "SEC-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SEC-04": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "SEC-05": {"CIS": "1.16", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "IAMPE-23": {"CIS": "1.16", "PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "WAF-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "WAF-04": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "WAF-05": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "ELC-04": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
     "ELC-05": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "ELC-06": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
@@ -497,6 +530,7 @@ COMPLIANCE_MAP = {
     "COG-06": {"PCI-DSS": "7.2.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "AGW2-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SC-5"},
     "LMB-05": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "LMB-06": {"PCI-DSS": "6.3.2", "SOC2": "CC7.1", "NIST": "SI-7"},
 }
 
 # ─── Remediation commands: check_id → AWS CLI command ────────────────────────
@@ -517,9 +551,13 @@ REMEDIATION_MAP = {
     "S3-05": "Enable access logging: aws s3api put-bucket-logging --bucket <BUCKET> --bucket-logging-status '{\"LoggingEnabled\":{\"TargetBucket\":\"<LOG_BUCKET>\",\"TargetPrefix\":\"s3-logs/\"}}'",
     "S3-07": "Attach a bucket policy that denies non-TLS requests (Effect=Deny, Condition Bool aws:SecureTransport=false) and apply it: aws s3api put-bucket-policy --bucket <BUCKET> --policy file://tls-only.json",
     "S3-08": "Enable versioning for rollback protection against overwrite/ransomware: aws s3api put-bucket-versioning --bucket <BUCKET> --versioning-configuration Status=Enabled",
+    "S3-09": "Block public access and strip the public statement, then re-apply a scoped policy: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true ; aws s3api put-bucket-policy --bucket <BUCKET> --policy file://scoped-policy.json",
+    "S3-10": "Scope the bucket policy to your own account or an aws:PrincipalOrgID condition (remove the external-account principal): aws s3api put-bucket-policy --bucket <BUCKET> --policy file://scoped-policy.json",
     "VPC-01": "Revoke risky SG rule: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
     "VPC-03": "Enable VPC Flow Logs: aws ec2 create-flow-logs --resource-type VPC --resource-ids <VPC_ID> --traffic-type ALL --log-destination-type cloud-watch-logs --log-group-name vpc-flow-logs",
     "VPC-04": "Strip all rules from each default SG so it denies all traffic (CIS 5.4): aws ec2 revoke-security-group-ingress --group-id <SG_ID> --ip-permissions ... and aws ec2 revoke-security-group-egress --group-id <SG_ID> --ip-permissions ... ; migrate workloads to purpose-built SGs",
+    "VPC-05": "Deny (or delete) the world-open admin-port NACL rule: aws ec2 replace-network-acl-entry --network-acl-id <NACL_ID> --rule-number <RULE_NUM> --protocol tcp --port-range From=3389,To=3389 --cidr-block 0.0.0.0/0 --rule-action deny --ingress",
+    "VPC-06": "Remove the unauthorized cross-account peer (or tighten route tables to least-privilege CIDRs): aws ec2 delete-vpc-peering-connection --vpc-peering-connection-id <PCX_ID>",
     "LOG-01": "Create multi-region trail: aws cloudtrail create-trail --name org-trail --s3-bucket-name <BUCKET> --is-multi-region-trail --enable-log-file-validation && aws cloudtrail start-logging --name org-trail",
     "LOG-03": "Start Config recorder: aws configservice start-configuration-recorder --configuration-recorder-name default",
     "LOG-04": "Enable GuardDuty: aws guardduty create-detector --enable",
@@ -553,6 +591,10 @@ REMEDIATION_MAP = {
     "EC2-06": "Enable default EBS encryption: aws ec2 enable-ebs-encryption-by-default",
     "EC2-07": "Remove the secret from user-data and rotate it; move it to SSM Parameter Store / Secrets Manager referenced at boot: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --user-data file://sanitized-userdata.txt (stop the instance first)",
     "EC2-08": "Enforce IMDSv2 AND remove the public exposure (SSRF->credential path): aws ec2 modify-instance-metadata-options --instance-id <INSTANCE_ID> --http-tokens required --http-endpoint enabled ; then place the instance behind a load balancer / remove the public IP",
+    "SSM-01": "Attach the SSM core policy to the instance role and confirm the agent registers: aws iam attach-role-policy --role-name <INSTANCE_ROLE> --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore ; aws ssm describe-instance-information",
+    "SSM-02": "Install the patch baseline via Patch Manager: aws ssm send-command --document-name AWS-RunPatchBaseline --parameters Operation=Install --instance-ids <INSTANCE_ID>",
+    "LT-01": "Publish a new default launch-template version requiring IMDSv2: aws ec2 create-launch-template-version --launch-template-id <LT_ID> --source-version <N> --launch-template-data '{\"MetadataOptions\":{\"HttpTokens\":\"required\",\"HttpEndpoint\":\"enabled\"}}' ; aws ec2 modify-launch-template --launch-template-id <LT_ID> --default-version <NEW_VERSION>",
+    "ASG-01": "Point the ASG at an IMDSv2 launch-template version and refresh: aws autoscaling update-auto-scaling-group --auto-scaling-group-name <ASG> --launch-template LaunchTemplateId=<LT_ID>,Version='$Latest' ; aws autoscaling start-instance-refresh --auto-scaling-group-name <ASG>",
     "RDS-01": "Create encrypted copy: aws rds create-db-snapshot --db-instance-identifier <DB_ID> --db-snapshot-identifier pre-encrypt-snap && aws rds copy-db-snapshot --source-db-snapshot-identifier pre-encrypt-snap --target-db-snapshot-identifier encrypted-snap --kms-key-id <KMS_KEY>",
     "RDS-02": "Disable public access: aws rds modify-db-instance --db-instance-identifier <DB_ID> --no-publicly-accessible",
     "RDS-04": "Enable deletion protection: aws rds modify-db-instance --db-instance-identifier <DB_ID> --deletion-protection",
@@ -567,11 +609,13 @@ REMEDIATION_MAP = {
     "AUR-05": "Recreate the cluster snapshot encrypted with a KMS key: aws rds copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier <SNAP_ID> --target-db-cluster-snapshot-identifier <SNAP_ID>-enc --kms-key-id <KMS_KEY>",
     "CFN-01": "Enforce HTTPS: aws cloudfront update-distribution --id <DIST_ID> --default-cache-behavior '{\"ViewerProtocolPolicy\":\"https-only\"}'",
     "CFN-03": "Associate WAF: aws cloudfront update-distribution --id <DIST_ID> --web-acl-id <WAF_ACL_ARN>",
+    "CFN-06": "Restrict each custom origin to TLS 1.2: aws cloudfront update-distribution --id <DIST_ID> --if-match <ETAG> --distribution-config <CONFIG with CustomOriginConfig.OriginSslProtocols.Items=[\"TLSv1.2\"]>",
     "LMB-01": "Remove public access: aws lambda remove-permission --function-name <FUNC> --statement-id <SID>",
     "LMB-02": "Add VPC config: aws lambda update-function-configuration --function-name <FUNC> --vpc-config SubnetIds=<SUBNETS>,SecurityGroupIds=<SGS>",
     "EKS-01": "Disable public endpoint: aws eks update-cluster-config --name <CLUSTER> --resources-vpc-config endpointPublicAccess=false,endpointPrivateAccess=true",
     "EKS-02": "Enable logging: aws eks update-cluster-config --name <CLUSTER> --logging '{\"clusterLogging\":[{\"types\":[\"api\",\"audit\",\"authenticator\",\"controllerManager\",\"scheduler\"],\"enabled\":true}]}'",
     "EKS-03": "Enable secrets encryption: aws eks associate-encryption-config --cluster-name <CLUSTER> --encryption-config '[{\"resources\":[\"secrets\"],\"provider\":{\"keyArn\":\"<KMS_ARN>\"}}]'",
+    "EKS-06": "Scope or remove worker-node SSH: aws ec2 revoke-security-group-ingress --group-id <NODE_SG> --protocol tcp --port 22 --cidr 0.0.0.0/0 (or recreate the nodegroup with remoteAccess.sourceSecurityGroups set to a bastion SG)",
     "SEC-01": "Enable rotation: aws secretsmanager rotate-secret --secret-id <SECRET_ID> --rotation-lambda-arn <LAMBDA_ARN> --rotation-rules AutomaticallyAfterDays=30",
     "SEC-02": "Update rotation schedule: aws secretsmanager rotate-secret --secret-id <SECRET_ID> --rotation-rules AutomaticallyAfterDays=90",
     "SEC-05": "Remove the public/cross-account grant (or scope it with aws:PrincipalOrgID) and block public policies: aws secretsmanager put-resource-policy --secret-id <SECRET_ARN> --block-public-policy --resource-policy file://scoped-policy.json ; or drop it: aws secretsmanager delete-resource-policy --secret-id <SECRET_ARN>",
@@ -587,8 +631,12 @@ REMEDIATION_MAP = {
     "DDB-01": "Enable CMK encryption: aws dynamodb update-table --table-name <TABLE> --sse-specification Enabled=true,SSEType=KMS",
     "DDB-02": "Enable PITR: aws dynamodb update-continuous-backups --table-name <TABLE> --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true",
     "DDB-04": "Enable deletion protection: aws dynamodb update-table --table-name <TABLE> --deletion-protection-enabled",
+    "DDB-05": "Remove the public/cross-account grant (or scope with aws:PrincipalOrgID) and re-apply: aws dynamodb put-resource-policy --resource-arn <TABLE_ARN> --policy file://scoped-policy.json ; or drop it: aws dynamodb delete-resource-policy --resource-arn <TABLE_ARN>",
+    "BCK-02": "Apply compliance-mode Vault Lock (test in governance first; permanent after cooling-off): aws backup put-backup-vault-lock-configuration --backup-vault-name <VAULT> --min-retention-days 7 --changeable-for-days 3",
+    "BCK-03": "Remove the public grant (or scope cross-account with aws:PrincipalOrgID) and re-apply: aws backup put-backup-vault-access-policy --backup-vault-name <VAULT> --policy file://scoped-vault-policy.json ; or drop it: aws backup delete-backup-vault-access-policy --backup-vault-name <VAULT>",
     "WAF-01": "Associate WAF with ALB: aws wafv2 associate-web-acl --web-acl-arn <ACL_ARN> --resource-arn <ALB_ARN>",
     "WAF-02": "Enable WAF logging: aws wafv2 put-logging-configuration --logging-configuration ResourceArn=<ACL_ARN>,LogDestinationConfigs=<LOG_ARN>",
+    "WAF-05": "Add an AWS managed rule group (OWASP baseline): aws wafv2 update-web-acl --name <ACL_NAME> --scope <REGIONAL|CLOUDFRONT> --id <ACL_ID> --lock-token <TOKEN> --rules '[{\"Name\":\"AWS-Common\",\"Priority\":0,\"Statement\":{\"ManagedRuleGroupStatement\":{\"VendorName\":\"AWS\",\"Name\":\"AWSManagedRulesCommonRuleSet\"}},\"OverrideAction\":{\"None\":{}},\"VisibilityConfig\":{\"SampledRequestsEnabled\":true,\"CloudWatchMetricsEnabled\":true,\"MetricName\":\"AWS-Common\"}}]'",
     "SFN-01": "Enable logging: aws stepfunctions update-state-machine --state-machine-arn <ARN> --logging-configuration '{\"level\":\"ALL\",\"includeExecutionData\":true,\"destinations\":[{\"cloudWatchLogsLogGroup\":{\"logGroupArn\":\"<LOG_ARN>\"}}]}'",
     "APIGW-01": "Enable stage logging: aws apigateway update-stage --rest-api-id <API_ID> --stage-name <STAGE> --patch-operations op=replace,path=/accessLogSettings/destinationArn,value=<LOG_GROUP_ARN> op=replace,path=/*/*/logging/loglevel,value=INFO",
     "APIGW-02": "Associate WAF: aws wafv2 associate-web-acl --web-acl-arn <ACL_ARN> --resource-arn arn:aws:apigateway:<REGION>::/restapis/<API_ID>/stages/<STAGE>",
@@ -597,6 +645,8 @@ REMEDIATION_MAP = {
     "ELB-02": "Redirect HTTP to HTTPS: aws elbv2 modify-listener --listener-arn <LISTENER_ARN> --default-actions Type=redirect,RedirectConfig='{Protocol=HTTPS,Port=443,StatusCode=HTTP_301}'",
     "ELB-03": "Use strong TLS policy: aws elbv2 modify-listener --listener-arn <LISTENER_ARN> --ssl-policy ELBSecurityPolicy-TLS13-1-2-2021-06",
     "ELB-05": "Drop invalid headers: aws elbv2 modify-load-balancer-attributes --load-balancer-arn <LB_ARN> --attributes Key=routing.http.drop_invalid_header_fields.enabled,Value=true",
+    "CLB-01": "Add an HTTPS listener with an ACM cert: aws elb create-load-balancer-listeners --load-balancer-name <CLB_NAME> --listeners \"Protocol=HTTPS,LoadBalancerPort=443,InstanceProtocol=HTTP,InstancePort=80,SSLCertificateId=<ACM_CERT_ARN>\"",
+    "CLB-02": "Set a modern predefined SSL policy on the listener: aws elb set-load-balancer-policies-of-listener --load-balancer-name <CLB_NAME> --load-balancer-port 443 --policy-names ELBSecurityPolicy-TLS-1-2-2017-01",
     "ELB-07": "Harden HTTP desync mitigation against request smuggling: aws elbv2 modify-load-balancer-attributes --load-balancer-arn <LB_ARN> --attributes Key=routing.http.desync_mitigation_mode,Value=defensive",
     "EBS-01": "Enable default encryption: aws ec2 enable-ebs-encryption-by-default",
     "EBS-02": "Encrypt volume: aws ec2 create-snapshot --volume-id <VOL_ID> then aws ec2 copy-snapshot --source-snapshot-id <SNAP> --encrypted --kms-key-id <KMS> and restore a new encrypted volume",
@@ -623,6 +673,9 @@ REMEDIATION_MAP = {
     "SM-02": "Disable root access: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --root-access Disabled",
     "SM-03": "Set KMS key at creation: aws sagemaker create-notebook-instance --notebook-instance-name <NB> --kms-key-id <KMS_KEY> --instance-type ml.t3.medium --role-arn <ROLE>",
     "SM-04": "Attach to VPC subnet: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --subnet-id <SUBNET> (recreate if subnet not set)",
+    "SM-05": "Restrict Studio egress to the VPC (deploy interface VPC endpoints first, else apps lose connectivity): aws sagemaker update-domain --domain-id <DOMAIN_ID> --app-network-access-type VpcOnly",
+    "SM-06": "KMS key is immutable on an existing domain — recreate with a CMK: aws sagemaker create-domain --domain-name <NAME> --auth-mode IAM --vpc-id <VPC> --subnet-ids <SUBNET_IDS> --kms-key-id <KMS_KEY_ARN> --default-user-settings file://user-settings.json",
+    "SM-07": "KmsKeyId is immutable on an endpoint-config — create a new config with a CMK then repoint the endpoint: aws sagemaker create-endpoint-config --endpoint-config-name <NEW_CFG> --kms-key-id <KMS_KEY_ARN> --production-variants file://variants.json ; aws sagemaker update-endpoint --endpoint-name <EP> --endpoint-config-name <NEW_CFG>",
     "COG-01": "Require MFA: aws cognito-idp set-user-pool-mfa-config --user-pool-id <POOL_ID> --mfa-configuration ON --software-token-mfa-configuration Enabled=true",
     "COG-02": "Strengthen password policy: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --policies PasswordPolicy='{MinimumLength=12,RequireUppercase=true,RequireLowercase=true,RequireNumbers=true,RequireSymbols=true}'",
     "COG-03": "Enable threat protection: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --user-pool-add-ons AdvancedSecurityMode=ENFORCED",
@@ -648,13 +701,20 @@ REMEDIATION_MAP = {
     "CNT-03": "Remove the public/cross-account grant from the ECR repository policy (or scope it with aws:PrincipalOrgID + a trusted-account allowlist): aws ecr set-repository-policy --repository-name <REPO> --policy-text file://scoped-repo-policy.json ; or delete it: aws ecr delete-repository-policy --repository-name <REPO>",
     "CNT-04": "Make image tags immutable so a tag cannot be overwritten with a poisoned image: aws ecr put-image-tag-mutability --repository-name <REPO> --image-tag-mutability IMMUTABLE",
     "CNT-05": "Add a lifecycle policy to expire untagged/old images: aws ecr put-lifecycle-policy --repository-name <REPO> --lifecycle-policy-text file://lifecycle.json",
+    "CNT-06": "Configure registry image signing with an AWS Signer profile: aws ecr put-signing-configuration --signing-configuration 'rules=[{signingProfileArn=<SIGNER_PROFILE_ARN>,repositoryFilters=[{filter=*,filterType=WILDCARD}]}]'",
+    "LMB-06": "Create an Enforce-mode code-signing config and attach it: aws lambda create-code-signing-config --allowed-publishers SigningProfileVersionArns=<SIGNER_PROFILE_ARN> --code-signing-policies UntrustedArtifactOnDeployment=Enforce ; aws lambda update-function-code-signing-config --function-name <FUNC> --code-signing-config-arn <CSC_ARN>",
     "AMI-01": "Revoke public/cross-account AMI sharing (a public AMI exposes its full disk snapshot): aws ec2 modify-image-attribute --image-id <AMI_ID> --launch-permission '{\"Remove\":[{\"Group\":\"all\"}]}' ; audit remaining account-level shares.",
+    "AMI-02": "Re-copy the AMI encrypted, then deregister the plaintext one: aws ec2 copy-image --source-image-id <AMI_ID> --source-region <REGION> --name <NAME>-enc --encrypted --kms-key-id <KMS_KEY> ; aws ec2 deregister-image --image-id <AMI_ID>",
+    "AMI-03": "Deregister the stale/deprecated AMI after re-pointing launch templates/ASGs at a fresh patched build: aws ec2 deregister-image --image-id <AMI_ID>",
     "GLC-01": "Remove public Glacier vault access policy: aws glacier set-vault-access-policy --vault-name <VAULT> --policy '{\"Policy\":\"<LEAST_PRIVILEGE_POLICY>\"}'",
     "SQS-02": "Restrict the queue policy to trusted principals: aws sqs set-queue-attributes --queue-url <URL> --attributes Policy='<LEAST_PRIVILEGE_POLICY>'",
     "R53-03": "Enable DNSSEC signing: aws route53 enable-hosted-zone-dnssec --hosted-zone-id <ZONE_ID>",
     "R53-06": "Remove the obsolete record or repoint it at a live resource you control: aws route53 change-resource-record-sets --hosted-zone-id <ZONE_ID> --change-batch '{\"Changes\":[{\"Action\":\"DELETE\",\"ResourceRecordSet\":{...}}]}'. If an S3-website target was deleted, reclaim the name first: aws s3api create-bucket --bucket <BUCKET> --region <REGION>",
     "DDB-04": "Enable deletion protection: aws dynamodb update-table --table-name <TABLE> --deletion-protection-enabled",
     "ECS-04": "Recreate the task definition with awsvpc network mode (drop host mode): aws ecs register-task-definition --network-mode awsvpc --cli-input-json file://taskdef.json",
+    "ECS-06": "Register a task-def revision without host namespace sharing (networkMode=awsvpc, drop pidMode/ipcMode): aws ecs register-task-definition --network-mode awsvpc --cli-input-json file://taskdef.json ; aws ecs update-service --cluster <C> --service <S> --task-definition <FAMILY>",
+    "ECS-07": "Remove the hostPath (especially the Docker socket) and use an EFS/Docker volume: aws ecs register-task-definition --cli-input-json file://taskdef.json (delete the volumes[].host entry)",
+    "ECS-08": "Drop all capabilities and add back only what is needed: aws ecs register-task-definition --cli-input-json file://taskdef.json (set linuxParameters.capabilities.drop=[\"ALL\"], remove the add list)",
     "EXPOSURE-01": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0  (then re-add a scoped CIDR)",
     "EXPOSURE-02": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges or place the workload behind a load balancer/WAF: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
     "ATTACK-01": "Break the path at the exposure or the privilege: remove the public ingress (aws ec2 revoke-security-group-ingress ...) AND scope the instance-profile role to least privilege / apply a permissions boundary: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>",
@@ -989,9 +1049,13 @@ def classify_resource_policy_stmt(stmt: Dict, own_account: str) -> Optional[Dict
         return {"kind": "public", "external_accounts": [], "org_id": None,
                 "has_condition": False}
 
-    # explicit AWS principals -> collect external accounts
+    # explicit AWS principals -> collect external accounts. Only REAL 12-digit account ids
+    # count: a legacy CloudFront OAI principal (arn:aws:iam::cloudfront:user/...) resolves to
+    # the pseudo-account 'cloudfront' — an AWS-managed service identity used in the documented
+    # private-S3-origin pattern, NOT an external customer account, so it must not be flagged.
     external = sorted({acct for p in aws_principals
-                       if (acct := _account_of(p)) and acct != own_account})
+                       if (acct := _account_of(p)) and acct != own_account
+                       and acct.isdigit() and len(acct) == 12})
     if external:
         if org_vals:
             return {"kind": "org", "external_accounts": external, "org_id": org_vals[0],
@@ -1593,6 +1657,7 @@ class AWSLiveScanner:
 
         # S3-01 — Account-level Block Public Access
         self._log("S3-01: Account-level Block Public Access")
+        cfg = None   # account-level BPA config; reused by S3-09 neutralization
         try:
             cfg = s3c.get_public_access_block(AccountId=self.account)[
                 "PublicAccessBlockConfiguration"
@@ -1621,6 +1686,7 @@ class AWSLiveScanner:
             bname = b["Name"]
 
             # BPA per bucket
+            bpa = None   # reused by S3-09 neutralization
             try:
                 bpa = s3.get_public_access_block(Bucket=bname)[
                     "PublicAccessBlockConfiguration"
@@ -1663,12 +1729,24 @@ class AWSLiveScanner:
             except Exception:
                 pass
 
-            # S3-07 — TLS-only (deny non-SecureTransport) bucket policy
+            # S3-07/09/10 — ONE bucket-policy fetch feeds TLS-only + public + cross-account
+            stmts = None
             try:
-                pol   = json.loads(s3.get_bucket_policy(Bucket=bname)["Policy"])
-                stmts = pol.get("Statement", [])
+                stmts = json.loads(s3.get_bucket_policy(Bucket=bname)["Policy"]).get(
+                    "Statement", [])
                 if isinstance(stmts, dict):
                     stmts = [stmts]
+            except Exception as e:
+                # No policy at all -> not public (S3-09 silent); TLS-only also not enforced.
+                self._add("WARN", "S3-07", "S3", bname,
+                          f"No bucket policy enforcing TLS-only access | {bname}")
+                # AccessDenied (not NoSuchBucketPolicy) means exposure is UNKNOWN, not clean.
+                if "denied" in str(e).lower():
+                    self._add("WARN", "S3-09", "S3", bname,
+                              f"Cannot evaluate bucket policy (access denied — possibly "
+                              f"cross-account owned) | {bname}")
+            if stmts is not None:
+                # S3-07 — TLS-only (deny non-SecureTransport)
                 if any(self._stmt_denies_insecure_transport(st, bname) for st in stmts):
                     self._add("PASS", "S3-07", "S3", bname,
                               f"Bucket policy denies non-TLS access | {bname}")
@@ -1676,9 +1754,8 @@ class AWSLiveScanner:
                     self._add("WARN", "S3-07", "S3", bname,
                               f"Bucket policy does NOT enforce TLS "
                               f"(no aws:SecureTransport deny) | {bname}")
-            except Exception:
-                self._add("WARN", "S3-07", "S3", bname,
-                          f"No bucket policy enforcing TLS-only access | {bname}")
+                # S3-09/10 — public + cross-account exposure classification
+                self._check_bucket_policy_exposure(bname, stmts, cfg, bpa)
 
             # S3-08 — Versioning (rollback protection vs overwrite/ransomware)
             try:
@@ -1746,6 +1823,44 @@ class AWSLiveScanner:
                 for r in not_res)
             return not excludes_objects
         return False
+
+    def _check_bucket_policy_exposure(self, bname, stmts, acct_bpa, bucket_bpa):
+        """S3-09 (public grant, BPA-neutralization aware) + S3-10 (cross-account/org grant,
+        NOT BPA-neutralized) off one already-parsed bucket policy. Findings-only in Phase 6."""
+        # A wildcard-principal ('*') public grant is neutralized when Block Public Access is
+        # fully on (account OR bucket). A NAMED cross-account grant is NOT — BPA blocks
+        # anonymous '*', never a specific external account — so S3-10 ignores BPA.
+        acct_full   = bool(acct_bpa) and all(acct_bpa.values())
+        bucket_full = bool(bucket_bpa) and all(bucket_bpa.values())
+        for st in stmts:
+            res = classify_resource_policy_stmt(st, self.account or "")
+            if not res:
+                continue
+            kind = res["kind"]
+            if kind == "public":
+                if acct_full or bucket_full:
+                    self._add("WARN", "S3-09", "S3", bname,
+                              f"Latent PUBLIC bucket-policy statement neutralized by Block "
+                              f"Public Access — remove the stale grant | {bname}")
+                else:
+                    self._add("FAIL", "S3-09", "S3", bname,
+                              f"Bucket policy grants PUBLIC access (Principal:*, "
+                              f"unconditioned) | {bname}")
+            elif kind == "public_conditioned":
+                self._add("WARN", "S3-09", "S3", bname,
+                          f"Wildcard principal gated by an unrecognized condition — "
+                          f"manual review | {bname}")
+            elif kind == "cross_account":
+                ext = [a for a in res.get("external_accounts", [])
+                       if a not in self.trusted_accounts]
+                if ext:
+                    self._add("FAIL", "S3-10", "S3", bname,
+                              f"Bucket policy grants CROSS-ACCOUNT access to "
+                              f"{', '.join(ext)} | {bname}")
+            elif kind == "org":
+                self._add("WARN", "S3-10", "S3", bname,
+                          f"Bucket shared to AWS Organization {res.get('org_id')} — "
+                          f"verify scope | {bname}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 3: NETWORK SECURITY
@@ -1837,6 +1952,96 @@ class AWSLiveScanner:
                               f"No Flow Logs | {vid}")
         except Exception as e:
             self._add("FAIL", "VPC-03", "VPC", "vpcs", str(e))
+
+        # VPC-05 — NACL allows internet ingress to admin ports 22/3389. NACLs are STATELESS
+        # and RuleNumber first-match-wins, so a low-numbered deny before an allow-all negates
+        # exposure — a naive 'any allow to 0.0.0.0/0' scan produces false FAILs.
+        self._log("VPC-05: Network ACLs allowing 0.0.0.0/0 to admin ports 22/3389")
+        _ADMIN = {22: "SSH", 3389: "RDP"}
+        try:
+            nacls = []
+            for page in ec2.get_paginator("describe_network_acls").paginate():
+                nacls.extend(page.get("NetworkAcls", []))
+        except Exception as e:
+            self._add("WARN", "VPC-05", "VPC", "network-acls",
+                      f"describe_network_acls failed: {e}")
+            nacls = None
+        if nacls is not None:
+            evaluated, world_open = 0, 0
+            for nacl in nacls:
+                evaluated += 1
+                nid = nacl.get("NetworkAclId", "unknown")
+                is_default = nacl.get("IsDefault", False)
+                ingress = sorted((e for e in nacl.get("Entries", []) if not e.get("Egress")),
+                                 key=lambda e: e.get("RuleNumber", 32767))
+                for port, pname in _ADMIN.items():
+                    # IPv4 and IPv6 are evaluated INDEPENDENTLY by AWS — a packet only matches
+                    # rules of its own family — so run first-match-wins over each chain
+                    # separately (an IPv6 deny must NOT mask an IPv4 allow-all, or vice versa).
+                    open_families = []
+                    for fam, key, world_cidr in (("IPv4", "CidrBlock", "0.0.0.0/0"),
+                                                 ("IPv6", "Ipv6CidrBlock", "::/0")):
+                        decided = None
+                        for e in ingress:             # first matching rule of this family wins
+                            if (e.get(key) == world_cidr
+                                    and self._nacl_covers_port(e, port)):
+                                decided = e.get("RuleAction")
+                                break
+                        if decided == "allow":
+                            open_families.append(fam)
+                    if open_families:
+                        world_open += 1
+                        # default NACL ships allow-all (SGs are the primary control) -> WARN
+                        self._add("WARN" if is_default else "FAIL", "VPC-05", "VPC", nid,
+                                  f"NACL allows {pname}({port}) from the internet "
+                                  f"({'/'.join(open_families)}, "
+                                  f"{'default' if is_default else 'custom'} NACL) | {nid}")
+            # AGGREGATE-PASS-MUST-COUNT: only all-clear when NACLs were actually read
+            if evaluated and world_open == 0:
+                self._add("PASS", "VPC-05", "VPC", "network-acls",
+                          "All NACLs restrict admin ports 22/3389 from the internet")
+
+        # VPC-06 — active cross-account VPC peering (trust-boundary crossing)
+        self._log("VPC-06: active cross-account VPC peering connections")
+        try:
+            pcxs = []
+            for page in ec2.get_paginator("describe_vpc_peering_connections").paginate():
+                pcxs.extend(page.get("VpcPeeringConnections", []))
+        except Exception as e:
+            self._add("WARN", "VPC-06", "VPC", "vpc-peering",
+                      f"describe_vpc_peering_connections failed: {e}")
+            pcxs = None
+        if pcxs is not None:
+            active = [p for p in pcxs if (p.get("Status") or {}).get("Code") == "active"]
+            if not active:
+                self._add("INFO", "VPC-06", "VPC", "vpc-peering",
+                          "No active VPC peering connections")
+            for p in active:
+                pid = p.get("VpcPeeringConnectionId", "unknown")
+                acc = (p.get("AccepterVpcInfo") or {}).get("OwnerId")
+                req = (p.get("RequesterVpcInfo") or {}).get("OwnerId")
+                # requester/accepter roles are not stable — compare the two owner ids
+                if acc and req and acc != req:
+                    other = acc if req == self.account else req
+                    self._add("WARN", "VPC-06", "VPC", pid,
+                              f"Cross-account peering {pid}: peer account {other} "
+                              f"(verify authorized) | {pid}")
+                else:
+                    self._add("PASS", "VPC-06", "VPC", pid, f"Intra-account peering {pid}")
+
+    @staticmethod
+    def _nacl_covers_port(entry, port):
+        """Does a NACL entry's protocol/port-range cover `port`? Protocol is a STRING
+        ('-1' all, '6' tcp, '17' udp). PortRange is ABSENT when Protocol=='-1' (all ports)."""
+        proto = str(entry.get("Protocol", "-1"))
+        if proto == "-1":
+            return True
+        if proto != "6":                              # admin ports are TCP
+            return False
+        pr = entry.get("PortRange")
+        if not pr:
+            return True                               # tcp with no explicit range = all ports
+        return pr.get("From", 0) <= port <= pr.get("To", 65535)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 4: LOGGING & MONITORING
@@ -2502,6 +2707,225 @@ class AWSLiveScanner:
         except Exception as e:
             self._add("FAIL", "EC2-05", "EC2", "ec2", str(e))
 
+        # ── Phase 6 compute depth: SSM patch posture + launch-template/ASG IMDSv2
+        # scale-out drift. Each sub-check is self-guarding; isolate so one failing does
+        # not skip the others (findings emit under section="EC2").
+        for _cid, _fn in (("SSM-01", self._check_ssm),
+                          ("LT-01", self._check_launch_templates),
+                          ("ASG-01", self._check_asg)):
+            try:
+                _fn()
+            except Exception as e:
+                self._add("WARN", _cid, "EC2", "ec2",
+                          f"compute-depth sub-check {_fn.__name__} failed: {e}")
+
+    # ── Phase 6: helper reused by _check_launch_templates + _check_asg ────────────
+    def _lt_http_tokens(self, ec2, lt_id: str, version) -> Optional[str]:
+        """The HttpTokens value ('required'/'optional') of a launch-template version, or
+        None if it could not be resolved. An ABSENT MetadataOptions block means IMDSv1
+        ('optional') — the killer under-report if treated as unknown. `version` may be a
+        number or the literals '$Default'/'$Latest' (describe_launch_template_versions
+        accepts all three)."""
+        resp = ec2.describe_launch_template_versions(
+            LaunchTemplateId=lt_id, Versions=[str(version)])
+        vers = resp.get("LaunchTemplateVersions", [])
+        if not vers:
+            return None
+        md = (vers[0].get("LaunchTemplateData") or {}).get("MetadataOptions") or {}
+        return md.get("HttpTokens", "optional")
+
+    def _check_ssm(self):
+        """SSM-01 unmanaged running instances (patch blind spot) + SSM-02 patch compliance.
+        Both inline-paginate in their OWN try/except (never _paginate_all); SSM read failure
+        is WARN, never a false PASS; managed-but-unscanned is INFO (unknown), not compliant."""
+        ec2 = self._client("ec2")
+        ssm = self._client("ssm")
+
+        # SSM-01 — running EC2 not covered by SSM
+        self._log("SSM-01: running EC2 instances not managed by AWS Systems Manager")
+        try:
+            ec2_ids = set()
+            for page in ec2.get_paginator("describe_instances").paginate(
+                Filters=[{"Name": "instance-state-name", "Values": ["running"]}]):
+                for res in page.get("Reservations", []):
+                    for i in res.get("Instances", []):
+                        ec2_ids.add(i["InstanceId"])
+        except Exception as e:
+            self._add("WARN", "SSM-01", "EC2", "ssm",
+                      f"describe_instances failed (SSM coverage not evaluated): {e}")
+            return
+        if not ec2_ids:
+            self._add("INFO", "SSM-01", "EC2", "ssm", "No running EC2 instances in this region")
+            return
+        try:
+            managed = set()
+            for page in ssm.get_paginator("describe_instance_information").paginate():
+                for info in page.get("InstanceInformationList", []):
+                    # only EC2 (not on-prem mi-* nodes) that are actually reachable
+                    if (info.get("ResourceType") == "EC2Instance"
+                            and info.get("PingStatus") == "Online"):
+                        managed.add(info["InstanceId"])
+        except Exception as e:
+            self._add("WARN", "SSM-01", "EC2", "ssm",
+                      f"SSM coverage UNDETERMINED (describe_instance_information failed): {e}")
+            return
+        unmanaged = ec2_ids - managed
+        for iid in sorted(unmanaged):
+            self._add("FAIL", "SSM-01", "EC2", iid,
+                      f"Running EC2 not SSM-managed — cannot be patch-audited or centrally "
+                      f"patched | {iid}")
+        if not unmanaged:
+            self._add("PASS", "SSM-01", "EC2", "ec2",
+                      f"All {len(ec2_ids)} running instances are SSM-managed")
+
+        # SSM-02 — missing critical/security patches on the managed instances
+        self._log("SSM-02: SSM-managed instances missing critical/security patches")
+        managed_ec2 = sorted(ec2_ids & managed)
+        if not managed_ec2:
+            return
+        states, read_err = {}, False
+        for i in range(0, len(managed_ec2), 50):        # InstanceIds capped at 50/call
+            batch = managed_ec2[i:i + 50]
+            token = None
+            try:
+                for _ in range(50):                     # bounded: page through NextToken
+                    kwargs = {"InstanceIds": batch}
+                    if token:
+                        kwargs["NextToken"] = token
+                    resp = ssm.describe_instance_patch_states(**kwargs)
+                    for st in resp.get("InstancePatchStates", []):
+                        states[st["InstanceId"]] = st
+                    token = resp.get("NextToken")
+                    if not token or not isinstance(token, str):
+                        break
+            except Exception as e:
+                read_err = True
+                self._add("WARN", "SSM-02", "EC2", "ssm",
+                          f"patch-state read failed for a batch: {e}")
+        bad, unknown = 0, 0
+        for iid in managed_ec2:
+            st = states.get(iid)
+            if st is None:                              # never scanned / no baseline -> unknown
+                unknown += 1
+                self._add("INFO", "SSM-02", "EC2", iid,
+                          f"No patch state (never scanned / no baseline) | {iid}")
+                continue
+            crit = st.get("CriticalNonCompliantCount", 0)
+            sec = st.get("SecurityNonCompliantCount", 0)
+            missing = st.get("MissingCount", 0)
+            pending = st.get("InstalledPendingRebootCount", 0)
+            if crit or sec:
+                bad += 1
+                self._add("FAIL", "SSM-02", "EC2", iid,
+                          f"Non-compliant patches: {crit} critical, {sec} security | {iid}")
+            elif missing:
+                self._add("WARN", "SSM-02", "EC2", iid, f"{missing} missing patches | {iid}")
+            elif pending:
+                self._add("WARN", "SSM-02", "EC2", iid, f"Patched, awaiting reboot | {iid}")
+        # AGGREGATE-PASS-MUST-COUNT: only all-clear when every managed instance was
+        # actually evaluated compliant (no unknown, no read error).
+        if managed_ec2 and bad == 0 and unknown == 0 and not read_err:
+            self._add("PASS", "SSM-02", "EC2", "ec2",
+                      f"All {len(managed_ec2)} managed instances patch-compliant")
+        elif bad == 0 and (unknown or read_err):
+            self._add("WARN", "SSM-02", "EC2", "ssm",
+                      f"Patch compliance UNDETERMINED for {unknown} of {len(managed_ec2)} "
+                      f"managed instances (unscanned / read denied)")
+
+    def _check_launch_templates(self):
+        """LT-01 — a launch template whose $Default version permits IMDSv1: every instance
+        launched from it is SSRF-to-credential exploitable."""
+        self._log("LT-01: launch-template default version permits IMDSv1")
+        ec2 = self._client("ec2")
+        try:
+            templates = []
+            for page in ec2.get_paginator("describe_launch_templates").paginate():
+                templates.extend(page.get("LaunchTemplates", []))
+        except Exception as e:
+            self._add("WARN", "LT-01", "EC2", "launch-templates",
+                      f"describe_launch_templates failed: {e}")
+            return
+        if not templates:
+            self._add("INFO", "LT-01", "EC2", "launch-templates",
+                      "No launch templates in this region")
+            return
+        resolved, bad, unresolved = 0, 0, 0
+        for lt in templates:
+            lt_id = lt.get("LaunchTemplateId")
+            name = lt.get("LaunchTemplateName", lt_id)
+            try:
+                tokens = self._lt_http_tokens(ec2, lt_id, "$Default")
+            except Exception:
+                tokens = None
+            if tokens is None:
+                unresolved += 1
+                self._add("WARN", "LT-01", "EC2", name,
+                          f"Could not resolve $Default version IMDS config | {name}")
+                continue
+            resolved += 1
+            if tokens != "required":
+                bad += 1
+                self._add("FAIL", "LT-01", "EC2", name,
+                          f"Launch template $Default permits IMDSv1 (HttpTokens={tokens}) — "
+                          f"instances launched from it are SSRF-to-credential exploitable | {name}")
+        if templates and bad == 0 and unresolved == 0:
+            self._add("PASS", "LT-01", "EC2", "launch-templates",
+                      f"All {resolved} launch templates require IMDSv2")
+
+    def _check_asg(self):
+        """ASG-01 — an Auto Scaling group whose effective launch spec permits IMDSv1
+        re-creates IMDSv1 instances on scale-out, silently undoing per-instance remediation."""
+        self._log("ASG-01: Auto Scaling group re-spawns IMDSv1 instances")
+        asg = self._client("autoscaling")
+        ec2 = self._client("ec2")
+        try:
+            groups = []
+            for page in asg.get_paginator("describe_auto_scaling_groups").paginate():
+                groups.extend(page.get("AutoScalingGroups", []))
+        except Exception as e:
+            self._add("WARN", "ASG-01", "EC2", "asg",
+                      f"describe_auto_scaling_groups failed: {e}")
+            return
+        if not groups:
+            self._add("INFO", "ASG-01", "EC2", "asg", "No Auto Scaling groups in this region")
+            return
+        bad, unresolved = 0, 0
+        for g in groups:
+            gname = g.get("AutoScalingGroupName", "unknown")
+            tokens = None
+            try:
+                lt_spec = None
+                if g.get("LaunchTemplate"):                       # direct launch template
+                    lt_spec = g["LaunchTemplate"]
+                elif g.get("MixedInstancesPolicy"):               # mixed-instances policy
+                    lt_spec = ((g["MixedInstancesPolicy"].get("LaunchTemplate") or {})
+                               .get("LaunchTemplateSpecification"))
+                if lt_spec and lt_spec.get("LaunchTemplateId"):
+                    tokens = self._lt_http_tokens(
+                        ec2, lt_spec["LaunchTemplateId"], lt_spec.get("Version") or "$Default")
+                elif g.get("LaunchConfigurationName"):            # legacy launch config
+                    lc = asg.describe_launch_configurations(
+                        LaunchConfigurationNames=[g["LaunchConfigurationName"]]
+                    ).get("LaunchConfigurations", [])
+                    if lc:
+                        # launch configs predate IMDSv2 default: absent MetadataOptions = IMDSv1
+                        tokens = (lc[0].get("MetadataOptions") or {}).get("HttpTokens", "optional")
+            except Exception:
+                tokens = None
+            if tokens is None:
+                unresolved += 1
+                self._add("WARN", "ASG-01", "EC2", gname,
+                          f"Could not resolve launch-spec IMDS config | {gname}")
+                continue
+            if tokens != "required":
+                bad += 1
+                self._add("FAIL", "ASG-01", "EC2", gname,
+                          f"ASG scale-out re-creates IMDSv1 instances (HttpTokens={tokens}) — "
+                          f"silently undoes per-instance remediation | {gname}")
+        if groups and bad == 0 and unresolved == 0:
+            self._add("PASS", "ASG-01", "EC2", "asg",
+                      f"All {len(groups)} Auto Scaling groups enforce IMDSv2 on scale-out")
+
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 7: CONTAINER SECURITY (ECR)
     # ══════════════════════════════════════════════════════════════════════════
@@ -2559,6 +2983,41 @@ class AWSLiveScanner:
             self._add("PASS", "AMI-01", "AMI", "ami",
                       f"All {len(images)} self-owned AMI(s) are private (no public/cross-account share)")
 
+        # AMI-02/03 — image supply-chain depth (reuses the same describe_images result, 0 new API)
+        now = datetime.now(timezone.utc)
+        enc_ok = True
+        for img in images:
+            aid  = img.get("ImageId", "ami-?")
+            name = img.get("Name") or aid
+            label = f"{name} ({aid})" if name != aid else aid
+            # AMI-02 — unencrypted backing snapshot (Encrypted absent == unencrypted)
+            unenc = [m for m in img.get("BlockDeviceMappings", [])
+                     if m.get("Ebs") and m["Ebs"].get("Encrypted") is not True]
+            if unenc:
+                enc_ok = False
+                self._add("FAIL", "AMI-02", "AMI", label,
+                          f"AMI backed by {len(unenc)} unencrypted snapshot(s) — plaintext disk "
+                          f"at rest (full plaintext volume if the AMI is ever shared) | {aid}")
+            # AMI-03 — past its deprecation date (FAIL) or very old (WARN)
+            try:
+                dep = img.get("DeprecationTime")
+                created = img.get("CreationDate")
+                if dep and datetime.fromisoformat(dep.replace("Z", "+00:00")) < now:
+                    self._add("FAIL", "AMI-03", "AMI", label,
+                              f"AMI past its deprecation date ({dep[:10]}) — launches start on an "
+                              f"unsupported/unpatched base | {aid}")
+                elif created:
+                    age = (now - datetime.fromisoformat(created.replace("Z", "+00:00"))).days
+                    if age > 730:
+                        self._add("WARN", "AMI-03", "AMI", label,
+                                  f"AMI ~{age} days old — baked base OS likely unpatched | {aid}")
+            except Exception:
+                self._add("INFO", "AMI-03", "AMI", label,
+                          f"Could not parse AMI timestamps | {aid}")
+        if images and enc_ok:
+            self._add("PASS", "AMI-02", "AMI", "ami",
+                      f"All {len(images)} self-owned AMI(s) use encrypted snapshots")
+
     def _check_ecr(self):
         self._section_header("ECR")
         self._log("CNT-01: ECR scan-on-push and encryption")
@@ -2568,7 +3027,8 @@ class AWSLiveScanner:
             if not repos:
                 self._add("WARN", "CNT-01", "ECR", "ecr",
                           "No ECR repositories found")
-                return
+            # do NOT return on empty repos — the registry-level CNT-06 (below) is
+            # repo-independent and must still run. The loop is simply skipped when empty.
             for repo in repos:
                 rname = repo["repositoryName"]
                 scan  = repo.get("imageScanningConfiguration", {}).get(
@@ -2597,6 +3057,30 @@ class AWSLiveScanner:
                 self._ingest_ecr_scan(ecr, repo)
         except Exception as e:
             self._add("WARN", "CNT-01", "ECR", "ecr", str(e))
+
+        # CNT-06 — registry-level image signing (run ONCE, in its OWN try/except so a
+        # brand-new-API error never masquerades as a CNT-01 WARN). getattr availability
+        # guard: an older botocore lacking the op is skipped silently, not flagged.
+        try:
+            ecr = self._client("ecr")
+            fn = getattr(ecr, "get_signing_configuration", None)
+            if fn is not None:
+                rules = (fn().get("signingConfiguration") or {}).get("rules") or []
+                if rules:
+                    prof = rules[0].get("signingProfileArn", "")
+                    self._add("PASS", "CNT-06", "ECR", "registry",
+                              f"ECR image signing configured ({len(rules)} rule(s)) {prof}")
+                else:
+                    self._add("FAIL", "CNT-06", "ECR", "registry",
+                              "ECR registry has no image-signing configuration — images are "
+                              "unsigned (no cryptographic provenance / supply-chain integrity)")
+        except AttributeError:
+            pass                                            # SDK lacks the op -> skip
+        except Exception as e:
+            if "denied" in str(e).lower() or "throttl" in str(e).lower():
+                self._add("WARN", "CNT-06", "ECR", "registry",
+                          f"cannot read ECR signing configuration: {e}")
+            # any other error (UnknownOperation on an old region/SDK) -> skip silently
 
     def _check_ecr_repo_policy(self, ecr, repo: Dict) -> None:
         """CNT-03 — ECR repository policy public/cross-account exposure (mirrors SEC-05
@@ -2752,6 +3236,95 @@ class AWSLiveScanner:
                               f"Backup plan: {p['BackupPlanName']}")
         except Exception as e:
             self._add("WARN", "BCK-01", "BACKUP", "backup", str(e))
+
+        # BCK-02/03 — Vault Lock immutability + vault access-policy exposure. Inline-paginate
+        # (BCK-01 does NOT paginate, so vaults past page 1 would be silently skipped).
+        self._log("BCK-02/03: Backup Vault Lock immutability + access-policy exposure")
+        try:
+            bk = self._client("backup")
+            all_vaults = []
+            for page in bk.get_paginator("list_backup_vaults").paginate():
+                all_vaults.extend(page.get("BackupVaultList", []))
+        except Exception as e:
+            self._add("WARN", "BCK-02", "BACKUP", "backup",
+                      f"could not enumerate backup vaults for Vault Lock evaluation: {e}")
+            all_vaults = None
+        if all_vaults:
+            now = datetime.now(timezone.utc)
+            for v in all_vaults:
+                name = v.get("BackupVaultName", "unknown")
+                # BCK-02 — Vault Lock immutability. Governance mode reports Locked=True with
+                # NO LockDate; compliance mode reports LockDate = the immutability date — the
+                # only distinguishing signal in the shape.
+                if not v.get("Locked", False):
+                    self._add("FAIL", "BCK-02", "BACKUP", name,
+                              f"Vault Lock NOT enabled — recovery points are mutable/deletable "
+                              f"(no ransomware/insider immutability) | {name}")
+                else:
+                    lock_date = v.get("LockDate")
+                    if lock_date is None:
+                        self._add("WARN", "BCK-02", "BACKUP", name,
+                                  f"GOVERNANCE-mode Vault Lock — a privileged principal can "
+                                  f"still delete the lock/vault; use compliance mode for true "
+                                  f"immutability | {name}")
+                    elif self._as_utc(lock_date) > now:
+                        self._add("WARN", "BCK-02", "BACKUP", name,
+                                  f"Compliance Vault Lock still in CHANGEABLE grace period until "
+                                  f"{lock_date} — the lock can still be removed | {name}")
+                    else:
+                        self._add("PASS", "BCK-02", "BACKUP", name,
+                                  f"Compliance-mode Vault Lock ACTIVE (immutable) | {name}")
+                # BCK-03 — vault access-policy exposure
+                self._check_backup_vault_policy(bk, name)
+
+    @staticmethod
+    def _as_utc(ts):
+        """Coerce a boto3 timestamp (datetime, usually tz-aware) or ISO string to a
+        tz-aware UTC datetime for comparison."""
+        if isinstance(ts, datetime):
+            return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+
+    def _check_backup_vault_policy(self, bk, name):
+        """BCK-03 — a Backup vault access policy granting public/cross-account access. Only
+        PUBLIC is a FAIL (CRITICAL); cross-account is a legitimate DR-copy pattern -> WARN."""
+        try:
+            pol_str = bk.get_backup_vault_access_policy(BackupVaultName=name).get("Policy")
+        except Exception as e:
+            if "denied" in str(e).lower():
+                self._add("WARN", "BCK-03", "BACKUP", name,
+                          f"could not evaluate vault access policy (access denied) | {name}")
+            return                       # ResourceNotFound == no policy attached (private)
+        if not pol_str:
+            return
+        try:
+            stmts = json.loads(pol_str).get("Statement", [])
+            if isinstance(stmts, dict):
+                stmts = [stmts]
+        except Exception:
+            return
+        for st in stmts:
+            res = classify_resource_policy_stmt(st, self.account or "")
+            if not res:
+                continue
+            kind = res["kind"]
+            if kind == "public":
+                self._add("FAIL", "BCK-03", "BACKUP", name,
+                          f"Backup vault access policy grants PUBLIC access — recovery points "
+                          f"(full data copies) restorable/deletable by any principal | {name}")
+            elif kind == "public_conditioned":
+                self._add("WARN", "BCK-03", "BACKUP", name,
+                          f"Vault policy wildcard principal condition-guarded — verify | {name}")
+            elif kind == "cross_account":
+                ext = [a for a in res.get("external_accounts", [])
+                       if a not in self.trusted_accounts]
+                if ext:
+                    self._add("WARN", "BCK-03", "BACKUP", name,
+                              f"Vault shared cross-account to {', '.join(ext)} — legitimate for "
+                              f"AWS Backup cross-account COPY, but verify the target | {name}")
+            elif kind == "org":
+                self._add("WARN", "BCK-03", "BACKUP", name,
+                          f"Vault shared to AWS Organization {res.get('org_id')} — verify | {name}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 9: AMAZON RDS
@@ -3526,6 +4099,22 @@ class AWSLiveScanner:
                 oid          = origin.get("Id", "N/A")
                 custom_cfg   = origin.get("CustomOriginConfig", {})
                 origin_proto = custom_cfg.get("OriginProtocolPolicy", "")
+                # CFN-06 — origin-side TLS (custom origins only; complements CFN-02 which
+                # only checks the VIEWER side). Skip http-only (CFN-05 owns plaintext-to-origin)
+                # and S3 origins (no CustomOriginConfig).
+                if custom_cfg and origin_proto != "http-only":
+                    ssl_protos = set(custom_cfg.get("OriginSslProtocols", {}).get("Items", []))
+                    weak = ssl_protos & {"SSLv3", "TLSv1", "TLSv1.1"}
+                    if weak:
+                        self._add("WARN", "CFN-06", "CLOUDFRONT", domain,
+                                  f"Origin '{oid}' negotiates weak TLS to origin {sorted(weak)} "
+                                  f"(policy={origin_proto}) | {domain}")
+                    elif ssl_protos:
+                        self._add("PASS", "CFN-06", "CLOUDFRONT", domain,
+                                  f"Origin '{oid}' negotiates TLS>=1.2 to origin | {domain}")
+                    else:
+                        self._add("INFO", "CFN-06", "CLOUDFRONT", domain,
+                                  f"Origin '{oid}' SSL protocols not reported | {domain}")
                 if origin_proto == "http-only":
                     self._add("FAIL", "CFN-05", "CLOUDFRONT", domain,
                               f"Origin '{oid}' uses HTTP-only | {domain}")
@@ -4383,6 +4972,49 @@ class AWSLiveScanner:
             except Exception:
                 pass
 
+        # LMB-06 — code-signing enforcement (supply-chain integrity). Absent config is the
+        # common default -> INFO aggregate only (a per-fn WARN would be noise). Enforce=PASS,
+        # Warn=FAIL (configured but not enforced). Denied read -> unknown, which downgrades
+        # the closing INFO to WARN (never a false all-clear from denied reads).
+        self._log("LMB-06: Lambda functions — code signing enforcement")
+        unsigned, unknown, evaluated = 0, 0, 0
+        for fn in funcs:
+            fname = fn["FunctionName"]
+            try:
+                csc_arn = lmb.get_function_code_signing_config(
+                    FunctionName=fname).get("CodeSigningConfigArn")
+            except Exception:
+                unknown += 1
+                continue
+            evaluated += 1
+            if not isinstance(csc_arn, str) or not csc_arn:
+                unsigned += 1                          # missing arn == unsigned (common default)
+                continue
+            try:
+                mode = (lmb.get_code_signing_config(CodeSigningConfigArn=csc_arn)
+                        ["CodeSigningConfig"]["CodeSigningPolicies"]
+                        ["UntrustedArtifactOnDeployment"])
+            except Exception:
+                unknown += 1
+                continue
+            if not isinstance(mode, str):
+                unknown += 1
+            elif mode == "Enforce":
+                self._add("PASS", "LMB-06", "LAMBDA", fname,
+                          f"Lambda '{fname}' enforces code signing")
+            else:
+                self._add("FAIL", "LMB-06", "LAMBDA", fname,
+                          f"Lambda '{fname}' has code signing configured but "
+                          f"UntrustedArtifactOnDeployment={mode} — unsigned/tampered code "
+                          f"deploys with only a warning (not enforced)")
+        if unknown:
+            self._add("WARN", "LMB-06", "LAMBDA", "lambda",
+                      f"Code-signing status undetermined for {unknown} function(s) (read "
+                      f"denied); {unsigned}/{evaluated} evaluated have no code-signing config")
+        elif unsigned:
+            self._add("INFO", "LMB-06", "LAMBDA", "lambda",
+                      f"{unsigned}/{evaluated} Lambda functions have no code-signing config")
+
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 18: AMAZON EKS
     # ══════════════════════════════════════════════════════════════════════════
@@ -4456,6 +5088,47 @@ class AWSLiveScanner:
                 self._add("WARN", "EKS-05", "EKS", cname,
                           f"EKS '{cname}' no additional security groups configured")
 
+            # EKS-06 — worker-nodegroup SSH exposed to the internet. OWN try/except: a
+            # denied call (or a generic mock whose .get returns a non-list) must NOT break
+            # EKS-01..05 above; a non-list result -> treat as no nodegroups.
+            try:
+                ng_names = eks.list_nodegroups(clusterName=cname).get("nodegroups", [])
+                if not isinstance(ng_names, list):
+                    ng_names = []
+                if not ng_names:
+                    self._add("INFO", "EKS-06", "EKS", cname,
+                              f"EKS '{cname}' has no managed nodegroups "
+                              f"(Fargate-only / self-managed)")
+                else:
+                    world_open, describe_err = 0, False
+                    for ng_name in ng_names:
+                        try:
+                            ng = eks.describe_nodegroup(
+                                clusterName=cname, nodegroupName=ng_name)["nodegroup"]
+                        except Exception:
+                            describe_err = True
+                            self._add("WARN", "EKS-06", "EKS", f"{cname}/{ng_name}",
+                                      "could not describe nodegroup (SSH exposure undetermined)")
+                            continue
+                        ra = ng.get("remoteAccess") or {}
+                        if ra.get("ec2SshKey") and not ra.get("sourceSecurityGroups"):
+                            world_open += 1
+                            self._add("FAIL", "EKS-06", "EKS", f"{cname}/{ng_name}",
+                                      f"Worker-node SSH(22) reachable from 0.0.0.0/0 "
+                                      f"(remoteAccess SSH key set, no sourceSecurityGroups) "
+                                      f"| {cname}/{ng_name}")
+                        elif ra.get("ec2SshKey"):
+                            self._add("INFO", "EKS-06", "EKS", f"{cname}/{ng_name}",
+                                      f"Worker SSH scoped to source security groups "
+                                      f"| {cname}/{ng_name}")
+                    # AGGREGATE-PASS-MUST-COUNT: only all-clear when every nodegroup was read
+                    if world_open == 0 and not describe_err:
+                        self._add("PASS", "EKS-06", "EKS", cname,
+                                  f"EKS '{cname}' nodegroups: no world-open worker SSH")
+            except Exception as e:
+                self._add("WARN", "EKS-06", "EKS", cname,
+                          f"could not enumerate nodegroups (SSH exposure not evaluated): {e}")
+
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 19: AMAZON ECS
     # ══════════════════════════════════════════════════════════════════════════
@@ -4519,6 +5192,52 @@ class AWSLiveScanner:
                 if not cd.get("readonlyRootFilesystem", False):
                     self._add("WARN", "ECS-05", "ECS", f"{td_name}/{cname}",
                               f"Container '{cname}' root filesystem is writable")
+                # ECS-08 — dangerous Linux capabilities (container-level). linuxParameters
+                # and capabilities are both optional -> chain-guard the .get()s.
+                add = set(((cd.get("linuxParameters") or {}).get("capabilities") or {})
+                          .get("add") or [])
+                risky = add & self._DANGEROUS_CAPS
+                if risky:
+                    self._add("FAIL", "ECS-08", "ECS", f"{td_name}/{cname}",
+                              f"Container '{cname}' adds dangerous capabilities "
+                              f"{sorted(risky)} (SYS_ADMIN/ALL ~ privileged; SYS_PTRACE crosses "
+                              f"the container boundary)")
+
+            # ── Task-level escape primitives (evaluate ONCE per task def, OUTSIDE the
+            # containerDefinitions loop — pidMode/ipcMode/networkMode/volumes are on the
+            # taskDefinition, not the container). ──
+            # ECS-06 — host namespace share
+            host_ns = [k for k in ("pidMode", "ipcMode", "networkMode")
+                       if td.get(k) == "host"]
+            if host_ns:
+                self._add("FAIL", "ECS-06", "ECS", td_name,
+                          f"Task shares host namespace(s) {host_ns} — host PID/IPC can "
+                          f"read/ptrace host processes & secrets; host network reaches the "
+                          f"node IMDS -> node-role credential theft | {td_name}")
+            # ECS-07 — sensitive host-path bind mount
+            for v in td.get("volumes", []):
+                sp = (v.get("host") or {}).get("sourcePath")
+                if not sp:
+                    continue                    # no host volume / ephemeral -> benign
+                sensitive = (sp in self._SENSITIVE_HOST_PATHS
+                             or any(sp == d.rstrip("/") or sp.startswith(d)
+                                    for d in self._SENSITIVE_HOST_DIRS))
+                if sensitive:
+                    self._add("FAIL", "ECS-07", "ECS", td_name,
+                              f"Task bind-mounts sensitive host path '{sp}' "
+                              f"(container->host escape; docker.sock = instant host root) "
+                              f"| {td_name}")
+                else:
+                    self._add("WARN", "ECS-07", "ECS", td_name,
+                              f"Task bind-mounts host path '{sp}' (hostPath mount) | {td_name}")
+
+    # ECS-07/08 dangerous-primitive tables (bare cap names, no CAP_ prefix in the ECS API)
+    _DANGEROUS_CAPS = {"ALL", "SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE",
+                       "DAC_READ_SEARCH", "SYS_RAWIO", "BPF", "NET_RAW"}
+    _SENSITIVE_HOST_PATHS = {"/", "/etc", "/root", "/proc", "/sys",
+                             "/var/run/docker.sock"}
+    _SENSITIVE_HOST_DIRS = ("/var/run/", "/var/lib/docker/", "/var/lib/kubelet/",
+                            "/etc/", "/root/", "/proc/", "/sys/")
 
     def _emit_runs_image(self, td: Dict, cd: Dict) -> None:
         """RUNS_IMAGE — ECS task-def container -> ECRImage node so image CVEs (from
@@ -4727,8 +5446,24 @@ class AWSLiveScanner:
                         self._add("WARN", "WAF-04", "WAF", aname,
                                   f"WAF '{aname}' default action is ALLOW "
                                   "(consider BLOCK)")
-                except Exception:
-                    pass
+                    # WAF-05 — managed rule group presence (baseline OWASP coverage). Only
+                    # when rules exist (WAF-03 owns the no-rules FAIL). A managed group nested
+                    # inside And/Or/Not/ScopeDown is not detected — top-level is the norm.
+                    if rules:
+                        has_managed = any(
+                            (r.get("Statement") or {}).get("ManagedRuleGroupStatement")
+                            for r in rules)
+                        if has_managed:
+                            self._add("PASS", "WAF-05", "WAF", aname,
+                                      f"WAF '{aname}' includes an AWS/vendor managed rule group")
+                        else:
+                            self._add("FAIL", "WAF-05", "WAF", aname,
+                                      f"WAF '{aname}' has {len(rules)} rule(s) but NO AWS/vendor "
+                                      f"managed rule group — no managed OWASP/known-bad-input coverage")
+                except Exception as e:
+                    # was a bare `except: pass` — surface the read error instead of vanishing
+                    self._add("WARN", "WAF-03", "WAF", aname,
+                              f"could not read WebACL detail: {e}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 22: AMAZON ELASTICACHE
@@ -5009,6 +5744,45 @@ class AWSLiveScanner:
                 self._add("FAIL", "DDB-04", "DYNAMODB", tname,
                           f"Deletion protection=OFF | {tname}")
 
+            # DDB-05 — resource-based policy exposure (public / cross-account). Recent (2024)
+            # feature — most tables have none, so PolicyNotFound is silent (private, common).
+            try:
+                pol_str = ddb.get_resource_policy(ResourceArn=t["TableArn"]).get("Policy")
+            except Exception as e:
+                if "denied" in str(e).lower():
+                    self._add("WARN", "DDB-05", "DYNAMODB", tname,
+                              f"could not evaluate table resource policy (access denied) | {tname}")
+                pol_str = None
+            if pol_str:
+                try:
+                    stmts = json.loads(pol_str).get("Statement", [])
+                    if isinstance(stmts, dict):
+                        stmts = [stmts]
+                except Exception:
+                    stmts = []
+                for st in stmts:
+                    res = classify_resource_policy_stmt(st, self.account or "")
+                    if not res:
+                        continue
+                    kind = res["kind"]
+                    if kind == "public":
+                        self._add("FAIL", "DDB-05", "DYNAMODB", tname,
+                                  f"Table resource policy grants PUBLIC access (any AWS "
+                                  f"principal can read/write table data) | {tname}")
+                    elif kind == "public_conditioned":
+                        self._add("WARN", "DDB-05", "DYNAMODB", tname,
+                                  f"Wildcard principal condition-guarded — verify | {tname}")
+                    elif kind == "cross_account":
+                        ext = [a for a in res.get("external_accounts", [])
+                               if a not in self.trusted_accounts]
+                        if ext:
+                            self._add("FAIL", "DDB-05", "DYNAMODB", tname,
+                                      f"Table resource policy grants CROSS-ACCOUNT access to "
+                                      f"{', '.join(ext)} | {tname}")
+                    elif kind == "org":
+                        self._add("WARN", "DDB-05", "DYNAMODB", tname,
+                                  f"Shared to AWS Organization {res.get('org_id')} — verify | {tname}")
+
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 25: AWS STEP FUNCTIONS
     # ══════════════════════════════════════════════════════════════════════════
@@ -5245,6 +6019,74 @@ class AWSLiveScanner:
                     else:
                         self._add("PASS", "ELB-03", "ELB", llabel,
                                   f"TLS policy '{policy}' | {llabel}")
+
+        # CLB-01/02 — Classic Load Balancers (elb v1, distinct client + listener shape)
+        self._check_classic_elb()
+
+    def _check_classic_elb(self):
+        """CLB-01 internet-facing plaintext CLB + CLB-02 weak SSL policy. Uses the elb (v1)
+        client — its Listener shape (LoadBalancerPort/InstancePort) differs from elbv2."""
+        elb = self._client("elb")
+        try:
+            clbs = []
+            for page in elb.get_paginator("describe_load_balancers").paginate():
+                clbs.extend(page.get("LoadBalancerDescriptions", []))
+        except Exception as e:
+            self._add("WARN", "CLB-01", "ELB", "classic-elb",
+                      f"describe_load_balancers (classic) failed: {e}")
+            return
+        if not clbs:
+            self._add("INFO", "CLB-01", "ELB", "classic-elb",
+                      "No Classic Load Balancers in this region")
+            return
+        for lb in clbs:
+            name = lb.get("LoadBalancerName", "unknown")
+            scheme = lb.get("Scheme", "")
+            listeners = lb.get("ListenerDescriptions", [])
+            protos = {(ld.get("Listener") or {}).get("Protocol", "").upper()
+                      for ld in listeners}
+            secure = protos & {"HTTPS", "SSL"}
+            # CLB-01 — plaintext-only (FAIL only when internet-facing AND no HTTPS/SSL)
+            if not listeners:
+                self._add("INFO", "CLB-01", "ELB", name, f"Classic LB has no listeners | {name}")
+            elif not secure and scheme == "internet-facing":
+                self._add("FAIL", "CLB-01", "ELB", name,
+                          f"Internet-facing Classic LB has NO HTTPS/SSL listener — plaintext "
+                          f"in transit | {name}")
+            elif not secure:
+                self._add("INFO", "CLB-01", "ELB", name,
+                          f"Internal Classic LB has no HTTPS/SSL listener (lower risk) | {name}")
+            else:
+                self._add("PASS", "CLB-01", "ELB", name,
+                          f"Classic LB terminates HTTPS/SSL | {name}")
+            # CLB-02 — weak SSL negotiation policy (only for HTTPS/SSL-terminating CLBs)
+            if secure:
+                try:
+                    pols = elb.describe_load_balancer_policies(
+                        LoadBalancerName=name).get("PolicyDescriptions", [])
+                except Exception as e:
+                    self._add("WARN", "CLB-02", "ELB", name,
+                              f"could not read SSL policies: {e}")
+                    continue
+                weak = False
+                for pd in pols:
+                    if pd.get("PolicyTypeName") != "SSLNegotiationPolicyType":
+                        continue
+                    for attr in pd.get("PolicyAttributeDescriptions", []):
+                        an = attr.get("AttributeName", "")
+                        av = str(attr.get("AttributeValue", "")).lower()
+                        if an in ("Protocol-TLSv1", "Protocol-TLSv1.1") and av == "true":
+                            weak = True
+                        if (an == "Reference-Security-Policy"
+                                and attr.get("AttributeValue") in self._WEAK_TLS_POLICIES):
+                            weak = True
+                if weak:
+                    self._add("FAIL", "CLB-02", "ELB", name,
+                              f"Classic LB HTTPS/SSL listener uses a weak SSL policy "
+                              f"(permits TLS 1.0/1.1) | {name}")
+                else:
+                    self._add("PASS", "CLB-02", "ELB", name,
+                              f"Classic LB SSL policy OK | {name}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 28: EBS VOLUMES & SNAPSHOTS
@@ -5669,18 +6511,19 @@ class AWSLiveScanner:
         self._section_header("SAGEMAKER")
         sm = self._client("sagemaker")
 
+        # SM-01..04 — notebook instances. Do NOT early-return: SM-05/06 (Studio domains) and
+        # SM-07 (endpoint configs) must run for domain-only / endpoint-only accounts.
         try:
             notebooks = sm.list_notebook_instances().get(
                 "NotebookInstances", [])
         except Exception as e:
             self._add("WARN", "SM-01", "SAGEMAKER", "sagemaker", str(e))
-            return
-        if not notebooks:
+            notebooks = None
+        if notebooks is not None and not notebooks:
             self._add("INFO", "SM-01", "SAGEMAKER", "sagemaker",
                       "No SageMaker notebook instances found")
-            return
 
-        for nb in notebooks:
+        for nb in (notebooks or []):
             name = nb.get("NotebookInstanceName", "unknown")
             try:
                 detail = sm.describe_notebook_instance(
@@ -5720,6 +6563,87 @@ class AWSLiveScanner:
             else:
                 self._add("FAIL", "SM-04", "SAGEMAKER", name,
                           f"Not attached to a VPC subnet | {name}")
+
+        # SM-05/06 Studio domains + SM-07 endpoint configs (run independently of notebooks)
+        self._check_sagemaker_domains(sm)
+        self._check_sagemaker_endpoint_configs(sm)
+
+    def _check_sagemaker_domains(self, sm):
+        """SM-05 Studio domain public egress + SM-06 home-EFS CMK. Inline-paginate (never
+        _paginate_all, which would swallow AccessDenied into a phantom 'no domains')."""
+        try:
+            domains, token = [], None
+            for _ in range(200):
+                resp = sm.list_domains(**({"NextToken": token} if token else {}))
+                domains.extend(resp.get("Domains", []) or [])
+                token = resp.get("NextToken")
+                if not token or not isinstance(token, str):
+                    break
+        except Exception as e:
+            self._add("WARN", "SM-05", "SAGEMAKER", "sagemaker-domains", str(e))
+            return
+        if not domains:
+            self._add("INFO", "SM-05", "SAGEMAKER", "sagemaker",
+                      "No SageMaker Studio domains found")
+            return
+        for d in domains:
+            did = d.get("DomainId", "unknown")
+            try:
+                detail = sm.describe_domain(DomainId=did)
+            except Exception as e:
+                self._add("WARN", "SM-05", "SAGEMAKER", did, str(e))
+                continue
+            dname = detail.get("DomainName", did)
+            # SM-05 — public egress (missing key defaults service-side to PublicInternetOnly)
+            if detail.get("AppNetworkAccessType", "PublicInternetOnly") == "PublicInternetOnly":
+                self._add("FAIL", "SM-05", "SAGEMAKER", dname,
+                          f"Studio domain allows direct public-internet egress "
+                          f"(AppNetworkAccessType=PublicInternetOnly) — bypasses VPC egress "
+                          f"controls (data-exfil path) | {dname}")
+            else:
+                self._add("PASS", "SM-05", "SAGEMAKER", dname,
+                          f"Studio domain egress restricted to the VPC | {dname}")
+            # SM-06 — home-EFS CMK (KmsKeyId or legacy HomeEfsFileSystemKmsKeyId)
+            if detail.get("KmsKeyId") or detail.get("HomeEfsFileSystemKmsKeyId"):
+                self._add("PASS", "SM-06", "SAGEMAKER", dname,
+                          f"Studio home-EFS encrypted with a customer-managed KMS key | {dname}")
+            else:
+                self._add("FAIL", "SM-06", "SAGEMAKER", dname,
+                          f"Studio home-EFS uses the AWS-owned key (no CMK) — home dirs hold "
+                          f"notebooks/source/cached credentials | {dname}")
+
+    def _check_sagemaker_endpoint_configs(self, sm):
+        """SM-07 — inference endpoint-config storage CMK. Inline-paginate own try/except.
+        Enumerate CONFIGS (KmsKeyId lives only on DescribeEndpointConfig, not DescribeEndpoint)."""
+        try:
+            configs, token = [], None
+            for _ in range(200):
+                resp = sm.list_endpoint_configs(**({"NextToken": token} if token else {}))
+                configs.extend(resp.get("EndpointConfigs", []) or [])
+                token = resp.get("NextToken")
+                if not token or not isinstance(token, str):
+                    break
+        except Exception as e:
+            self._add("WARN", "SM-07", "SAGEMAKER", "sagemaker-endpoint-configs", str(e))
+            return
+        if not configs:
+            self._add("INFO", "SM-07", "SAGEMAKER", "sagemaker",
+                      "No SageMaker endpoint configurations found")
+            return
+        for c in configs:
+            name = c.get("EndpointConfigName", "unknown")
+            try:
+                detail = sm.describe_endpoint_config(EndpointConfigName=name)
+            except Exception as e:
+                self._add("WARN", "SM-07", "SAGEMAKER", name, str(e))
+                continue
+            if detail.get("KmsKeyId"):
+                self._add("PASS", "SM-07", "SAGEMAKER", name,
+                          f"Endpoint-config storage encrypted with a CMK | {name}")
+            else:
+                self._add("FAIL", "SM-07", "SAGEMAKER", name,
+                          f"Endpoint-config storage uses the AWS-owned key (no CMK) — model "
+                          f"artifacts + captured inference payloads unprotected | {name}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 33: AMAZON COGNITO
