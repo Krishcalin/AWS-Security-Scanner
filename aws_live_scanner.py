@@ -236,6 +236,7 @@ CHECK_SEVERITY = {
     "ACM-01": "HIGH", "ACM-02": "MEDIUM", "ACM-03": "LOW",
     "ACM-04": "HIGH", "ACM-05": "MEDIUM",
     "SM-01": "HIGH", "SM-02": "MEDIUM", "SM-03": "MEDIUM", "SM-04": "MEDIUM",
+    "SM-05": "HIGH", "SM-06": "MEDIUM", "SM-07": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
     "COG-05": "HIGH", "COG-06": "CRITICAL",
     "AGW2-01": "MEDIUM", "AGW2-02": "HIGH", "AGW2-03": "LOW",
@@ -437,6 +438,9 @@ COMPLIANCE_MAP = {
     "SM-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "SM-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SM-04": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SM-05": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SM-06": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "SM-07": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     # Cognito
     "COG-01": {"CIS": "1.5", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
     "COG-02": {"PCI-DSS": "8.3.6", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "IA-5(1)"},
@@ -669,6 +673,9 @@ REMEDIATION_MAP = {
     "SM-02": "Disable root access: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --root-access Disabled",
     "SM-03": "Set KMS key at creation: aws sagemaker create-notebook-instance --notebook-instance-name <NB> --kms-key-id <KMS_KEY> --instance-type ml.t3.medium --role-arn <ROLE>",
     "SM-04": "Attach to VPC subnet: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --subnet-id <SUBNET> (recreate if subnet not set)",
+    "SM-05": "Restrict Studio egress to the VPC (deploy interface VPC endpoints first, else apps lose connectivity): aws sagemaker update-domain --domain-id <DOMAIN_ID> --app-network-access-type VpcOnly",
+    "SM-06": "KMS key is immutable on an existing domain — recreate with a CMK: aws sagemaker create-domain --domain-name <NAME> --auth-mode IAM --vpc-id <VPC> --subnet-ids <SUBNET_IDS> --kms-key-id <KMS_KEY_ARN> --default-user-settings file://user-settings.json",
+    "SM-07": "KmsKeyId is immutable on an endpoint-config — create a new config with a CMK then repoint the endpoint: aws sagemaker create-endpoint-config --endpoint-config-name <NEW_CFG> --kms-key-id <KMS_KEY_ARN> --production-variants file://variants.json ; aws sagemaker update-endpoint --endpoint-name <EP> --endpoint-config-name <NEW_CFG>",
     "COG-01": "Require MFA: aws cognito-idp set-user-pool-mfa-config --user-pool-id <POOL_ID> --mfa-configuration ON --software-token-mfa-configuration Enabled=true",
     "COG-02": "Strengthen password policy: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --policies PasswordPolicy='{MinimumLength=12,RequireUppercase=true,RequireLowercase=true,RequireNumbers=true,RequireSymbols=true}'",
     "COG-03": "Enable threat protection: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --user-pool-add-ons AdvancedSecurityMode=ENFORCED",
@@ -6484,18 +6491,19 @@ class AWSLiveScanner:
         self._section_header("SAGEMAKER")
         sm = self._client("sagemaker")
 
+        # SM-01..04 — notebook instances. Do NOT early-return: SM-05/06 (Studio domains) and
+        # SM-07 (endpoint configs) must run for domain-only / endpoint-only accounts.
         try:
             notebooks = sm.list_notebook_instances().get(
                 "NotebookInstances", [])
         except Exception as e:
             self._add("WARN", "SM-01", "SAGEMAKER", "sagemaker", str(e))
-            return
-        if not notebooks:
+            notebooks = None
+        if notebooks is not None and not notebooks:
             self._add("INFO", "SM-01", "SAGEMAKER", "sagemaker",
                       "No SageMaker notebook instances found")
-            return
 
-        for nb in notebooks:
+        for nb in (notebooks or []):
             name = nb.get("NotebookInstanceName", "unknown")
             try:
                 detail = sm.describe_notebook_instance(
@@ -6535,6 +6543,87 @@ class AWSLiveScanner:
             else:
                 self._add("FAIL", "SM-04", "SAGEMAKER", name,
                           f"Not attached to a VPC subnet | {name}")
+
+        # SM-05/06 Studio domains + SM-07 endpoint configs (run independently of notebooks)
+        self._check_sagemaker_domains(sm)
+        self._check_sagemaker_endpoint_configs(sm)
+
+    def _check_sagemaker_domains(self, sm):
+        """SM-05 Studio domain public egress + SM-06 home-EFS CMK. Inline-paginate (never
+        _paginate_all, which would swallow AccessDenied into a phantom 'no domains')."""
+        try:
+            domains, token = [], None
+            for _ in range(200):
+                resp = sm.list_domains(**({"NextToken": token} if token else {}))
+                domains.extend(resp.get("Domains", []) or [])
+                token = resp.get("NextToken")
+                if not token or not isinstance(token, str):
+                    break
+        except Exception as e:
+            self._add("WARN", "SM-05", "SAGEMAKER", "sagemaker-domains", str(e))
+            return
+        if not domains:
+            self._add("INFO", "SM-05", "SAGEMAKER", "sagemaker",
+                      "No SageMaker Studio domains found")
+            return
+        for d in domains:
+            did = d.get("DomainId", "unknown")
+            try:
+                detail = sm.describe_domain(DomainId=did)
+            except Exception as e:
+                self._add("WARN", "SM-05", "SAGEMAKER", did, str(e))
+                continue
+            dname = detail.get("DomainName", did)
+            # SM-05 — public egress (missing key defaults service-side to PublicInternetOnly)
+            if detail.get("AppNetworkAccessType", "PublicInternetOnly") == "PublicInternetOnly":
+                self._add("FAIL", "SM-05", "SAGEMAKER", dname,
+                          f"Studio domain allows direct public-internet egress "
+                          f"(AppNetworkAccessType=PublicInternetOnly) — bypasses VPC egress "
+                          f"controls (data-exfil path) | {dname}")
+            else:
+                self._add("PASS", "SM-05", "SAGEMAKER", dname,
+                          f"Studio domain egress restricted to the VPC | {dname}")
+            # SM-06 — home-EFS CMK (KmsKeyId or legacy HomeEfsFileSystemKmsKeyId)
+            if detail.get("KmsKeyId") or detail.get("HomeEfsFileSystemKmsKeyId"):
+                self._add("PASS", "SM-06", "SAGEMAKER", dname,
+                          f"Studio home-EFS encrypted with a customer-managed KMS key | {dname}")
+            else:
+                self._add("FAIL", "SM-06", "SAGEMAKER", dname,
+                          f"Studio home-EFS uses the AWS-owned key (no CMK) — home dirs hold "
+                          f"notebooks/source/cached credentials | {dname}")
+
+    def _check_sagemaker_endpoint_configs(self, sm):
+        """SM-07 — inference endpoint-config storage CMK. Inline-paginate own try/except.
+        Enumerate CONFIGS (KmsKeyId lives only on DescribeEndpointConfig, not DescribeEndpoint)."""
+        try:
+            configs, token = [], None
+            for _ in range(200):
+                resp = sm.list_endpoint_configs(**({"NextToken": token} if token else {}))
+                configs.extend(resp.get("EndpointConfigs", []) or [])
+                token = resp.get("NextToken")
+                if not token or not isinstance(token, str):
+                    break
+        except Exception as e:
+            self._add("WARN", "SM-07", "SAGEMAKER", "sagemaker-endpoint-configs", str(e))
+            return
+        if not configs:
+            self._add("INFO", "SM-07", "SAGEMAKER", "sagemaker",
+                      "No SageMaker endpoint configurations found")
+            return
+        for c in configs:
+            name = c.get("EndpointConfigName", "unknown")
+            try:
+                detail = sm.describe_endpoint_config(EndpointConfigName=name)
+            except Exception as e:
+                self._add("WARN", "SM-07", "SAGEMAKER", name, str(e))
+                continue
+            if detail.get("KmsKeyId"):
+                self._add("PASS", "SM-07", "SAGEMAKER", name,
+                          f"Endpoint-config storage encrypted with a CMK | {name}")
+            else:
+                self._add("FAIL", "SM-07", "SAGEMAKER", name,
+                          f"Endpoint-config storage uses the AWS-owned key (no CMK) — model "
+                          f"artifacts + captured inference payloads unprotected | {name}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 33: AMAZON COGNITO
