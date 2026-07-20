@@ -181,6 +181,94 @@ def role_can_read_bucket(statements: List[dict], bucket_arn: str) -> Optional[Di
     return {"conditioned": conditioned_all}
 
 
+# ─── Phase 7 DSPM: tag-driven crown jewels + non-S3 CAN_READ_DATA ─────────────
+_DSPM_CLASSIFICATION_KEYS = frozenset({
+    "dataclassification", "classification", "sensitivity", "datasensitivity",
+    "compliance", "datacategory"})
+_DSPM_BOOLEAN_KEYS = frozenset({"pii", "phi", "crownjewel"})
+_DSPM_SENSITIVE_VALUES = frozenset({
+    "sensitive", "confidential", "restricted", "pii", "phi", "pci", "secret",
+    "critical", "high"})
+_DSPM_TRUTHY = frozenset({"true", "yes", "1", "enabled", "y", "t"})
+
+# read-action sets per crown datastore kind (lowercased for fnmatch vs `dynamodb:*` etc.)
+DSPM_READ_ACTIONS = {
+    "dynamodbtable": frozenset({"dynamodb:getitem", "dynamodb:query", "dynamodb:scan",
+                                "dynamodb:batchgetitem", "dynamodb:partiqlselect"}),
+    "efsfilesystem": frozenset({"elasticfilesystem:clientmount"}),
+    "redshiftcluster": frozenset({"redshift:getclustercredentials",
+                                  "redshift-data:executestatement",
+                                  "redshift-data:batchexecutestatement",
+                                  "redshift-data:getstatementresult",
+                                  "redshift-serverless:getcredentials"}),
+    "rdsinstance": frozenset({"rds-db:connect", "rds-data:executestatement",
+                              "rds-data:batchexecutestatement", "rds-data:executesql"}),
+    "rdscluster": frozenset({"rds-db:connect", "rds-data:executestatement",
+                             "rds-data:batchexecutestatement", "rds-data:executesql"}),
+}
+
+
+def is_crown_jewel_by_tags(tags, extra_keys=frozenset(), extra_values=frozenset()
+                           ) -> Optional[Dict]:
+    """Conservative tag-driven crown-jewel classifier (no Macie needed). Two tiers:
+    CLASSIFICATION keys (DataClassification/Classification/Sensitivity/…) require an
+    EXACT sensitive value (so 'high-availability' != 'high' — no substring FP); BOOLEAN
+    keys (pii/phi/crownjewel) qualify on a truthy value OR any sensitive value.
+    ``tags`` is a list of ``{'Key','Value'}`` dicts. ``environment=prod`` deliberately
+    does NOT qualify (too broad — an operator opts it in via ``extra_keys``). Returns
+    ``{crown, sensitivity, matched:(Key,Value)}`` or None."""
+    class_keys = _DSPM_CLASSIFICATION_KEYS | {k.lower() for k in extra_keys}
+    sens_values = _DSPM_SENSITIVE_VALUES | {v.lower() for v in extra_values}
+    for t in tags or []:
+        key = (t.get("Key") or "").strip().lower()
+        val = (t.get("Value") or "").strip().lower()
+        if key in class_keys and val in sens_values:
+            return {"crown": True, "sensitivity": val,
+                    "matched": (t.get("Key"), t.get("Value"))}
+        if key in _DSPM_BOOLEAN_KEYS and (val in _DSPM_TRUTHY or val in sens_values):
+            return {"crown": True,
+                    "sensitivity": (val if val in sens_values else "flagged"),
+                    "matched": (t.get("Key"), t.get("Value"))}
+    return None
+
+
+def role_can_read_store(statements: List[dict], resource_arn: str,
+                        read_actions) -> Optional[Dict]:
+    """Sibling of ``role_can_read_bucket`` for the Phase-7 DSPM datastores. ``read_actions``
+    is the lowercased action set for the store kind. The probe is the store's OWN ARN:
+    DynamoDB/EFS match PRECISELY; RDS/Redshift credential actions have a dbuser-ARN real
+    resource, so only ``*``/service-wildcard grants match the instance/cluster ARN — a
+    coarse-but-safe result (narrowly-scoped dbuser policies drop the edge: a conservative
+    FN, documented). Deny wins over Allow; NotResource excludes; identity-only so the edge
+    is always 'paths-to-verify'."""
+    probe = resource_arn.lower().rstrip("/")
+
+    def _covers(patterns) -> bool:
+        return any(p == "*" or fnmatch(probe, p) for p in (patterns or set()))
+
+    def _grants(st_actions) -> bool:
+        return any(_actions_match(st_actions, ra) for ra in read_actions)
+
+    allow = deny = False
+    conditioned_all = True
+    for st in statements:
+        if not _grants(st.get("actions", set())):
+            continue
+        if not _covers(st.get("resources")):
+            continue
+        if _covers(st.get("not_resources")):          # NotResource excludes the store -> no read
+            continue
+        if st.get("effect") == "Deny":
+            deny = True
+        elif st.get("effect") == "Allow":
+            allow = True
+            if not st.get("condition"):
+                conditioned_all = False
+    if deny or not allow:
+        return None                                   # Deny precedence / no grant
+    return {"conditioned": conditioned_all}
+
+
 # ─── GuardDuty → THREAT_ON ───────────────────────────────────────────────────
 def severity_band(score) -> str:
     try:

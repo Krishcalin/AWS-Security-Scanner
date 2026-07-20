@@ -8335,7 +8335,8 @@ class AWSLiveScanner:
         crown = self._collect_macie(g)
         self._collect_access_analyzer(g)
         self._build_can_read_data(g, crown)
-        self._correlate_flagship(g)
+        self._collect_dspm(g)                       # Phase 7 DSPM crown datastores
+        self._correlate_flagship(g)                 # crown_nodes(g) now spans S3 + DSPM
 
     def _collect_macie(self, g) -> set:
         crown: set = set()
@@ -8508,6 +8509,136 @@ class AWSLiveScanner:
                           f"FLAGSHIP ATTACK PATH (conditioned): Internet -> exposed EC2 "
                           f"{iid} -> exploitable {cve} -> role -> crown-jewel data {bucket} "
                           f"reachable only via a Condition-guarded hop; verify.{boost} | {iid}")
+
+    # ── Phase 7 DSPM: crown-jewel datastores (RDS/Redshift/DynamoDB/EFS) w/o Macie ─
+    def _collect_dspm(self, g):
+        """Extend crown-jewel identity beyond S3/Macie to RDS/RDSCluster/Redshift/DynamoDB/
+        EFS via data-classification TAGS. Emitted from DATA#41 (post-clobber). Node ids
+        reuse the Phase-5 EOL fallback so a tagged crown MERGES onto any existing vulnerable
+        EOL node ('vulnerable crown jewel'). Each store is its own try/except -> INFO no-op
+        (never _paginate_all -> never a phantom all-clear on a denied describe)."""
+        try:
+            roles = [p for p in self._get_iam_principals() if p["type"] == "role"]
+        except Exception:
+            roles = []
+        self._dspm_rds(g, roles)
+        self._dspm_redshift(g, roles)
+        self._dspm_dynamodb(g, roles)
+        self._dspm_efs(g, roles)
+
+    def _dspm_emit(self, g, arn, kind, name, cj, public, encrypted, roles, read_actions):
+        """Add the crown DataStore node + DSPM-01 (+DSPM-02 if public) + CAN_READ_DATA
+        edges for every role whose identity policy can read it (coarse for RDS/Redshift)."""
+        if not arn:
+            return
+        g.add_node(arn, kind, name=name, DataStore=True, crown_jewel=True,
+                   sensitivity=cj["sensitivity"], public=public, encrypted=encrypted)
+        mk, mv = cj["matched"]
+        self._add("FAIL", "DSPM-01", "DATA", name,
+                  f"Crown-jewel {kind} (tag {mk}={mv}) holds sensitive data"
+                  f"{'' if encrypted else ' — UNENCRYPTED'} | {name}")
+        if public:
+            self._add("FAIL", "DSPM-02", "DATA", name,
+                      f"Crown-jewel {kind} {name} is publicly reachable | {name}")
+        for p in roles:
+            r = aws_deepplane.role_can_read_store(p["statements"], arn, read_actions)
+            if r is None:
+                continue
+            g.add_edge(p["arn"], arn, "CAN_READ_DATA", basis="identity-policy",
+                       confidence="paths-to-verify", conditioned=r["conditioned"])
+            self._add("WARN" if r["conditioned"] else "FAIL", "EXTACCESS-03", "DATA",
+                      f"role:{p['name']}",
+                      f"Role {p['name']} can read crown-jewel {kind} {name} (identity "
+                      f"policy, coarse, paths-to-verify)"
+                      f"{' [conditioned]' if r['conditioned'] else ''} | {p['name']}")
+
+    def _dspm_rds(self, g, roles):
+        for op, key, kind, arn_f, id_f, enc_f in (
+                ("describe_db_instances", "DBInstances", "RDSInstance",
+                 "DBInstanceArn", "DBInstanceIdentifier", "StorageEncrypted"),
+                ("describe_db_clusters", "DBClusters", "RDSCluster",
+                 "DBClusterArn", "DBClusterIdentifier", "StorageEncrypted")):
+            try:
+                rds = self._client("rds")
+                rows: List[Dict] = []
+                for page in rds.get_paginator(op).paginate():
+                    rows += page.get(key, [])
+            except Exception as e:
+                self._add("INFO", "DSPM-01", "DATA", kind.lower(),
+                          f"Could not enumerate {kind} in {self.region}: {e}")
+                continue
+            for db in rows:
+                cj = aws_deepplane.is_crown_jewel_by_tags(db.get("TagList"))
+                if not cj:
+                    continue
+                arn = db.get(arn_f) or db.get(id_f, "")
+                self._dspm_emit(g, arn, kind, db.get(id_f, arn), cj,
+                                bool(db.get("PubliclyAccessible")), bool(db.get(enc_f)),
+                                roles, aws_deepplane.DSPM_READ_ACTIONS[kind.lower()])
+
+    def _dspm_redshift(self, g, roles):
+        try:
+            rs = self._client("redshift")
+            clusters: List[Dict] = []
+            for page in rs.get_paginator("describe_clusters").paginate():
+                clusters += page.get("Clusters", [])
+        except Exception as e:
+            self._add("INFO", "DSPM-01", "DATA", "redshift",
+                      f"Could not enumerate Redshift clusters in {self.region}: {e}")
+            return
+        for c in clusters:
+            cj = aws_deepplane.is_crown_jewel_by_tags(c.get("Tags"))
+            if not cj:
+                continue
+            cid = c.get("ClusterIdentifier", "")
+            arn = f"arn:aws:redshift:{self.region}:{self.account}:cluster:{cid}"
+            self._dspm_emit(g, arn, "RedshiftCluster", cid, cj,
+                            bool(c.get("PubliclyAccessible")), bool(c.get("Encrypted")),
+                            roles, aws_deepplane.DSPM_READ_ACTIONS["redshiftcluster"])
+
+    def _dspm_dynamodb(self, g, roles):
+        try:
+            ddb = self._client("dynamodb")
+            names: List[str] = []
+            for page in ddb.get_paginator("list_tables").paginate():
+                names += page.get("TableNames", [])
+        except Exception as e:
+            self._add("INFO", "DSPM-01", "DATA", "dynamodb",
+                      f"Could not enumerate DynamoDB tables in {self.region}: {e}")
+            return
+        for name in names[:300]:                     # bound the per-table tag read cost
+            arn = f"arn:aws:dynamodb:{self.region}:{self.account}:table/{name}"
+            try:
+                tags = ddb.list_tags_of_resource(ResourceArn=arn).get("Tags", [])
+            except Exception:
+                continue                             # skip a denied/throttled single table
+            cj = aws_deepplane.is_crown_jewel_by_tags(tags)
+            if not cj:
+                continue
+            # DynamoDB is never network-public (IAM-gated) and always encrypted at rest.
+            self._dspm_emit(g, arn, "DynamoDBTable", name, cj, False, True,
+                            roles, aws_deepplane.DSPM_READ_ACTIONS["dynamodbtable"])
+
+    def _dspm_efs(self, g, roles):
+        try:
+            efs = self._client("efs")
+            fss: List[Dict] = []
+            for page in efs.get_paginator("describe_file_systems").paginate():
+                fss += page.get("FileSystems", [])
+        except Exception as e:
+            self._add("INFO", "DSPM-01", "DATA", "efs",
+                      f"Could not enumerate EFS file systems in {self.region}: {e}")
+            return
+        for fs in fss:
+            cj = aws_deepplane.is_crown_jewel_by_tags(fs.get("Tags"))
+            if not cj:
+                continue
+            arn = fs.get("FileSystemArn", "")
+            name = fs.get("Name") or fs.get("FileSystemId", arn)
+            # EFS FS-policy public-exposure parse deferred -> public=False (fail-closed).
+            self._dspm_emit(g, arn, "EFSFileSystem", name, cj, False,
+                            bool(fs.get("Encrypted")), roles,
+                            aws_deepplane.DSPM_READ_ACTIONS["efsfilesystem"])
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 40: ATTACK-PATH CORRELATION & CHOKE POINTS (Phase 4)
