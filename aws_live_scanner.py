@@ -200,7 +200,7 @@ CHECK_SEVERITY = {
     "SNS-01": "MEDIUM", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
     "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "MEDIUM", "SQS-04": "LOW",
     "CFN-01": "HIGH", "CFN-02": "HIGH", "CFN-03": "HIGH",
-    "CFN-04": "MEDIUM", "CFN-05": "HIGH",
+    "CFN-04": "MEDIUM", "CFN-05": "HIGH", "CFN-06": "MEDIUM",
     "R53-01": "MEDIUM", "R53-02": "MEDIUM", "R53-03": "HIGH",
     "R53-04": "LOW", "R53-05": "MEDIUM",
     "BDR-01": "HIGH", "BDR-02": "HIGH", "BDR-03": "MEDIUM",
@@ -216,6 +216,7 @@ CHECK_SEVERITY = {
     "SEC-01": "HIGH", "SEC-02": "HIGH", "SEC-03": "MEDIUM", "SEC-04": "MEDIUM",
     "SEC-05": "CRITICAL",
     "WAF-01": "HIGH", "WAF-02": "MEDIUM", "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
+    "WAF-05": "MEDIUM",
     "ELC-01": "HIGH", "ELC-02": "HIGH", "ELC-03": "HIGH", "ELC-04": "MEDIUM",
     "ELC-05": "HIGH", "ELC-06": "MEDIUM",
     "OSR-01": "HIGH", "OSR-02": "HIGH", "OSR-03": "MEDIUM",
@@ -369,6 +370,7 @@ COMPLIANCE_MAP = {
     "CFN-01": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "CFN-02": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
     "CFN-03": {"PCI-DSS": "6.6", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "CFN-06": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
     # New sections
     "LMB-01": {"CIS": "2.7.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "LMB-02": {"CIS": "2.7.2", "PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
@@ -506,6 +508,7 @@ COMPLIANCE_MAP = {
     "IAMPE-23": {"CIS": "1.16", "PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "WAF-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "WAF-04": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "WAF-05": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "ELC-04": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
     "ELC-05": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "ELC-06": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
@@ -602,6 +605,7 @@ REMEDIATION_MAP = {
     "AUR-05": "Recreate the cluster snapshot encrypted with a KMS key: aws rds copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier <SNAP_ID> --target-db-cluster-snapshot-identifier <SNAP_ID>-enc --kms-key-id <KMS_KEY>",
     "CFN-01": "Enforce HTTPS: aws cloudfront update-distribution --id <DIST_ID> --default-cache-behavior '{\"ViewerProtocolPolicy\":\"https-only\"}'",
     "CFN-03": "Associate WAF: aws cloudfront update-distribution --id <DIST_ID> --web-acl-id <WAF_ACL_ARN>",
+    "CFN-06": "Restrict each custom origin to TLS 1.2: aws cloudfront update-distribution --id <DIST_ID> --if-match <ETAG> --distribution-config <CONFIG with CustomOriginConfig.OriginSslProtocols.Items=[\"TLSv1.2\"]>",
     "LMB-01": "Remove public access: aws lambda remove-permission --function-name <FUNC> --statement-id <SID>",
     "LMB-02": "Add VPC config: aws lambda update-function-configuration --function-name <FUNC> --vpc-config SubnetIds=<SUBNETS>,SecurityGroupIds=<SGS>",
     "EKS-01": "Disable public endpoint: aws eks update-cluster-config --name <CLUSTER> --resources-vpc-config endpointPublicAccess=false,endpointPrivateAccess=true",
@@ -628,6 +632,7 @@ REMEDIATION_MAP = {
     "BCK-03": "Remove the public grant (or scope cross-account with aws:PrincipalOrgID) and re-apply: aws backup put-backup-vault-access-policy --backup-vault-name <VAULT> --policy file://scoped-vault-policy.json ; or drop it: aws backup delete-backup-vault-access-policy --backup-vault-name <VAULT>",
     "WAF-01": "Associate WAF with ALB: aws wafv2 associate-web-acl --web-acl-arn <ACL_ARN> --resource-arn <ALB_ARN>",
     "WAF-02": "Enable WAF logging: aws wafv2 put-logging-configuration --logging-configuration ResourceArn=<ACL_ARN>,LogDestinationConfigs=<LOG_ARN>",
+    "WAF-05": "Add an AWS managed rule group (OWASP baseline): aws wafv2 update-web-acl --name <ACL_NAME> --scope <REGIONAL|CLOUDFRONT> --id <ACL_ID> --lock-token <TOKEN> --rules '[{\"Name\":\"AWS-Common\",\"Priority\":0,\"Statement\":{\"ManagedRuleGroupStatement\":{\"VendorName\":\"AWS\",\"Name\":\"AWSManagedRulesCommonRuleSet\"}},\"OverrideAction\":{\"None\":{}},\"VisibilityConfig\":{\"SampledRequestsEnabled\":true,\"CloudWatchMetricsEnabled\":true,\"MetricName\":\"AWS-Common\"}}]'",
     "SFN-01": "Enable logging: aws stepfunctions update-state-machine --state-machine-arn <ARN> --logging-configuration '{\"level\":\"ALL\",\"includeExecutionData\":true,\"destinations\":[{\"cloudWatchLogsLogGroup\":{\"logGroupArn\":\"<LOG_ARN>\"}}]}'",
     "APIGW-01": "Enable stage logging: aws apigateway update-stage --rest-api-id <API_ID> --stage-name <STAGE> --patch-operations op=replace,path=/accessLogSettings/destinationArn,value=<LOG_GROUP_ARN> op=replace,path=/*/*/logging/loglevel,value=INFO",
     "APIGW-02": "Associate WAF: aws wafv2 associate-web-acl --web-acl-arn <ACL_ARN> --resource-arn arn:aws:apigateway:<REGION>::/restapis/<API_ID>/stages/<STAGE>",
@@ -4067,6 +4072,22 @@ class AWSLiveScanner:
                 oid          = origin.get("Id", "N/A")
                 custom_cfg   = origin.get("CustomOriginConfig", {})
                 origin_proto = custom_cfg.get("OriginProtocolPolicy", "")
+                # CFN-06 — origin-side TLS (custom origins only; complements CFN-02 which
+                # only checks the VIEWER side). Skip http-only (CFN-05 owns plaintext-to-origin)
+                # and S3 origins (no CustomOriginConfig).
+                if custom_cfg and origin_proto != "http-only":
+                    ssl_protos = set(custom_cfg.get("OriginSslProtocols", {}).get("Items", []))
+                    weak = ssl_protos & {"SSLv3", "TLSv1", "TLSv1.1"}
+                    if weak:
+                        self._add("WARN", "CFN-06", "CLOUDFRONT", domain,
+                                  f"Origin '{oid}' negotiates weak TLS to origin {sorted(weak)} "
+                                  f"(policy={origin_proto}) | {domain}")
+                    elif ssl_protos:
+                        self._add("PASS", "CFN-06", "CLOUDFRONT", domain,
+                                  f"Origin '{oid}' negotiates TLS>=1.2 to origin | {domain}")
+                    else:
+                        self._add("INFO", "CFN-06", "CLOUDFRONT", domain,
+                                  f"Origin '{oid}' SSL protocols not reported | {domain}")
                 if origin_proto == "http-only":
                     self._add("FAIL", "CFN-05", "CLOUDFRONT", domain,
                               f"Origin '{oid}' uses HTTP-only | {domain}")
@@ -5398,8 +5419,24 @@ class AWSLiveScanner:
                         self._add("WARN", "WAF-04", "WAF", aname,
                                   f"WAF '{aname}' default action is ALLOW "
                                   "(consider BLOCK)")
-                except Exception:
-                    pass
+                    # WAF-05 — managed rule group presence (baseline OWASP coverage). Only
+                    # when rules exist (WAF-03 owns the no-rules FAIL). A managed group nested
+                    # inside And/Or/Not/ScopeDown is not detected — top-level is the norm.
+                    if rules:
+                        has_managed = any(
+                            (r.get("Statement") or {}).get("ManagedRuleGroupStatement")
+                            for r in rules)
+                        if has_managed:
+                            self._add("PASS", "WAF-05", "WAF", aname,
+                                      f"WAF '{aname}' includes an AWS/vendor managed rule group")
+                        else:
+                            self._add("FAIL", "WAF-05", "WAF", aname,
+                                      f"WAF '{aname}' has {len(rules)} rule(s) but NO AWS/vendor "
+                                      f"managed rule group — no managed OWASP/known-bad-input coverage")
+                except Exception as e:
+                    # was a bare `except: pass` — surface the read error instead of vanishing
+                    self._add("WARN", "WAF-03", "WAF", aname,
+                              f"could not read WebACL detail: {e}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 22: AMAZON ELASTICACHE
