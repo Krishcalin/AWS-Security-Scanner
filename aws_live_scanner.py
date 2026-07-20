@@ -216,7 +216,7 @@ CHECK_SEVERITY = {
     "ELC-01": "HIGH", "ELC-02": "HIGH", "ELC-03": "HIGH", "ELC-04": "MEDIUM",
     "ELC-05": "HIGH", "ELC-06": "MEDIUM",
     "OSR-01": "HIGH", "OSR-02": "HIGH", "OSR-03": "MEDIUM",
-    "OSR-04": "HIGH", "OSR-05": "HIGH",
+    "OSR-04": "HIGH", "OSR-05": "HIGH", "OSR-06": "MEDIUM", "OSR-07": "HIGH",
     "DDB-01": "HIGH", "DDB-02": "HIGH", "DDB-03": "MEDIUM", "DDB-04": "MEDIUM",
     "SFN-01": "MEDIUM", "SFN-02": "LOW", "SFN-03": "MEDIUM",
     "APIGW-01": "MEDIUM", "APIGW-02": "MEDIUM", "APIGW-03": "HIGH", "APIGW-04": "LOW",
@@ -373,6 +373,8 @@ COMPLIANCE_MAP = {
     "OSR-02": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "OSR-04": {"PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "OSR-05": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "OSR-06": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "OSR-07": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "DDB-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "DDB-02": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
     # API Gateway
@@ -572,6 +574,8 @@ REMEDIATION_MAP = {
     "OSR-01": "Enforce HTTPS: aws opensearch update-domain-config --domain-name <DOMAIN> --domain-endpoint-options EnforceHTTPS=true,TLSSecurityPolicy=Policy-Min-TLS-1-2-2019-07",
     "OSR-02": "Enable encryption at rest: aws opensearch update-domain-config --domain-name <DOMAIN> --encrypt-at-rest-options Enabled=true",
     "OSR-04": "Configure VPC: aws opensearch update-domain-config --domain-name <DOMAIN> --vpc-options SubnetIds=<SUBNETS>,SecurityGroupIds=<SGS>",
+    "OSR-06": "Require min TLS 1.2: aws opensearch update-domain-config --domain-name <DOMAIN> --domain-endpoint-options EnforceHTTPS=true,TLSSecurityPolicy=Policy-Min-TLS-1-2-2019-07",
+    "OSR-07": "Upgrade to a supported engine version: aws opensearch upgrade-domain --domain-name <DOMAIN> --target-version OpenSearch_2.13",
     "DDB-01": "Enable CMK encryption: aws dynamodb update-table --table-name <TABLE> --sse-specification Enabled=true,SSEType=KMS",
     "DDB-02": "Enable PITR: aws dynamodb update-continuous-backups --table-name <TABLE> --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true",
     "DDB-04": "Enable deletion protection: aws dynamodb update-table --table-name <TABLE> --deletion-protection-enabled",
@@ -4871,6 +4875,44 @@ class AWSLiveScanner:
             else:
                 self._add("FAIL", "OSR-05", "OPENSEARCH", dname,
                           f"Fine-grained access control=OFF | {dname}")
+            # OSR-06 — TLS policy depth (reuses ep_opts; 0 new API calls). Only meaningful
+            # when HTTPS is enforced — OSR-01 already owns the not-enforced FAIL, so gate on
+            # it here to avoid double-reporting. Policy-Min-TLS-1-0-2019-07 permits TLS 1.0/1.1.
+            if ep_opts.get("EnforceHTTPS", False):
+                pol = ep_opts.get("TLSSecurityPolicy", "")
+                if pol == "Policy-Min-TLS-1-0-2019-07":
+                    self._add("FAIL", "OSR-06", "OPENSEARCH", dname,
+                              f"Weak TLS policy {pol} (permits TLS 1.0/1.1) | {dname}")
+                elif pol:
+                    self._add("PASS", "OSR-06", "OPENSEARCH", dname,
+                              f"TLS policy {pol} (min TLS 1.2) | {dname}")
+                else:
+                    self._add("INFO", "OSR-06", "OPENSEARCH", dname,
+                              f"TLS policy not reported | {dname}")
+            else:
+                self._add("INFO", "OSR-06", "OPENSEARCH", dname,
+                          f"TLS policy N/A (HTTPS not enforced; see OSR-01) | {dname}")
+            # OSR-07 — Engine end-of-life. EngineVersion is 'OpenSearch_2.11' /
+            # 'Elasticsearch_7.10'; split on '_' (all Elasticsearch engines are legacy/EOL).
+            ever = cfg.get("EngineVersion", "")
+            eng, _sep, ver = ever.partition("_")
+            eng = eng.lower()
+            pending = ""
+            if cfg.get("ServiceSoftwareOptions", {}).get("UpdateAvailable"):
+                pending = " (service software update available)"
+            verdict, matches = self._eol_check("opensearch", eng, ver)
+            arn = cfg.get("ARN", dname)
+            if verdict == "EOL":
+                self._add("FAIL", "OSR-07", "OPENSEARCH", dname,
+                          f"Engine END-OF-LIFE: {ever or '(unknown)'}{pending} | {dname}")
+                self._stash_eol_edge(arn, "OpenSearchDomain", matches,
+                                     engine=eng, engine_version=ver, region=self.region)
+            elif verdict == "OK":
+                self._add("PASS", "OSR-07", "OPENSEARCH", dname,
+                          f"Engine supported: {ever}{pending} | {dname}")
+            else:
+                self._add("INFO", "OSR-07", "OPENSEARCH", dname,
+                          f"Engine EOL not evaluable: {ever or '(unknown)'} | {dname}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 24: AMAZON DYNAMODB
