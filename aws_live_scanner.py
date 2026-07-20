@@ -1049,9 +1049,13 @@ def classify_resource_policy_stmt(stmt: Dict, own_account: str) -> Optional[Dict
         return {"kind": "public", "external_accounts": [], "org_id": None,
                 "has_condition": False}
 
-    # explicit AWS principals -> collect external accounts
+    # explicit AWS principals -> collect external accounts. Only REAL 12-digit account ids
+    # count: a legacy CloudFront OAI principal (arn:aws:iam::cloudfront:user/...) resolves to
+    # the pseudo-account 'cloudfront' — an AWS-managed service identity used in the documented
+    # private-S3-origin pattern, NOT an external customer account, so it must not be flagged.
     external = sorted({acct for p in aws_principals
-                       if (acct := _account_of(p)) and acct != own_account})
+                       if (acct := _account_of(p)) and acct != own_account
+                       and acct.isdigit() and len(acct) == 12})
     if external:
         if org_vals:
             return {"kind": "org", "external_accounts": external, "org_id": org_vals[0],
@@ -1971,20 +1975,27 @@ class AWSLiveScanner:
                 ingress = sorted((e for e in nacl.get("Entries", []) if not e.get("Egress")),
                                  key=lambda e: e.get("RuleNumber", 32767))
                 for port, pname in _ADMIN.items():
-                    decided = None
-                    for e in ingress:                 # first matching rule wins
-                        world = ((e.get("CidrBlock") == "0.0.0.0/0"
-                                  or e.get("Ipv6CidrBlock") == "::/0")
-                                 and self._nacl_covers_port(e, port))
-                        if world:
-                            decided = e.get("RuleAction")
-                            break
-                    if decided == "allow":
+                    # IPv4 and IPv6 are evaluated INDEPENDENTLY by AWS — a packet only matches
+                    # rules of its own family — so run first-match-wins over each chain
+                    # separately (an IPv6 deny must NOT mask an IPv4 allow-all, or vice versa).
+                    open_families = []
+                    for fam, key, world_cidr in (("IPv4", "CidrBlock", "0.0.0.0/0"),
+                                                 ("IPv6", "Ipv6CidrBlock", "::/0")):
+                        decided = None
+                        for e in ingress:             # first matching rule of this family wins
+                            if (e.get(key) == world_cidr
+                                    and self._nacl_covers_port(e, port)):
+                                decided = e.get("RuleAction")
+                                break
+                        if decided == "allow":
+                            open_families.append(fam)
+                    if open_families:
                         world_open += 1
                         # default NACL ships allow-all (SGs are the primary control) -> WARN
                         self._add("WARN" if is_default else "FAIL", "VPC-05", "VPC", nid,
                                   f"NACL allows {pname}({port}) from the internet "
-                                  f"({'default' if is_default else 'custom'} NACL) | {nid}")
+                                  f"({'/'.join(open_families)}, "
+                                  f"{'default' if is_default else 'custom'} NACL) | {nid}")
             # AGGREGATE-PASS-MUST-COUNT: only all-clear when NACLs were actually read
             if evaluated and world_open == 0:
                 self._add("PASS", "VPC-05", "VPC", "network-acls",
@@ -2775,10 +2786,18 @@ class AWSLiveScanner:
         states, read_err = {}, False
         for i in range(0, len(managed_ec2), 50):        # InstanceIds capped at 50/call
             batch = managed_ec2[i:i + 50]
+            token = None
             try:
-                resp = ssm.describe_instance_patch_states(InstanceIds=batch)
-                for st in resp.get("InstancePatchStates", []):
-                    states[st["InstanceId"]] = st
+                for _ in range(50):                     # bounded: page through NextToken
+                    kwargs = {"InstanceIds": batch}
+                    if token:
+                        kwargs["NextToken"] = token
+                    resp = ssm.describe_instance_patch_states(**kwargs)
+                    for st in resp.get("InstancePatchStates", []):
+                        states[st["InstanceId"]] = st
+                    token = resp.get("NextToken")
+                    if not token or not isinstance(token, str):
+                        break
             except Exception as e:
                 read_err = True
                 self._add("WARN", "SSM-02", "EC2", "ssm",
@@ -3008,7 +3027,8 @@ class AWSLiveScanner:
             if not repos:
                 self._add("WARN", "CNT-01", "ECR", "ecr",
                           "No ECR repositories found")
-                return
+            # do NOT return on empty repos — the registry-level CNT-06 (below) is
+            # repo-independent and must still run. The loop is simply skipped when empty.
             for repo in repos:
                 rname = repo["repositoryName"]
                 scan  = repo.get("imageScanningConfiguration", {}).get(
@@ -5216,7 +5236,7 @@ class AWSLiveScanner:
                        "DAC_READ_SEARCH", "SYS_RAWIO", "BPF", "NET_RAW"}
     _SENSITIVE_HOST_PATHS = {"/", "/etc", "/root", "/proc", "/sys",
                              "/var/run/docker.sock"}
-    _SENSITIVE_HOST_DIRS = ("/var/run/", "/var/lib/docker", "/var/lib/kubelet",
+    _SENSITIVE_HOST_DIRS = ("/var/run/", "/var/lib/docker/", "/var/lib/kubelet/",
                             "/etc/", "/root/", "/proc/", "/sys/")
 
     def _emit_runs_image(self, td: Dict, cd: Dict) -> None:
