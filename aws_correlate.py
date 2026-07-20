@@ -36,9 +36,20 @@ from typing import Callable, Dict, List, Optional, Tuple
 E_PATH = frozenset({
     "EXPOSED_TO", "ATTACHED_TO", "HAS_INSTANCE_PROFILE", "HAS_ROLE",
     "CAN_ASSUME", "CAN_PRIVESC_TO", "CAN_READ_DATA",
+    "TARGETS",   # Phase 7: internet-facing L7 front (LB/CloudFront/API-GW) -> workload
 })
+# Crown-jewel data terminals across every store kind (S3 + the Phase-7 DSPM datastores).
+# These are the DATA endpoints paths TERMINATE at — never intermediate hops. HAS_VULN,
+# RUNS_IMAGE, THREAT_ON and HAS_STALE_KEY stay OUT of E_PATH (annotations; traversing
+# them would fabricate phantom hops/chokes).
+CROWN_DATASTORE_KINDS = frozenset({
+    "S3Bucket", "RDSInstance", "RDSCluster",
+    "RedshiftCluster", "DynamoDBTable", "EFSFileSystem",
+})
+# workload node kinds that can carry their own HAS_VULN exploit signal
+_EXPLOIT_KINDS = frozenset({"EC2Instance", "ECRImage", "LambdaFunction"})
 # node kinds that must never rank as a choke (they ARE the endpoints being cut between)
-EXCLUDE_KINDS = frozenset({"InternetSource", "AdminCapability", "S3Bucket"})
+EXCLUDE_KINDS = frozenset({"InternetSource", "AdminCapability"}) | CROWN_DATASTORE_KINDS
 
 MAX_HOPS = 8
 TOP_N = 200
@@ -60,6 +71,7 @@ WEIGHTS = {
     "E_auth": 1.0, "E_computed": 0.90,
     "X_kev": 1.0, "X_exploit": 0.90, "X_epss_base": 0.55, "X_epss_scale": 0.45,
     "X_epss_missing": 0.10, "X_none": 0.15,
+    "X_reachable_boost": 1.10,   # Phase 7: sharpen a network-reachable vuln (clamped <= X_kev)
     "P_admin": 1.0, "P_data": 0.6,
     "I_crown_public": 1.0, "I_crown_private": 0.9, "I_admin": 0.85,
     "T_kev": 1.25, "T_threat": 1.5,
@@ -148,6 +160,27 @@ def _label(g, node_id: str) -> str:
     return node_id.split("/")[-1].split(":::")[-1]
 
 
+def crown_nodes(g) -> set:
+    """All crown-jewel node ids regardless of kind — S3 buckets (Macie) PLUS the Phase-7
+    DSPM datastores (RDS/RDSCluster/Redshift/DynamoDB/EFS). Replaces the old S3-only
+    ``nodes("S3Bucket") if crown_jewel`` comprehensions so non-S3 stores rank as data
+    terminals. O(nodes)."""
+    return {n["id"] for n in g.nodes() if (n.get("props") or {}).get("crown_jewel")}
+
+
+def _iter_vuln_edges(node_id: str, nd: dict, g):
+    """Yield the HAS_VULN edges that make ``node_id`` exploitable: its OWN vulns (for an
+    exploit-carrying workload kind) PLUS any vulns inherited from an ECRImage it
+    ``RUNS_IMAGE``. This is the ONLY reader of RUNS_IMAGE — the edge is never traversed as
+    a path hop (it stays out of E_PATH), only followed one hop here for CVE inheritance."""
+    if nd.get("kind") in _EXPLOIT_KINDS:
+        yield from g.out_edges(node_id, {"HAS_VULN"})
+    for ri in g.out_edges(node_id, {"RUNS_IMAGE"}):
+        img = g.node(ri["dst"])
+        if img and img.get("kind") == "ECRImage":
+            yield from g.out_edges(ri["dst"], {"HAS_VULN"})
+
+
 def _edge_te(edge: dict, is_unconditioned: Callable[[dict], bool], g) -> Tuple[float, str]:
     kind = edge["kind"]
     uncond = is_unconditioned(edge)
@@ -158,6 +191,8 @@ def _edge_te(edge: dict, is_unconditioned: Callable[[dict], bool], g) -> Tuple[f
         if dst and dst.get("kind") == "S3Bucket":
             return WEIGHTS["te_exposed_s3_auth"], "authoritative internet->S3"
         return WEIGHTS["te_exposed_eni"], "internet-reachable ENI"
+    if kind == "TARGETS":
+        return WEIGHTS["te_structural"], "load-balancer target"
     if kind == "CAN_ASSUME":
         return (WEIGHTS["te_can_assume"], "assume-role") if uncond \
             else (WEIGHTS["te_can_assume_cond"], "conditioned assume-role")
@@ -171,13 +206,18 @@ def _edge_te(edge: dict, is_unconditioned: Callable[[dict], bool], g) -> Tuple[f
 
 
 def _path_exploitability(nodes, g, is_exploitable) -> Tuple[float, Optional[str], bool]:
-    """Strongest exploit signal across EC2 hosts on the path (max, for explainability)."""
+    """Strongest exploit signal across the exploitable workloads on the path (max, for
+    explainability). Phase 7: EC2 hosts PLUS container images / Lambda functions on the
+    path, PLUS vulns a workload inherits by ``RUNS_IMAGE`` (via ``_iter_vuln_edges``). A
+    network-reachable component (``reachable_service`` on the HAS_VULN edge) is sharpened
+    by ``X_reachable_boost`` and clamped to ``X_kev`` so it can neither exceed a KEV nor
+    manufacture a path (the DFS ``ex`` gate still requires ``is_exploitable``)."""
     best_x, best_cve, kev = 0.0, None, False
     for n in nodes:
         nd = g.node(n)
-        if not nd or nd.get("kind") != "EC2Instance":
+        if not nd:
             continue
-        for e in g.out_edges(n, {"HAS_VULN"}):
+        for e in _iter_vuln_edges(n, nd, g):
             p = e["props"]
             if p.get("kev"):
                 x = WEIGHTS["X_kev"]; kev = True
@@ -189,6 +229,8 @@ def _path_exploitability(nodes, g, is_exploitable) -> Tuple[float, Optional[str]
                     x = WEIGHTS["X_epss_base"] + WEIGHTS["X_epss_scale"] * float(epss)
                 else:
                     x = WEIGHTS["X_epss_missing"]
+            if p.get("reachable_service"):
+                x = min(WEIGHTS["X_kev"], x * WEIGHTS["X_reachable_boost"])
             if x > best_x or (p.get("kev") and not best_cve):
                 best_x, best_cve = x, p.get("cve")
     return best_x, best_cve, kev
@@ -201,7 +243,7 @@ def is_direct_public_crown(edges: List[Edge], g) -> bool:
     if kind != "EXPOSED_TO":
         return False
     nd = g.node(dst)
-    return bool(nd and nd.get("kind") == "S3Bucket")
+    return bool(nd and nd.get("kind") in CROWN_DATASTORE_KINDS)
 
 
 def _severity(score: int) -> str:
@@ -224,7 +266,7 @@ def _make_path(entry, terminal, terminal_kind, nodes, edges, hop_factors,
     exposure = WEIGHTS["E_computed"]
     if edges:
         e0 = g.node(edges[0][1])
-        if e0 and e0.get("kind") == "S3Bucket":
+        if e0 and e0.get("kind") in CROWN_DATASTORE_KINDS:
             exposure = WEIGHTS["E_auth"]
 
     # X — exploitability
@@ -309,6 +351,9 @@ def enumerate_paths(g, sources, admin_id, crown_ids,
     paths: List[AttackPath] = []
     pair_counts: Dict[Tuple[str, str], int] = defaultdict(int)
     budget = [STEP_BUDGET]
+    # Precompute once (O(E)) the set of nodes that RUNS_IMAGE some image, so the hot DFS
+    # exploitability check stays O(1) for the common role/profile hop (set membership).
+    runs_image_src = {e["src"] for e in g.edges("RUNS_IMAGE")}
     sorted_out: Dict[str, list] = {}
     npath: List[str] = []
     epath: List[Edge] = []
@@ -336,8 +381,13 @@ def enumerate_paths(g, sources, admin_id, crown_ids,
             cond2 = cond or (not is_unconditioned(e))
             nd = g.node(nxt)
             ex = exp
-            if not ex and nd and nd.get("kind") == "EC2Instance":
-                ex = any(is_exploitable(v["props"]) for v in g.out_edges(nxt, {"HAS_VULN"}))
+            if not ex and nd:
+                if nd.get("kind") in _EXPLOIT_KINDS:
+                    ex = any(is_exploitable(v["props"]) for v in g.out_edges(nxt, {"HAS_VULN"}))
+                if not ex and nxt in runs_image_src:
+                    ex = any(is_exploitable(v["props"])
+                             for ri in g.out_edges(nxt, {"RUNS_IMAGE"})
+                             for v in g.out_edges(ri["dst"], {"HAS_VULN"}))
             threat2 = threat or node_has_threat(nxt)
             visited.add(nxt)
             npath.append(nxt)
@@ -378,6 +428,7 @@ def remediation_by_kind(node_kind: Optional[str]) -> str:
         "EC2Instance": "Patch the exploitable CVE to its fixed version (or isolate the host) to break every path through it.",
         "IAMRole": "Scope this role to least privilege / apply a permissions boundary (aws iam put-role-permissions-boundary ...).",
         "InstanceProfile": "Detach or re-scope this instance profile so the workload no longer inherits the privileged role.",
+        "LoadBalancer": "Make this load balancer internal or scope its front-end security group so the internet cannot reach the workloads behind it (aws elbv2 set-security-groups / aws ec2 revoke-security-group-ingress ...).",
     }.get(node_kind or "", "Remediate this node to sever the attack paths that traverse it.")
 
 

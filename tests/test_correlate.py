@@ -343,5 +343,137 @@ class TestCorrelateSection(unittest.TestCase):
         self.assertTrue([r for r in sc.results if r.status == "INFO"])
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase 7 — attack-path FUSION (L7 TARGETS traversal, image/Lambda + RUNS_IMAGE
+# exploit inheritance, reachable_service boost, multi-kind crown terminals).
+# Pure-engine tests on hand-built graphs; no scanner, no AWS.
+# ══════════════════════════════════════════════════════════════════════════════
+LB = f"lb/arn:aws:elasticloadbalancing:us-east-1:{ACCT}:loadbalancer/app/x/abc"
+
+
+def lb_fronted_graph(kev=True):
+    """internet -EXPOSED_TO-> LoadBalancer -TARGETS-> EC2 -> profile -> role -> admin."""
+    g = SecurityGraph()
+    iid = "i-lb1"
+    inst = f"arn:aws:ec2:us-east-1:{ACCT}:instance/{iid}"
+    prof = f"arn:aws:iam::{ACCT}:instance-profile/p-{iid}"
+    role = f"arn:aws:iam::{ACCT}:role/r-{iid}"
+    g.add_node("internet", "InternetSource")
+    g.add_node(LB, "LoadBalancer", name="app-lb", scheme="internet-facing")
+    g.add_node(inst, "EC2Instance", instance_id=iid)
+    g.add_node(prof, "InstanceProfile")
+    g.add_node(role, "IAMRole", name=f"r-{iid}")
+    g.add_node(ADMIN, "AdminCapability")
+    g.add_edge("internet", LB, "EXPOSED_TO", basis="l7-elbv2", ports="443")
+    g.add_edge(LB, inst, "TARGETS", basis="l7-elbv2", target_type="instance")
+    g.add_edge(inst, prof, "HAS_INSTANCE_PROFILE")
+    g.add_edge(prof, role, "HAS_ROLE")
+    g.add_edge(role, ADMIN, "CAN_PRIVESC_TO", conditioned=False)
+    return g
+
+
+class TestPhase7Fusion(unittest.TestCase):
+
+    def test_lb_targets_traversal_reaches_admin(self):
+        # (a) TARGETS must be traversable so a LB-fronted host chains into admin
+        paths = enum(lb_fronted_graph(), crown=())
+        self.assertTrue(paths)
+        top = paths[0]
+        self.assertEqual(top.terminal, ADMIN)
+        self.assertIn("TARGETS", {e[2] for e in top.edges})
+        self.assertEqual(top.severity, "CRITICAL")   # unconditioned admin floor
+
+    def test_targets_out_of_e_path_would_not_chain(self):
+        # sanity: TARGETS is now IN E_PATH (guards against an accidental removal)
+        self.assertIn("TARGETS", C.E_PATH)
+
+    def test_runs_image_kev_inheritance_data_hard_floor(self):
+        # (b) an EC2 that RUNS_IMAGE a KEV ECRImage inherits the exploit signal,
+        # unlocking the ATTACK-02 data terminal + KEV hard floor — even with NO
+        # host-native HAS_VULN edge.
+        g = flagship_graph(with_vuln=False)              # host has no own vuln
+        inst = f"arn:aws:ec2:us-east-1:{ACCT}:instance/i-1"
+        img = f"111111111111.dkr.ecr.us-east-1.amazonaws.com/app@sha256:deadbeef"
+        g.add_node(img, "ECRImage")
+        g.add_node("CVE-2021-44228", "Vulnerability", kev=True)
+        g.add_edge(inst, img, "RUNS_IMAGE", repository="app")
+        g.add_edge(img, "CVE-2021-44228", "HAS_VULN", cve="CVE-2021-44228",
+                   kev=True, exploit_available="YES")
+        data = [p for p in enum(g) if p.terminal == BUCKET]
+        self.assertTrue(data, "image-inherited KEV should unlock the data terminal")
+        self.assertTrue(data[0].kev)
+        self.assertTrue(data[0].hard_floor_applied)
+        self.assertEqual(data[0].severity, "CRITICAL")
+
+    def test_reachable_service_boost_raises_nonkev_score(self):
+        # (c) reachable_service sharpens a non-KEV exploit path; absent leaves it as-is.
+        # exploit_available=YES is exploitable (X=0.90) with headroom below the KEV clamp.
+        base = enum(flagship_graph(kev=False, exploit="YES"))
+        base_data = [p for p in base if p.terminal == BUCKET][0]
+
+        g = flagship_graph(kev=False, exploit="YES")
+        # re-tag the existing HAS_VULN edge as network-reachable
+        for e in g.out_edges(f"arn:aws:ec2:us-east-1:{ACCT}:instance/i-1", {"HAS_VULN"}):
+            e["props"]["reachable_service"] = True
+        boosted = enum(g)
+        boosted_data = [p for p in boosted if p.terminal == BUCKET][0]
+        self.assertGreater(boosted_data.exploitability, base_data.exploitability)
+        self.assertLessEqual(boosted_data.exploitability, 1.0)
+
+    def test_reachable_service_cannot_exceed_kev(self):
+        # clamp: boosting a KEV (X=1.0) is a no-op, never >1.0
+        g = flagship_graph(kev=True)
+        for e in g.out_edges(f"arn:aws:ec2:us-east-1:{ACCT}:instance/i-1", {"HAS_VULN"}):
+            e["props"]["reachable_service"] = True
+        p = [x for x in enum(g) if x.terminal == BUCKET][0]
+        self.assertLessEqual(p.exploitability, 1.0)
+
+    def test_rds_crown_terminal_ranks_and_excluded_from_choke(self):
+        # (d) a non-S3 crown datastore ranks as a data terminal; it is a terminal,
+        # so it must be excluded from choke ranking.
+        g = flagship_graph(with_data=False)
+        rds = f"arn:aws:rds:us-east-1:{ACCT}:db:crown-db"
+        role = f"arn:aws:iam::{ACCT}:role/r-i-1"
+        g.add_node(rds, "RDSInstance", name="crown-db", crown_jewel=True, public=False)
+        g.add_edge(role, rds, "CAN_READ_DATA", conditioned=False)
+        paths = enum(g, crown=(rds,))
+        data = [p for p in paths if p.terminal == rds]
+        self.assertTrue(data, "RDSInstance crown must rank as a data terminal")
+        node_kind = lambda nid: (g.node(nid) or {}).get("kind")
+        chokes = C.choke_points(paths, node_kind=node_kind)
+        self.assertNotIn(rds, {c.node_id for c in chokes})   # terminal, not a choke
+
+    def test_crown_nodes_helper_multi_kind(self):
+        g = flagship_graph()
+        rds = f"arn:aws:rds:us-east-1:{ACCT}:db:crown-db"
+        g.add_node(rds, "RDSInstance", crown_jewel=True)
+        g.add_node("arn:aws:s3:::not-crown", "S3Bucket")     # no crown_jewel prop
+        crowns = C.crown_nodes(g)
+        self.assertIn(BUCKET, crowns)
+        self.assertIn(rds, crowns)
+        self.assertNotIn("arn:aws:s3:::not-crown", crowns)
+
+    def test_loadbalancer_can_be_a_choke(self):
+        # (e) a LoadBalancer is an intermediate node -> eligible as a choke point.
+        g = lb_fronted_graph()
+        # add a second fronted host so the LB severs >1 path (non-trivial choke)
+        iid2 = "i-lb2"
+        inst2 = f"arn:aws:ec2:us-east-1:{ACCT}:instance/{iid2}"
+        prof2 = f"arn:aws:iam::{ACCT}:instance-profile/p-{iid2}"
+        role2 = f"arn:aws:iam::{ACCT}:role/r-{iid2}"
+        g.add_node(inst2, "EC2Instance", instance_id=iid2)
+        g.add_node(prof2, "InstanceProfile")
+        g.add_node(role2, "IAMRole", name=f"r-{iid2}")
+        g.add_edge(LB, inst2, "TARGETS", basis="l7-elbv2", target_type="instance")
+        g.add_edge(inst2, prof2, "HAS_INSTANCE_PROFILE")
+        g.add_edge(prof2, role2, "HAS_ROLE")
+        g.add_edge(role2, ADMIN, "CAN_PRIVESC_TO", conditioned=False)
+        paths = enum(g, crown=())
+        node_kind = lambda nid: (g.node(nid) or {}).get("kind")
+        chokes = C.choke_points(paths, node_kind=node_kind)
+        self.assertIn(LB, {c.node_id for c in chokes})
+        self.assertEqual(node_kind(LB), "LoadBalancer")
+
+
 if __name__ == "__main__":
     unittest.main()
