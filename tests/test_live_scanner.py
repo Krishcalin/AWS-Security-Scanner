@@ -98,7 +98,7 @@ def _gaad_iam(users=None, roles=None, groups=None, policies=None):
 class TestDataStructures(unittest.TestCase):
 
     def test_version(self):
-        self.assertEqual(VERSION, "2.14.0")
+        self.assertEqual(VERSION, "2.15.0")
 
     def test_sections_count(self):
         self.assertEqual(len(SECTIONS), 43)
@@ -187,7 +187,11 @@ class TestMaps(unittest.TestCase):
                        "ELC-01", "OSR-01", "DDB-01", "SFN-01",
                        "APIGW-01", "ELB-01", "EBS-01", "RS-01", "EFS-01", "ACM-01",
                        "SM-01", "COG-01", "AGW2-01",
-                       "IAMPE-01", "IAMPE-03", "IAMPE-10", "IAMPE-19", "IAMPE-20"]
+                       "IAMPE-01", "IAMPE-03", "IAMPE-10", "IAMPE-19", "IAMPE-20",
+                       # Phase 5 managed-service vuln axis
+                       "RDS-12", "AUR-01", "AUR-02", "AUR-03", "AUR-04", "AUR-05",
+                       "ELC-05", "ELC-06", "OSR-06", "OSR-07",
+                       "RS-06", "RS-07", "RSS-01", "RSS-02", "RSS-03", "RSS-04"]
         for c in new_checks:
             self.assertIn(c, CHECK_SEVERITY, f"{c} missing from CHECK_SEVERITY")
 

@@ -73,7 +73,7 @@ import aws_sidescan
 import aws_engine_eol
 import aws_graph_neptune
 
-VERSION = "2.14.0"
+VERSION = "2.15.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -6753,8 +6753,30 @@ class AWSLiveScanner:
                 pass
         return out
 
+    def _replay_eol_edges(self):
+        """Emit the managed-engine-EOL HAS_VULN edges stashed by the service sections
+        (RDS-12/AUR-03/ELC-05/OSR-07). Deferred to HERE — the VULN section (which runs
+        AFTER IAMPRIVESC hard-replaces the graph via _build_identity_graph) — so the
+        identity-graph rebuild cannot clobber them. The edge shape is byte-identical to the
+        side-scan/Inspector HAS_VULN edges (reuses emit_node_vuln_edges); a second merge
+        add_edge only sharpens scan_source to 'managed-eol' for report honesty."""
+        if not self._eol_graph_payloads:
+            return
+        g = self._ensure_graph()
+        if g is None:
+            return
+        for node_id, node_kind, matches, props in self._eol_graph_payloads:
+            aws_sidescan.emit_node_vuln_edges(g, node_id, node_kind, matches,
+                                              snapshot_id="", **props)
+            for m in matches:
+                g.add_edge(node_id, m.cve, "HAS_VULN", scan_source="managed-eol")
+
     def _check_vuln(self):
         self._section_header("VULN")
+        # Replay stashed managed-engine-EOL edges FIRST — before any Inspector early-return,
+        # and after IAMPRIVESC's graph rebuild — so they land and survive regardless of
+        # whether Amazon Inspector is enabled.
+        self._replay_eol_edges()
         self._log("Amazon Inspector v2 package vulnerabilities -> HAS_VULN edges "
                   "(EPSS native; KEV via batch_get_finding_details). INFO no-op if disabled.")
         try:
