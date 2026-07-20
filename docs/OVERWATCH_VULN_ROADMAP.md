@@ -124,12 +124,29 @@ Agentless, Inspector-independent, reusing the Phase-3 extractor + SBOM pipeline 
 - ✅ **`RUNS_IMAGE`** edges (ECS task-def images → `ECRImage`, dual-emit to both node-id conventions so image CVEs join attack paths) + ECR hygiene **`CNT-03`** (repo policy public/cross-account) / **`CNT-04`** (tag immutability) / **`CNT-05`** (lifecycle). EKS pod→image deferred (needs the k8s API).
 - 3-agent scoping research + a 12-defect (1 blocker) read-only adversarial-verify (all fixed). The pure extractors subclass `DictExtractor`, so an image/Lambda scans byte-identically to the test double.
 
-### Phase 5 — Managed-service vulnerability axis · **M**
-The "vulnerable managed service" signal + the invisible Aurora cluster shape.
-- Bundled `ENGINE_EOL` table + `managed_engine_cve()` deep-plane hook → HAS_VULN edges shaped like the side-scan
-- `RDS-07/OSR-07/ELC-05/RS-08` EngineVersion vs EOL + deprecated-version API
-- Aurora cluster enumeration (`describe_db_clusters`) → RDS-01c/02c/03c + public cluster snapshots
-- Redshift Serverless; parameter-group TLS; Redis 6+ RBAC
+### Phase 5 — Managed-service vulnerability axis · **M** — ✅ SHIPPED (v2.15.0)
+The "vulnerable managed service" signal + the invisible Aurora cluster shape. **16 checks**, folded
+into the existing `_check_rds/_check_elasticache/_check_opensearch/_check_redshift` methods (no new
+SECTIONS), scoped up front by a 7-agent research pass (botocore shapes verified offline) then hardened
+by a read-only adversarial-verify (3 confirmed defects, all fixed) + a fix-verify.
+- ✅ **Bundled `ENGINE_EOL` table + `managed_engine_cve()`** (`aws_engine_eol.py`, pure/deterministic —
+  `today` injectable, no `now()`) → **synthetic honest `EOL-<engine>-<series>` signal, NOT real CVE ids**:
+  AWS backports fixes into EOL engines out-of-band, so a CVE claim keyed on the visible EngineVersion is a
+  near-guaranteed FP; an EOL date is a public deterministic fact. Feeds `emit_node_vuln_edges` → HAS_VULN
+  edges byte-identical to the side-scan/Inspector shape. `engine_series()` handles the awkward real
+  strings (`8.0.mysql_aurora.3.04.0`, `15.00.4322.2.v1`, `OpenSearch_2.11`).
+- ✅ **EngineVersion vs EOL**: `RDS-12` (instance), `AUR-03` (Aurora cluster), `ELC-05` (ElastiCache, via
+  `describe_cache_clusters` since replication groups carry no version), `OSR-07` (OpenSearch; all
+  Elasticsearch = legacy). Live deprecated-version API deferred (`live_status` hook wired, defaults offline).
+- ✅ **Aurora cluster enumeration** (`describe_db_clusters` — a plane the instance checks never touch, so
+  Serverless-v1/headless clusters were unscanned): `AUR-01` encryption, `AUR-02` deletion-protection,
+  `AUR-04` public cluster snapshot (fail-closed on a denied attribute read), `AUR-05` snapshot encryption.
+- ✅ **Redshift Serverless** (`RSS-01..04`: public workgroup / CMK gap / require_ssl / enhanced-VPC),
+  parameter-group `require_ssl` (`RS-06`) + version-pinning (`RS-07`), **Redis/Valkey 6+ RBAC** (`ELC-06`),
+  OpenSearch min-TLS-1.2 depth (`OSR-06`).
+- ✅ **Clobber-safe graph replay**: EOL HAS_VULN edges are stashed and replayed in `_check_vuln` (+ a run()
+  epilogue) *after* IAMPRIVESC hard-replaces the graph, so they survive the rebuild. Managed nodes are
+  intentionally correlate-**inert** in Phase 5 (attack-path participation is the Phase-7 unlock).
 
 ### Phase 6 — Per-service misconfig depth · **L**
 Close the FSBP breadth backlog — partial → thorough, service by service.
