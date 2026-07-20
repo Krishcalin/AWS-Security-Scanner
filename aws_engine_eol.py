@@ -233,12 +233,16 @@ def managed_engine_cve(service: str, engine: str, version: str, *,
         return [_synth_match(service, eng, version, s, "HIGH",
                              "a supported engine version")]
 
-    if series is None:
-        return []                          # unparseable -> not evaluable
-
+    # Wholesale-legacy engines are EOL regardless of version — check this BEFORE the
+    # unparseable-version guard so `evaluable()` (which returns True for these) and this
+    # function stay consistent (an odd/blank EngineVersion still flags, never a false PASS).
     if (service, eng) in _ALL_EOL:
         e = _ALL_EOL[(service, eng)]
-        return [_synth_match(service, eng, version, series, e.severity, e.recommend)]
+        s = series if series is not None else (0,)
+        return [_synth_match(service, eng, version, s, e.severity, e.recommend)]
+
+    if series is None:
+        return []                          # unparseable + not wholesale-legacy -> not evaluable
 
     if live_status == "available":
         return []                          # AWS says supported; trust it over a stale table

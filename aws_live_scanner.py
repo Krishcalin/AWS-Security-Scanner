@@ -3040,6 +3040,8 @@ class AWSLiveScanner:
                           "No manual Aurora/RDS cluster snapshots in this region")
             public_c = 0
             unenc_c  = 0
+            read_ok  = 0    # snapshots whose restore-attribute was actually evaluated
+            read_err = 0    # snapshots whose attribute read failed (visibility UNKNOWN)
             for s in csnaps:
                 sid = s["DBClusterSnapshotIdentifier"]
                 # AUR-05 cluster-snapshot encryption (field is StorageEncrypted — the
@@ -3055,6 +3057,7 @@ class AWSLiveScanner:
                     attrs = rds.describe_db_cluster_snapshot_attributes(
                         DBClusterSnapshotIdentifier=sid
                     )["DBClusterSnapshotAttributesResult"]["DBClusterSnapshotAttributes"]
+                    read_ok += 1
                     if any(a.get("AttributeName") == "restore"
                            and "all" in a.get("AttributeValues", []) for a in attrs):
                         public_c += 1
@@ -3062,11 +3065,21 @@ class AWSLiveScanner:
                                   f"Aurora cluster snapshot PUBLICLY RESTORABLE by any AWS "
                                   f"account: {sid} — CRITICAL")
                 except Exception as e:
+                    read_err += 1
                     self._add("WARN", "AUR-04", "RDS", sid,
-                              f"cluster-snapshot attribute read failed: {e}")
-            if csnaps and public_c == 0:
+                              f"cluster-snapshot attribute read failed (public visibility "
+                              f"UNDETERMINED): {e}")
+            # Only an all-clear when EVERY snapshot's restore attribute was actually read.
+            # A denied/throttled read leaves public visibility unknown — never a false PASS
+            # (the whole point of the per-snapshot try/except above).
+            if csnaps and public_c == 0 and read_err == 0:
                 self._add("PASS", "AUR-04", "RDS", "cluster-snapshots",
-                          f"No public Aurora cluster snapshots ({len(csnaps)} manual checked)")
+                          f"No public Aurora cluster snapshots ({read_ok} manual checked)")
+            elif csnaps and public_c == 0 and read_err:
+                self._add("WARN", "AUR-04", "RDS", "cluster-snapshots",
+                          f"Public visibility UNDETERMINED for {read_err} of {len(csnaps)} "
+                          f"manual cluster snapshots (attribute read denied/throttled) — "
+                          f"{read_ok} confirmed not public")
             if csnaps and unenc_c == 0:
                 self._add("PASS", "AUR-05", "RDS", "cluster-snapshots",
                           f"All {len(csnaps)} manual Aurora cluster snapshots encrypted at rest")
@@ -7413,6 +7426,14 @@ class AWSLiveScanner:
                               f"Unhandled error in section {section}"
                               f"{f' ({reg})' if reg != base_region else ''}: {e}")
             self.region = base_region
+
+        # Epilogue: flush any managed-engine-EOL HAS_VULN edges still stashed — e.g. a
+        # graph-building scan (IAMPRIVESC/CORRELATE/export) that omitted the VULN section,
+        # whose _replay_eol_edges call is the only other flush point. Idempotent (no-op if
+        # _check_vuln already flushed) and gated on an existing graph so a findings-only scan
+        # is never forced to build one.
+        if self.graph is not None and self._eol_graph_payloads:
+            self._replay_eol_edges()
 
     def _regions_for_section(self, section: str) -> List[str]:
         """Regions to run a section in. Single-region by default; with
