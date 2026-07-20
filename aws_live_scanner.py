@@ -72,7 +72,7 @@ import aws_unused
 import aws_sidescan
 import aws_graph_neptune
 
-VERSION = "2.13.0"
+VERSION = "2.14.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -184,7 +184,8 @@ CHECK_SEVERITY = {
     "EC2-04": "HIGH", "EC2-05": "MEDIUM", "EC2-06": "HIGH",
     "EC2-07": "HIGH", "EC2-08": "HIGH",
     "AMI-01": "HIGH",
-    "CNT-01": "MEDIUM", "CNT-02": "HIGH",
+    "CNT-01": "MEDIUM", "CNT-02": "HIGH", "CNT-03": "CRITICAL", "CNT-04": "MEDIUM",
+    "CNT-05": "LOW",
     "BCK-01": "MEDIUM",
     "RDS-01": "HIGH", "RDS-02": "CRITICAL", "RDS-03": "MEDIUM",
     "RDS-04": "MEDIUM", "RDS-05": "LOW", "RDS-06": "CRITICAL",
@@ -429,6 +430,9 @@ COMPLIANCE_MAP = {
     # ── Backfill: FAIL-capable checks previously missing a compliance mapping ──
     "CNT-01": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5"},
     "CNT-02": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5"},
+    "CNT-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "CNT-04": {"PCI-DSS": "6.3.2", "HIPAA": "164.312(c)(1)", "SOC2": "CC7.1", "NIST": "CM-5"},
+    "CNT-05": {"PCI-DSS": "6.3.2", "SOC2": "CC7.1", "NIST": "SI-2"},
     "BCK-01": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
     "SNS-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SNS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
@@ -603,6 +607,9 @@ REMEDIATION_MAP = {
     "IAMPE-23": "Scope the federated OIDC trust to a specific repo+ref via the :sub condition (StringEquals, not just :aud): aws iam update-assume-role-policy --role-name <ROLE> --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Federated\":\"arn:aws:iam::<ACCT>:oidc-provider/token.actions.githubusercontent.com\"},\"Action\":\"sts:AssumeRoleWithWebIdentity\",\"Condition\":{\"StringEquals\":{\"token.actions.githubusercontent.com:aud\":\"sts.amazonaws.com\",\"token.actions.githubusercontent.com:sub\":\"repo:<ORG>/<REPO>:ref:refs/heads/main\"}}}]}'",
     "CNT-01": "Enable scan-on-push and pull existing findings: aws ecr put-image-scanning-configuration --repository-name <REPO> --image-scanning-configuration scanOnPush=true",
     "CNT-02": "Rebuild the image on a patched base and push the new digest; delete the vulnerable image: aws ecr batch-delete-image --repository-name <REPO> --image-ids imageDigest=<DIGEST>. Enable Inspector enhanced scanning for continuous coverage.",
+    "CNT-03": "Remove the public/cross-account grant from the ECR repository policy (or scope it with aws:PrincipalOrgID + a trusted-account allowlist): aws ecr set-repository-policy --repository-name <REPO> --policy-text file://scoped-repo-policy.json ; or delete it: aws ecr delete-repository-policy --repository-name <REPO>",
+    "CNT-04": "Make image tags immutable so a tag cannot be overwritten with a poisoned image: aws ecr put-image-tag-mutability --repository-name <REPO> --image-tag-mutability IMMUTABLE",
+    "CNT-05": "Add a lifecycle policy to expire untagged/old images: aws ecr put-lifecycle-policy --repository-name <REPO> --lifecycle-policy-text file://lifecycle.json",
     "AMI-01": "Revoke public/cross-account AMI sharing (a public AMI exposes its full disk snapshot): aws ec2 modify-image-attribute --image-id <AMI_ID> --launch-permission '{\"Remove\":[{\"Group\":\"all\"}]}' ; audit remaining account-level shares.",
     "GLC-01": "Remove public Glacier vault access policy: aws glacier set-vault-access-policy --vault-name <VAULT> --policy '{\"Policy\":\"<LEAST_PRIVILEGE_POLICY>\"}'",
     "SQS-02": "Restrict the queue policy to trusted principals: aws sqs set-queue-attributes --queue-url <URL> --attributes Policy='<LEAST_PRIVILEGE_POLICY>'",
@@ -954,6 +961,47 @@ def classify_resource_policy_stmt(stmt: Dict, own_account: str) -> Optional[Dict
         return {"kind": "cross_account", "external_accounts": external, "org_id": None,
                 "has_condition": has_cond}
     return None                                              # own-account only / service
+
+
+_ECR_HOST_RE = re.compile(r"^(\d{12})\.dkr\.ecr(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$")
+
+
+def parse_ecr_image_ref(ref: str) -> Optional[Dict]:
+    """Parse a container image reference into {account, region, repo, tag, digest}
+    for a PRIVATE ECR image, else None (Docker Hub / public.ecr.aws / gcr.io / a
+    tagless official image all return None so no bogus ECRImage node is fabricated)."""
+    if not ref or not isinstance(ref, str):
+        return None
+    body, digest = ref, None
+    if "@" in ref:
+        body, _, digest = ref.partition("@")
+    if "/" not in body:
+        return None                          # official Docker Hub image, no registry host
+    host, path = body.split("/", 1)
+    m = _ECR_HOST_RE.match(host)
+    if not m:
+        return None                          # not a private ECR host
+    repo, tag = path, None
+    if ":" in path.rsplit("/", 1)[-1]:       # tag only within the final path component
+        repo, tag = path.rsplit(":", 1)
+    return {"account": m.group(1), "region": m.group(2), "repo": repo, "tag": tag,
+            "digest": digest}
+
+
+def ecr_image_node_ids(account: str, region: str, repo: str, digest: str) -> tuple:
+    """Both ECRImage node-id conventions for the SAME image — CNT-02's
+    repositoryUri@digest AND Inspector's repository ARN — so RUNS_IMAGE dual-emits
+    and joins whichever producer (native scan or Inspector) created the node. Partition/
+    host suffix are derived from the region so China/GovCloud ids match their producers."""
+    if region.startswith("cn-"):
+        partition, host = "aws-cn", "amazonaws.com.cn"
+    elif region.startswith("us-gov-"):
+        partition, host = "aws-us-gov", "amazonaws.com"
+    else:
+        partition, host = "aws", "amazonaws.com"
+    repo_uri = f"{account}.dkr.ecr.{region}.{host}/{repo}"
+    return (f"{repo_uri}@{digest}",
+            f"arn:{partition}:ecr:{region}:{account}:repository/{repo}/{digest}")
 
 
 def evaluate_privesc_scoped(statements: List[Dict], boundary: Optional[List[Dict]] = None,
@@ -2491,9 +2539,91 @@ class AWSLiveScanner:
                 else:
                     self._add("FAIL", "CNT-01", "ECR", rname,
                               f"Scan-on-push=OFF enc={enc} | {rname}")
+                # CNT-04 — image tag immutability (already in the describe_repositories response)
+                mut = repo.get("imageTagMutability")
+                if mut == "IMMUTABLE":
+                    self._add("PASS", "CNT-04", "ECR", rname,
+                              f"Tag immutability=IMMUTABLE | {rname}")
+                elif mut:
+                    self._add("WARN", "CNT-04", "ECR", rname,
+                              f"Tag mutability={mut} — tags overwritable "
+                              f"(supply-chain poisoning) | {rname}")
+                self._check_ecr_repo_policy(ecr, repo)      # CNT-03
+                self._check_ecr_lifecycle(ecr, repo)        # CNT-05
                 self._ingest_ecr_scan(ecr, repo)
         except Exception as e:
             self._add("WARN", "CNT-01", "ECR", "ecr", str(e))
+
+    def _check_ecr_repo_policy(self, ecr, repo: Dict) -> None:
+        """CNT-03 — ECR repository policy public/cross-account exposure (mirrors SEC-05
+        via the shared classifier). No policy attached => not a finding (silent)."""
+        rname = repo["repositoryName"]
+        try:
+            pol = ecr.get_repository_policy(repositoryName=rname).get("policyText")
+        except Exception:
+            return                              # RepositoryPolicyNotFoundException / AccessDenied
+        if not pol:
+            return
+        try:
+            stmts = json.loads(pol).get("Statement", [])
+        except Exception:
+            return
+        if isinstance(stmts, dict):
+            stmts = [stmts]
+        trusted = getattr(self, "trusted_accounts", set())
+        public = public_cond = False
+        cross: set = set()
+        org_id = None
+        for st in stmts:
+            c = classify_resource_policy_stmt(st, self.account or "")
+            if not c:
+                continue
+            if c["kind"] == "public":
+                public = True
+            elif c["kind"] == "public_conditioned":
+                public_cond = True
+            elif c["kind"] == "org":
+                org_id = c.get("org_id") or org_id
+            elif c["kind"] == "cross_account":
+                cross.update(a for a in c["external_accounts"] if a not in trusted)
+        if not (public or public_cond or cross or org_id):
+            return
+        g = self._ensure_graph()
+        rarn = repo.get("repositoryArn", rname)
+        g.add_node(rarn, "ECRRepository", name=rname, uri=repo.get("repositoryUri", rname),
+                   scan_source="ecr")
+        if public:
+            g.add_node("internet", "InternetSource", cidr="0.0.0.0/0")
+            g.add_edge("internet", rarn, "SHARED_IMAGE", public=True, scan_source="ecr")
+            self._add("FAIL", "CNT-03", "ECR", rname,
+                      f"ECR repository policy grants PUBLIC pull/push access | {rname}")
+        elif cross:
+            for acct in sorted(cross):
+                g.add_node("account:" + acct, "AWSAccount", account=acct, external=True)
+                g.add_edge("account:" + acct, rarn, "SHARED_IMAGE", external_account=acct,
+                           scan_source="ecr")
+            self._add("FAIL", "CNT-03", "ECR", rname,
+                      f"ECR repository policy grants CROSS-ACCOUNT access to "
+                      f"{', '.join(sorted(cross))} | {rname}")
+        elif public_cond:
+            self._add("WARN", "CNT-03", "ECR", rname,
+                      f"ECR repository policy wildcard principal is condition-guarded — "
+                      f"verify | {rname}")
+        elif org_id:
+            self._add("WARN", "CNT-03", "ECR", rname,
+                      f"ECR repository shared to AWS Organization {org_id} — verify | {rname}")
+
+    def _check_ecr_lifecycle(self, ecr, repo: Dict) -> None:
+        """CNT-05 — a lifecycle policy prevents untagged/old images (cost + stale-vuln
+        surface) accumulating. Absent => WARN."""
+        rname = repo["repositoryName"]
+        try:
+            ecr.get_lifecycle_policy(repositoryName=rname)
+            self._add("PASS", "CNT-05", "ECR", rname, f"Lifecycle policy configured | {rname}")
+        except Exception as e:
+            if "LifecyclePolicyNotFound" in str(e) or "NotFound" in str(e):
+                self._add("WARN", "CNT-05", "ECR", rname,
+                          f"No lifecycle policy — untagged/old images accumulate | {rname}")
 
     def _ingest_ecr_scan(self, ecr, repo: Dict) -> None:
         """CNT-02 — pull the ECR *native* image-scan findings for the newest image in a
@@ -4147,6 +4277,8 @@ class AWSLiveScanner:
             td_name = td.get("family", td_arn.split("/")[-1])
             for cd in td.get("containerDefinitions", []):
                 cname = cd.get("name", "unknown")
+                # RUNS_IMAGE — workload -> ECRImage so image CVEs drive attack paths
+                self._emit_runs_image(td, cd)
                 # ECS-01 — Privileged mode
                 if cd.get("privileged", False):
                     self._add("FAIL", "ECS-01", "ECS", f"{td_name}/{cname}",
@@ -4173,6 +4305,38 @@ class AWSLiveScanner:
                 if not cd.get("readonlyRootFilesystem", False):
                     self._add("WARN", "ECS-05", "ECS", f"{td_name}/{cname}",
                               f"Container '{cname}' root filesystem is writable")
+
+    def _emit_runs_image(self, td: Dict, cd: Dict) -> None:
+        """RUNS_IMAGE — ECS task-def container -> ECRImage node so image CVEs (from
+        CNT-02 native scan OR Inspector VULN-03, which use DIFFERENT node ids) drive
+        attack paths. Dual-emits to both id conventions. :tag refs resolve to a digest
+        via a live in-account describe_images (best-effort); else a tag-keyed node."""
+        p = parse_ecr_image_ref(cd.get("image", ""))
+        if not p:
+            return                              # non-ECR (Docker Hub etc.) — no ECRImage node
+        digest = p["digest"]
+        if not digest and p["tag"] and p["account"] == self.account:
+            try:
+                imgs = self._client("ecr", p["region"]).describe_images(
+                    repositoryName=p["repo"], imageIds=[{"imageTag": p["tag"]}]
+                ).get("imageDetails", [])
+                if imgs:
+                    digest = imgs[0].get("imageDigest")
+            except Exception:
+                digest = None
+        g = self._ensure_graph()
+        src = td.get("taskDefinitionArn", td.get("family", "ecs-task"))
+        g.add_node(src, "ECSTaskDefinition", family=td.get("family"))
+        cname = cd.get("name", "")
+        if digest:
+            for node in ecr_image_node_ids(p["account"], p["region"], p["repo"], digest):
+                g.add_node(node, "ECRImage", repository=p["repo"], digest=digest)
+                g.add_edge(src, node, "RUNS_IMAGE", container=cname, scan_source="ecs")
+        else:
+            # best-effort topology node (won't join digest-keyed CVE nodes)
+            node = f"{p['account']}.dkr.ecr.{p['region']}.amazonaws.com/{p['repo']}:{p['tag'] or 'latest'}"
+            g.add_node(node, "ECRImage", repository=p["repo"])
+            g.add_edge(src, node, "RUNS_IMAGE", container=cname, resolved=False, scan_source="ecs")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 20: AWS SECRETS MANAGER

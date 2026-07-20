@@ -33,10 +33,12 @@ semver is WRONG for all three. See dpkg_vercmp / rpm_vercmp / apk_vercmp.
 
 from __future__ import annotations
 
+import io
 import json
 import math
 import re
 import struct
+import tarfile
 from dataclasses import dataclass, field
 from typing import (AbstractSet, Callable, Dict, Iterator, List, Mapping,
                     Optional, Protocol, Tuple)
@@ -90,6 +92,161 @@ class DictExtractor:
         if b is None:
             return None
         return FileStat(size=len(b), mode=0o600, mtime=0, is_symlink=False)
+
+
+# ── OCI/Docker image-layer overlay (container-image side-scan = CWPP-05) ───────
+def _norm_tar_path(name: str) -> Optional[str]:
+    """Normalize a tar member name to a relative path; None if it escapes ('..')."""
+    parts: List[str] = []
+    for seg in (name or "").replace("\\", "/").split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            return None                       # tar-slip guard
+        parts.append(seg)
+    return "/".join(parts)
+
+
+def merge_layers(layers: List[bytes], *, max_file_bytes: int = 10_000_000,
+                 max_total_bytes: int = 1_000_000_000, max_entries: int = 500_000,
+                 notes: Optional[List[str]] = None) -> Dict[str, bytes]:
+    """Overlay OCI/Docker image layers (each a gzip/tar changeset, BOTTOM-TO-TOP)
+    into a merged absolute-path -> content map, honoring whiteouts. PURE and
+    fail-open: an unreadable layer/member becomes a note, never a crash. Feeds
+    ImageLayerExtractor so the UNCHANGED sidescan pipeline runs on the image."""
+    # merged values are bytes (a real file) OR ("\x00sym", target) (a symlink), so that
+    # symlinks participate in per-layer overlay: an upper real file / whiteout at the
+    # same path overrides the lower symlink (fixed vs an end-of-merge unconditional bake).
+    merged: Dict = {}
+    total = 0
+    entries = 0
+    for blob in layers:
+        if entries >= max_entries:
+            break
+        try:
+            tf = tarfile.open(fileobj=io.BytesIO(blob), mode="r:*")
+        except Exception as e:
+            if notes is not None:
+                notes.append(f"image layer unreadable: {e}")
+            continue
+        files_this: Dict[str, bytes] = {}
+        layer_files: Dict[str, bytes] = {}    # for in-layer hardlink resolution
+        opaque: List[str] = []
+        whiteout: List[str] = []
+        try:
+            members = tf.getmembers()
+        except Exception:
+            members = []
+        for m in members:
+            entries += 1
+            if entries > max_entries:
+                break
+            try:
+                name = m.name
+                base = name.rsplit("/", 1)[-1]
+                dirn = name[:len(name) - len(base)].rstrip("/")
+                if base == ".wh..wh..opq":
+                    d = _norm_tar_path(dirn)
+                    if d is not None:
+                        opaque.append(d)
+                    continue
+                if base.startswith(".wh.") and len(base) > 4:
+                    tgt = _norm_tar_path((dirn + "/" + base[4:]) if dirn else base[4:])
+                    if tgt is not None:
+                        whiteout.append(tgt)
+                    continue
+                rel = _norm_tar_path(name)
+                if rel is None or m.isdir() or m.ischr() or m.isblk() or m.isfifo():
+                    continue
+                if m.issym():
+                    files_this[rel] = ("\x00sym", m.linkname)   # symlink marker (per-layer)
+                    continue
+                if m.islnk():
+                    src = _norm_tar_path(m.linkname)
+                    if src in layer_files:
+                        files_this[rel] = layer_files[src]
+                    continue
+                if m.isfile():
+                    if (m.size or 0) > max_file_bytes or total > max_total_bytes:
+                        continue
+                    f = tf.extractfile(m)
+                    if f is None:
+                        continue
+                    data = f.read(max_file_bytes + 1)
+                    if len(data) > max_file_bytes:
+                        continue
+                    files_this[rel] = data
+                    layer_files[rel] = data
+                    total += len(data)
+            except Exception:
+                continue
+        # whiteouts hit LOWER layers only: delete from `merged` BEFORE folding this layer
+        for d in opaque:
+            if d == "":
+                merged.clear()                   # root opaque clears the whole lower tree
+                continue
+            pref = "/" + d
+            for k in [k for k in merged if k == pref or k.startswith(pref + "/")]:
+                del merged[k]
+        for t in whiteout:
+            p = "/" + t
+            for k in [k for k in merged if k == p or k.startswith(p + "/")]:
+                del merged[k]
+        merged.update({"/" + rel: v for rel, v in files_this.items()})
+        try:
+            tf.close()
+        except Exception:
+            pass
+    def _resolve_target(linkpath: str, target: str) -> str:
+        if target.startswith("/"):
+            return "/" + "/".join(s for s in target.split("/") if s and s != ".")
+        parts = [s for s in linkpath.rsplit("/", 1)[0].strip("/").split("/") if s]
+        for seg in target.split("/"):
+            if seg in ("", "."):
+                continue
+            if seg == "..":
+                if parts:
+                    parts.pop()
+            else:
+                parts.append(seg)
+        return "/" + "/".join(parts)
+
+    # Resolve surviving symlink markers by following the chain (bounded, deterministic
+    # regardless of tar member order): bake real-file bytes into the link path; drop
+    # unresolved / cyclic. A symlink whited-out or overwritten by a real file in an
+    # upper layer never reaches here (it participated in per-layer overlay above).
+    for linkpath, val in list(merged.items()):
+        if not (isinstance(val, tuple) and val[0] == "\x00sym"):
+            continue
+        cur, cur_val, seen, baked = linkpath, val, set(), None
+        for _ in range(8):
+            if cur in seen:
+                break                            # symlink cycle
+            seen.add(cur)
+            nxt = _resolve_target(cur, cur_val[1])
+            tv = merged.get(nxt)
+            if isinstance(tv, bytes):
+                baked = tv
+                break
+            if isinstance(tv, tuple) and tv[0] == "\x00sym":
+                cur, cur_val = nxt, tv
+                continue
+            break                                # dead end
+        if isinstance(baked, bytes):
+            merged[linkpath] = baked
+        else:
+            del merged[linkpath]
+    return merged
+
+
+class ImageLayerExtractor(DictExtractor):
+    """FilesystemExtractor over a merged OCI/Docker image (layers bottom-to-top).
+    Subclasses DictExtractor so read_file/exists/walk/stat are the already-validated
+    pure implementations — an image scans byte-identically to the test double."""
+
+    def __init__(self, layers: List[bytes], *, notes: Optional[List[str]] = None,
+                 **caps):
+        super().__init__(merge_layers(layers, notes=notes, **caps))
 
 
 # ── data shapes ──────────────────────────────────────────────────────────────
@@ -1404,6 +1561,54 @@ def parse_requirements(data) -> List[Package]:
     return out
 
 
+# Installed-package metadata (no lockfile needed) — container/Lambda artifacts often
+# ship the INSTALLED tree (node_modules, site-packages, gems) with no lockfile.
+def parse_node_package_json(data) -> List[Package]:
+    """An INSTALLED node_modules/<pkg>/package.json -> [Package] (npm). Only valid
+    under node_modules/ (there the version is the exact resolved release)."""
+    try:
+        d = json.loads(_asdict_text(data))
+    except Exception:
+        return []
+    name, ver = d.get("name"), d.get("version")
+    if not name or not isinstance(ver, str) or not ver:
+        return []
+    return [_lang_pkg("npm", name, ver)]
+
+
+def parse_python_metadata(data) -> List[Package]:
+    """An installed *.dist-info/METADATA or *.egg-info/PKG-INFO (RFC822 headers) ->
+    [Package] (PyPI)."""
+    name = ver = None
+    for line in _asdict_text(data).splitlines():
+        if not line:
+            break                             # a truly-empty line ends the header block
+        if line[:1] in (" ", "\t"):
+            continue                          # folded continuation line (may be blank-ish)
+        if line.startswith("Name:") and name is None:
+            name = line[5:].strip()
+        elif line.startswith("Version:") and ver is None:
+            ver = line[8:].strip()
+    if not name or not ver:
+        return []
+    return [_lang_pkg("pypi", _pep503(name), ver)]
+
+
+def parse_gemspec_name(path: str) -> List[Package]:
+    """An installed specifications/<name>-<version>[-platform].gemspec -> [Package]
+    (RubyGems), taken from the filename (the gemspec body is executable Ruby)."""
+    base = path.rsplit("/", 1)[-1]
+    if not base.endswith(".gemspec"):
+        return []
+    # <name>-<version>[-<platform>]; name may itself contain '-<digit>' segments, so the
+    # version is the LAST dash-then-digit token (greedy name), platform stripped.
+    m = re.match(r'^(.+)-(\d[\d.]*(?:\.[A-Za-z][\w.]*)?)(?:-[A-Za-z][\w.]*(?:-[\w.]+)*)?$',
+                 base[:-len(".gemspec")])
+    if not m:
+        return []
+    return [_lang_pkg("gem", m.group(1), m.group(2))]
+
+
 _LOCKFILE_PARSERS = {
     "package-lock.json":   parse_package_lock,
     "npm-shrinkwrap.json": parse_package_lock,
@@ -1418,36 +1623,61 @@ _LOCKFILE_PARSERS = {
 
 
 def collect_app_packages(ext: FilesystemExtractor,
-                         roots=("/app", "/srv", "/opt", "/home", "/var/www",
-                                "/usr/src", "/usr/local/src", "/workspace", "/code", "/root"),
-                         max_files: int = 20000, max_file_bytes: int = 5_000_000,
+                         roots=("/app", "/srv", "/opt", "/var/task", "/home", "/var/www",
+                                "/usr/src", "/usr/local/src", "/usr/local/lib", "/usr/lib",
+                                "/usr/lib64", "/usr/local/bundle", "/workspace", "/code", "/root"),
+                         max_files: int = 200000, max_file_bytes: int = 5_000_000,
                          notes: Optional[List[str]] = None) -> List[Package]:
-    """Walk the extracted filesystem for language dependency lockfiles and return a
-    de-duplicated Package inventory (fed to the unchanged OSV matcher = CWPP-06).
-    Fail-open: a malformed lockfile becomes a note, never a crash or false-clean."""
+    """Walk the extracted filesystem for language dependency lockfiles AND installed-
+    package metadata (node_modules/*/package.json, *.dist-info/METADATA, *.egg-info/
+    PKG-INFO, gems specifications/*.gemspec) and return a de-duplicated Package
+    inventory (fed to the unchanged OSV matcher = CWPP-06). Installed metadata gives
+    recall on container/Lambda artifacts that ship no lockfile. Fail-open."""
     out: List[Package] = []
     seen = set()
+
+    def _emit(pkgs):
+        for p in pkgs:
+            key = (p.origin, p.name, p.version)
+            if key not in seen:
+                seen.add(key)
+                out.append(p)
+
     for root in roots:
         try:
+            walked = 0
             for path in ext.walk(root, max_files):
+                walked += 1
                 base = path.rsplit("/", 1)[-1]
                 parser = _LOCKFILE_PARSERS.get(base)
-                if parser is None:
+                if parser is not None:
+                    fn = parser
+                elif base == "package.json" and "node_modules/" in path:
+                    # only an npm PACKAGE ROOT: <name>/package.json or @scope/<name>/
+                    # package.json — NOT a test fixture / vendored copy deeper in the tree
+                    tail = path.rsplit("node_modules/", 1)[-1].split("/")
+                    if not (len(tail) == 2 or (len(tail) == 3 and tail[0].startswith("@"))):
+                        continue
+                    fn = parse_node_package_json
+                elif (base == "METADATA" and ".dist-info/" in path) or \
+                     (base == "PKG-INFO" and ".egg-info/" in path):
+                    fn = parse_python_metadata
+                elif base.endswith(".gemspec") and "specifications/" in path:
+                    _emit(parse_gemspec_name(path))          # from filename, no read
+                    continue
+                else:
                     continue
                 data = ext.read_file(path)
                 if not data or len(data) > max_file_bytes:
                     continue
                 try:
-                    pkgs = parser(data)
+                    _emit(fn(data))
                 except Exception as e:
                     if notes is not None:
-                        notes.append(f"lockfile parse failed for {path}: {e}")
-                    continue
-                for p in pkgs:
-                    key = (p.origin, p.name, p.version)
-                    if key not in seen:
-                        seen.add(key)
-                        out.append(p)
+                        notes.append(f"manifest parse failed for {path}: {e}")
+            if walked >= max_files and notes is not None:
+                notes.append(f"app-package walk truncated at max_files={max_files} under "
+                             f"{root} — inventory may be incomplete")
         except Exception:
             continue
     return out
@@ -1660,6 +1890,24 @@ def to_has_vuln_edges(instance_arn: str, matches: List[EnrichedMatch],
         }
         out.append(VulnEdge(node_arn=instance_arn, cve=m.cve, props=props))
     return out
+
+
+def emit_node_vuln_edges(graph, node_id: str, node_kind: str,
+                         matches: List[EnrichedMatch], snapshot_id: str = "",
+                         **node_props) -> int:
+    """Emit HAS_VULN edges from an arbitrary-kind node (ECRImage / LambdaFunction /
+    EC2Instance) to Vulnerability nodes. MERGE-idempotent, so it converges byte-for-byte
+    with the Inspector paths that build the same node ids (CWPP-05 / LMB-07 / VULN-*)."""
+    graph.add_node(node_id, node_kind, **node_props)
+    n = 0
+    for e in to_has_vuln_edges(node_id, matches, snapshot_id):
+        graph.add_node(e.cve, "Vulnerability", severity=e.props["severity"],
+                       epss=e.props["epss"], kev=e.props["kev"],
+                       exploit_available=e.props["exploit_available"],
+                       fix_available=e.props["fix_available"])
+        graph.add_edge(node_id, e.cve, "HAS_VULN", **e.props)
+        n += 1
+    return n
 
 
 def emit_vuln_edges(graph, instance_arn: str, instance_id: str,
