@@ -188,7 +188,7 @@ CHECK_SEVERITY = {
     "AMI-02": "MEDIUM", "AMI-03": "MEDIUM",
     "AMI-01": "HIGH",
     "CNT-01": "MEDIUM", "CNT-02": "HIGH", "CNT-03": "CRITICAL", "CNT-04": "MEDIUM",
-    "CNT-05": "LOW",
+    "CNT-05": "LOW", "CNT-06": "MEDIUM",
     "BCK-01": "MEDIUM", "BCK-02": "HIGH", "BCK-03": "CRITICAL",
     "RDS-01": "HIGH", "RDS-02": "CRITICAL", "RDS-03": "MEDIUM",
     "RDS-04": "MEDIUM", "RDS-05": "LOW", "RDS-06": "CRITICAL",
@@ -207,7 +207,7 @@ CHECK_SEVERITY = {
     "AGT-01": "MEDIUM", "AGT-02": "HIGH", "AGT-03": "MEDIUM",
     "AGT-04": "HIGH", "AGT-05": "HIGH",
     "LMB-01": "HIGH", "LMB-02": "MEDIUM", "LMB-03": "HIGH",
-    "LMB-04": "MEDIUM", "LMB-05": "MEDIUM",
+    "LMB-04": "MEDIUM", "LMB-05": "MEDIUM", "LMB-06": "MEDIUM",
     "EKS-01": "HIGH", "EKS-02": "HIGH", "EKS-03": "MEDIUM",
     "EKS-04": "MEDIUM", "EKS-05": "MEDIUM",
     "ECS-01": "CRITICAL", "ECS-02": "HIGH", "ECS-03": "MEDIUM",
@@ -465,6 +465,7 @@ COMPLIANCE_MAP = {
     "CNT-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "CNT-04": {"PCI-DSS": "6.3.2", "HIPAA": "164.312(c)(1)", "SOC2": "CC7.1", "NIST": "CM-5"},
     "CNT-05": {"PCI-DSS": "6.3.2", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "CNT-06": {"PCI-DSS": "6.3.2", "SOC2": "CC7.1", "NIST": "SI-7"},
     "BCK-01": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
     "BCK-02": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
     "BCK-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
@@ -516,6 +517,7 @@ COMPLIANCE_MAP = {
     "COG-06": {"PCI-DSS": "7.2.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "AGW2-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SC-5"},
     "LMB-05": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "LMB-06": {"PCI-DSS": "6.3.2", "SOC2": "CC7.1", "NIST": "SI-7"},
 }
 
 # ─── Remediation commands: check_id → AWS CLI command ────────────────────────
@@ -677,6 +679,8 @@ REMEDIATION_MAP = {
     "CNT-03": "Remove the public/cross-account grant from the ECR repository policy (or scope it with aws:PrincipalOrgID + a trusted-account allowlist): aws ecr set-repository-policy --repository-name <REPO> --policy-text file://scoped-repo-policy.json ; or delete it: aws ecr delete-repository-policy --repository-name <REPO>",
     "CNT-04": "Make image tags immutable so a tag cannot be overwritten with a poisoned image: aws ecr put-image-tag-mutability --repository-name <REPO> --image-tag-mutability IMMUTABLE",
     "CNT-05": "Add a lifecycle policy to expire untagged/old images: aws ecr put-lifecycle-policy --repository-name <REPO> --lifecycle-policy-text file://lifecycle.json",
+    "CNT-06": "Configure registry image signing with an AWS Signer profile: aws ecr put-signing-configuration --signing-configuration 'rules=[{signingProfileArn=<SIGNER_PROFILE_ARN>,repositoryFilters=[{filter=*,filterType=WILDCARD}]}]'",
+    "LMB-06": "Create an Enforce-mode code-signing config and attach it: aws lambda create-code-signing-config --allowed-publishers SigningProfileVersionArns=<SIGNER_PROFILE_ARN> --code-signing-policies UntrustedArtifactOnDeployment=Enforce ; aws lambda update-function-code-signing-config --function-name <FUNC> --code-signing-config-arn <CSC_ARN>",
     "AMI-01": "Revoke public/cross-account AMI sharing (a public AMI exposes its full disk snapshot): aws ec2 modify-image-attribute --image-id <AMI_ID> --launch-permission '{\"Remove\":[{\"Group\":\"all\"}]}' ; audit remaining account-level shares.",
     "AMI-02": "Re-copy the AMI encrypted, then deregister the plaintext one: aws ec2 copy-image --source-image-id <AMI_ID> --source-region <REGION> --name <NAME>-enc --encrypted --kms-key-id <KMS_KEY> ; aws ec2 deregister-image --image-id <AMI_ID>",
     "AMI-03": "Deregister the stale/deprecated AMI after re-pointing launch templates/ASGs at a fresh patched build: aws ec2 deregister-image --image-id <AMI_ID>",
@@ -2929,6 +2933,30 @@ class AWSLiveScanner:
         except Exception as e:
             self._add("WARN", "CNT-01", "ECR", "ecr", str(e))
 
+        # CNT-06 — registry-level image signing (run ONCE, in its OWN try/except so a
+        # brand-new-API error never masquerades as a CNT-01 WARN). getattr availability
+        # guard: an older botocore lacking the op is skipped silently, not flagged.
+        try:
+            ecr = self._client("ecr")
+            fn = getattr(ecr, "get_signing_configuration", None)
+            if fn is not None:
+                rules = (fn().get("signingConfiguration") or {}).get("rules") or []
+                if rules:
+                    prof = rules[0].get("signingProfileArn", "")
+                    self._add("PASS", "CNT-06", "ECR", "registry",
+                              f"ECR image signing configured ({len(rules)} rule(s)) {prof}")
+                else:
+                    self._add("FAIL", "CNT-06", "ECR", "registry",
+                              "ECR registry has no image-signing configuration — images are "
+                              "unsigned (no cryptographic provenance / supply-chain integrity)")
+        except AttributeError:
+            pass                                            # SDK lacks the op -> skip
+        except Exception as e:
+            if "denied" in str(e).lower() or "throttl" in str(e).lower():
+                self._add("WARN", "CNT-06", "ECR", "registry",
+                          f"cannot read ECR signing configuration: {e}")
+            # any other error (UnknownOperation on an old region/SDK) -> skip silently
+
     def _check_ecr_repo_policy(self, ecr, repo: Dict) -> None:
         """CNT-03 — ECR repository policy public/cross-account exposure (mirrors SEC-05
         via the shared classifier). No policy attached => not a finding (silent)."""
@@ -4802,6 +4830,49 @@ class AWSLiveScanner:
                               f"No reserved concurrency on '{fname}'")
             except Exception:
                 pass
+
+        # LMB-06 — code-signing enforcement (supply-chain integrity). Absent config is the
+        # common default -> INFO aggregate only (a per-fn WARN would be noise). Enforce=PASS,
+        # Warn=FAIL (configured but not enforced). Denied read -> unknown, which downgrades
+        # the closing INFO to WARN (never a false all-clear from denied reads).
+        self._log("LMB-06: Lambda functions — code signing enforcement")
+        unsigned, unknown, evaluated = 0, 0, 0
+        for fn in funcs:
+            fname = fn["FunctionName"]
+            try:
+                csc_arn = lmb.get_function_code_signing_config(
+                    FunctionName=fname).get("CodeSigningConfigArn")
+            except Exception:
+                unknown += 1
+                continue
+            evaluated += 1
+            if not isinstance(csc_arn, str) or not csc_arn:
+                unsigned += 1                          # missing arn == unsigned (common default)
+                continue
+            try:
+                mode = (lmb.get_code_signing_config(CodeSigningConfigArn=csc_arn)
+                        ["CodeSigningConfig"]["CodeSigningPolicies"]
+                        ["UntrustedArtifactOnDeployment"])
+            except Exception:
+                unknown += 1
+                continue
+            if not isinstance(mode, str):
+                unknown += 1
+            elif mode == "Enforce":
+                self._add("PASS", "LMB-06", "LAMBDA", fname,
+                          f"Lambda '{fname}' enforces code signing")
+            else:
+                self._add("FAIL", "LMB-06", "LAMBDA", fname,
+                          f"Lambda '{fname}' has code signing configured but "
+                          f"UntrustedArtifactOnDeployment={mode} — unsigned/tampered code "
+                          f"deploys with only a warning (not enforced)")
+        if unknown:
+            self._add("WARN", "LMB-06", "LAMBDA", "lambda",
+                      f"Code-signing status undetermined for {unknown} function(s) (read "
+                      f"denied); {unsigned}/{evaluated} evaluated have no code-signing config")
+        elif unsigned:
+            self._add("INFO", "LMB-06", "LAMBDA", "lambda",
+                      f"{unsigned}/{evaluated} Lambda functions have no code-signing config")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 18: AMAZON EKS
