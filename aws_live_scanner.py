@@ -189,7 +189,7 @@ CHECK_SEVERITY = {
     "AMI-01": "HIGH",
     "CNT-01": "MEDIUM", "CNT-02": "HIGH", "CNT-03": "CRITICAL", "CNT-04": "MEDIUM",
     "CNT-05": "LOW",
-    "BCK-01": "MEDIUM",
+    "BCK-01": "MEDIUM", "BCK-02": "HIGH", "BCK-03": "CRITICAL",
     "RDS-01": "HIGH", "RDS-02": "CRITICAL", "RDS-03": "MEDIUM",
     "RDS-04": "MEDIUM", "RDS-05": "LOW", "RDS-06": "CRITICAL",
     "RDS-08": "MEDIUM", "RDS-11": "HIGH", "RDS-12": "HIGH",
@@ -220,6 +220,7 @@ CHECK_SEVERITY = {
     "OSR-01": "HIGH", "OSR-02": "HIGH", "OSR-03": "MEDIUM",
     "OSR-04": "HIGH", "OSR-05": "HIGH", "OSR-06": "MEDIUM", "OSR-07": "HIGH",
     "DDB-01": "HIGH", "DDB-02": "HIGH", "DDB-03": "MEDIUM", "DDB-04": "MEDIUM",
+    "DDB-05": "CRITICAL",
     "SFN-01": "MEDIUM", "SFN-02": "LOW", "SFN-03": "MEDIUM",
     "APIGW-01": "MEDIUM", "APIGW-02": "MEDIUM", "APIGW-03": "HIGH", "APIGW-04": "LOW",
     "ELB-01": "MEDIUM", "ELB-02": "HIGH", "ELB-03": "MEDIUM",
@@ -464,6 +465,8 @@ COMPLIANCE_MAP = {
     "CNT-04": {"PCI-DSS": "6.3.2", "HIPAA": "164.312(c)(1)", "SOC2": "CC7.1", "NIST": "CM-5"},
     "CNT-05": {"PCI-DSS": "6.3.2", "SOC2": "CC7.1", "NIST": "SI-2"},
     "BCK-01": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "BCK-02": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "BCK-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "SNS-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SNS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "SNS-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
@@ -480,6 +483,7 @@ COMPLIANCE_MAP = {
     "R53-06": {"PCI-DSS": "2.4", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SC-20"},
     "DDB-03": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "DDB-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "DDB-05": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "EKS-04": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "EKS-05": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "ECS-04": {"PCI-DSS": "2.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "CM-7"},
@@ -603,6 +607,9 @@ REMEDIATION_MAP = {
     "DDB-01": "Enable CMK encryption: aws dynamodb update-table --table-name <TABLE> --sse-specification Enabled=true,SSEType=KMS",
     "DDB-02": "Enable PITR: aws dynamodb update-continuous-backups --table-name <TABLE> --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true",
     "DDB-04": "Enable deletion protection: aws dynamodb update-table --table-name <TABLE> --deletion-protection-enabled",
+    "DDB-05": "Remove the public/cross-account grant (or scope with aws:PrincipalOrgID) and re-apply: aws dynamodb put-resource-policy --resource-arn <TABLE_ARN> --policy file://scoped-policy.json ; or drop it: aws dynamodb delete-resource-policy --resource-arn <TABLE_ARN>",
+    "BCK-02": "Apply compliance-mode Vault Lock (test in governance first; permanent after cooling-off): aws backup put-backup-vault-lock-configuration --backup-vault-name <VAULT> --min-retention-days 7 --changeable-for-days 3",
+    "BCK-03": "Remove the public grant (or scope cross-account with aws:PrincipalOrgID) and re-apply: aws backup put-backup-vault-access-policy --backup-vault-name <VAULT> --policy file://scoped-vault-policy.json ; or drop it: aws backup delete-backup-vault-access-policy --backup-vault-name <VAULT>",
     "WAF-01": "Associate WAF with ALB: aws wafv2 associate-web-acl --web-acl-arn <ACL_ARN> --resource-arn <ALB_ARN>",
     "WAF-02": "Enable WAF logging: aws wafv2 put-logging-configuration --logging-configuration ResourceArn=<ACL_ARN>,LogDestinationConfigs=<LOG_ARN>",
     "SFN-01": "Enable logging: aws stepfunctions update-state-machine --state-machine-arn <ARN> --logging-configuration '{\"level\":\"ALL\",\"includeExecutionData\":true,\"destinations\":[{\"cloudWatchLogsLogGroup\":{\"logGroupArn\":\"<LOG_ARN>\"}}]}'",
@@ -3068,6 +3075,95 @@ class AWSLiveScanner:
         except Exception as e:
             self._add("WARN", "BCK-01", "BACKUP", "backup", str(e))
 
+        # BCK-02/03 — Vault Lock immutability + vault access-policy exposure. Inline-paginate
+        # (BCK-01 does NOT paginate, so vaults past page 1 would be silently skipped).
+        self._log("BCK-02/03: Backup Vault Lock immutability + access-policy exposure")
+        try:
+            bk = self._client("backup")
+            all_vaults = []
+            for page in bk.get_paginator("list_backup_vaults").paginate():
+                all_vaults.extend(page.get("BackupVaultList", []))
+        except Exception as e:
+            self._add("WARN", "BCK-02", "BACKUP", "backup",
+                      f"could not enumerate backup vaults for Vault Lock evaluation: {e}")
+            all_vaults = None
+        if all_vaults:
+            now = datetime.now(timezone.utc)
+            for v in all_vaults:
+                name = v.get("BackupVaultName", "unknown")
+                # BCK-02 — Vault Lock immutability. Governance mode reports Locked=True with
+                # NO LockDate; compliance mode reports LockDate = the immutability date — the
+                # only distinguishing signal in the shape.
+                if not v.get("Locked", False):
+                    self._add("FAIL", "BCK-02", "BACKUP", name,
+                              f"Vault Lock NOT enabled — recovery points are mutable/deletable "
+                              f"(no ransomware/insider immutability) | {name}")
+                else:
+                    lock_date = v.get("LockDate")
+                    if lock_date is None:
+                        self._add("WARN", "BCK-02", "BACKUP", name,
+                                  f"GOVERNANCE-mode Vault Lock — a privileged principal can "
+                                  f"still delete the lock/vault; use compliance mode for true "
+                                  f"immutability | {name}")
+                    elif self._as_utc(lock_date) > now:
+                        self._add("WARN", "BCK-02", "BACKUP", name,
+                                  f"Compliance Vault Lock still in CHANGEABLE grace period until "
+                                  f"{lock_date} — the lock can still be removed | {name}")
+                    else:
+                        self._add("PASS", "BCK-02", "BACKUP", name,
+                                  f"Compliance-mode Vault Lock ACTIVE (immutable) | {name}")
+                # BCK-03 — vault access-policy exposure
+                self._check_backup_vault_policy(bk, name)
+
+    @staticmethod
+    def _as_utc(ts):
+        """Coerce a boto3 timestamp (datetime, usually tz-aware) or ISO string to a
+        tz-aware UTC datetime for comparison."""
+        if isinstance(ts, datetime):
+            return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+
+    def _check_backup_vault_policy(self, bk, name):
+        """BCK-03 — a Backup vault access policy granting public/cross-account access. Only
+        PUBLIC is a FAIL (CRITICAL); cross-account is a legitimate DR-copy pattern -> WARN."""
+        try:
+            pol_str = bk.get_backup_vault_access_policy(BackupVaultName=name).get("Policy")
+        except Exception as e:
+            if "denied" in str(e).lower():
+                self._add("WARN", "BCK-03", "BACKUP", name,
+                          f"could not evaluate vault access policy (access denied) | {name}")
+            return                       # ResourceNotFound == no policy attached (private)
+        if not pol_str:
+            return
+        try:
+            stmts = json.loads(pol_str).get("Statement", [])
+            if isinstance(stmts, dict):
+                stmts = [stmts]
+        except Exception:
+            return
+        for st in stmts:
+            res = classify_resource_policy_stmt(st, self.account or "")
+            if not res:
+                continue
+            kind = res["kind"]
+            if kind == "public":
+                self._add("FAIL", "BCK-03", "BACKUP", name,
+                          f"Backup vault access policy grants PUBLIC access — recovery points "
+                          f"(full data copies) restorable/deletable by any principal | {name}")
+            elif kind == "public_conditioned":
+                self._add("WARN", "BCK-03", "BACKUP", name,
+                          f"Vault policy wildcard principal condition-guarded — verify | {name}")
+            elif kind == "cross_account":
+                ext = [a for a in res.get("external_accounts", [])
+                       if a not in self.trusted_accounts]
+                if ext:
+                    self._add("WARN", "BCK-03", "BACKUP", name,
+                              f"Vault shared cross-account to {', '.join(ext)} — legitimate for "
+                              f"AWS Backup cross-account COPY, but verify the target | {name}")
+            elif kind == "org":
+                self._add("WARN", "BCK-03", "BACKUP", name,
+                          f"Vault shared to AWS Organization {res.get('org_id')} — verify | {name}")
+
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 9: AMAZON RDS
     # ══════════════════════════════════════════════════════════════════════════
@@ -5323,6 +5419,45 @@ class AWSLiveScanner:
             else:
                 self._add("FAIL", "DDB-04", "DYNAMODB", tname,
                           f"Deletion protection=OFF | {tname}")
+
+            # DDB-05 — resource-based policy exposure (public / cross-account). Recent (2024)
+            # feature — most tables have none, so PolicyNotFound is silent (private, common).
+            try:
+                pol_str = ddb.get_resource_policy(ResourceArn=t["TableArn"]).get("Policy")
+            except Exception as e:
+                if "denied" in str(e).lower():
+                    self._add("WARN", "DDB-05", "DYNAMODB", tname,
+                              f"could not evaluate table resource policy (access denied) | {tname}")
+                pol_str = None
+            if pol_str:
+                try:
+                    stmts = json.loads(pol_str).get("Statement", [])
+                    if isinstance(stmts, dict):
+                        stmts = [stmts]
+                except Exception:
+                    stmts = []
+                for st in stmts:
+                    res = classify_resource_policy_stmt(st, self.account or "")
+                    if not res:
+                        continue
+                    kind = res["kind"]
+                    if kind == "public":
+                        self._add("FAIL", "DDB-05", "DYNAMODB", tname,
+                                  f"Table resource policy grants PUBLIC access (any AWS "
+                                  f"principal can read/write table data) | {tname}")
+                    elif kind == "public_conditioned":
+                        self._add("WARN", "DDB-05", "DYNAMODB", tname,
+                                  f"Wildcard principal condition-guarded — verify | {tname}")
+                    elif kind == "cross_account":
+                        ext = [a for a in res.get("external_accounts", [])
+                               if a not in self.trusted_accounts]
+                        if ext:
+                            self._add("FAIL", "DDB-05", "DYNAMODB", tname,
+                                      f"Table resource policy grants CROSS-ACCOUNT access to "
+                                      f"{', '.join(ext)} | {tname}")
+                    elif kind == "org":
+                        self._add("WARN", "DDB-05", "DYNAMODB", tname,
+                                  f"Shared to AWS Organization {res.get('org_id')} — verify | {tname}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 25: AWS STEP FUNCTIONS
