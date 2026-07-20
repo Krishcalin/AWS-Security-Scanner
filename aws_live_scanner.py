@@ -224,6 +224,8 @@ CHECK_SEVERITY = {
     "ELB-04": "LOW", "ELB-05": "MEDIUM", "ELB-07": "MEDIUM",
     "EBS-01": "HIGH", "EBS-02": "HIGH", "EBS-03": "MEDIUM", "EBS-04": "CRITICAL",
     "RS-01": "HIGH", "RS-02": "HIGH", "RS-03": "MEDIUM", "RS-04": "MEDIUM", "RS-05": "LOW",
+    "RS-06": "HIGH", "RS-07": "MEDIUM",
+    "RSS-01": "HIGH", "RSS-02": "MEDIUM", "RSS-03": "HIGH", "RSS-04": "MEDIUM",
     "EFS-01": "HIGH", "EFS-02": "MEDIUM", "EFS-03": "LOW",
     "ACM-01": "HIGH", "ACM-02": "MEDIUM", "ACM-03": "LOW",
     "ACM-04": "HIGH", "ACM-05": "MEDIUM",
@@ -397,6 +399,12 @@ COMPLIANCE_MAP = {
     "RS-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "RS-03": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "RS-04": {"PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "RS-06": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "RS-07": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "RSS-01": {"CIS": "2.3.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "RSS-02": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "RSS-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "RSS-04": {"PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     # EFS
     "EFS-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "EFS-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
@@ -598,6 +606,12 @@ REMEDIATION_MAP = {
     "RS-02": "Disable public access: aws redshift modify-cluster --cluster-identifier <CLUSTER> --no-publicly-accessible",
     "RS-03": "Enable audit logging: aws redshift enable-logging --cluster-identifier <CLUSTER> --bucket-name <LOG_BUCKET>",
     "RS-04": "Enable enhanced VPC routing: aws redshift modify-cluster --cluster-identifier <CLUSTER> --enhanced-vpc-routing",
+    "RS-06": "Require TLS by setting require_ssl=true on the cluster parameter group: aws redshift modify-cluster-parameter-group --parameter-group-name <PG> --parameters ParameterName=require_ssl,ParameterValue=true",
+    "RS-07": "Re-enable managed version upgrades: aws redshift modify-cluster --cluster-identifier <CLUSTER> --allow-version-upgrade",
+    "RSS-01": "Make the Serverless workgroup private: aws redshift-serverless update-workgroup --workgroup-name <WG> --no-publicly-accessible",
+    "RSS-02": "Recreate the namespace with a customer-managed KMS key: aws redshift-serverless update-namespace --namespace-name <NS> --kms-key-id <KMS_KEY>",
+    "RSS-03": "Require TLS on the Serverless workgroup: aws redshift-serverless update-workgroup --workgroup-name <WG> --config-parameters parameterKey=require_ssl,parameterValue=true",
+    "RSS-04": "Enable enhanced VPC routing on the Serverless workgroup: aws redshift-serverless update-workgroup --workgroup-name <WG> --enhanced-vpc-routing",
     "EFS-01": "Recreate encrypted: aws efs create-file-system --encrypted --kms-key-id <KMS_KEY> (encryption can only be set at creation; migrate data via DataSync)",
     "EFS-02": "Enforce TLS in policy: aws efs put-file-system-policy --file-system-id <FS_ID> --policy '{\"Statement\":[{\"Effect\":\"Deny\",\"Principal\":{\"AWS\":\"*\"},\"Action\":\"*\",\"Condition\":{\"Bool\":{\"aws:SecureTransport\":\"false\"}}}]}'",
     "EFS-03": "Enable backups: aws efs put-backup-policy --file-system-id <FS_ID> --backup-policy Status=ENABLED",
@@ -5300,17 +5314,19 @@ class AWSLiveScanner:
         self._section_header("REDSHIFT")
         rs = self._client("redshift")
 
+        # Do NOT early-return on empty/error: RSS-01..04 (Redshift Serverless, below) must
+        # still run — Serverless can exist with zero provisioned clusters.
         try:
             clusters = rs.describe_clusters().get("Clusters", [])
         except Exception as e:
             self._add("WARN", "RS-01", "REDSHIFT", "redshift", str(e))
-            return
-        if not clusters:
+            clusters = None
+        if clusters is not None and not clusters:
             self._add("INFO", "RS-01", "REDSHIFT", "redshift",
                       "No Redshift clusters found")
-            return
 
-        for c in clusters:
+        pg_ssl_cache: Dict[str, object] = {}   # parameter-group name -> require_ssl value / error
+        for c in (clusters or []):
             cid = c.get("ClusterIdentifier", "unknown")
 
             # RS-01 — Encryption at rest
@@ -5356,6 +5372,131 @@ class AWSLiveScanner:
             else:
                 self._add("PASS", "RS-05", "REDSHIFT", cid,
                           f"Non-default master username | {cid}")
+
+            # RS-06 — require_ssl parameter (stock default.redshift-1.0 ships 'false', so
+            # in-transit encryption is optional unless explicitly required). Cached per
+            # parameter group; OWN try/except -> WARN, never a PASS on a failed read.
+            pgs = c.get("ClusterParameterGroups", [])
+            pgname = pgs[0].get("ParameterGroupName") if pgs else None
+            if pgname:
+                if pgname not in pg_ssl_cache:
+                    try:
+                        params = rs.describe_cluster_parameters(
+                            ParameterGroupName=pgname).get("Parameters", [])
+                        val = None
+                        for p in params:
+                            if p.get("ParameterName") == "require_ssl":
+                                val = (p.get("ParameterValue") or "").lower()
+                                break
+                        pg_ssl_cache[pgname] = val
+                    except Exception as e:
+                        pg_ssl_cache[pgname] = RuntimeError(str(e))
+                cached = pg_ssl_cache[pgname]
+                if isinstance(cached, Exception):
+                    self._add("WARN", "RS-06", "REDSHIFT", cid,
+                              f"require_ssl not read ({pgname}): {cached}")
+                elif cached == "true":
+                    self._add("PASS", "RS-06", "REDSHIFT", cid,
+                              f"require_ssl=true (TLS required) | {cid}")
+                else:
+                    self._add("FAIL", "RS-06", "REDSHIFT", cid,
+                              f"require_ssl not enforced (in-transit encryption optional) | {cid}")
+            else:
+                self._add("WARN", "RS-06", "REDSHIFT", cid,
+                          f"No cluster parameter group resolved (require_ssl unknown) | {cid}")
+
+            # RS-07 — AllowVersionUpgrade (managed maintenance-track patching). Default is
+            # True; OFF means the cluster is pinned and receives no managed upgrades.
+            if c.get("AllowVersionUpgrade", True):
+                self._add("PASS", "RS-07", "REDSHIFT", cid,
+                          f"AllowVersionUpgrade=ON | {cid}")
+            else:
+                mt = c.get("MaintenanceTrackName", "")
+                extra = f" (maintenance track '{mt}')" if mt else ""
+                self._add("WARN", "RS-07", "REDSHIFT", cid,
+                          f"AllowVersionUpgrade=OFF — pinned, no managed upgrades{extra} | {cid}")
+
+        # ── RSS-01..04 — Redshift Serverless (separate client + camelCase API). Runs
+        # regardless of provisioned clusters. Region-guarded: Serverless is unavailable in
+        # some regions -> WARN, not a crash.
+        self._log("RSS-01..04: Redshift Serverless workgroups and namespaces")
+        try:
+            rss = self._client("redshift-serverless")
+        except Exception as e:
+            self._add("WARN", "RSS-01", "REDSHIFT", "redshift-serverless", str(e))
+            rss = None
+        if rss is not None:
+            # Workgroups: public accessibility (RSS-01), require_ssl (RSS-03), enhanced VPC (RSS-04)
+            try:
+                workgroups = []
+                token = None
+                for _ in range(200):                 # bounded: never trust nextToken to terminate
+                    resp = rss.list_workgroups(**({"nextToken": token} if token else {}))
+                    workgroups.extend(resp.get("workgroups", []) or [])
+                    token = resp.get("nextToken")
+                    if not token or not isinstance(token, str):
+                        break
+            except Exception as e:
+                self._add("WARN", "RSS-01", "REDSHIFT", "redshift-serverless",
+                          f"list_workgroups failed: {e}")
+                workgroups = None
+            if workgroups is not None:
+                if not workgroups:
+                    self._add("INFO", "RSS-01", "REDSHIFT", "redshift-serverless",
+                              "No Redshift Serverless workgroups in this region")
+                for wg in workgroups:
+                    wgn = wg.get("workgroupName", "unknown")
+                    if wg.get("publiclyAccessible", False):
+                        self._add("FAIL", "RSS-01", "REDSHIFT", wgn,
+                                  f"Serverless workgroup PUBLICLY ACCESSIBLE | {wgn}")
+                    else:
+                        self._add("PASS", "RSS-01", "REDSHIFT", wgn,
+                                  f"Not publicly accessible | {wgn}")
+                    ssl_val = None
+                    for p in wg.get("configParameters", []):
+                        if p.get("parameterKey") == "require_ssl":
+                            ssl_val = (p.get("parameterValue") or "").lower()
+                            break
+                    if ssl_val == "true":
+                        self._add("PASS", "RSS-03", "REDSHIFT", wgn, f"require_ssl=true | {wgn}")
+                    elif ssl_val is None:
+                        self._add("INFO", "RSS-03", "REDSHIFT", wgn,
+                                  f"require_ssl not in workgroup projection | {wgn}")
+                    else:
+                        self._add("FAIL", "RSS-03", "REDSHIFT", wgn,
+                                  f"require_ssl not enforced | {wgn}")
+                    if wg.get("enhancedVpcRouting", False):
+                        self._add("PASS", "RSS-04", "REDSHIFT", wgn,
+                                  f"Enhanced VPC routing=ON | {wgn}")
+                    else:
+                        self._add("WARN", "RSS-04", "REDSHIFT", wgn,
+                                  f"Enhanced VPC routing=OFF | {wgn}")
+            # Namespaces: customer-managed CMK gap (RSS-02)
+            try:
+                namespaces = []
+                token = None
+                for _ in range(200):                 # bounded: never trust nextToken to terminate
+                    resp = rss.list_namespaces(**({"nextToken": token} if token else {}))
+                    namespaces.extend(resp.get("namespaces", []) or [])
+                    token = resp.get("nextToken")
+                    if not token or not isinstance(token, str):
+                        break
+            except Exception as e:
+                self._add("WARN", "RSS-02", "REDSHIFT", "redshift-serverless",
+                          f"list_namespaces failed: {e}")
+                namespaces = None
+            if namespaces is not None:
+                for ns in namespaces:
+                    nsn = ns.get("namespaceName", "unknown")
+                    kms = ns.get("kmsKeyId")
+                    # Serverless is always encrypted; the gap is AWS-owned key vs a CMK.
+                    if kms in (None, "", "AWS_OWNED_KMS_KEY"):
+                        self._add("WARN", "RSS-02", "REDSHIFT", nsn,
+                                  f"Namespace encrypted with an AWS-owned key "
+                                  f"(no customer-managed CMK) | {nsn}")
+                    else:
+                        self._add("PASS", "RSS-02", "REDSHIFT", nsn,
+                                  f"Customer-managed CMK in use | {nsn}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 30: AMAZON EFS
