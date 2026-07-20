@@ -264,7 +264,7 @@ CHECK_SEVERITY = {
     "R53-01": "MEDIUM", "R53-02": "MEDIUM", "R53-03": "HIGH", "R53-04": "LOW", "R53-05": "MEDIUM",
     "R53-06": "HIGH",
     "DDB-03": "MEDIUM", "DDB-04": "MEDIUM",
-    "EKS-04": "MEDIUM", "EKS-05": "MEDIUM",
+    "EKS-04": "MEDIUM", "EKS-05": "MEDIUM", "EKS-06": "HIGH",
     "ECS-04": "HIGH", "ECS-05": "MEDIUM",
     "ECS-06": "HIGH", "ECS-07": "CRITICAL", "ECS-08": "HIGH",
     "SEC-03": "MEDIUM", "SEC-04": "MEDIUM",
@@ -487,6 +487,7 @@ COMPLIANCE_MAP = {
     "DDB-05": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "EKS-04": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "EKS-05": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EKS-06": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "ECS-04": {"PCI-DSS": "2.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "CM-7"},
     "ECS-05": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "ECS-06": {"PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
@@ -596,6 +597,7 @@ REMEDIATION_MAP = {
     "EKS-01": "Disable public endpoint: aws eks update-cluster-config --name <CLUSTER> --resources-vpc-config endpointPublicAccess=false,endpointPrivateAccess=true",
     "EKS-02": "Enable logging: aws eks update-cluster-config --name <CLUSTER> --logging '{\"clusterLogging\":[{\"types\":[\"api\",\"audit\",\"authenticator\",\"controllerManager\",\"scheduler\"],\"enabled\":true}]}'",
     "EKS-03": "Enable secrets encryption: aws eks associate-encryption-config --cluster-name <CLUSTER> --encryption-config '[{\"resources\":[\"secrets\"],\"provider\":{\"keyArn\":\"<KMS_ARN>\"}}]'",
+    "EKS-06": "Scope or remove worker-node SSH: aws ec2 revoke-security-group-ingress --group-id <NODE_SG> --protocol tcp --port 22 --cidr 0.0.0.0/0 (or recreate the nodegroup with remoteAccess.sourceSecurityGroups set to a bastion SG)",
     "SEC-01": "Enable rotation: aws secretsmanager rotate-secret --secret-id <SECRET_ID> --rotation-lambda-arn <LAMBDA_ARN> --rotation-rules AutomaticallyAfterDays=30",
     "SEC-02": "Update rotation schedule: aws secretsmanager rotate-secret --secret-id <SECRET_ID> --rotation-rules AutomaticallyAfterDays=90",
     "SEC-05": "Remove the public/cross-account grant (or scope it with aws:PrincipalOrgID) and block public policies: aws secretsmanager put-resource-policy --secret-id <SECRET_ARN> --block-public-policy --resource-policy file://scoped-policy.json ; or drop it: aws secretsmanager delete-resource-policy --secret-id <SECRET_ARN>",
@@ -4873,6 +4875,47 @@ class AWSLiveScanner:
             if not sg_ids:
                 self._add("WARN", "EKS-05", "EKS", cname,
                           f"EKS '{cname}' no additional security groups configured")
+
+            # EKS-06 — worker-nodegroup SSH exposed to the internet. OWN try/except: a
+            # denied call (or a generic mock whose .get returns a non-list) must NOT break
+            # EKS-01..05 above; a non-list result -> treat as no nodegroups.
+            try:
+                ng_names = eks.list_nodegroups(clusterName=cname).get("nodegroups", [])
+                if not isinstance(ng_names, list):
+                    ng_names = []
+                if not ng_names:
+                    self._add("INFO", "EKS-06", "EKS", cname,
+                              f"EKS '{cname}' has no managed nodegroups "
+                              f"(Fargate-only / self-managed)")
+                else:
+                    world_open, describe_err = 0, False
+                    for ng_name in ng_names:
+                        try:
+                            ng = eks.describe_nodegroup(
+                                clusterName=cname, nodegroupName=ng_name)["nodegroup"]
+                        except Exception:
+                            describe_err = True
+                            self._add("WARN", "EKS-06", "EKS", f"{cname}/{ng_name}",
+                                      "could not describe nodegroup (SSH exposure undetermined)")
+                            continue
+                        ra = ng.get("remoteAccess") or {}
+                        if ra.get("ec2SshKey") and not ra.get("sourceSecurityGroups"):
+                            world_open += 1
+                            self._add("FAIL", "EKS-06", "EKS", f"{cname}/{ng_name}",
+                                      f"Worker-node SSH(22) reachable from 0.0.0.0/0 "
+                                      f"(remoteAccess SSH key set, no sourceSecurityGroups) "
+                                      f"| {cname}/{ng_name}")
+                        elif ra.get("ec2SshKey"):
+                            self._add("INFO", "EKS-06", "EKS", f"{cname}/{ng_name}",
+                                      f"Worker SSH scoped to source security groups "
+                                      f"| {cname}/{ng_name}")
+                    # AGGREGATE-PASS-MUST-COUNT: only all-clear when every nodegroup was read
+                    if world_open == 0 and not describe_err:
+                        self._add("PASS", "EKS-06", "EKS", cname,
+                                  f"EKS '{cname}' nodegroups: no world-open worker SSH")
+            except Exception as e:
+                self._add("WARN", "EKS-06", "EKS", cname,
+                          f"could not enumerate nodegroups (SSH exposure not evaluated): {e}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 19: AMAZON ECS
