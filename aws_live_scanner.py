@@ -185,6 +185,7 @@ CHECK_SEVERITY = {
     "EC2-04": "HIGH", "EC2-05": "MEDIUM", "EC2-06": "HIGH",
     "EC2-07": "HIGH", "EC2-08": "HIGH",
     "SSM-01": "HIGH", "SSM-02": "HIGH", "LT-01": "HIGH", "ASG-01": "HIGH",
+    "AMI-02": "MEDIUM", "AMI-03": "MEDIUM",
     "AMI-01": "HIGH",
     "CNT-01": "MEDIUM", "CNT-02": "HIGH", "CNT-03": "CRITICAL", "CNT-04": "MEDIUM",
     "CNT-05": "LOW",
@@ -340,6 +341,8 @@ COMPLIANCE_MAP = {
     "EC2-06": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "EC2-07": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "IA-5"},
     "AMI-01": {"CIS": "2.3.3", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "AMI-02": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "AMI-03": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     # RDS
     "RDS-01": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "RDS-02": {"CIS": "2.3.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
@@ -658,6 +661,8 @@ REMEDIATION_MAP = {
     "CNT-04": "Make image tags immutable so a tag cannot be overwritten with a poisoned image: aws ecr put-image-tag-mutability --repository-name <REPO> --image-tag-mutability IMMUTABLE",
     "CNT-05": "Add a lifecycle policy to expire untagged/old images: aws ecr put-lifecycle-policy --repository-name <REPO> --lifecycle-policy-text file://lifecycle.json",
     "AMI-01": "Revoke public/cross-account AMI sharing (a public AMI exposes its full disk snapshot): aws ec2 modify-image-attribute --image-id <AMI_ID> --launch-permission '{\"Remove\":[{\"Group\":\"all\"}]}' ; audit remaining account-level shares.",
+    "AMI-02": "Re-copy the AMI encrypted, then deregister the plaintext one: aws ec2 copy-image --source-image-id <AMI_ID> --source-region <REGION> --name <NAME>-enc --encrypted --kms-key-id <KMS_KEY> ; aws ec2 deregister-image --image-id <AMI_ID>",
+    "AMI-03": "Deregister the stale/deprecated AMI after re-pointing launch templates/ASGs at a fresh patched build: aws ec2 deregister-image --image-id <AMI_ID>",
     "GLC-01": "Remove public Glacier vault access policy: aws glacier set-vault-access-policy --vault-name <VAULT> --policy '{\"Policy\":\"<LEAST_PRIVILEGE_POLICY>\"}'",
     "SQS-02": "Restrict the queue policy to trusted principals: aws sqs set-queue-attributes --queue-url <URL> --attributes Policy='<LEAST_PRIVILEGE_POLICY>'",
     "R53-03": "Enable DNSSEC signing: aws route53 enable-hosted-zone-dnssec --hosted-zone-id <ZONE_ID>",
@@ -2778,6 +2783,41 @@ class AWSLiveScanner:
         if exposed == 0:
             self._add("PASS", "AMI-01", "AMI", "ami",
                       f"All {len(images)} self-owned AMI(s) are private (no public/cross-account share)")
+
+        # AMI-02/03 — image supply-chain depth (reuses the same describe_images result, 0 new API)
+        now = datetime.now(timezone.utc)
+        enc_ok = True
+        for img in images:
+            aid  = img.get("ImageId", "ami-?")
+            name = img.get("Name") or aid
+            label = f"{name} ({aid})" if name != aid else aid
+            # AMI-02 — unencrypted backing snapshot (Encrypted absent == unencrypted)
+            unenc = [m for m in img.get("BlockDeviceMappings", [])
+                     if m.get("Ebs") and m["Ebs"].get("Encrypted") is not True]
+            if unenc:
+                enc_ok = False
+                self._add("FAIL", "AMI-02", "AMI", label,
+                          f"AMI backed by {len(unenc)} unencrypted snapshot(s) — plaintext disk "
+                          f"at rest (full plaintext volume if the AMI is ever shared) | {aid}")
+            # AMI-03 — past its deprecation date (FAIL) or very old (WARN)
+            try:
+                dep = img.get("DeprecationTime")
+                created = img.get("CreationDate")
+                if dep and datetime.fromisoformat(dep.replace("Z", "+00:00")) < now:
+                    self._add("FAIL", "AMI-03", "AMI", label,
+                              f"AMI past its deprecation date ({dep[:10]}) — launches start on an "
+                              f"unsupported/unpatched base | {aid}")
+                elif created:
+                    age = (now - datetime.fromisoformat(created.replace("Z", "+00:00"))).days
+                    if age > 730:
+                        self._add("WARN", "AMI-03", "AMI", label,
+                                  f"AMI ~{age} days old — baked base OS likely unpatched | {aid}")
+            except Exception:
+                self._add("INFO", "AMI-03", "AMI", label,
+                          f"Could not parse AMI timestamps | {aid}")
+        if images and enc_ok:
+            self._add("PASS", "AMI-02", "AMI", "ami",
+                      f"All {len(images)} self-owned AMI(s) use encrypted snapshots")
 
     def _check_ecr(self):
         self._section_header("ECR")

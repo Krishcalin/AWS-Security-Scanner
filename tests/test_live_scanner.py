@@ -193,7 +193,7 @@ class TestMaps(unittest.TestCase):
                        "ELC-05", "ELC-06", "OSR-06", "OSR-07",
                        "RS-06", "RS-07", "RSS-01", "RSS-02", "RSS-03", "RSS-04",
                        # Phase 6 per-service depth
-                       "SSM-01", "SSM-02", "LT-01", "ASG-01"]
+                       "SSM-01", "SSM-02", "LT-01", "ASG-01", "AMI-02", "AMI-03"]
         for c in new_checks:
             self.assertIn(c, CHECK_SEVERITY, f"{c} missing from CHECK_SEVERITY")
 
