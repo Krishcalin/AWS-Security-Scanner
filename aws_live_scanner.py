@@ -170,7 +170,7 @@ CHECK_SEVERITY = {
     "IAM-05": "MEDIUM", "IAM-06": "HIGH", "IAM-10": "MEDIUM",
     "IAM-07": "MEDIUM", "IAM-08": "MEDIUM",
     "S3-01": "HIGH", "S3-03": "HIGH", "S3-05": "MEDIUM",
-    "S3-07": "MEDIUM", "S3-08": "MEDIUM",
+    "S3-07": "MEDIUM", "S3-08": "MEDIUM", "S3-09": "HIGH", "S3-10": "HIGH",
     "VPC-01": "HIGH", "VPC-03": "MEDIUM", "VPC-04": "MEDIUM",
     "LOG-01": "CRITICAL", "LOG-03": "HIGH", "LOG-04": "CRITICAL", "LOG-05": "MEDIUM",
     "LOG-06": "MEDIUM", "LOG-07": "MEDIUM", "LOG-08": "MEDIUM", "LOG-09": "CRITICAL",
@@ -295,6 +295,8 @@ COMPLIANCE_MAP = {
     "S3-05": {"CIS": "3.6", "PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "S3-07": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "S3-08": {"CIS": "2.1.3", "PCI-DSS": "10.5.3", "HIPAA": "164.312(c)(1)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "S3-09": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "S3-10": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     # VPC
     "VPC-01": {"CIS": "5.2", "PCI-DSS": "1.3.2", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "VPC-03": {"CIS": "3.7", "PCI-DSS": "10.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
@@ -525,6 +527,8 @@ REMEDIATION_MAP = {
     "S3-05": "Enable access logging: aws s3api put-bucket-logging --bucket <BUCKET> --bucket-logging-status '{\"LoggingEnabled\":{\"TargetBucket\":\"<LOG_BUCKET>\",\"TargetPrefix\":\"s3-logs/\"}}'",
     "S3-07": "Attach a bucket policy that denies non-TLS requests (Effect=Deny, Condition Bool aws:SecureTransport=false) and apply it: aws s3api put-bucket-policy --bucket <BUCKET> --policy file://tls-only.json",
     "S3-08": "Enable versioning for rollback protection against overwrite/ransomware: aws s3api put-bucket-versioning --bucket <BUCKET> --versioning-configuration Status=Enabled",
+    "S3-09": "Block public access and strip the public statement, then re-apply a scoped policy: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true ; aws s3api put-bucket-policy --bucket <BUCKET> --policy file://scoped-policy.json",
+    "S3-10": "Scope the bucket policy to your own account or an aws:PrincipalOrgID condition (remove the external-account principal): aws s3api put-bucket-policy --bucket <BUCKET> --policy file://scoped-policy.json",
     "VPC-01": "Revoke risky SG rule: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
     "VPC-03": "Enable VPC Flow Logs: aws ec2 create-flow-logs --resource-type VPC --resource-ids <VPC_ID> --traffic-type ALL --log-destination-type cloud-watch-logs --log-group-name vpc-flow-logs",
     "VPC-04": "Strip all rules from each default SG so it denies all traffic (CIS 5.4): aws ec2 revoke-security-group-ingress --group-id <SG_ID> --ip-permissions ... and aws ec2 revoke-security-group-egress --group-id <SG_ID> --ip-permissions ... ; migrate workloads to purpose-built SGs",
@@ -1607,6 +1611,7 @@ class AWSLiveScanner:
 
         # S3-01 — Account-level Block Public Access
         self._log("S3-01: Account-level Block Public Access")
+        cfg = None   # account-level BPA config; reused by S3-09 neutralization
         try:
             cfg = s3c.get_public_access_block(AccountId=self.account)[
                 "PublicAccessBlockConfiguration"
@@ -1635,6 +1640,7 @@ class AWSLiveScanner:
             bname = b["Name"]
 
             # BPA per bucket
+            bpa = None   # reused by S3-09 neutralization
             try:
                 bpa = s3.get_public_access_block(Bucket=bname)[
                     "PublicAccessBlockConfiguration"
@@ -1677,12 +1683,24 @@ class AWSLiveScanner:
             except Exception:
                 pass
 
-            # S3-07 — TLS-only (deny non-SecureTransport) bucket policy
+            # S3-07/09/10 — ONE bucket-policy fetch feeds TLS-only + public + cross-account
+            stmts = None
             try:
-                pol   = json.loads(s3.get_bucket_policy(Bucket=bname)["Policy"])
-                stmts = pol.get("Statement", [])
+                stmts = json.loads(s3.get_bucket_policy(Bucket=bname)["Policy"]).get(
+                    "Statement", [])
                 if isinstance(stmts, dict):
                     stmts = [stmts]
+            except Exception as e:
+                # No policy at all -> not public (S3-09 silent); TLS-only also not enforced.
+                self._add("WARN", "S3-07", "S3", bname,
+                          f"No bucket policy enforcing TLS-only access | {bname}")
+                # AccessDenied (not NoSuchBucketPolicy) means exposure is UNKNOWN, not clean.
+                if "denied" in str(e).lower():
+                    self._add("WARN", "S3-09", "S3", bname,
+                              f"Cannot evaluate bucket policy (access denied — possibly "
+                              f"cross-account owned) | {bname}")
+            if stmts is not None:
+                # S3-07 — TLS-only (deny non-SecureTransport)
                 if any(self._stmt_denies_insecure_transport(st, bname) for st in stmts):
                     self._add("PASS", "S3-07", "S3", bname,
                               f"Bucket policy denies non-TLS access | {bname}")
@@ -1690,9 +1708,8 @@ class AWSLiveScanner:
                     self._add("WARN", "S3-07", "S3", bname,
                               f"Bucket policy does NOT enforce TLS "
                               f"(no aws:SecureTransport deny) | {bname}")
-            except Exception:
-                self._add("WARN", "S3-07", "S3", bname,
-                          f"No bucket policy enforcing TLS-only access | {bname}")
+                # S3-09/10 — public + cross-account exposure classification
+                self._check_bucket_policy_exposure(bname, stmts, cfg, bpa)
 
             # S3-08 — Versioning (rollback protection vs overwrite/ransomware)
             try:
@@ -1760,6 +1777,44 @@ class AWSLiveScanner:
                 for r in not_res)
             return not excludes_objects
         return False
+
+    def _check_bucket_policy_exposure(self, bname, stmts, acct_bpa, bucket_bpa):
+        """S3-09 (public grant, BPA-neutralization aware) + S3-10 (cross-account/org grant,
+        NOT BPA-neutralized) off one already-parsed bucket policy. Findings-only in Phase 6."""
+        # A wildcard-principal ('*') public grant is neutralized when Block Public Access is
+        # fully on (account OR bucket). A NAMED cross-account grant is NOT — BPA blocks
+        # anonymous '*', never a specific external account — so S3-10 ignores BPA.
+        acct_full   = bool(acct_bpa) and all(acct_bpa.values())
+        bucket_full = bool(bucket_bpa) and all(bucket_bpa.values())
+        for st in stmts:
+            res = classify_resource_policy_stmt(st, self.account or "")
+            if not res:
+                continue
+            kind = res["kind"]
+            if kind == "public":
+                if acct_full or bucket_full:
+                    self._add("WARN", "S3-09", "S3", bname,
+                              f"Latent PUBLIC bucket-policy statement neutralized by Block "
+                              f"Public Access — remove the stale grant | {bname}")
+                else:
+                    self._add("FAIL", "S3-09", "S3", bname,
+                              f"Bucket policy grants PUBLIC access (Principal:*, "
+                              f"unconditioned) | {bname}")
+            elif kind == "public_conditioned":
+                self._add("WARN", "S3-09", "S3", bname,
+                          f"Wildcard principal gated by an unrecognized condition — "
+                          f"manual review | {bname}")
+            elif kind == "cross_account":
+                ext = [a for a in res.get("external_accounts", [])
+                       if a not in self.trusted_accounts]
+                if ext:
+                    self._add("FAIL", "S3-10", "S3", bname,
+                              f"Bucket policy grants CROSS-ACCOUNT access to "
+                              f"{', '.join(ext)} | {bname}")
+            elif kind == "org":
+                self._add("WARN", "S3-10", "S3", bname,
+                          f"Bucket shared to AWS Organization {res.get('org_id')} — "
+                          f"verify scope | {bname}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 3: NETWORK SECURITY
