@@ -266,6 +266,7 @@ CHECK_SEVERITY = {
     "DDB-03": "MEDIUM", "DDB-04": "MEDIUM",
     "EKS-04": "MEDIUM", "EKS-05": "MEDIUM",
     "ECS-04": "HIGH", "ECS-05": "MEDIUM",
+    "ECS-06": "HIGH", "ECS-07": "CRITICAL", "ECS-08": "HIGH",
     "SEC-03": "MEDIUM", "SEC-04": "MEDIUM",
     "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
     "ELC-04": "MEDIUM", "OSR-03": "MEDIUM",
@@ -488,6 +489,9 @@ COMPLIANCE_MAP = {
     "EKS-05": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "ECS-04": {"PCI-DSS": "2.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "CM-7"},
     "ECS-05": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "ECS-06": {"PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
+    "ECS-07": {"PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
+    "ECS-08": {"PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-6"},
     "SEC-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SEC-04": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "SEC-05": {"CIS": "1.16", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
@@ -680,6 +684,9 @@ REMEDIATION_MAP = {
     "R53-06": "Remove the obsolete record or repoint it at a live resource you control: aws route53 change-resource-record-sets --hosted-zone-id <ZONE_ID> --change-batch '{\"Changes\":[{\"Action\":\"DELETE\",\"ResourceRecordSet\":{...}}]}'. If an S3-website target was deleted, reclaim the name first: aws s3api create-bucket --bucket <BUCKET> --region <REGION>",
     "DDB-04": "Enable deletion protection: aws dynamodb update-table --table-name <TABLE> --deletion-protection-enabled",
     "ECS-04": "Recreate the task definition with awsvpc network mode (drop host mode): aws ecs register-task-definition --network-mode awsvpc --cli-input-json file://taskdef.json",
+    "ECS-06": "Register a task-def revision without host namespace sharing (networkMode=awsvpc, drop pidMode/ipcMode): aws ecs register-task-definition --network-mode awsvpc --cli-input-json file://taskdef.json ; aws ecs update-service --cluster <C> --service <S> --task-definition <FAMILY>",
+    "ECS-07": "Remove the hostPath (especially the Docker socket) and use an EFS/Docker volume: aws ecs register-task-definition --cli-input-json file://taskdef.json (delete the volumes[].host entry)",
+    "ECS-08": "Drop all capabilities and add back only what is needed: aws ecs register-task-definition --cli-input-json file://taskdef.json (set linuxParameters.capabilities.drop=[\"ALL\"], remove the add list)",
     "EXPOSURE-01": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0  (then re-add a scoped CIDR)",
     "EXPOSURE-02": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges or place the workload behind a load balancer/WAF: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
     "ATTACK-01": "Break the path at the exposure or the privilege: remove the public ingress (aws ec2 revoke-security-group-ingress ...) AND scope the instance-profile role to least privilege / apply a permissions boundary: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>",
@@ -4930,6 +4937,52 @@ class AWSLiveScanner:
                 if not cd.get("readonlyRootFilesystem", False):
                     self._add("WARN", "ECS-05", "ECS", f"{td_name}/{cname}",
                               f"Container '{cname}' root filesystem is writable")
+                # ECS-08 — dangerous Linux capabilities (container-level). linuxParameters
+                # and capabilities are both optional -> chain-guard the .get()s.
+                add = set(((cd.get("linuxParameters") or {}).get("capabilities") or {})
+                          .get("add") or [])
+                risky = add & self._DANGEROUS_CAPS
+                if risky:
+                    self._add("FAIL", "ECS-08", "ECS", f"{td_name}/{cname}",
+                              f"Container '{cname}' adds dangerous capabilities "
+                              f"{sorted(risky)} (SYS_ADMIN/ALL ~ privileged; SYS_PTRACE crosses "
+                              f"the container boundary)")
+
+            # ── Task-level escape primitives (evaluate ONCE per task def, OUTSIDE the
+            # containerDefinitions loop — pidMode/ipcMode/networkMode/volumes are on the
+            # taskDefinition, not the container). ──
+            # ECS-06 — host namespace share
+            host_ns = [k for k in ("pidMode", "ipcMode", "networkMode")
+                       if td.get(k) == "host"]
+            if host_ns:
+                self._add("FAIL", "ECS-06", "ECS", td_name,
+                          f"Task shares host namespace(s) {host_ns} — host PID/IPC can "
+                          f"read/ptrace host processes & secrets; host network reaches the "
+                          f"node IMDS -> node-role credential theft | {td_name}")
+            # ECS-07 — sensitive host-path bind mount
+            for v in td.get("volumes", []):
+                sp = (v.get("host") or {}).get("sourcePath")
+                if not sp:
+                    continue                    # no host volume / ephemeral -> benign
+                sensitive = (sp in self._SENSITIVE_HOST_PATHS
+                             or any(sp == d.rstrip("/") or sp.startswith(d)
+                                    for d in self._SENSITIVE_HOST_DIRS))
+                if sensitive:
+                    self._add("FAIL", "ECS-07", "ECS", td_name,
+                              f"Task bind-mounts sensitive host path '{sp}' "
+                              f"(container->host escape; docker.sock = instant host root) "
+                              f"| {td_name}")
+                else:
+                    self._add("WARN", "ECS-07", "ECS", td_name,
+                              f"Task bind-mounts host path '{sp}' (hostPath mount) | {td_name}")
+
+    # ECS-07/08 dangerous-primitive tables (bare cap names, no CAP_ prefix in the ECS API)
+    _DANGEROUS_CAPS = {"ALL", "SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE",
+                       "DAC_READ_SEARCH", "SYS_RAWIO", "BPF", "NET_RAW"}
+    _SENSITIVE_HOST_PATHS = {"/", "/etc", "/root", "/proc", "/sys",
+                             "/var/run/docker.sock"}
+    _SENSITIVE_HOST_DIRS = ("/var/run/", "/var/lib/docker", "/var/lib/kubelet",
+                            "/etc/", "/root/", "/proc/", "/sys/")
 
     def _emit_runs_image(self, td: Dict, cd: Dict) -> None:
         """RUNS_IMAGE — ECS task-def container -> ECRImage node so image CVEs (from
