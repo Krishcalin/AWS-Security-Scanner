@@ -1407,6 +1407,9 @@ class AWSLiveScanner:
         # in ECS#20 for replay in VULN#39 (image-CVE inheritance survives the graph rebuild).
         self._reachable_workloads: set = set()
         self._runs_image_payloads: List[tuple] = []
+        # CloudFront is GLOBAL but EXPOSURE runs per-region; guard so --all-regions does
+        # not re-emit the same distributions once per region (the graph merges anyway).
+        self._l7_cf_done = False
 
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
@@ -5281,15 +5284,25 @@ class AWSLiveScanner:
         src = td.get("taskDefinitionArn", td.get("family", "ecs-task"))
         g.add_node(src, "ECSTaskDefinition", family=td.get("family"))
         cname = cd.get("name", "")
+        # Stash each RUNS_IMAGE payload for replay in VULN#39: this section (ECS#20) runs
+        # BEFORE IAMPRIVESC#36 hard-replaces the graph, so the inline edge is clobbered —
+        # without the replay the Phase-7 image-CVE inheritance (_iter_vuln_edges) is dead.
         if digest:
             for node in ecr_image_node_ids(p["account"], p["region"], p["repo"], digest):
                 g.add_node(node, "ECRImage", repository=p["repo"], digest=digest)
                 g.add_edge(src, node, "RUNS_IMAGE", container=cname, scan_source="ecs")
+                self._runs_image_payloads.append(
+                    (src, {"family": td.get("family")}, node,
+                     {"repository": p["repo"], "digest": digest},
+                     {"container": cname, "scan_source": "ecs"}))
         else:
             # best-effort topology node (won't join digest-keyed CVE nodes)
             node = f"{p['account']}.dkr.ecr.{p['region']}.amazonaws.com/{p['repo']}:{p['tag'] or 'latest'}"
             g.add_node(node, "ECRImage", repository=p["repo"])
             g.add_edge(src, node, "RUNS_IMAGE", container=cname, resolved=False, scan_source="ecs")
+            self._runs_image_payloads.append(
+                (src, {"family": td.get("family")}, node, {"repository": p["repo"]},
+                 {"container": cname, "resolved": False, "scan_source": "ecs"}))
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 20: AWS SECRETS MANAGER
@@ -7632,6 +7645,14 @@ class AWSLiveScanner:
                               f"Internet-reachable on {family} [{summary}] "
                               f"(public IP: {ipk}) | {res}")
 
+        # Phase 7 — L7 reachability: internet-facing ALB/NLB/classic-ELB/CloudFront/API-GW
+        # -> LoadBalancer/front node + TARGETS edges. Runs HERE (after IAMPRIVESC's graph
+        # hard-replace), and feeds resolved target instance-ids into exposed_instances
+        # BEFORE the ATTACK-01 loop below, so an LB-fronted host lights up ATTACK-01 with
+        # zero duplicated emitter (the loop reads inst_by_id[id].IamInstanceProfile).
+        if self._build_l7_exposure(g, internet, sg_perms, enis, inst_by_id, exposed_instances):
+            any_finding = True
+
         # Fire the first end-to-end attack paths: exposed EC2 -> instance role -> admin
         admin = self._admin_cap_id()
         for instance_id in sorted(exposed_instances):
@@ -7670,9 +7691,348 @@ class AWSLiveScanner:
                           f"exploitable only if the attacker can satisfy the condition. Verify. "
                           f"| {instance_id}")
 
+        # Record every internet-reachable workload (direct ENI + L7 backend, since L7
+        # targets were folded into exposed_instances above) so the VULN section can tag
+        # their HAS_VULN edges reachable_service=True (component-level exploitability).
+        self._reachable_workloads = {self._instance_arn(i) for i in exposed_instances}
+
         if not any_finding:
             self._add("PASS", "EXPOSURE-02", "EXPOSURE", "all-enis",
                       f"No internet-reachable workloads across {len(enis)} interface(s)")
+
+    # ── Phase 7 — L7 reachability (un-defers aws_exposure's deferred L7 axis) ──────
+    @staticmethod
+    def _l7_port_open(port, pub) -> bool:
+        """True if int ``port`` falls in any internet-open tcp range in ``pub`` (the
+        aws_exposure.sg_public_ports set of (proto, lo, hi)). L7 listeners are tcp."""
+        try:
+            p = int(port)
+        except (TypeError, ValueError):
+            return False
+        return any(proto == "tcp" and lo <= p <= hi for (proto, lo, hi) in pub)
+
+    def _l7_sg_public(self, sg_perms, sgids) -> set:
+        pub: set = set()
+        for gid in sgids or []:
+            perms = sg_perms.get(gid, [])
+            pub |= aws_exposure.sg_public_ports(perms, "ipv4")
+            pub |= aws_exposure.sg_public_ports(perms, "ipv6")
+        return pub
+
+    def _build_l7_exposure(self, g, internet, sg_perms, enis, inst_by_id,
+                           exposed_instances) -> bool:
+        """Resolve internet-facing L7 fronts (ALB/NLB/classic-ELB/CloudFront/API-GW) to
+        graph nodes + TARGETS edges to the workloads behind them, emitting EXPOSURE-03.
+        LB target instance-ids are folded into ``exposed_instances`` (before the caller's
+        ATTACK-01 loop) so an over-privileged LB-fronted host lights up ATTACK-01. Each
+        front type is isolated in its own try/except -> INFO no-op (never a phantom PASS,
+        never a crash that aborts the whole exposure section)."""
+        ip_to_instance: Dict[str, str] = {}
+        for e in enis:
+            iid = (e.get("Attachment") or {}).get("InstanceId")
+            if not iid:
+                continue
+            for ip in e.get("PrivateIpAddresses", []):
+                addr = ip.get("PrivateIpAddress")
+                if addr:
+                    ip_to_instance[addr] = iid
+        lb_dns: Dict[str, str] = {}     # DNSName.lower() -> LoadBalancer node id
+        found = False
+        found = self._l7_elbv2(g, internet, sg_perms, ip_to_instance,
+                               exposed_instances, lb_dns) or found
+        found = self._l7_classic_elb(g, internet, sg_perms,
+                                     exposed_instances, lb_dns) or found
+        found = self._l7_cloudfront(g, internet, lb_dns) or found
+        found = self._l7_apigateway(g, internet) or found
+        found = self._l7_apigatewayv2(g, internet) or found
+        return found
+
+    def _l7_elbv2(self, g, internet, sg_perms, ip_to_instance,
+                  exposed_instances, lb_dns) -> bool:
+        try:
+            elb = self._client("elbv2")
+            lbs: List[Dict] = []
+            for page in elb.get_paginator("describe_load_balancers").paginate():
+                lbs.extend(page.get("LoadBalancers", []))
+        except Exception as e:
+            self._add("INFO", "EXPOSURE-03", "EXPOSURE", "elbv2",
+                      f"Could not enumerate ALB/NLB in {self.region}: {e}")
+            return False
+        found = False
+        for lb in lbs:
+            typ = lb.get("Type", "application")
+            if typ == "gateway":                                # GWLB is not an app front
+                continue
+            if lb.get("Scheme") != "internet-facing":
+                continue
+            if ((lb.get("State") or {}).get("Code")) not in ("active", "active_impaired"):
+                continue
+            arn = lb.get("LoadBalancerArn", "")
+            name = lb.get("LoadBalancerName", "unknown")
+            dns = lb.get("DNSName", "")
+            sgids = lb.get("SecurityGroups") or []
+            pub = self._l7_sg_public(sg_perms, sgids)
+            try:
+                listeners = elb.describe_listeners(LoadBalancerArn=arn).get("Listeners", [])
+            except Exception:
+                listeners = []
+            # ALB is SG-gated; an NLB is frequently SG-less -> scheme+active+listener suffices
+            open_ports = {ls.get("Port") for ls in listeners
+                          if ls.get("Port") is not None
+                          and (not sgids or self._l7_port_open(ls.get("Port"), pub))}
+            if not open_ports:
+                continue
+            node = f"lb/{arn}"
+            g.add_node(node, "LoadBalancer", name=name, dns=dns,
+                       scheme="internet-facing", lb_type=typ)
+            g.add_edge(internet, node, "EXPOSED_TO", basis="l7-elbv2",
+                       ports=",".join(str(p) for p in sorted(open_ports)))
+            if dns:
+                lb_dns[dns.lower()] = node
+            resolved = self._l7_resolve_target_groups(
+                g, elb, arn, node, ip_to_instance, exposed_instances)
+            found = True
+            label = "ALB" if typ == "application" else "NLB"
+            portstr = ",".join(str(p) for p in sorted(open_ports))
+            if resolved:
+                self._add("FAIL", "EXPOSURE-03", "EXPOSURE", name,
+                          f"Internet-facing {label} {name} ({dns}) on port(s) [{portstr}] "
+                          f"fronts {len(resolved)} reachable workload(s): "
+                          f"{', '.join(sorted(resolved)[:8])} | {name}")
+            else:
+                self._add("INFO", "EXPOSURE-03", "EXPOSURE", name,
+                          f"Internet-facing {label} {name} ({dns}) has no resolvable "
+                          f"in-rotation backend — internet entry, no mapped workload | {name}")
+        return found
+
+    def _l7_resolve_target_groups(self, g, elb, arn, node, ip_to_instance,
+                                  exposed_instances) -> List[str]:
+        """Resolve an ALB/NLB's target groups -> in-rotation workloads, emitting TARGETS
+        edges. Only TargetType 'instance' (and 'ip' backed by an enumerated ENI) chains
+        into the EC2 attack path; 'lambda'/'alb' are front-surface TARGETS only."""
+        resolved: List[str] = []
+        try:
+            tgs = elb.describe_target_groups(LoadBalancerArn=arn).get("TargetGroups", [])
+        except Exception:
+            return resolved
+        _SKIP = {"unused", "draining", "unhealthy.draining", "unavailable"}
+        for tg in tgs:
+            ttype = tg.get("TargetType", "instance")
+            tg_arn = tg.get("TargetGroupArn", "")
+            try:
+                thds = elb.describe_target_health(
+                    TargetGroupArn=tg_arn).get("TargetHealthDescriptions", [])
+            except Exception:
+                continue
+            for thd in thds:
+                if (thd.get("TargetHealth") or {}).get("State", "") in _SKIP:
+                    continue                                    # not in rotation
+                tid = (thd.get("Target") or {}).get("Id", "")
+                if not tid:
+                    continue
+                if ttype == "instance":
+                    tarn = self._instance_arn(tid)
+                    g.add_node(tarn, "EC2Instance", instance_id=tid)
+                    g.add_edge(node, tarn, "TARGETS", basis="l7-elbv2",
+                               target_type="instance")
+                    exposed_instances.add(tid)
+                    resolved.append(tid)
+                elif ttype == "ip":
+                    iid = ip_to_instance.get(tid)
+                    if iid:                                     # else cross-VPC/on-prem: FN
+                        tarn = self._instance_arn(iid)
+                        g.add_node(tarn, "EC2Instance", instance_id=iid)
+                        g.add_edge(node, tarn, "TARGETS", basis="l7-elbv2-ip",
+                                   target_type="ip")
+                        exposed_instances.add(iid)
+                        resolved.append(iid)
+                elif ttype == "alb":
+                    inner = f"lb/{tid}"
+                    if g.node(inner):                           # best-effort NLB->ALB
+                        g.add_edge(node, inner, "TARGETS", basis="l7-elbv2-alb",
+                                   target_type="alb")
+                        resolved.append(tid.split("/")[-1])
+                elif ttype == "lambda":
+                    g.add_node(tid, "LambdaFunction", function_arn=tid)
+                    g.add_edge(node, tid, "TARGETS", basis="l7-elbv2-lambda",
+                               target_type="lambda")
+                    resolved.append(tid.split(":")[-1])
+        return resolved
+
+    def _l7_classic_elb(self, g, internet, sg_perms, exposed_instances, lb_dns) -> bool:
+        try:
+            elb = self._client("elb")
+            clbs: List[Dict] = []
+            for page in elb.get_paginator("describe_load_balancers").paginate():
+                clbs.extend(page.get("LoadBalancerDescriptions", []))
+        except Exception as e:
+            self._add("INFO", "EXPOSURE-03", "EXPOSURE", "classic-elb",
+                      f"Could not enumerate Classic ELBs in {self.region}: {e}")
+            return False
+        found = False
+        for lb in clbs:
+            if lb.get("Scheme") != "internet-facing":
+                continue
+            name = lb.get("LoadBalancerName", "unknown")
+            dns = lb.get("DNSName", "")
+            sgids = lb.get("SecurityGroups") or []
+            pub = self._l7_sg_public(sg_perms, sgids)
+            open_ports = set()
+            for ld in lb.get("ListenerDescriptions", []):
+                p = (ld.get("Listener") or {}).get("LoadBalancerPort")
+                if p is not None and (not sgids or self._l7_port_open(p, pub)):
+                    open_ports.add(p)
+            if not open_ports:
+                continue
+            node = f"clb/{name}"
+            g.add_node(node, "LoadBalancer", name=name, dns=dns,
+                       scheme="internet-facing", lb_type="classic")
+            g.add_edge(internet, node, "EXPOSED_TO", basis="l7-classic-elb",
+                       ports=",".join(str(p) for p in sorted(open_ports)))
+            if dns:
+                lb_dns[dns.lower()] = node
+            resolved: List[str] = []
+            for inst in lb.get("Instances", []):
+                iid = inst.get("InstanceId")
+                if not iid:
+                    continue
+                tarn = self._instance_arn(iid)
+                g.add_node(tarn, "EC2Instance", instance_id=iid)
+                g.add_edge(node, tarn, "TARGETS", basis="l7-classic-elb",
+                           target_type="instance")
+                exposed_instances.add(iid)
+                resolved.append(iid)
+            found = True
+            portstr = ",".join(str(p) for p in sorted(open_ports))
+            if resolved:
+                self._add("FAIL", "EXPOSURE-03", "EXPOSURE", name,
+                          f"Internet-facing Classic ELB {name} ({dns}) on port(s) "
+                          f"[{portstr}] fronts {len(resolved)} registered instance(s): "
+                          f"{', '.join(sorted(resolved)[:8])} | {name}")
+            else:
+                self._add("INFO", "EXPOSURE-03", "EXPOSURE", name,
+                          f"Internet-facing Classic ELB {name} ({dns}) has no registered "
+                          f"instances | {name}")
+        return found
+
+    def _l7_cloudfront(self, g, internet, lb_dns) -> bool:
+        if self._l7_cf_done:                # global service; enumerate once per scan
+            return False
+        try:
+            cf = self._client("cloudfront")
+            dists: List[Dict] = []
+            for page in cf.get_paginator("list_distributions").paginate():
+                dists.extend((page.get("DistributionList") or {}).get("Items", []))
+        except Exception as e:
+            self._add("INFO", "EXPOSURE-03", "EXPOSURE", "cloudfront",
+                      f"Could not enumerate CloudFront distributions: {e}")
+            return False
+        self._l7_cf_done = True
+        found = False
+        for d in dists:
+            if not d.get("Enabled"):
+                continue
+            did = d.get("Id", "")
+            domain = d.get("DomainName", "")
+            aliases = (d.get("Aliases") or {}).get("Items", [])
+            node = f"cf/{did}"
+            g.add_node(node, "CloudFrontDistribution", name=did, domain=domain,
+                       aliases=(",".join(aliases) or None), waf=(d.get("WebACLId") or None))
+            g.add_edge(internet, node, "EXPOSED_TO", basis="l7-cloudfront")
+            found = True
+            compute_backed, unresolved = False, False
+            for o in (d.get("Origins") or {}).get("Items", []):
+                odom = (o.get("DomainName") or "").lower()
+                if o.get("S3OriginConfig") is not None:
+                    # S3 origin -> TARGETS -> bucket (merges w/ DATA crown); NO EXPOSURE-03
+                    # (public-bucket findings belong to S3/EXTACCESS/DATA — avoid double-count).
+                    bucket = odom.split(".s3")[0] if ".s3" in odom else ""
+                    if bucket:
+                        barn = ("arn:aws:s3:::" + bucket).lower()
+                        g.add_node(barn, "S3Bucket", name=bucket)
+                        g.add_edge(node, barn, "TARGETS", basis="l7-cloudfront-s3",
+                                   target_type="s3")
+                elif o.get("CustomOriginConfig") is not None:
+                    inner = lb_dns.get(odom)
+                    if inner:
+                        g.add_edge(node, inner, "TARGETS", basis="l7-cloudfront-origin",
+                                   target_type="lb")
+                        compute_backed = True
+                    else:
+                        unresolved = True
+            if compute_backed:
+                self._add("FAIL", "EXPOSURE-03", "EXPOSURE", did,
+                          f"Internet-facing CloudFront distribution {did} ({domain}) fronts "
+                          f"an internet-facing load-balancer origin | {did}")
+            elif unresolved:
+                self._add("INFO", "EXPOSURE-03", "EXPOSURE", did,
+                          f"Internet-facing CloudFront distribution {did} ({domain}) has a "
+                          f"custom origin with no mapped in-account load balancer | {did}")
+        return found
+
+    def _l7_apigateway(self, g, internet) -> bool:
+        try:
+            api = self._client("apigateway")
+            items: List[Dict] = []
+            for page in api.get_paginator("get_rest_apis").paginate():
+                items.extend(page.get("items", []))
+        except Exception as e:
+            self._add("INFO", "EXPOSURE-03", "EXPOSURE", "apigateway",
+                      f"Could not enumerate REST APIs in {self.region}: {e}")
+            return False
+        found = False
+        for it in items:
+            types = (it.get("endpointConfiguration") or {}).get("types") or []
+            if not any(t in ("EDGE", "REGIONAL") for t in types):
+                continue                                        # PRIVATE = not internet-facing
+            aid = it.get("id", "")
+            name = it.get("name", aid)
+            node = f"apigw/{aid}"
+            g.add_node(node, "ApiGateway", name=name, protocol="REST",
+                       endpoint=("/".join(types) or None))
+            g.add_edge(internet, node, "EXPOSED_TO", basis="l7-apigateway")
+            found = True
+            self._add("INFO", "EXPOSURE-03", "EXPOSURE", name,
+                      f"Internet-facing REST API {name} ({aid}, {'/'.join(types)}) — "
+                      f"internet entry; backend integrations not correlated | {name}")
+        return found
+
+    def _l7_apigatewayv2(self, g, internet) -> bool:
+        try:
+            api = self._client("apigatewayv2")
+            items: List[Dict] = []
+            for page in api.get_paginator("get_apis").paginate():
+                items.extend(page.get("Items", []))
+        except Exception as e:
+            self._add("INFO", "EXPOSURE-03", "EXPOSURE", "apigatewayv2",
+                      f"Could not enumerate HTTP/WebSocket APIs in {self.region}: {e}")
+            return False
+        found = False
+        for it in items:
+            aid = it.get("ApiId", "")
+            name = it.get("Name", aid)
+            proto = it.get("ProtocolType", "HTTP")
+            node = f"apigwv2/{aid}"
+            g.add_node(node, "ApiGateway", name=name, protocol=proto,
+                       endpoint=(it.get("ApiEndpoint") or None))
+            g.add_edge(internet, node, "EXPOSED_TO", basis="l7-apigatewayv2")
+            found = True
+            # Best-effort Lambda integration target (front surface only — no attack path
+            # since the Lambda->role subgraph was clobbered by IAMPRIVESC).
+            try:
+                for integ in api.get_integrations(ApiId=aid).get("Items", []):
+                    uri = integ.get("IntegrationUri", "") or ""
+                    idx = uri.find("arn:aws:lambda:")
+                    if idx >= 0:
+                        larn = uri[idx:].split("/")[0]
+                        g.add_node(larn, "LambdaFunction", function_arn=larn)
+                        g.add_edge(node, larn, "TARGETS", basis="l7-apigatewayv2-lambda",
+                                   target_type="lambda")
+            except Exception:
+                pass
+            self._add("INFO", "EXPOSURE-03", "EXPOSURE", name,
+                      f"Internet-facing {proto} API {name} ({aid}) — internet entry | {name}")
+        return found
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTIONS 37-39: DEEP-PLANE INGESTION (Phase 3, buy-not-build)
@@ -7728,12 +8088,28 @@ class AWSLiveScanner:
             for m in matches:
                 g.add_edge(node_id, m.cve, "HAS_VULN", scan_source="managed-eol")
 
+    def _replay_runs_image_edges(self):
+        """Re-emit the ECS task-def -> ECRImage RUNS_IMAGE edges stashed pre-clobber in
+        _emit_runs_image (ECS#20). Replayed here (VULN#39, after IAMPRIVESC rebuilds the
+        graph) so image-CVE inheritance survives; MERGE-idempotent, byte-identical shape."""
+        if not self._runs_image_payloads:
+            return
+        g = self._ensure_graph()
+        if g is None:
+            return
+        for src, sprops, node, nprops, eprops in self._runs_image_payloads:
+            g.add_node(src, "ECSTaskDefinition",
+                       **{k: v for k, v in sprops.items() if v is not None})
+            g.add_node(node, "ECRImage", **{k: v for k, v in nprops.items() if v is not None})
+            g.add_edge(src, node, "RUNS_IMAGE", **eprops)
+
     def _check_vuln(self):
         self._section_header("VULN")
-        # Replay stashed managed-engine-EOL edges FIRST — before any Inspector early-return,
-        # and after IAMPRIVESC's graph rebuild — so they land and survive regardless of
-        # whether Amazon Inspector is enabled.
+        # Replay stashed managed-engine-EOL + RUNS_IMAGE edges FIRST — before any Inspector
+        # early-return, and after IAMPRIVESC's graph rebuild — so they land and survive
+        # regardless of whether Amazon Inspector is enabled.
         self._replay_eol_edges()
+        self._replay_runs_image_edges()
         self._log("Amazon Inspector v2 package vulnerabilities -> HAS_VULN edges "
                   "(EPSS native; KEV via batch_get_finding_details). INFO no-op if disabled.")
         try:
@@ -7797,9 +8173,13 @@ class AWSLiveScanner:
             g.add_node(v["cve"], "Vulnerability", severity=v["severity"], epss=v["epss"],
                        kev=v["kev"], exploit_available=v["exploit_available"],
                        fix_available=v["fix_available"])
+            # Phase 7: tag the vuln reachable_service when its workload is internet-exposed
+            # (set in EXPOSURE#37). `or None` -> False is dropped by the graph (props strip
+            # None), keeping graph.json byte-identical for unexposed workloads.
             g.add_edge(node, v["cve"], "HAS_VULN", cve=v["cve"], severity=v["severity"],
                        epss=v["epss"], kev=v["kev"], exploit_available=v["exploit_available"],
-                       fix_available=v["fix_available"], finding_arn=v["finding_arn"])
+                       fix_available=v["fix_available"], finding_arn=v["finding_arn"],
+                       reachable_service=(node in self._reachable_workloads or None))
             count += 1
             if v["kev"]:
                 fid, tag = "VULN-02", "KEV/in-the-wild"
@@ -8379,6 +8759,10 @@ class AWSLiveScanner:
         # is never forced to build one.
         if self.graph is not None and self._eol_graph_payloads:
             self._replay_eol_edges()
+        # Same idempotent flush for stashed RUNS_IMAGE edges (a scan that graphed ECS but
+        # omitted VULN) so image-CVE inheritance survives the clobber either way.
+        if self.graph is not None and self._runs_image_payloads:
+            self._replay_runs_image_edges()
 
     def _regions_for_section(self, section: str) -> List[str]:
         """Regions to run a section in. Single-region by default; with
