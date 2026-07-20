@@ -225,6 +225,7 @@ CHECK_SEVERITY = {
     "APIGW-01": "MEDIUM", "APIGW-02": "MEDIUM", "APIGW-03": "HIGH", "APIGW-04": "LOW",
     "ELB-01": "MEDIUM", "ELB-02": "HIGH", "ELB-03": "MEDIUM",
     "ELB-04": "LOW", "ELB-05": "MEDIUM", "ELB-07": "MEDIUM",
+    "CLB-01": "HIGH", "CLB-02": "MEDIUM",
     "EBS-01": "HIGH", "EBS-02": "HIGH", "EBS-03": "MEDIUM", "EBS-04": "CRITICAL",
     "RS-01": "HIGH", "RS-02": "HIGH", "RS-03": "MEDIUM", "RS-04": "MEDIUM", "RS-05": "LOW",
     "RS-06": "HIGH", "RS-07": "MEDIUM",
@@ -401,6 +402,8 @@ COMPLIANCE_MAP = {
     "ELB-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
     "ELB-05": {"PCI-DSS": "6.6", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "ELB-07": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "CLB-01": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "CLB-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     # EBS
     "EBS-01": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "EBS-02": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
@@ -628,6 +631,8 @@ REMEDIATION_MAP = {
     "ELB-02": "Redirect HTTP to HTTPS: aws elbv2 modify-listener --listener-arn <LISTENER_ARN> --default-actions Type=redirect,RedirectConfig='{Protocol=HTTPS,Port=443,StatusCode=HTTP_301}'",
     "ELB-03": "Use strong TLS policy: aws elbv2 modify-listener --listener-arn <LISTENER_ARN> --ssl-policy ELBSecurityPolicy-TLS13-1-2-2021-06",
     "ELB-05": "Drop invalid headers: aws elbv2 modify-load-balancer-attributes --load-balancer-arn <LB_ARN> --attributes Key=routing.http.drop_invalid_header_fields.enabled,Value=true",
+    "CLB-01": "Add an HTTPS listener with an ACM cert: aws elb create-load-balancer-listeners --load-balancer-name <CLB_NAME> --listeners \"Protocol=HTTPS,LoadBalancerPort=443,InstanceProtocol=HTTP,InstancePort=80,SSLCertificateId=<ACM_CERT_ARN>\"",
+    "CLB-02": "Set a modern predefined SSL policy on the listener: aws elb set-load-balancer-policies-of-listener --load-balancer-name <CLB_NAME> --load-balancer-port 443 --policy-names ELBSecurityPolicy-TLS-1-2-2017-01",
     "ELB-07": "Harden HTTP desync mitigation against request smuggling: aws elbv2 modify-load-balancer-attributes --load-balancer-arn <LB_ARN> --attributes Key=routing.http.desync_mitigation_mode,Value=defensive",
     "EBS-01": "Enable default encryption: aws ec2 enable-ebs-encryption-by-default",
     "EBS-02": "Encrypt volume: aws ec2 create-snapshot --volume-id <VOL_ID> then aws ec2 copy-snapshot --source-snapshot-id <SNAP> --encrypted --kms-key-id <KMS> and restore a new encrypted volume",
@@ -5862,6 +5867,74 @@ class AWSLiveScanner:
                     else:
                         self._add("PASS", "ELB-03", "ELB", llabel,
                                   f"TLS policy '{policy}' | {llabel}")
+
+        # CLB-01/02 — Classic Load Balancers (elb v1, distinct client + listener shape)
+        self._check_classic_elb()
+
+    def _check_classic_elb(self):
+        """CLB-01 internet-facing plaintext CLB + CLB-02 weak SSL policy. Uses the elb (v1)
+        client — its Listener shape (LoadBalancerPort/InstancePort) differs from elbv2."""
+        elb = self._client("elb")
+        try:
+            clbs = []
+            for page in elb.get_paginator("describe_load_balancers").paginate():
+                clbs.extend(page.get("LoadBalancerDescriptions", []))
+        except Exception as e:
+            self._add("WARN", "CLB-01", "ELB", "classic-elb",
+                      f"describe_load_balancers (classic) failed: {e}")
+            return
+        if not clbs:
+            self._add("INFO", "CLB-01", "ELB", "classic-elb",
+                      "No Classic Load Balancers in this region")
+            return
+        for lb in clbs:
+            name = lb.get("LoadBalancerName", "unknown")
+            scheme = lb.get("Scheme", "")
+            listeners = lb.get("ListenerDescriptions", [])
+            protos = {(ld.get("Listener") or {}).get("Protocol", "").upper()
+                      for ld in listeners}
+            secure = protos & {"HTTPS", "SSL"}
+            # CLB-01 — plaintext-only (FAIL only when internet-facing AND no HTTPS/SSL)
+            if not listeners:
+                self._add("INFO", "CLB-01", "ELB", name, f"Classic LB has no listeners | {name}")
+            elif not secure and scheme == "internet-facing":
+                self._add("FAIL", "CLB-01", "ELB", name,
+                          f"Internet-facing Classic LB has NO HTTPS/SSL listener — plaintext "
+                          f"in transit | {name}")
+            elif not secure:
+                self._add("INFO", "CLB-01", "ELB", name,
+                          f"Internal Classic LB has no HTTPS/SSL listener (lower risk) | {name}")
+            else:
+                self._add("PASS", "CLB-01", "ELB", name,
+                          f"Classic LB terminates HTTPS/SSL | {name}")
+            # CLB-02 — weak SSL negotiation policy (only for HTTPS/SSL-terminating CLBs)
+            if secure:
+                try:
+                    pols = elb.describe_load_balancer_policies(
+                        LoadBalancerName=name).get("PolicyDescriptions", [])
+                except Exception as e:
+                    self._add("WARN", "CLB-02", "ELB", name,
+                              f"could not read SSL policies: {e}")
+                    continue
+                weak = False
+                for pd in pols:
+                    if pd.get("PolicyTypeName") != "SSLNegotiationPolicyType":
+                        continue
+                    for attr in pd.get("PolicyAttributeDescriptions", []):
+                        an = attr.get("AttributeName", "")
+                        av = str(attr.get("AttributeValue", "")).lower()
+                        if an in ("Protocol-TLSv1", "Protocol-TLSv1.1") and av == "true":
+                            weak = True
+                        if (an == "Reference-Security-Policy"
+                                and attr.get("AttributeValue") in self._WEAK_TLS_POLICIES):
+                            weak = True
+                if weak:
+                    self._add("FAIL", "CLB-02", "ELB", name,
+                              f"Classic LB HTTPS/SSL listener uses a weak SSL policy "
+                              f"(permits TLS 1.0/1.1) | {name}")
+                else:
+                    self._add("PASS", "CLB-02", "ELB", name,
+                              f"Classic LB SSL policy OK | {name}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 28: EBS VOLUMES & SNAPSHOTS
