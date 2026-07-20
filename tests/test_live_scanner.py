@@ -98,7 +98,7 @@ def _gaad_iam(users=None, roles=None, groups=None, policies=None):
 class TestDataStructures(unittest.TestCase):
 
     def test_version(self):
-        self.assertEqual(VERSION, "2.16.0")
+        self.assertEqual(VERSION, "2.17.0")
 
     def test_sections_count(self):
         self.assertEqual(len(SECTIONS), 43)
@@ -197,9 +197,23 @@ class TestMaps(unittest.TestCase):
                        "S3-09", "S3-10", "BCK-02", "BCK-03", "DDB-05",
                        "ECS-06", "ECS-07", "ECS-08", "EKS-06", "CNT-06", "LMB-06",
                        "CLB-01", "CLB-02", "VPC-05", "VPC-06", "WAF-05", "CFN-06",
-                       "SM-05", "SM-06", "SM-07"]
+                       "SM-05", "SM-06", "SM-07",
+                       # Phase 7 attack-path fusion (L7 + identity + DSPM)
+                       "EXPOSURE-03", "IDENTITY-01", "DSPM-01", "DSPM-02"]
         for c in new_checks:
             self.assertIn(c, CHECK_SEVERITY, f"{c} missing from CHECK_SEVERITY")
+
+    def test_phase7_maps_lockstep(self):
+        # Every Phase-7 check lands in all three maps in lockstep; COMPLIANCE keys are
+        # confined to the allowed frameworks (no FSBP key); remediation carries a CLI cmd.
+        allowed = {"CIS", "PCI-DSS", "HIPAA", "SOC2", "NIST"}
+        for cid in ("EXPOSURE-03", "IDENTITY-01", "DSPM-01", "DSPM-02"):
+            self.assertIn(cid, CHECK_SEVERITY, f"{cid} missing from CHECK_SEVERITY")
+            self.assertIn(cid, COMPLIANCE_MAP, f"{cid} missing from COMPLIANCE_MAP")
+            self.assertIn(cid, REMEDIATION_MAP, f"{cid} missing from REMEDIATION_MAP")
+            self.assertLessEqual(set(COMPLIANCE_MAP[cid]), allowed,
+                                 f"{cid} has a disallowed compliance key")
+            self.assertIn("aws ", REMEDIATION_MAP[cid].lower())
 
 
 # ─── Test: _add method auto-populates fields ────────────────────────────────

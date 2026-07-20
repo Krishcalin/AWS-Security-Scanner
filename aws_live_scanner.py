@@ -73,7 +73,7 @@ import aws_sidescan
 import aws_engine_eol
 import aws_graph_neptune
 
-VERSION = "2.16.0"
+VERSION = "2.17.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -251,6 +251,11 @@ CHECK_SEVERITY = {
     "IAMPE-21": "HIGH", "IAMPE-22": "HIGH", "IAMPE-23": "CRITICAL",
     # Phase 2: effective internet exposure + attack paths
     "EXPOSURE-01": "HIGH", "EXPOSURE-02": "MEDIUM", "ATTACK-01": "CRITICAL",
+    # Phase 7: L7 reachability (internet-facing LB/CloudFront/API-GW fronting a
+    # workload) + identity fusion (stale admin key = pre-auth account takeover)
+    "EXPOSURE-03": "MEDIUM", "IDENTITY-01": "HIGH",
+    # Phase 7: DSPM crown-jewel datastores (RDS/Redshift/DynamoDB/EFS) w/o Macie
+    "DSPM-01": "MEDIUM", "DSPM-02": "HIGH",
     # Phase 3: deep-plane ingestion (vuln / data / threat) + flagship attack path
     "VULN-01": "HIGH", "VULN-02": "CRITICAL", "VULN-03": "HIGH",
     "VULN-04": "HIGH",
@@ -456,6 +461,8 @@ COMPLIANCE_MAP = {
     "EXPOSURE-01": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EXPOSURE-02": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "ATTACK-01":   {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EXPOSURE-03": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "IDENTITY-01": {"CIS": "1.14", "PCI-DSS": "8.6.3", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.2", "NIST": "IA-5(1)"},
     # Phase 3 deep-plane
     "VULN-01": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "VULN-02": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5(2)"},
@@ -464,6 +471,10 @@ COMPLIANCE_MAP = {
     "DATA-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "DATA-02": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "DATA-03": {"CIS": "2.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    # Phase 7 DSPM: DSPM-01 data-sensitivity (mirrors DATA-01, no single CIS control);
+    # DSPM-02 network-exposure keys (NOT CIS 2.1.1 — that is the S3-only BPA control)
+    "DSPM-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "DSPM-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EXTACCESS-01": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "AC-3"},
     "EXTACCESS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "EXTACCESS-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
@@ -718,6 +729,8 @@ REMEDIATION_MAP = {
     "EXPOSURE-01": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0  (then re-add a scoped CIDR)",
     "EXPOSURE-02": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges or place the workload behind a load balancer/WAF: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
     "ATTACK-01": "Break the path at the exposure or the privilege: remove the public ingress (aws ec2 revoke-security-group-ingress ...) AND scope the instance-profile role to least privilege / apply a permissions boundary: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>",
+    "EXPOSURE-03": "Confirm this L7 front must be internet-facing; if not, make it internal or scope its front-end security group and require WAF/auth at the edge: aws elbv2 set-security-groups --load-balancer-arn <ARN> --security-groups <SCOPED_SG> ; aws ec2 revoke-security-group-ingress --group-id <ALB_SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0 . For CloudFront/API Gateway attach a WAF Web ACL (aws wafv2 associate-web-acl ...) and require authentication.",
+    "IDENTITY-01": "Deactivate and rotate the stale/long-unused privileged access key, then bound the identity: aws iam update-access-key --user-name <USER> --access-key-id <AK_ID> --status Inactive ; aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN> . Prefer short-lived role credentials over long-lived user keys.",
     "VULN-01": "Patch the affected package to fixedInVersion, e.g. run the patch baseline: aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install, then re-scan in Inspector.",
     "VULN-02": "PRIORITIZE — this CVE is on the CISA KEV catalog (actively exploited). Patch immediately (aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install), and if internet-exposed isolate the host: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --groups <QUARANTINE_SG>",
     "VULN-03": "Rebuild the container image on a patched base and push; enable Inspector enhanced ECR scanning: aws inspector2 enable --resource-types ECR",
@@ -725,6 +738,8 @@ REMEDIATION_MAP = {
     "DATA-01": "Confirm the sensitive data is intended here; restrict access, enable default encryption with a CMK, and enable S3 Block Public Access on the bucket: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "DATA-02": "Remove public/external access from the crown-jewel bucket: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "DATA-03": "Enable default encryption on the crown-jewel bucket: aws s3api put-bucket-encryption --bucket <BUCKET> --server-side-encryption-configuration '{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\"}}]}'",
+    "DSPM-01": "Confirm this datastore is authorized to hold the tagged sensitive data class and enforce encryption-at-rest with a CMK + least-privilege reads. DynamoDB: aws dynamodb update-table --table-name <NAME> --sse-specification Enabled=true,SSEType=KMS ; RDS: restore an encrypted snapshot copy; scope reader roles: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <ARN> .",
+    "DSPM-02": "Remove public network reachability from the crown-jewel datastore and place it in private subnets. RDS: aws rds modify-db-instance --db-instance-identifier <ID> --no-publicly-accessible --apply-immediately ; Redshift: aws redshift modify-cluster --cluster-identifier <ID> --no-publicly-accessible ; then deny 0.0.0.0/0 in its security group and scope its reader roles.",
     "EXTACCESS-01": "Remove the public bucket policy / ACL grant (Access Analyzer confirmed public): aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "EXTACCESS-02": "Scope the bucket policy to remove the cross-account principal (or add an aws:PrincipalOrgID condition): aws s3api put-bucket-policy --bucket <BUCKET> --policy <SCOPED_POLICY_JSON>",
     "EXTACCESS-03": "Scope the role's S3 permissions to specific buckets/prefixes instead of s3:GetObject on '*' or 'bucket/*', and bound the role: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN> (identity-policy only — also verify the bucket policy / SCP).",
@@ -1387,6 +1402,11 @@ class AWSLiveScanner:
         # checks. Emitted LATE (in _check_vuln, after IAMPRIVESC hard-replaces the graph)
         # so the identity-graph rebuild can't clobber them.
         self._eol_graph_payloads: List[tuple] = []
+        # Phase-7 fusion: workloads found internet-reachable in EXPOSURE#37 (feeds the
+        # HAS_VULN reachable_service tag in VULN#39); RUNS_IMAGE edges stashed pre-clobber
+        # in ECS#20 for replay in VULN#39 (image-CVE inheritance survives the graph rebuild).
+        self._reachable_workloads: set = set()
+        self._runs_image_payloads: List[tuple] = []
 
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
@@ -8007,9 +8027,9 @@ class AWSLiveScanner:
         to all have contributed; if any is absent (service off) it simply does not fire."""
         if g is None or g.node("internet") is None:
             return
-        crown = {n["id"] for n in g.nodes("S3Bucket") if (n["props"] or {}).get("crown_jewel")}
+        crown = aws_correlate.crown_nodes(g)                # Phase 7: S3 + DSPM datastores
         if not crown:
-            return                                          # no data terminal (Macie off)
+            return                                          # no data terminal (Macie/DSPM off)
         reach = g.reachable("internet", {"EXPOSED_TO", "ATTACHED_TO"}, max_hops=3)
         exposed = [nid for nid in reach if (g.node(nid) or {}).get("kind") == "EC2Instance"]
         kinds = {"CAN_ASSUME", "CAN_PRIVESC_TO", "CAN_READ_DATA"}
@@ -8034,7 +8054,9 @@ class AWSLiveScanner:
             cve = vulns[0]["props"].get("cve", "?")
             kev = any(v["props"].get("kev") for v in vulns)
             iid = (g.node(inst) or {}).get("props", {}).get("instance_id", inst)
-            bucket = sorted(conf or anyb)[0].split(":::")[-1]
+            # Phase 7: crown store may be a non-S3 datastore (RDS/DynamoDB/EFS ARN has no
+            # ':::' segment), so use _label (name prop / arn tail) not a bucket-only split.
+            bucket = aws_correlate._label(g, sorted(conf or anyb)[0])
             boost = (" [ACTIVE THREAT on the path — TOP priority]"
                      if self._node_has_threat(inst) or self._node_has_threat(role) else "")
             if conf:
@@ -8064,8 +8086,7 @@ class AWSLiveScanner:
             self._add("INFO", "PATHS-01", "CORRELATE", "graph",
                       "No internet-facing attack surface in the graph; nothing to correlate")
             return
-        crown = {n["id"] for n in g.nodes("S3Bucket")
-                 if (n["props"] or {}).get("crown_jewel")}
+        crown = aws_correlate.crown_nodes(g)                # Phase 7: S3 + DSPM datastores
         # Precompute the threat set ONCE — the enumerator calls node_has_threat per
         # edge expansion, so it must be O(1), not an O(E) scan of every graph edge.
         threatened = {e["dst"] for e in g.edges("THREAT_ON")}
