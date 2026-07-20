@@ -196,7 +196,7 @@ class TestMaps(unittest.TestCase):
                        "SSM-01", "SSM-02", "LT-01", "ASG-01", "AMI-02", "AMI-03",
                        "S3-09", "S3-10", "BCK-02", "BCK-03", "DDB-05",
                        "ECS-06", "ECS-07", "ECS-08", "EKS-06", "CNT-06", "LMB-06",
-                       "CLB-01", "CLB-02"]
+                       "CLB-01", "CLB-02", "VPC-05", "VPC-06"]
         for c in new_checks:
             self.assertIn(c, CHECK_SEVERITY, f"{c} missing from CHECK_SEVERITY")
 

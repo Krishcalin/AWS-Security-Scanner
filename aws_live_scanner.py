@@ -172,6 +172,7 @@ CHECK_SEVERITY = {
     "S3-01": "HIGH", "S3-03": "HIGH", "S3-05": "MEDIUM",
     "S3-07": "MEDIUM", "S3-08": "MEDIUM", "S3-09": "HIGH", "S3-10": "HIGH",
     "VPC-01": "HIGH", "VPC-03": "MEDIUM", "VPC-04": "MEDIUM",
+    "VPC-05": "HIGH", "VPC-06": "MEDIUM",
     "LOG-01": "CRITICAL", "LOG-03": "HIGH", "LOG-04": "CRITICAL", "LOG-05": "MEDIUM",
     "LOG-06": "MEDIUM", "LOG-07": "MEDIUM", "LOG-08": "MEDIUM", "LOG-09": "CRITICAL",
     "LOG-10": "HIGH",
@@ -304,6 +305,8 @@ COMPLIANCE_MAP = {
     "VPC-01": {"CIS": "5.2", "PCI-DSS": "1.3.2", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "VPC-03": {"CIS": "3.7", "PCI-DSS": "10.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
     "VPC-04": {"CIS": "5.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "VPC-05": {"CIS": "5.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "VPC-06": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     # Logging
     "LOG-01": {"CIS": "3.1", "PCI-DSS": "10.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "LOG-03": {"CIS": "3.5", "PCI-DSS": "10.5.3", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "CM-8"},
@@ -546,6 +549,8 @@ REMEDIATION_MAP = {
     "VPC-01": "Revoke risky SG rule: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
     "VPC-03": "Enable VPC Flow Logs: aws ec2 create-flow-logs --resource-type VPC --resource-ids <VPC_ID> --traffic-type ALL --log-destination-type cloud-watch-logs --log-group-name vpc-flow-logs",
     "VPC-04": "Strip all rules from each default SG so it denies all traffic (CIS 5.4): aws ec2 revoke-security-group-ingress --group-id <SG_ID> --ip-permissions ... and aws ec2 revoke-security-group-egress --group-id <SG_ID> --ip-permissions ... ; migrate workloads to purpose-built SGs",
+    "VPC-05": "Deny (or delete) the world-open admin-port NACL rule: aws ec2 replace-network-acl-entry --network-acl-id <NACL_ID> --rule-number <RULE_NUM> --protocol tcp --port-range From=3389,To=3389 --cidr-block 0.0.0.0/0 --rule-action deny --ingress",
+    "VPC-06": "Remove the unauthorized cross-account peer (or tighten route tables to least-privilege CIDRs): aws ec2 delete-vpc-peering-connection --vpc-peering-connection-id <PCX_ID>",
     "LOG-01": "Create multi-region trail: aws cloudtrail create-trail --name org-trail --s3-bucket-name <BUCKET> --is-multi-region-trail --enable-log-file-validation && aws cloudtrail start-logging --name org-trail",
     "LOG-03": "Start Config recorder: aws configservice start-configuration-recorder --configuration-recorder-name default",
     "LOG-04": "Enable GuardDuty: aws guardduty create-detector --enable",
@@ -1931,6 +1936,89 @@ class AWSLiveScanner:
                               f"No Flow Logs | {vid}")
         except Exception as e:
             self._add("FAIL", "VPC-03", "VPC", "vpcs", str(e))
+
+        # VPC-05 — NACL allows internet ingress to admin ports 22/3389. NACLs are STATELESS
+        # and RuleNumber first-match-wins, so a low-numbered deny before an allow-all negates
+        # exposure — a naive 'any allow to 0.0.0.0/0' scan produces false FAILs.
+        self._log("VPC-05: Network ACLs allowing 0.0.0.0/0 to admin ports 22/3389")
+        _ADMIN = {22: "SSH", 3389: "RDP"}
+        try:
+            nacls = []
+            for page in ec2.get_paginator("describe_network_acls").paginate():
+                nacls.extend(page.get("NetworkAcls", []))
+        except Exception as e:
+            self._add("WARN", "VPC-05", "VPC", "network-acls",
+                      f"describe_network_acls failed: {e}")
+            nacls = None
+        if nacls is not None:
+            evaluated, world_open = 0, 0
+            for nacl in nacls:
+                evaluated += 1
+                nid = nacl.get("NetworkAclId", "unknown")
+                is_default = nacl.get("IsDefault", False)
+                ingress = sorted((e for e in nacl.get("Entries", []) if not e.get("Egress")),
+                                 key=lambda e: e.get("RuleNumber", 32767))
+                for port, pname in _ADMIN.items():
+                    decided = None
+                    for e in ingress:                 # first matching rule wins
+                        world = ((e.get("CidrBlock") == "0.0.0.0/0"
+                                  or e.get("Ipv6CidrBlock") == "::/0")
+                                 and self._nacl_covers_port(e, port))
+                        if world:
+                            decided = e.get("RuleAction")
+                            break
+                    if decided == "allow":
+                        world_open += 1
+                        # default NACL ships allow-all (SGs are the primary control) -> WARN
+                        self._add("WARN" if is_default else "FAIL", "VPC-05", "VPC", nid,
+                                  f"NACL allows {pname}({port}) from the internet "
+                                  f"({'default' if is_default else 'custom'} NACL) | {nid}")
+            # AGGREGATE-PASS-MUST-COUNT: only all-clear when NACLs were actually read
+            if evaluated and world_open == 0:
+                self._add("PASS", "VPC-05", "VPC", "network-acls",
+                          "All NACLs restrict admin ports 22/3389 from the internet")
+
+        # VPC-06 — active cross-account VPC peering (trust-boundary crossing)
+        self._log("VPC-06: active cross-account VPC peering connections")
+        try:
+            pcxs = []
+            for page in ec2.get_paginator("describe_vpc_peering_connections").paginate():
+                pcxs.extend(page.get("VpcPeeringConnections", []))
+        except Exception as e:
+            self._add("WARN", "VPC-06", "VPC", "vpc-peering",
+                      f"describe_vpc_peering_connections failed: {e}")
+            pcxs = None
+        if pcxs is not None:
+            active = [p for p in pcxs if (p.get("Status") or {}).get("Code") == "active"]
+            if not active:
+                self._add("INFO", "VPC-06", "VPC", "vpc-peering",
+                          "No active VPC peering connections")
+            for p in active:
+                pid = p.get("VpcPeeringConnectionId", "unknown")
+                acc = (p.get("AccepterVpcInfo") or {}).get("OwnerId")
+                req = (p.get("RequesterVpcInfo") or {}).get("OwnerId")
+                # requester/accepter roles are not stable — compare the two owner ids
+                if acc and req and acc != req:
+                    other = acc if req == self.account else req
+                    self._add("WARN", "VPC-06", "VPC", pid,
+                              f"Cross-account peering {pid}: peer account {other} "
+                              f"(verify authorized) | {pid}")
+                else:
+                    self._add("PASS", "VPC-06", "VPC", pid, f"Intra-account peering {pid}")
+
+    @staticmethod
+    def _nacl_covers_port(entry, port):
+        """Does a NACL entry's protocol/port-range cover `port`? Protocol is a STRING
+        ('-1' all, '6' tcp, '17' udp). PortRange is ABSENT when Protocol=='-1' (all ports)."""
+        proto = str(entry.get("Protocol", "-1"))
+        if proto == "-1":
+            return True
+        if proto != "6":                              # admin ports are TCP
+            return False
+        pr = entry.get("PortRange")
+        if not pr:
+            return True                               # tcp with no explicit range = all ports
+        return pr.get("From", 0) <= port <= pr.get("To", 65535)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 4: LOGGING & MONITORING
