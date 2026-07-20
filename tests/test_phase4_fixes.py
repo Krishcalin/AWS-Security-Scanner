@@ -40,6 +40,23 @@ def test_symlink_still_baked_when_surviving_no_marker_leak():
     assert not any(isinstance(v, tuple) for v in m.values())   # no marker tuple leaks
 
 
+def test_symlink_chain_resolves_deterministically():
+    # a -> b -> real/lock.json : a 2-hop chain must bake the real bytes regardless of
+    # tar member order (was order-dependent single-hop, verify nit fixed to fixed-point).
+    m = ss.merge_layers([_layer(
+        {"real/lock.json": b'{"name":"x"}'},
+        symlinks=[("app/lock", "./mid"), ("app/mid", "../real/lock.json")])])
+    assert m.get("/app/lock") == b'{"name":"x"}'
+    assert m.get("/app/mid") == b'{"name":"x"}'
+    assert not any(isinstance(v, tuple) for v in m.values())
+
+
+def test_symlink_cycle_dropped_not_leaked():
+    m = ss.merge_layers([_layer(symlinks=[("a/x", "./y"), ("a/y", "./x")])])
+    assert "/a/x" not in m and "/a/y" not in m          # cycle -> dropped, never a tuple
+    assert not any(isinstance(v, tuple) for v in m.values())
+
+
 # 8. root-level opaque clears the whole lower tree
 def test_root_opaque_clears_lower():
     m = ss.merge_layers([_layer({"a": b"1", "b/c": b"2"}), _layer({"d": b"n"}, opaque_dirs=[""])])

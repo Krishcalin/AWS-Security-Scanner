@@ -197,31 +197,45 @@ def merge_layers(layers: List[bytes], *, max_file_bytes: int = 10_000_000,
             tf.close()
         except Exception:
             pass
-    # Resolve surviving symlink markers (single hop): bake target bytes ONLY when the
-    # target is a real file; drop unresolved / symlink-to-symlink. A symlink whited-out
-    # or overwritten by a real file in an upper layer never reaches here.
+    def _resolve_target(linkpath: str, target: str) -> str:
+        if target.startswith("/"):
+            return "/" + "/".join(s for s in target.split("/") if s and s != ".")
+        parts = [s for s in linkpath.rsplit("/", 1)[0].strip("/").split("/") if s]
+        for seg in target.split("/"):
+            if seg in ("", "."):
+                continue
+            if seg == "..":
+                if parts:
+                    parts.pop()
+            else:
+                parts.append(seg)
+        return "/" + "/".join(parts)
+
+    # Resolve surviving symlink markers by following the chain (bounded, deterministic
+    # regardless of tar member order): bake real-file bytes into the link path; drop
+    # unresolved / cyclic. A symlink whited-out or overwritten by a real file in an
+    # upper layer never reaches here (it participated in per-layer overlay above).
     for linkpath, val in list(merged.items()):
         if not (isinstance(val, tuple) and val[0] == "\x00sym"):
             continue
-        target = val[1]
-        if target.startswith("/"):
-            resolved = "/" + "/".join(s for s in target.split("/") if s and s != ".")
+        cur, cur_val, seen, baked = linkpath, val, set(), None
+        for _ in range(8):
+            if cur in seen:
+                break                            # symlink cycle
+            seen.add(cur)
+            nxt = _resolve_target(cur, cur_val[1])
+            tv = merged.get(nxt)
+            if isinstance(tv, bytes):
+                baked = tv
+                break
+            if isinstance(tv, tuple) and tv[0] == "\x00sym":
+                cur, cur_val = nxt, tv
+                continue
+            break                                # dead end
+        if isinstance(baked, bytes):
+            merged[linkpath] = baked
         else:
-            parts = [s for s in linkpath.rsplit("/", 1)[0].strip("/").split("/") if s]
-            for seg in target.split("/"):
-                if seg in ("", "."):
-                    continue
-                if seg == "..":
-                    if parts:
-                        parts.pop()
-                else:
-                    parts.append(seg)
-            resolved = "/" + "/".join(parts)
-        tv = merged.get(resolved)
-        if isinstance(tv, bytes):
-            merged[linkpath] = tv
-        else:
-            del merged[linkpath]                 # unresolved / points at a symlink -> drop
+            del merged[linkpath]
     return merged
 
 
