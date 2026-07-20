@@ -50,7 +50,7 @@ import fnmatch
 import argparse
 from urllib.parse import unquote
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
@@ -70,9 +70,10 @@ import aws_effperm
 import aws_state
 import aws_unused
 import aws_sidescan
+import aws_engine_eol
 import aws_graph_neptune
 
-VERSION = "2.14.0"
+VERSION = "2.15.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -189,7 +190,9 @@ CHECK_SEVERITY = {
     "BCK-01": "MEDIUM",
     "RDS-01": "HIGH", "RDS-02": "CRITICAL", "RDS-03": "MEDIUM",
     "RDS-04": "MEDIUM", "RDS-05": "LOW", "RDS-06": "CRITICAL",
-    "RDS-08": "MEDIUM", "RDS-11": "HIGH",
+    "RDS-08": "MEDIUM", "RDS-11": "HIGH", "RDS-12": "HIGH",
+    "AUR-01": "HIGH", "AUR-02": "MEDIUM", "AUR-03": "HIGH",
+    "AUR-04": "CRITICAL", "AUR-05": "HIGH",
     "GLC-01": "CRITICAL", "GLC-02": "MEDIUM", "GLC-03": "LOW",
     "SNS-01": "MEDIUM", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
     "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "MEDIUM", "SQS-04": "LOW",
@@ -211,8 +214,9 @@ CHECK_SEVERITY = {
     "SEC-05": "CRITICAL",
     "WAF-01": "HIGH", "WAF-02": "MEDIUM", "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
     "ELC-01": "HIGH", "ELC-02": "HIGH", "ELC-03": "HIGH", "ELC-04": "MEDIUM",
+    "ELC-05": "HIGH", "ELC-06": "MEDIUM",
     "OSR-01": "HIGH", "OSR-02": "HIGH", "OSR-03": "MEDIUM",
-    "OSR-04": "HIGH", "OSR-05": "HIGH",
+    "OSR-04": "HIGH", "OSR-05": "HIGH", "OSR-06": "MEDIUM", "OSR-07": "HIGH",
     "DDB-01": "HIGH", "DDB-02": "HIGH", "DDB-03": "MEDIUM", "DDB-04": "MEDIUM",
     "SFN-01": "MEDIUM", "SFN-02": "LOW", "SFN-03": "MEDIUM",
     "APIGW-01": "MEDIUM", "APIGW-02": "MEDIUM", "APIGW-03": "HIGH", "APIGW-04": "LOW",
@@ -220,6 +224,8 @@ CHECK_SEVERITY = {
     "ELB-04": "LOW", "ELB-05": "MEDIUM", "ELB-07": "MEDIUM",
     "EBS-01": "HIGH", "EBS-02": "HIGH", "EBS-03": "MEDIUM", "EBS-04": "CRITICAL",
     "RS-01": "HIGH", "RS-02": "HIGH", "RS-03": "MEDIUM", "RS-04": "MEDIUM", "RS-05": "LOW",
+    "RS-06": "HIGH", "RS-07": "MEDIUM",
+    "RSS-01": "HIGH", "RSS-02": "MEDIUM", "RSS-03": "HIGH", "RSS-04": "MEDIUM",
     "EFS-01": "HIGH", "EFS-02": "MEDIUM", "EFS-03": "LOW",
     "ACM-01": "HIGH", "ACM-02": "MEDIUM", "ACM-03": "LOW",
     "ACM-04": "HIGH", "ACM-05": "MEDIUM",
@@ -337,6 +343,12 @@ COMPLIANCE_MAP = {
     "RDS-06": {"CIS": "2.3.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "RDS-08": {"PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2"},
     "RDS-11": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "RDS-12": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "AUR-01": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "AUR-02": {"PCI-DSS": "10.5.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.1", "NIST": "CP-9"},
+    "AUR-03": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "AUR-04": {"CIS": "2.3.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "AUR-05": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     # CloudFront
     "CFN-01": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "CFN-02": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
@@ -363,6 +375,8 @@ COMPLIANCE_MAP = {
     "OSR-02": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "OSR-04": {"PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "OSR-05": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "OSR-06": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "OSR-07": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "DDB-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "DDB-02": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
     # API Gateway
@@ -385,6 +399,12 @@ COMPLIANCE_MAP = {
     "RS-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "RS-03": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "RS-04": {"PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "RS-06": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "RS-07": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "RSS-01": {"CIS": "2.3.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "RSS-02": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "RSS-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "RSS-04": {"PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     # EFS
     "EFS-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "EFS-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
@@ -461,6 +481,8 @@ COMPLIANCE_MAP = {
     "WAF-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "WAF-04": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "ELC-04": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
+    "ELC-05": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "ELC-06": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "OSR-03": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "SFN-01": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "SFN-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
@@ -537,6 +559,12 @@ REMEDIATION_MAP = {
     "RDS-06": "Remove public access from snapshot: aws rds modify-db-snapshot-attribute --db-snapshot-identifier <SNAP_ID> --attribute-name restore --values-to-remove all",
     "RDS-08": "Enable IAM database authentication so short-lived IAM tokens replace static passwords: aws rds modify-db-instance --db-instance-identifier <DB_ID> --enable-iam-database-authentication --apply-immediately",
     "RDS-11": "Recreate the snapshot encrypted (copy with a KMS key, then delete the plaintext one): aws rds copy-db-snapshot --source-db-snapshot-identifier <SNAP_ID> --target-db-snapshot-identifier <SNAP_ID>-enc --kms-key-id <KMS_KEY>",
+    "RDS-12": "Upgrade the instance to a supported engine version: aws rds modify-db-instance --db-instance-identifier <DB_ID> --engine-version <SUPPORTED_VERSION> --allow-major-version-upgrade --apply-immediately",
+    "AUR-01": "Aurora encryption at rest can only be set at creation — snapshot the cluster and restore with a KMS key: aws rds restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAP> --engine <ENGINE> --kms-key-id <KMS_KEY>",
+    "AUR-02": "Enable deletion protection on the cluster: aws rds modify-db-cluster --db-cluster-identifier <CLUSTER_ID> --deletion-protection --apply-immediately",
+    "AUR-03": "Upgrade the cluster to a supported engine version: aws rds modify-db-cluster --db-cluster-identifier <CLUSTER_ID> --engine-version <SUPPORTED_VERSION> --allow-major-version-upgrade --apply-immediately",
+    "AUR-04": "Remove public restore access from the cluster snapshot: aws rds modify-db-cluster-snapshot-attribute --db-cluster-snapshot-identifier <SNAP_ID> --attribute-name restore --values-to-remove all",
+    "AUR-05": "Recreate the cluster snapshot encrypted with a KMS key: aws rds copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier <SNAP_ID> --target-db-cluster-snapshot-identifier <SNAP_ID>-enc --kms-key-id <KMS_KEY>",
     "CFN-01": "Enforce HTTPS: aws cloudfront update-distribution --id <DIST_ID> --default-cache-behavior '{\"ViewerProtocolPolicy\":\"https-only\"}'",
     "CFN-03": "Associate WAF: aws cloudfront update-distribution --id <DIST_ID> --web-acl-id <WAF_ACL_ARN>",
     "LMB-01": "Remove public access: aws lambda remove-permission --function-name <FUNC> --statement-id <SID>",
@@ -549,9 +577,13 @@ REMEDIATION_MAP = {
     "SEC-05": "Remove the public/cross-account grant (or scope it with aws:PrincipalOrgID) and block public policies: aws secretsmanager put-resource-policy --secret-id <SECRET_ARN> --block-public-policy --resource-policy file://scoped-policy.json ; or drop it: aws secretsmanager delete-resource-policy --secret-id <SECRET_ARN>",
     "ELC-01": "Enable at-rest encryption on new cluster: aws elasticache create-replication-group --replication-group-id <ID> --at-rest-encryption-enabled",
     "ELC-02": "Enable in-transit encryption on new cluster: aws elasticache create-replication-group --replication-group-id <ID> --transit-encryption-enabled",
+    "ELC-05": "Upgrade the cache to a supported engine version: aws elasticache modify-replication-group --replication-group-id <ID> --engine-version <SUPPORTED_VERSION> --apply-immediately",
+    "ELC-06": "Attach an RBAC user group (Redis/Valkey 6+): aws elasticache modify-replication-group --replication-group-id <ID> --user-group-ids-to-add <USER_GROUP_ID> --apply-immediately",
     "OSR-01": "Enforce HTTPS: aws opensearch update-domain-config --domain-name <DOMAIN> --domain-endpoint-options EnforceHTTPS=true,TLSSecurityPolicy=Policy-Min-TLS-1-2-2019-07",
     "OSR-02": "Enable encryption at rest: aws opensearch update-domain-config --domain-name <DOMAIN> --encrypt-at-rest-options Enabled=true",
     "OSR-04": "Configure VPC: aws opensearch update-domain-config --domain-name <DOMAIN> --vpc-options SubnetIds=<SUBNETS>,SecurityGroupIds=<SGS>",
+    "OSR-06": "Require min TLS 1.2: aws opensearch update-domain-config --domain-name <DOMAIN> --domain-endpoint-options EnforceHTTPS=true,TLSSecurityPolicy=Policy-Min-TLS-1-2-2019-07",
+    "OSR-07": "Upgrade to a supported engine version: aws opensearch upgrade-domain --domain-name <DOMAIN> --target-version OpenSearch_2.13",
     "DDB-01": "Enable CMK encryption: aws dynamodb update-table --table-name <TABLE> --sse-specification Enabled=true,SSEType=KMS",
     "DDB-02": "Enable PITR: aws dynamodb update-continuous-backups --table-name <TABLE> --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true",
     "DDB-04": "Enable deletion protection: aws dynamodb update-table --table-name <TABLE> --deletion-protection-enabled",
@@ -574,6 +606,12 @@ REMEDIATION_MAP = {
     "RS-02": "Disable public access: aws redshift modify-cluster --cluster-identifier <CLUSTER> --no-publicly-accessible",
     "RS-03": "Enable audit logging: aws redshift enable-logging --cluster-identifier <CLUSTER> --bucket-name <LOG_BUCKET>",
     "RS-04": "Enable enhanced VPC routing: aws redshift modify-cluster --cluster-identifier <CLUSTER> --enhanced-vpc-routing",
+    "RS-06": "Require TLS by setting require_ssl=true on the cluster parameter group: aws redshift modify-cluster-parameter-group --parameter-group-name <PG> --parameters ParameterName=require_ssl,ParameterValue=true",
+    "RS-07": "Re-enable managed version upgrades: aws redshift modify-cluster --cluster-identifier <CLUSTER> --allow-version-upgrade",
+    "RSS-01": "Make the Serverless workgroup private: aws redshift-serverless update-workgroup --workgroup-name <WG> --no-publicly-accessible",
+    "RSS-02": "Recreate the namespace with a customer-managed KMS key: aws redshift-serverless update-namespace --namespace-name <NS> --kms-key-id <KMS_KEY>",
+    "RSS-03": "Require TLS on the Serverless workgroup: aws redshift-serverless update-workgroup --workgroup-name <WG> --config-parameters parameterKey=require_ssl,parameterValue=true",
+    "RSS-04": "Enable enhanced VPC routing on the Serverless workgroup: aws redshift-serverless update-workgroup --workgroup-name <WG> --enhanced-vpc-routing",
     "EFS-01": "Recreate encrypted: aws efs create-file-system --encrypted --kms-key-id <KMS_KEY> (encryption can only be set at creation; migrate data via DataSync)",
     "EFS-02": "Enforce TLS in policy: aws efs put-file-system-policy --file-system-id <FS_ID> --policy '{\"Statement\":[{\"Effect\":\"Deny\",\"Principal\":{\"AWS\":\"*\"},\"Action\":\"*\",\"Condition\":{\"Bool\":{\"aws:SecureTransport\":\"false\"}}}]}'",
     "EFS-03": "Enable backups: aws efs put-backup-policy --file-system-id <FS_ID> --backup-policy Status=ENABLED",
@@ -1279,6 +1317,12 @@ class AWSLiveScanner:
         self._sidescan_extractor_opener = None      # test seam: (vol_ids, iid) -> CM
         self._remediation_report: Optional[Dict] = None   # Phase 7 --remediate
         self._code_to_cloud_meta: Optional[Dict] = None
+        # ── Phase 5b: managed-service engine-EOL axis ────────────────────────
+        self._today: Optional[date] = None   # test clock seam; None -> utcnow().date()
+        # Stashed (node_id, node_kind, matches, node_props) HAS_VULN payloads from EOL
+        # checks. Emitted LATE (in _check_vuln, after IAMPRIVESC hard-replaces the graph)
+        # so the identity-graph rebuild can't clobber them.
+        self._eol_graph_payloads: List[tuple] = []
 
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
@@ -2712,6 +2756,28 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 9: AMAZON RDS
     # ══════════════════════════════════════════════════════════════════════════
+    # ── Phase 5b: managed-service engine-EOL helpers ──────────────────────────
+    def _scan_date(self) -> date:
+        """The date EOL verdicts are evaluated against — injectable for deterministic
+        tests (self._today), else today (UTC)."""
+        return self._today or datetime.now(timezone.utc).date()
+
+    def _stash_eol_edge(self, node_id: str, node_kind: str, matches, **node_props):
+        """Queue a HAS_VULN payload for LATE emission (after IAMPRIVESC rebuilds the
+        graph). Findings themselves are added inline via self._add; only the graph edge
+        is deferred, because _build_identity_graph does a hard graph replace."""
+        if node_id and matches:
+            self._eol_graph_payloads.append((node_id, node_kind, list(matches), node_props))
+
+    def _eol_check(self, service: str, engine: str, version: str):
+        """Evaluate one managed engine version. Returns (verdict, matches):
+        verdict in {'EOL','OK','UNKNOWN'}; matches is the synthetic EnrichedMatch list."""
+        if not aws_engine_eol.evaluable(service, engine, version):
+            return "UNKNOWN", []
+        matches = aws_engine_eol.managed_engine_cve(
+            service, engine, version, today=self._scan_date())
+        return ("EOL" if matches else "OK"), matches
+
     def _check_rds(self):
         self._section_header("RDS")
         rds = self._client("rds")
@@ -2869,6 +2935,154 @@ class AWSLiveScanner:
                           f"All {len(snaps)} manual RDS snapshots encrypted at rest")
         except Exception as e:
             self._add("FAIL", "RDS-06", "RDS", "rds-snapshots", str(e))
+
+        # RDS-12 — Instance engine end-of-life (Aurora skipped here; AUR-03 covers it at
+        # the cluster level). Inline-paginate in OWN try/except — do NOT reuse
+        # _rds_instances() which swallows API errors (false-clean trap).
+        self._log("RDS-12: RDS instance engine end-of-life / past standard support")
+        try:
+            instances = []
+            for page in rds.get_paginator("describe_db_instances").paginate():
+                instances.extend(page.get("DBInstances", []))
+        except Exception as e:
+            self._add("WARN", "RDS-12", "RDS", "rds",
+                      f"describe_db_instances failed (engine EOL not evaluated): {e}")
+            instances = None
+        if instances is not None:
+            if not instances:
+                self._add("INFO", "RDS-12", "RDS", "rds", "No RDS instances found in this region")
+            for db in instances:
+                engine = db.get("Engine", "")
+                if engine.startswith("aurora"):
+                    continue
+                iid = db["DBInstanceIdentifier"]
+                ev  = db.get("EngineVersion", "")
+                verdict, matches = self._eol_check("rds", engine, ev)
+                if verdict == "EOL":
+                    self._add("FAIL", "RDS-12", "RDS", iid,
+                              f"Engine END-OF-LIFE: {engine} {ev} past standard support "
+                              f"(upgrade to >= {matches[0].fixed_version}) | {iid}")
+                    self._stash_eol_edge(db.get("DBInstanceArn", iid), "RDSInstance", matches,
+                                         engine=engine, engine_version=ev, region=self.region)
+                elif verdict == "OK":
+                    self._add("PASS", "RDS-12", "RDS", iid,
+                              f"Engine supported: {engine} {ev} | {iid}")
+                else:
+                    self._add("INFO", "RDS-12", "RDS", iid,
+                              f"Engine EOL not evaluable: {engine} {ev} | {iid}")
+
+        # AUR-01/02/03 — Aurora / Multi-AZ DB CLUSTER: encryption, deletion protection,
+        # engine EOL. describe_db_clusters is a SEPARATE plane from describe_db_instances —
+        # today's RDS-01..11 never see a cluster, so Aurora Serverless-v1 / headless
+        # clusters are entirely unscanned without this.
+        self._log("AUR-01/02/03: Aurora cluster encryption, deletion protection, engine EOL")
+        try:
+            clusters = []
+            for page in rds.get_paginator("describe_db_clusters").paginate():
+                clusters.extend(page.get("DBClusters", []))
+        except Exception as e:
+            self._add("WARN", "AUR-01", "RDS", "rds", f"describe_db_clusters failed: {e}")
+            clusters = None
+        if clusters is not None:
+            if not clusters:
+                self._add("INFO", "AUR-01", "RDS", "rds",
+                          "No Aurora/Multi-AZ DB clusters found in this region")
+            for cl in clusters:
+                cid    = cl.get("DBClusterIdentifier", "unknown")
+                carn   = cl.get("DBClusterArn", cid)
+                engine = cl.get("Engine", "")
+                ev     = cl.get("EngineVersion", "")
+                # AUR-01 cluster encryption at rest
+                if cl.get("StorageEncrypted", False):
+                    self._add("PASS", "AUR-01", "RDS", cid,
+                              f"Cluster storage encryption=ON | {cid} ({engine})")
+                else:
+                    self._add("FAIL", "AUR-01", "RDS", cid,
+                              f"Cluster storage encryption=OFF | {cid} ({engine})")
+                # AUR-02 cluster deletion protection (authoritative for Aurora; distinct from RDS-04)
+                if cl.get("DeletionProtection", False):
+                    self._add("PASS", "AUR-02", "RDS", cid,
+                              f"Cluster deletion protection=ON | {cid}")
+                else:
+                    self._add("FAIL", "AUR-02", "RDS", cid,
+                              f"Cluster deletion protection=OFF | {cid}")
+                # AUR-03 cluster engine EOL
+                verdict, matches = self._eol_check("rds", engine, ev)
+                if verdict == "EOL":
+                    self._add("FAIL", "AUR-03", "RDS", cid,
+                              f"Cluster engine END-OF-LIFE: {engine} {ev} "
+                              f"(upgrade to >= {matches[0].fixed_version}) | {cid}")
+                    self._stash_eol_edge(carn, "RDSCluster", matches,
+                                         engine=engine, engine_version=ev, region=self.region)
+                elif verdict == "OK":
+                    self._add("PASS", "AUR-03", "RDS", cid,
+                              f"Cluster engine supported: {engine} {ev} | {cid}")
+                else:
+                    self._add("INFO", "AUR-03", "RDS", cid,
+                              f"Cluster engine EOL not evaluable: {engine} {ev} | {cid}")
+
+        # AUR-04/05 — Aurora CLUSTER snapshots: public visibility + encryption at rest.
+        # Distinct API + id-namespace from instance snapshots (RDS-06/11) — zero overlap.
+        self._log("AUR-04/05: Aurora cluster snapshot public visibility and encryption")
+        try:
+            csnaps = []
+            for page in rds.get_paginator("describe_db_cluster_snapshots").paginate(
+                SnapshotType="manual"
+            ):
+                csnaps.extend(page.get("DBClusterSnapshots", []))
+        except Exception as e:
+            self._add("WARN", "AUR-04", "RDS", "rds",
+                      f"describe_db_cluster_snapshots failed: {e}")
+            csnaps = None
+        if csnaps is not None:
+            if not csnaps:
+                self._add("INFO", "AUR-04", "RDS", "cluster-snapshots",
+                          "No manual Aurora/RDS cluster snapshots in this region")
+            public_c = 0
+            unenc_c  = 0
+            read_ok  = 0    # snapshots whose restore-attribute was actually evaluated
+            read_err = 0    # snapshots whose attribute read failed (visibility UNKNOWN)
+            for s in csnaps:
+                sid = s["DBClusterSnapshotIdentifier"]
+                # AUR-05 cluster-snapshot encryption (field is StorageEncrypted — the
+                # cluster-snapshot shape differs from the instance-snapshot 'Encrypted')
+                if not s.get("StorageEncrypted", False):
+                    unenc_c += 1
+                    self._add("FAIL", "AUR-05", "RDS", sid,
+                              f"Manual Aurora cluster snapshot NOT encrypted at rest: {sid} "
+                              f"— plaintext DB data if shared/leaked")
+                # AUR-04 public visibility — OWN try/except per snapshot (surface the error,
+                # do NOT silently `pass` like RDS-06 which can mis-read a public snapshot as private)
+                try:
+                    attrs = rds.describe_db_cluster_snapshot_attributes(
+                        DBClusterSnapshotIdentifier=sid
+                    )["DBClusterSnapshotAttributesResult"]["DBClusterSnapshotAttributes"]
+                    read_ok += 1
+                    if any(a.get("AttributeName") == "restore"
+                           and "all" in a.get("AttributeValues", []) for a in attrs):
+                        public_c += 1
+                        self._add("FAIL", "AUR-04", "RDS", sid,
+                                  f"Aurora cluster snapshot PUBLICLY RESTORABLE by any AWS "
+                                  f"account: {sid} — CRITICAL")
+                except Exception as e:
+                    read_err += 1
+                    self._add("WARN", "AUR-04", "RDS", sid,
+                              f"cluster-snapshot attribute read failed (public visibility "
+                              f"UNDETERMINED): {e}")
+            # Only an all-clear when EVERY snapshot's restore attribute was actually read.
+            # A denied/throttled read leaves public visibility unknown — never a false PASS
+            # (the whole point of the per-snapshot try/except above).
+            if csnaps and public_c == 0 and read_err == 0:
+                self._add("PASS", "AUR-04", "RDS", "cluster-snapshots",
+                          f"No public Aurora cluster snapshots ({read_ok} manual checked)")
+            elif csnaps and public_c == 0 and read_err:
+                self._add("WARN", "AUR-04", "RDS", "cluster-snapshots",
+                          f"Public visibility UNDETERMINED for {read_err} of {len(csnaps)} "
+                          f"manual cluster snapshots (attribute read denied/throttled) — "
+                          f"{read_ok} confirmed not public")
+            if csnaps and unenc_c == 0:
+                self._add("PASS", "AUR-05", "RDS", "cluster-snapshots",
+                          f"All {len(csnaps)} manual Aurora cluster snapshots encrypted at rest")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 10: AMAZON S3 GLACIER
@@ -4523,18 +4737,20 @@ class AWSLiveScanner:
         self._section_header("ELASTICACHE")
         ec = self._client("elasticache")
 
+        # ELC-01..04 + ELC-06 — Redis/Valkey replication groups. Do NOT early-return on
+        # empty/error: ELC-05 (engine EOL, below) must still run — it covers Memcached
+        # (which has no replication group at all) via describe_cache_clusters.
         try:
             clusters = ec.describe_replication_groups().get(
                 "ReplicationGroups", [])
         except Exception as e:
             self._add("WARN", "ELC-01", "ELASTICACHE", "elasticache", str(e))
-            return
-        if not clusters:
+            clusters = None
+        if clusters is not None and not clusters:
             self._add("INFO", "ELC-01", "ELASTICACHE", "elasticache",
                       "No ElastiCache replication groups found")
-            return
 
-        for rg in clusters:
+        for rg in (clusters or []):
             rgid = rg.get("ReplicationGroupId", "unknown")
             # ELC-01 — Encryption at rest
             if rg.get("AtRestEncryptionEnabled", False):
@@ -4564,6 +4780,61 @@ class AWSLiveScanner:
             else:
                 self._add("WARN", "ELC-04", "ELASTICACHE", rgid,
                           f"Auto failover=OFF | {rgid}")
+            # ELC-06 — Redis/Valkey RBAC (user groups). Replication groups are Redis/Valkey
+            # only (Memcached has none), so absent/empty UserGroupIds means no per-user
+            # access control — the cache falls back to an AUTH token or network-only.
+            engine = (rg.get("Engine") or "redis").lower()
+            if engine in ("redis", "valkey"):
+                if rg.get("UserGroupIds"):
+                    self._add("PASS", "ELC-06", "ELASTICACHE", rgid,
+                              f"RBAC user group attached | {rgid}")
+                else:
+                    self._add("FAIL", "ELC-06", "ELASTICACHE", rgid,
+                              f"No RBAC user group — no per-user access control "
+                              f"(relies on AUTH token / network isolation) | {rgid}")
+
+        # ELC-05 — Engine end-of-life. describe_replication_groups carries NO EngineVersion
+        # (verified), so this uses describe_cache_clusters. Dedup by replication group so an
+        # N-node Redis cluster yields ONE finding/edge; standalone Memcached (never in a
+        # replication group) is covered here. Inline-paginate in OWN try/except.
+        self._log("ELC-05: ElastiCache engine end-of-life")
+        try:
+            cache_clusters = []
+            for page in ec.get_paginator("describe_cache_clusters").paginate():
+                cache_clusters.extend(page.get("CacheClusters", []))
+        except Exception as e:
+            self._add("WARN", "ELC-05", "ELASTICACHE", "elasticache",
+                      f"describe_cache_clusters failed (engine EOL not evaluated): {e}")
+            cache_clusters = None
+        if cache_clusters is not None:
+            if not cache_clusters:
+                self._add("INFO", "ELC-05", "ELASTICACHE", "elasticache",
+                          "No ElastiCache clusters found in this region")
+            seen: set = set()
+            for cc in cache_clusters:
+                rgid = cc.get("ReplicationGroupId")
+                ccid = cc.get("CacheClusterId", "unknown")
+                key  = rgid or ccid
+                if key in seen:
+                    continue
+                seen.add(key)
+                engine = cc.get("Engine", "")
+                ev     = cc.get("EngineVersion", "")
+                node_id = cc.get("ARN", key)
+                verdict, matches = self._eol_check("elasticache", engine, ev)
+                if verdict == "EOL":
+                    self._add("FAIL", "ELC-05", "ELASTICACHE", key,
+                              f"Engine END-OF-LIFE: {engine} {ev} "
+                              f"(upgrade to >= {matches[0].fixed_version}) | {key}")
+                    self._stash_eol_edge(node_id, "ElastiCacheCluster", matches,
+                                         engine=engine, engine_version=ev, region=self.region,
+                                         replication_group_id=(rgid or ""))
+                elif verdict == "OK":
+                    self._add("PASS", "ELC-05", "ELASTICACHE", key,
+                              f"Engine supported: {engine} {ev} | {key}")
+                else:
+                    self._add("INFO", "ELC-05", "ELASTICACHE", key,
+                              f"Engine EOL not evaluable: {engine} {ev} | {key}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 23: AMAZON OPENSEARCH
@@ -4631,6 +4902,44 @@ class AWSLiveScanner:
             else:
                 self._add("FAIL", "OSR-05", "OPENSEARCH", dname,
                           f"Fine-grained access control=OFF | {dname}")
+            # OSR-06 — TLS policy depth (reuses ep_opts; 0 new API calls). Only meaningful
+            # when HTTPS is enforced — OSR-01 already owns the not-enforced FAIL, so gate on
+            # it here to avoid double-reporting. Policy-Min-TLS-1-0-2019-07 permits TLS 1.0/1.1.
+            if ep_opts.get("EnforceHTTPS", False):
+                pol = ep_opts.get("TLSSecurityPolicy", "")
+                if pol == "Policy-Min-TLS-1-0-2019-07":
+                    self._add("FAIL", "OSR-06", "OPENSEARCH", dname,
+                              f"Weak TLS policy {pol} (permits TLS 1.0/1.1) | {dname}")
+                elif pol:
+                    self._add("PASS", "OSR-06", "OPENSEARCH", dname,
+                              f"TLS policy {pol} (min TLS 1.2) | {dname}")
+                else:
+                    self._add("INFO", "OSR-06", "OPENSEARCH", dname,
+                              f"TLS policy not reported | {dname}")
+            else:
+                self._add("INFO", "OSR-06", "OPENSEARCH", dname,
+                          f"TLS policy N/A (HTTPS not enforced; see OSR-01) | {dname}")
+            # OSR-07 — Engine end-of-life. EngineVersion is 'OpenSearch_2.11' /
+            # 'Elasticsearch_7.10'; split on '_' (all Elasticsearch engines are legacy/EOL).
+            ever = cfg.get("EngineVersion", "")
+            eng, _sep, ver = ever.partition("_")
+            eng = eng.lower()
+            pending = ""
+            if cfg.get("ServiceSoftwareOptions", {}).get("UpdateAvailable"):
+                pending = " (service software update available)"
+            verdict, matches = self._eol_check("opensearch", eng, ver)
+            arn = cfg.get("ARN", dname)
+            if verdict == "EOL":
+                self._add("FAIL", "OSR-07", "OPENSEARCH", dname,
+                          f"Engine END-OF-LIFE: {ever or '(unknown)'}{pending} | {dname}")
+                self._stash_eol_edge(arn, "OpenSearchDomain", matches,
+                                     engine=eng, engine_version=ver, region=self.region)
+            elif verdict == "OK":
+                self._add("PASS", "OSR-07", "OPENSEARCH", dname,
+                          f"Engine supported: {ever}{pending} | {dname}")
+            else:
+                self._add("INFO", "OSR-07", "OPENSEARCH", dname,
+                          f"Engine EOL not evaluable: {ever or '(unknown)'} | {dname}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 24: AMAZON DYNAMODB
@@ -5018,17 +5327,19 @@ class AWSLiveScanner:
         self._section_header("REDSHIFT")
         rs = self._client("redshift")
 
+        # Do NOT early-return on empty/error: RSS-01..04 (Redshift Serverless, below) must
+        # still run — Serverless can exist with zero provisioned clusters.
         try:
             clusters = rs.describe_clusters().get("Clusters", [])
         except Exception as e:
             self._add("WARN", "RS-01", "REDSHIFT", "redshift", str(e))
-            return
-        if not clusters:
+            clusters = None
+        if clusters is not None and not clusters:
             self._add("INFO", "RS-01", "REDSHIFT", "redshift",
                       "No Redshift clusters found")
-            return
 
-        for c in clusters:
+        pg_ssl_cache: Dict[str, object] = {}   # parameter-group name -> require_ssl value / error
+        for c in (clusters or []):
             cid = c.get("ClusterIdentifier", "unknown")
 
             # RS-01 — Encryption at rest
@@ -5074,6 +5385,131 @@ class AWSLiveScanner:
             else:
                 self._add("PASS", "RS-05", "REDSHIFT", cid,
                           f"Non-default master username | {cid}")
+
+            # RS-06 — require_ssl parameter (stock default.redshift-1.0 ships 'false', so
+            # in-transit encryption is optional unless explicitly required). Cached per
+            # parameter group; OWN try/except -> WARN, never a PASS on a failed read.
+            pgs = c.get("ClusterParameterGroups", [])
+            pgname = pgs[0].get("ParameterGroupName") if pgs else None
+            if pgname:
+                if pgname not in pg_ssl_cache:
+                    try:
+                        params = rs.describe_cluster_parameters(
+                            ParameterGroupName=pgname).get("Parameters", [])
+                        val = None
+                        for p in params:
+                            if p.get("ParameterName") == "require_ssl":
+                                val = (p.get("ParameterValue") or "").lower()
+                                break
+                        pg_ssl_cache[pgname] = val
+                    except Exception as e:
+                        pg_ssl_cache[pgname] = RuntimeError(str(e))
+                cached = pg_ssl_cache[pgname]
+                if isinstance(cached, Exception):
+                    self._add("WARN", "RS-06", "REDSHIFT", cid,
+                              f"require_ssl not read ({pgname}): {cached}")
+                elif cached == "true":
+                    self._add("PASS", "RS-06", "REDSHIFT", cid,
+                              f"require_ssl=true (TLS required) | {cid}")
+                else:
+                    self._add("FAIL", "RS-06", "REDSHIFT", cid,
+                              f"require_ssl not enforced (in-transit encryption optional) | {cid}")
+            else:
+                self._add("WARN", "RS-06", "REDSHIFT", cid,
+                          f"No cluster parameter group resolved (require_ssl unknown) | {cid}")
+
+            # RS-07 — AllowVersionUpgrade (managed maintenance-track patching). Default is
+            # True; OFF means the cluster is pinned and receives no managed upgrades.
+            if c.get("AllowVersionUpgrade", True):
+                self._add("PASS", "RS-07", "REDSHIFT", cid,
+                          f"AllowVersionUpgrade=ON | {cid}")
+            else:
+                mt = c.get("MaintenanceTrackName", "")
+                extra = f" (maintenance track '{mt}')" if mt else ""
+                self._add("WARN", "RS-07", "REDSHIFT", cid,
+                          f"AllowVersionUpgrade=OFF — pinned, no managed upgrades{extra} | {cid}")
+
+        # ── RSS-01..04 — Redshift Serverless (separate client + camelCase API). Runs
+        # regardless of provisioned clusters. Region-guarded: Serverless is unavailable in
+        # some regions -> WARN, not a crash.
+        self._log("RSS-01..04: Redshift Serverless workgroups and namespaces")
+        try:
+            rss = self._client("redshift-serverless")
+        except Exception as e:
+            self._add("WARN", "RSS-01", "REDSHIFT", "redshift-serverless", str(e))
+            rss = None
+        if rss is not None:
+            # Workgroups: public accessibility (RSS-01), require_ssl (RSS-03), enhanced VPC (RSS-04)
+            try:
+                workgroups = []
+                token = None
+                for _ in range(200):                 # bounded: never trust nextToken to terminate
+                    resp = rss.list_workgroups(**({"nextToken": token} if token else {}))
+                    workgroups.extend(resp.get("workgroups", []) or [])
+                    token = resp.get("nextToken")
+                    if not token or not isinstance(token, str):
+                        break
+            except Exception as e:
+                self._add("WARN", "RSS-01", "REDSHIFT", "redshift-serverless",
+                          f"list_workgroups failed: {e}")
+                workgroups = None
+            if workgroups is not None:
+                if not workgroups:
+                    self._add("INFO", "RSS-01", "REDSHIFT", "redshift-serverless",
+                              "No Redshift Serverless workgroups in this region")
+                for wg in workgroups:
+                    wgn = wg.get("workgroupName", "unknown")
+                    if wg.get("publiclyAccessible", False):
+                        self._add("FAIL", "RSS-01", "REDSHIFT", wgn,
+                                  f"Serverless workgroup PUBLICLY ACCESSIBLE | {wgn}")
+                    else:
+                        self._add("PASS", "RSS-01", "REDSHIFT", wgn,
+                                  f"Not publicly accessible | {wgn}")
+                    ssl_val = None
+                    for p in wg.get("configParameters", []):
+                        if p.get("parameterKey") == "require_ssl":
+                            ssl_val = (p.get("parameterValue") or "").lower()
+                            break
+                    if ssl_val == "true":
+                        self._add("PASS", "RSS-03", "REDSHIFT", wgn, f"require_ssl=true | {wgn}")
+                    elif ssl_val is None:
+                        self._add("INFO", "RSS-03", "REDSHIFT", wgn,
+                                  f"require_ssl not in workgroup projection | {wgn}")
+                    else:
+                        self._add("FAIL", "RSS-03", "REDSHIFT", wgn,
+                                  f"require_ssl not enforced | {wgn}")
+                    if wg.get("enhancedVpcRouting", False):
+                        self._add("PASS", "RSS-04", "REDSHIFT", wgn,
+                                  f"Enhanced VPC routing=ON | {wgn}")
+                    else:
+                        self._add("WARN", "RSS-04", "REDSHIFT", wgn,
+                                  f"Enhanced VPC routing=OFF | {wgn}")
+            # Namespaces: customer-managed CMK gap (RSS-02)
+            try:
+                namespaces = []
+                token = None
+                for _ in range(200):                 # bounded: never trust nextToken to terminate
+                    resp = rss.list_namespaces(**({"nextToken": token} if token else {}))
+                    namespaces.extend(resp.get("namespaces", []) or [])
+                    token = resp.get("nextToken")
+                    if not token or not isinstance(token, str):
+                        break
+            except Exception as e:
+                self._add("WARN", "RSS-02", "REDSHIFT", "redshift-serverless",
+                          f"list_namespaces failed: {e}")
+                namespaces = None
+            if namespaces is not None:
+                for ns in namespaces:
+                    nsn = ns.get("namespaceName", "unknown")
+                    kms = ns.get("kmsKeyId")
+                    # Serverless is always encrypted; the gap is AWS-owned key vs a CMK.
+                    if kms in (None, "", "AWS_OWNED_KMS_KEY"):
+                        self._add("WARN", "RSS-02", "REDSHIFT", nsn,
+                                  f"Namespace encrypted with an AWS-owned key "
+                                  f"(no customer-managed CMK) | {nsn}")
+                    else:
+                        self._add("PASS", "RSS-02", "REDSHIFT", nsn,
+                                  f"Customer-managed CMK in use | {nsn}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 30: AMAZON EFS
@@ -6330,8 +6766,30 @@ class AWSLiveScanner:
                 pass
         return out
 
+    def _replay_eol_edges(self):
+        """Emit the managed-engine-EOL HAS_VULN edges stashed by the service sections
+        (RDS-12/AUR-03/ELC-05/OSR-07). Deferred to HERE — the VULN section (which runs
+        AFTER IAMPRIVESC hard-replaces the graph via _build_identity_graph) — so the
+        identity-graph rebuild cannot clobber them. The edge shape is byte-identical to the
+        side-scan/Inspector HAS_VULN edges (reuses emit_node_vuln_edges); a second merge
+        add_edge only sharpens scan_source to 'managed-eol' for report honesty."""
+        if not self._eol_graph_payloads:
+            return
+        g = self._ensure_graph()
+        if g is None:
+            return
+        for node_id, node_kind, matches, props in self._eol_graph_payloads:
+            aws_sidescan.emit_node_vuln_edges(g, node_id, node_kind, matches,
+                                              snapshot_id="", **props)
+            for m in matches:
+                g.add_edge(node_id, m.cve, "HAS_VULN", scan_source="managed-eol")
+
     def _check_vuln(self):
         self._section_header("VULN")
+        # Replay stashed managed-engine-EOL edges FIRST — before any Inspector early-return,
+        # and after IAMPRIVESC's graph rebuild — so they land and survive regardless of
+        # whether Amazon Inspector is enabled.
+        self._replay_eol_edges()
         self._log("Amazon Inspector v2 package vulnerabilities -> HAS_VULN edges "
                   "(EPSS native; KEV via batch_get_finding_details). INFO no-op if disabled.")
         try:
@@ -6968,6 +7426,14 @@ class AWSLiveScanner:
                               f"Unhandled error in section {section}"
                               f"{f' ({reg})' if reg != base_region else ''}: {e}")
             self.region = base_region
+
+        # Epilogue: flush any managed-engine-EOL HAS_VULN edges still stashed — e.g. a
+        # graph-building scan (IAMPRIVESC/CORRELATE/export) that omitted the VULN section,
+        # whose _replay_eol_edges call is the only other flush point. Idempotent (no-op if
+        # _check_vuln already flushed) and gated on an existing graph so a findings-only scan
+        # is never forced to build one.
+        if self.graph is not None and self._eol_graph_payloads:
+            self._replay_eol_edges()
 
     def _regions_for_section(self, section: str) -> List[str]:
         """Regions to run a section in. Single-region by default; with
