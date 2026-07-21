@@ -166,6 +166,9 @@ SEVERITY_WEIGHTS = {"CRITICAL": 15, "HIGH": 5, "MEDIUM": 2, "LOW": 0.5, "INFO": 
 CHECK_SEVERITY = {
     # Agentless side-scan (CWPP, Phase 6)
     "CWPP-01": "HIGH", "CWPP-02": "CRITICAL", "CWPP-03": "HIGH",
+    # Phase 8: Windows agentless OS-vuln (SSM patch compliance) — WINVULN-03 is the
+    # interim explicit-WARN that removes the silent false-clean on Windows hosts.
+    "WINVULN-01": "HIGH", "WINVULN-02": "CRITICAL", "WINVULN-03": "MEDIUM", "WINVULN-04": "LOW",
     "IAM-01": "CRITICAL", "IAM-02": "CRITICAL", "IAM-04": "HIGH",
     "IAM-05": "MEDIUM", "IAM-06": "HIGH", "IAM-10": "MEDIUM",
     "IAM-07": "MEDIUM", "IAM-08": "MEDIUM",
@@ -291,6 +294,12 @@ COMPLIANCE_MAP = {
     "CWPP-01": {"NIST": "RA-5", "PCI-DSS": "6.3.1", "SOC2": "CC7.1"},
     "CWPP-02": {"NIST": "SI-2", "PCI-DSS": "11.3.1", "SOC2": "CC7.1"},
     "CWPP-03": {"NIST": "IA-5", "PCI-DSS": "8.3.1", "SOC2": "CC6.1"},
+    # Phase 8 Windows OS-vuln (CIS omitted — no in-guest OS-patch control in CIS AWS
+    # Foundations, matching VULN-01/02). WINVULN-03 = the "must actually scan" controls.
+    "WINVULN-01": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "WINVULN-02": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5(2)"},
+    "WINVULN-03": {"PCI-DSS": "6.3.1", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5"},
+    "WINVULN-04": {"PCI-DSS": "6.3.3", "SOC2": "CC7.1", "NIST": "SI-2"},
     # IAM
     "IAM-01": {"CIS": "1.5", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
     "IAM-02": {"CIS": "1.4", "PCI-DSS": "8.2.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "IA-2"},
@@ -549,6 +558,12 @@ REMEDIATION_MAP = {
     "CWPP-01": "Patch the vulnerable package (CVE reachable on an internet-exposed host — prioritize): aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=instanceids,Values=<INSTANCE_ID> --parameters Operation=Install, then rebuild the AMI from the patched instance.",
     "CWPP-02": "KEV/exploited CVE on a reachable host — patch immediately or isolate: aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=instanceids,Values=<INSTANCE_ID> --parameters Operation=Install ; consider aws ec2 stop-instances --instance-ids <INSTANCE_ID> until patched.",
     "CWPP-03": "Rotate/revoke the exposed credential and move it off disk: aws secretsmanager rotate-secret --secret-id <SECRET_ARN> (or aws iam update-access-key / delete-access-key), attach an instance role, and reference AWS Secrets Manager instead of the on-disk file.",
+    # Phase 8 Windows OS-vuln — AWS-RunPatchBaseline is OPERATOR-run text only; the scanner
+    # only reads describe/get SSM APIs and NEVER executes anything on the host.
+    "WINVULN-01": "Install the missing Windows security/critical updates via Patch Manager (operator-run; the scanner only reads describe/get APIs, never executes on the host): aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install ; then rebuild the golden AMI. If past end-of-support, upgrade to a supported Windows release.",
+    "WINVULN-02": "PRIORITIZE — a CISA-KEV CVE maps to a missing patch: aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install ; if internet-exposed, isolate first: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --groups <QUARANTINE_SG>.",
+    "WINVULN-03": "Windows OS-vuln posture UNDETERMINED — do NOT treat as clean. Make it assessable: attach AmazonSSMManagedInstanceCore, then aws ssm create-association --name AWS-GatherSoftwareInventory --targets Key=InstanceIds,Values=<INSTANCE_ID> and scan a patch baseline: aws ssm send-command --document-name AWS-RunPatchBaseline --parameters Operation=Scan --targets Key=InstanceIds,Values=<INSTANCE_ID>.",
+    "WINVULN-04": "Assessed via SSM patch compliance — keep it continuously scanned: aws ssm create-association --name AWS-RunPatchBaseline --parameters Operation=Scan --schedule-expression \"rate(1 day)\" --targets Key=InstanceIds,Values=<INSTANCE_ID>.",
     "IAM-01": "Enable virtual MFA for root: aws iam create-virtual-mfa-device --virtual-mfa-device-name root-mfa && aws iam enable-mfa-device --user-name root --serial-number <MFA_ARN> --authentication-code1 <CODE1> --authentication-code2 <CODE2>",
     "IAM-02": "Delete root access keys: aws iam delete-access-key --access-key-id <KEY_ID>",
     "IAM-04": "Enable MFA for user: aws iam enable-mfa-device --user-name <USER> --serial-number <MFA_ARN> --authentication-code1 <CODE1> --authentication-code2 <CODE2>",
