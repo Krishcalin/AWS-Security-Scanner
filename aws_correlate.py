@@ -212,14 +212,15 @@ def _path_exploitability(nodes, g, is_exploitable) -> Tuple[float, Optional[str]
     network-reachable component (``reachable_service`` on the HAS_VULN edge) is sharpened
     by ``X_reachable_boost`` and clamped to ``X_kev`` so it can neither exceed a KEV nor
     manufacture a path (the DFS ``ex`` gate still requires ``is_exploitable``)."""
-    best_x, best_cve, kev = 0.0, None, False
+    best_x, best_cve, kev, best_is_kev = 0.0, None, False, False
     for n in nodes:
         nd = g.node(n)
         if not nd:
             continue
         for e in _iter_vuln_edges(n, nd, g):
             p = e["props"]
-            if p.get("kev"):
+            is_kev = bool(p.get("kev"))
+            if is_kev:
                 x = WEIGHTS["X_kev"]; kev = True
             elif str(p.get("exploit_available", "")).upper() == "YES":
                 x = WEIGHTS["X_exploit"]
@@ -231,8 +232,11 @@ def _path_exploitability(nodes, g, is_exploitable) -> Tuple[float, Optional[str]
                     x = WEIGHTS["X_epss_missing"]
             if p.get("reachable_service"):
                 x = min(WEIGHTS["X_kev"], x * WEIGHTS["X_reachable_boost"])
-            if x > best_x or (p.get("kev") and not best_cve):
-                best_x, best_cve = x, p.get("cve")
+            # Highest-x wins; at EQUAL x a real KEV edge wins the named-driver slot over a
+            # merely reachable-boosted non-KEV — else a boosted non-KEV clamped to 1.0 could be
+            # mislabeled VULN-02:<non-kev-cve> when the path also carries an actual KEV.
+            if x > best_x or (is_kev and not best_is_kev and x >= best_x):
+                best_x, best_cve, best_is_kev = x, p.get("cve"), is_kev
     return best_x, best_cve, kev
 
 

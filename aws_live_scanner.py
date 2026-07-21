@@ -1411,6 +1411,8 @@ class AWSLiveScanner:
         # not re-emit the same distributions once per region (the graph merges anyway).
         self._l7_cf_done = False
         self._identity_fusion_done = False          # IDENTITY-01 is global (IAM); run once
+        self._l7_read_error = False                 # any L7 describe denied -> suppress phantom PASS
+        self._l7_lb_dns: Dict[str, str] = {}        # DNS->LB node id, ACCUMULATED across regions
 
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
@@ -7570,7 +7572,9 @@ class AWSLiveScanner:
         if not enis:
             self._add("INFO", "EXPOSURE-02", "EXPOSURE", "network",
                       "No elastic network interfaces found in this region")
-            return
+            # Do NOT return: IDENTITY-01 (global IAM stale-admin-key fusion), the `internet`
+            # node that CORRELATE depends on, and L7 fronts are ENI-agnostic and MUST still
+            # run in a compute-light / IAM-only account. The ENI loop below simply no-ops.
 
         sg_perms = {s.get("GroupId"): s.get("IpPermissions", []) for s in sgs}
         inst_by_id = {i.get("InstanceId"): i for i in instances}
@@ -7695,16 +7699,30 @@ class AWSLiveScanner:
         # Record every internet-reachable workload (direct ENI + L7 backend, since L7
         # targets were folded into exposed_instances above) so the VULN section can tag
         # their HAS_VULN edges reachable_service=True (component-level exploitability).
-        self._reachable_workloads = {self._instance_arn(i) for i in exposed_instances}
+        # F6: ACCUMULATE across regions (|=, not =) — under --all-regions EXPOSURE sweeps
+        # every region before VULN runs, so an overwrite would keep only the last region's
+        # set and drop the boost for every earlier region. ARNs are region-qualified, so a
+        # union never mis-tags across regions.
+        self._reachable_workloads |= {self._instance_arn(i) for i in exposed_instances}
 
         # Phase 7 identity fusion: a stale/long-unused admin access key = a pre-auth
         # account-takeover path (draws internet -EXPOSED_TO-> IAMUser -> ...-> admin).
         if self._build_identity_fusion(g, admin):
             any_finding = True
 
-        if not any_finding:
-            self._add("PASS", "EXPOSURE-02", "EXPOSURE", "all-enis",
-                      f"No internet-reachable workloads across {len(enis)} interface(s)")
+        if not any_finding and enis:
+            # AGGREGATE-PASS-MUST-COUNT: a clean all-clear is only honest when the L7 axis
+            # actually enumerated. If any L7 describe was denied/throttled, downgrade to WARN
+            # (UNDETERMINED) — an internet-facing LB fronting an admin-role host could be hidden.
+            if self._l7_read_error:
+                self._add("WARN", "EXPOSURE-02", "EXPOSURE", "all-enis",
+                          f"No DIRECTLY internet-reachable workloads across {len(enis)} "
+                          f"interface(s), but L7 (load-balancer / CloudFront / API-Gateway) "
+                          f"enumeration was DENIED/incomplete — internet-facing fronts could "
+                          f"not be evaluated (UNDETERMINED)")
+            else:
+                self._add("PASS", "EXPOSURE-02", "EXPOSURE", "all-enis",
+                          f"No internet-reachable workloads across {len(enis)} interface(s)")
 
     # ── Phase 7 — L7 reachability (un-defers aws_exposure's deferred L7 axis) ──────
     @staticmethod
@@ -7733,16 +7751,23 @@ class AWSLiveScanner:
         ATTACK-01 loop) so an over-privileged LB-fronted host lights up ATTACK-01. Each
         front type is isolated in its own try/except -> INFO no-op (never a phantom PASS,
         never a crash that aborts the whole exposure section)."""
-        ip_to_instance: Dict[str, str] = {}
+        self._l7_read_error = False      # F2: track denied L7 describes for aggregate-PASS honesty
+        # F3: key private-IP -> instance by (vpc_id, ip). A bare-IP map mis-resolves an elbv2
+        # 'ip' target (to the wrong instance) when overlapping-CIDR VPCs reuse the same address.
+        ip_to_instance: Dict[tuple, str] = {}
         for e in enis:
             iid = (e.get("Attachment") or {}).get("InstanceId")
             if not iid:
                 continue
+            vpc = e.get("VpcId", "")
             for ip in e.get("PrivateIpAddresses", []):
                 addr = ip.get("PrivateIpAddress")
                 if addr:
-                    ip_to_instance[addr] = iid
-        lb_dns: Dict[str, str] = {}     # DNSName.lower() -> LoadBalancer node id
+                    ip_to_instance[(vpc, addr)] = iid
+        # F9: accumulate the DNS->LB map ACROSS regions (self._l7_lb_dns) — CloudFront is global
+        # and enumerates once, so a per-region map would miss a distribution fronting an LB in
+        # a different region under --all-regions.
+        lb_dns = self._l7_lb_dns
         found = False
         found = self._l7_elbv2(g, internet, sg_perms, ip_to_instance,
                                exposed_instances, lb_dns) or found
@@ -7761,6 +7786,7 @@ class AWSLiveScanner:
             for page in elb.get_paginator("describe_load_balancers").paginate():
                 lbs.extend(page.get("LoadBalancers", []))
         except Exception as e:
+            self._l7_read_error = True                       # F2: denied -> no phantom PASS
             self._add("INFO", "EXPOSURE-03", "EXPOSURE", "elbv2",
                       f"Could not enumerate ALB/NLB in {self.region}: {e}")
             return False
@@ -7783,11 +7809,24 @@ class AWSLiveScanner:
             except Exception:
                 listeners = []
             # ALB is SG-gated; an NLB is frequently SG-less -> scheme+active+listener suffices
-            open_ports = {ls.get("Port") for ls in listeners
-                          if ls.get("Port") is not None
-                          and (not sgids or self._l7_port_open(ls.get("Port"), pub))}
+            open_listeners = [ls for ls in listeners if ls.get("Port") is not None
+                              and (not sgids or self._l7_port_open(ls.get("Port"), pub))]
+            open_ports = {ls.get("Port") for ls in open_listeners}
             if not open_ports:
                 continue
+            # F8: only target groups served by an INTERNET-OPEN listener are reachable — a
+            # leftover listener on an SG-blocked port must not mark its TG internet-facing.
+            # Fail-open to all TGs if no forward action is resolvable (avoid a false negative).
+            open_tg_arns: set = set()
+            for ls in open_listeners:
+                for act in ls.get("DefaultActions", []):
+                    if act.get("Type") != "forward":
+                        continue
+                    if act.get("TargetGroupArn"):
+                        open_tg_arns.add(act["TargetGroupArn"])
+                    for t in (act.get("ForwardConfig") or {}).get("TargetGroups", []):
+                        if t.get("TargetGroupArn"):
+                            open_tg_arns.add(t["TargetGroupArn"])
             node = f"lb/{arn}"
             g.add_node(node, "LoadBalancer", name=name, dns=dns,
                        scheme="internet-facing", lb_type=typ)
@@ -7796,7 +7835,7 @@ class AWSLiveScanner:
             if dns:
                 lb_dns[dns.lower()] = node
             resolved = self._l7_resolve_target_groups(
-                g, elb, arn, node, ip_to_instance, exposed_instances)
+                g, elb, arn, node, ip_to_instance, exposed_instances, open_tg_arns)
             found = True
             label = "ALB" if typ == "application" else "NLB"
             portstr = ",".join(str(p) for p in sorted(open_ports))
@@ -7812,10 +7851,12 @@ class AWSLiveScanner:
         return found
 
     def _l7_resolve_target_groups(self, g, elb, arn, node, ip_to_instance,
-                                  exposed_instances) -> List[str]:
+                                  exposed_instances, open_tg_arns=None) -> List[str]:
         """Resolve an ALB/NLB's target groups -> in-rotation workloads, emitting TARGETS
-        edges. Only TargetType 'instance' (and 'ip' backed by an enumerated ENI) chains
-        into the EC2 attack path; 'lambda'/'alb' are front-surface TARGETS only."""
+        edges. Only TargetType 'instance' (and 'ip' backed by an enumerated ENI IN THE TG's
+        VPC) chains into the EC2 attack path; 'lambda'/'alb' are front-surface TARGETS only.
+        ``open_tg_arns`` (F8), if non-empty, restricts to target groups actually served by an
+        internet-open listener; empty means fail-open to all TGs."""
         resolved: List[str] = []
         try:
             tgs = elb.describe_target_groups(LoadBalancerArn=arn).get("TargetGroups", [])
@@ -7823,8 +7864,11 @@ class AWSLiveScanner:
             return resolved
         _SKIP = {"unused", "draining", "unhealthy.draining", "unavailable"}
         for tg in tgs:
-            ttype = tg.get("TargetType", "instance")
             tg_arn = tg.get("TargetGroupArn", "")
+            if open_tg_arns and tg_arn not in open_tg_arns:
+                continue                                        # F8: not behind an open listener
+            ttype = tg.get("TargetType", "instance")
+            tg_vpc = tg.get("VpcId", "")
             try:
                 thds = elb.describe_target_health(
                     TargetGroupArn=tg_arn).get("TargetHealthDescriptions", [])
@@ -7844,7 +7888,7 @@ class AWSLiveScanner:
                     exposed_instances.add(tid)
                     resolved.append(tid)
                 elif ttype == "ip":
-                    iid = ip_to_instance.get(tid)
+                    iid = ip_to_instance.get((tg_vpc, tid))     # F3: VPC-scoped lookup
                     if iid:                                     # else cross-VPC/on-prem: FN
                         tarn = self._instance_arn(iid)
                         g.add_node(tarn, "EC2Instance", instance_id=iid)
@@ -7872,6 +7916,7 @@ class AWSLiveScanner:
             for page in elb.get_paginator("describe_load_balancers").paginate():
                 clbs.extend(page.get("LoadBalancerDescriptions", []))
         except Exception as e:
+            self._l7_read_error = True                       # F2: denied -> no phantom PASS
             self._add("INFO", "EXPOSURE-03", "EXPOSURE", "classic-elb",
                       f"Could not enumerate Classic ELBs in {self.region}: {e}")
             return False
@@ -7930,6 +7975,7 @@ class AWSLiveScanner:
             for page in cf.get_paginator("list_distributions").paginate():
                 dists.extend((page.get("DistributionList") or {}).get("Items", []))
         except Exception as e:
+            self._l7_read_error = True                       # F2: denied -> no phantom PASS
             self._add("INFO", "EXPOSURE-03", "EXPOSURE", "cloudfront",
                       f"Could not enumerate CloudFront distributions: {e}")
             return False
@@ -7971,9 +8017,12 @@ class AWSLiveScanner:
                           f"Internet-facing CloudFront distribution {did} ({domain}) fronts "
                           f"an internet-facing load-balancer origin | {did}")
             elif unresolved:
+                # F9: don't assert absence — under --all-regions the LB may live in a region
+                # not yet enumerated when this global CloudFront pass runs.
                 self._add("INFO", "EXPOSURE-03", "EXPOSURE", did,
                           f"Internet-facing CloudFront distribution {did} ({domain}) has a "
-                          f"custom origin with no mapped in-account load balancer | {did}")
+                          f"custom origin not matched to an enumerated in-account load balancer "
+                          f"(a cross-region origin may be unresolved under --all-regions) | {did}")
         return found
 
     def _l7_apigateway(self, g, internet) -> bool:
@@ -7983,6 +8032,7 @@ class AWSLiveScanner:
             for page in api.get_paginator("get_rest_apis").paginate():
                 items.extend(page.get("items", []))
         except Exception as e:
+            self._l7_read_error = True                       # F2: denied -> no phantom PASS
             self._add("INFO", "EXPOSURE-03", "EXPOSURE", "apigateway",
                       f"Could not enumerate REST APIs in {self.region}: {e}")
             return False
@@ -8010,6 +8060,7 @@ class AWSLiveScanner:
             for page in api.get_paginator("get_apis").paginate():
                 items.extend(page.get("Items", []))
         except Exception as e:
+            self._l7_read_error = True                       # F2: denied -> no phantom PASS
             self._add("INFO", "EXPOSURE-03", "EXPOSURE", "apigatewayv2",
                       f"Could not enumerate HTTP/WebSocket APIs in {self.region}: {e}")
             return False
@@ -8470,7 +8521,9 @@ class AWSLiveScanner:
         crown = aws_correlate.crown_nodes(g)                # Phase 7: S3 + DSPM datastores
         if not crown:
             return                                          # no data terminal (Macie/DSPM off)
-        reach = g.reachable("internet", {"EXPOSED_TO", "ATTACHED_TO"}, max_hops=3)
+        # Phase 7: TARGETS traverses an internet-facing LB to its private backend, so an
+        # LB-fronted (subnet-private) EC2 is internet-reachable for the flagship path too.
+        reach = g.reachable("internet", {"EXPOSED_TO", "ATTACHED_TO", "TARGETS"}, max_hops=3)
         exposed = [nid for nid in reach if (g.node(nid) or {}).get("kind") == "EC2Instance"]
         kinds = {"CAN_ASSUME", "CAN_PRIVESC_TO", "CAN_READ_DATA"}
         for inst in exposed:
@@ -8606,6 +8659,13 @@ class AWSLiveScanner:
             self._add("INFO", "DSPM-01", "DATA", "dynamodb",
                       f"Could not enumerate DynamoDB tables in {self.region}: {e}")
             return
+        # F4: the 300-table cap bounds per-table tag-read cost but MUST be visible — a silent
+        # truncation is a phantom all-clear on any crown table beyond position 300.
+        if len(names) > 300:
+            self._add("INFO", "DSPM-01", "DATA", "dynamodb",
+                      f"DynamoDB DSPM classified only the first 300 of {len(names)} tables in "
+                      f"{self.region}; {len(names) - 300} not inspected for crown-jewel tags "
+                      f"(rerun scoped, or raise the cap)")
         for name in names[:300]:                     # bound the per-table tag read cost
             arn = f"arn:aws:dynamodb:{self.region}:{self.account}:table/{name}"
             try:
@@ -8741,7 +8801,8 @@ class AWSLiveScanner:
         Returns [(instance_id, volume_ids)], capped at side_scan_max."""
         exposed: List[str] = []
         if g is not None and g.node("internet") is not None:
-            reach = g.reachable("internet", {"EXPOSED_TO", "ATTACHED_TO"}, max_hops=3)
+            # Phase 7: include TARGETS so LB-fronted private instances are side-scan-selected.
+            reach = g.reachable("internet", {"EXPOSED_TO", "ATTACHED_TO", "TARGETS"}, max_hops=3)
             for nid in reach:
                 node = g.node(nid) or {}
                 if node.get("kind") == "EC2Instance":

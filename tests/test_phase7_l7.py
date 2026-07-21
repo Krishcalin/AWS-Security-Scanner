@@ -120,24 +120,38 @@ def test_draining_target_not_counted_info():
 
 
 def test_ip_target_resolves_via_eni():
+    # F3: ip_to_instance is keyed by (vpc_id, addr) and resolved via the TG's VpcId.
     s, g = _l7_scanner()
-    tgs = [{"TargetGroupArn": "arn:tg/1", "TargetType": "ip"}]
+    tgs = [{"TargetGroupArn": "arn:tg/1", "TargetType": "ip", "VpcId": "vpc-1"}]
     health = [{"Target": {"Id": "10.0.0.5"}, "TargetHealth": {"State": "healthy"}}]
     s._clients["elbv2:us-east-1"] = _elbv2_client([_alb()], tgs=tgs, health=health)
     exposed = set()
-    found = s._l7_elbv2(g, "internet", PUB_SG, {"10.0.0.5": "i-ip1"}, exposed, {})
-    assert found and "i-ip1" in exposed             # ip resolved to its ENI's instance
+    found = s._l7_elbv2(g, "internet", PUB_SG, {("vpc-1", "10.0.0.5"): "i-ip1"}, exposed, {})
+    assert found and "i-ip1" in exposed             # ip resolved to its ENI's instance in-VPC
 
 
 def test_ip_target_unresolved_no_edge():
     s, g = _l7_scanner()
-    tgs = [{"TargetGroupArn": "arn:tg/1", "TargetType": "ip"}]
+    tgs = [{"TargetGroupArn": "arn:tg/1", "TargetType": "ip", "VpcId": "vpc-1"}]
     health = [{"Target": {"Id": "203.0.113.9"}, "TargetHealth": {"State": "healthy"}}]
     s._clients["elbv2:us-east-1"] = _elbv2_client([_alb()], tgs=tgs, health=health)
     exposed = set()
     s._l7_elbv2(g, "internet", PUB_SG, {}, exposed, {})   # cross-VPC/on-prem ip -> unresolved
     assert not exposed
     assert "INFO" in _status(s, "EXPOSURE-03")
+
+
+def test_ip_target_cross_vpc_collision_resolves_correct_instance():
+    # F3 regression: two VPCs reuse private IP 10.0.1.50; the NLB in vpc-A must resolve to
+    # i-A (its VPC), never i-B in vpc-B (last-write-wins bare-IP map would have picked i-B).
+    s, g = _l7_scanner()
+    tgs = [{"TargetGroupArn": "arn:tg/1", "TargetType": "ip", "VpcId": "vpc-A"}]
+    health = [{"Target": {"Id": "10.0.1.50"}, "TargetHealth": {"State": "healthy"}}]
+    s._clients["elbv2:us-east-1"] = _elbv2_client([_alb()], tgs=tgs, health=health)
+    ip_map = {("vpc-A", "10.0.1.50"): "i-A", ("vpc-B", "10.0.1.50"): "i-B"}
+    exposed = set()
+    s._l7_elbv2(g, "internet", PUB_SG, ip_map, exposed, {})
+    assert exposed == {"i-A"}                        # not i-B (the collision)
 
 
 def test_elbv2_denied_is_info_not_phantom():
@@ -151,6 +165,42 @@ def test_elbv2_denied_is_info_not_phantom():
 
 
 # ── Classic ELB ───────────────────────────────────────────────────────────────
+def test_f8_non_open_listener_tg_not_reachable():
+    # F8: listener 443 (open) forwards to TG-web; listener 8080 (SG-blocked) forwards to
+    # TG-admin. Only i-web is internet-reachable; i-admin (behind the blocked port) is not.
+    s, g = _l7_scanner()
+    listeners = [
+        {"Port": 443, "Protocol": "HTTPS",
+         "DefaultActions": [{"Type": "forward", "TargetGroupArn": "arn:tg/web"}]},
+        {"Port": 8080, "Protocol": "HTTP",
+         "DefaultActions": [{"Type": "forward", "TargetGroupArn": "arn:tg/admin"}]},
+    ]
+    tgs = [{"TargetGroupArn": "arn:tg/web", "TargetType": "instance"},
+           {"TargetGroupArn": "arn:tg/admin", "TargetType": "instance"}]
+    c = _elbv2_client([_alb()], listeners=listeners, tgs=tgs)
+    c.describe_target_health.side_effect = lambda TargetGroupArn: {
+        "TargetHealthDescriptions": [
+            {"Target": {"Id": "i-web" if "web" in TargetGroupArn else "i-admin"},
+             "TargetHealth": {"State": "healthy"}}]}
+    s._clients["elbv2:us-east-1"] = c
+    exposed = set()
+    s._l7_elbv2(g, "internet", PUB_SG, {}, exposed, {})   # PUB_SG opens 443 only
+    assert "i-web" in exposed                             # served by the open 443 listener
+    assert "i-admin" not in exposed                       # served only by SG-blocked 8080
+
+
+def test_f8_fail_open_when_no_forward_action():
+    # a listener with no resolvable forward action -> fail open to all TGs (avoid FN)
+    s, g = _l7_scanner()
+    tgs = [{"TargetGroupArn": "arn:tg/web", "TargetType": "instance"}]
+    health = [{"Target": {"Id": "i-web"}, "TargetHealth": {"State": "healthy"}}]
+    c = _elbv2_client([_alb()], listeners=[{"Port": 443}], tgs=tgs, health=health)  # no DefaultActions
+    s._clients["elbv2:us-east-1"] = c
+    exposed = set()
+    s._l7_elbv2(g, "internet", PUB_SG, {}, exposed, {})
+    assert "i-web" in exposed                             # fail-open preserves coverage
+
+
 def test_classic_elb_internet_facing():
     s, g = _l7_scanner()
     clb = {"LoadBalancerName": "clb1", "DNSName": "clb1.elb.amazonaws.com",

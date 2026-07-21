@@ -184,12 +184,24 @@ def role_can_read_bucket(statements: List[dict], bucket_arn: str) -> Optional[Di
 # ─── Phase 7 DSPM: tag-driven crown jewels + non-S3 CAN_READ_DATA ─────────────
 _DSPM_CLASSIFICATION_KEYS = frozenset({
     "dataclassification", "classification", "sensitivity", "datasensitivity",
-    "compliance", "datacategory"})
+    "compliance", "datacategory", "confidentiality"})
 _DSPM_BOOLEAN_KEYS = frozenset({"pii", "phi", "crownjewel"})
 _DSPM_SENSITIVE_VALUES = frozenset({
     "sensitive", "confidential", "restricted", "pii", "phi", "pci", "secret",
-    "critical", "high"})
+    "critical", "high",
+    # regulated-data compliance frameworks (as a Compliance=<framework> tag value)
+    "hipaa", "gdpr", "sox", "glba", "ferpa", "pci-dss", "pcidss"})
 _DSPM_TRUTHY = frozenset({"true", "yes", "1", "enabled", "y", "t"})
+
+
+def _dspm_norm_key(raw: str) -> str:
+    """Normalize a tag key for classification lookup: lowercase + drop the separators
+    that distinguish otherwise-identical keys (``Data-Classification`` / ``data_classification``
+    / ``Data Classification`` all fold to ``dataclassification``)."""
+    k = (raw or "").strip().lower()
+    for sep in ("-", "_", " ", "."):
+        k = k.replace(sep, "")
+    return k
 
 # read-action sets per crown datastore kind (lowercased for fnmatch vs `dynamodb:*` etc.)
 DSPM_READ_ACTIONS = {
@@ -217,10 +229,10 @@ def is_crown_jewel_by_tags(tags, extra_keys=frozenset(), extra_values=frozenset(
     ``tags`` is a list of ``{'Key','Value'}`` dicts. ``environment=prod`` deliberately
     does NOT qualify (too broad — an operator opts it in via ``extra_keys``). Returns
     ``{crown, sensitivity, matched:(Key,Value)}`` or None."""
-    class_keys = _DSPM_CLASSIFICATION_KEYS | {k.lower() for k in extra_keys}
-    sens_values = _DSPM_SENSITIVE_VALUES | {v.lower() for v in extra_values}
+    class_keys = _DSPM_CLASSIFICATION_KEYS | {_dspm_norm_key(k) for k in extra_keys}
+    sens_values = _DSPM_SENSITIVE_VALUES | {v.strip().lower() for v in extra_values}
     for t in tags or []:
-        key = (t.get("Key") or "").strip().lower()
+        key = _dspm_norm_key(t.get("Key"))          # F5: fold -/_/space/. separators
         val = (t.get("Value") or "").strip().lower()
         if key in class_keys and val in sens_values:
             return {"crown": True, "sensitivity": val,

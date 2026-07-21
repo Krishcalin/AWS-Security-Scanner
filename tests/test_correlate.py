@@ -453,6 +453,24 @@ class TestPhase7Fusion(unittest.TestCase):
         self.assertIn(rds, crowns)
         self.assertNotIn("arn:aws:s3:::not-crown", crowns)
 
+    def test_f7_kev_named_in_vuln02_not_boosted_nonkev(self):
+        # A host carries a reachable-boosted non-KEV (added FIRST, clamped to x=1.0) AND a
+        # real KEV. The VULN-02 driver label must name the KEV cve, not the non-KEV.
+        g = flagship_graph(with_vuln=False)              # admin + data terminals, no host vuln
+        inst = f"arn:aws:ec2:us-east-1:{ACCT}:instance/i-1"
+        g.add_node("CVE-NONKEV", "Vulnerability", kev=False)
+        g.add_edge(inst, "CVE-NONKEV", "HAS_VULN", cve="CVE-NONKEV", kev=False,
+                   exploit_available="YES", epss=0.9, reachable_service=True)
+        g.add_node("CVE-KEV", "Vulnerability", kev=True)
+        g.add_edge(inst, "CVE-KEV", "HAS_VULN", cve="CVE-KEV", kev=True,
+                   exploit_available="YES")
+        admin_paths = [p for p in enum(g) if p.terminal == ADMIN]
+        self.assertTrue(admin_paths)
+        v2 = [d for d in admin_paths[0].driving_findings if d.startswith("VULN-02")]
+        self.assertTrue(v2)
+        self.assertIn("CVE-KEV", v2[0])
+        self.assertNotIn("CVE-NONKEV", v2[0])
+
     def test_loadbalancer_can_be_a_choke(self):
         # (e) a LoadBalancer is an intermediate node -> eligible as a choke point.
         g = lb_fronted_graph()
