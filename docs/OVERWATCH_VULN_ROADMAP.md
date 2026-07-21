@@ -200,11 +200,41 @@ fix-verify. 1066 tests.
   ids reuse the Phase-5 EOL fallback so a tagged crown **merges** onto any vulnerable EOL node
   (a "vulnerable crown jewel"). `crown_nodes(g)` spans S3 + all DSPM stores for the flagship/correlate.
 
-### Phase 8 — Windows agentless OS-vuln coverage · **L**
-Extend the now-live side-scan to Windows; close the Linux-only blind spot.
-- Windows branch in the EBS extractor (NTFS + SOFTWARE-registry-hive software/hotfix inventory)
-- New `match_vulns` branch vs an MSRC/OSV KB→CVE feed → HAS_VULN edges
-- SSM-CWPP fallback + interim explicit-WARN (removes the silent false-clean now)
+### Phase 8 — Windows agentless OS-vuln coverage · **L** — ✅ SHIPPED (v2.18.0)
+Closed the Linux-only CWPP blind spot **without a filesystem read**. The design pivot from a
+7-agent scoping pass: **`ssm.DescribeInstancePatches` already carries each missing patch's real
+MSRC CVE ids** (`CVEIds`) — AWS did the KB→CVE mapping — so the primary signal is AWS-native
+real CVEs, sidestepping the roadmap's central "Windows KB→CVE feed fidelity" risk entirely.
+New pure module `aws_winvuln.py` (mirrors `aws_engine_eol.py`: `today` injected, floor-safe) +
+a **default-on** `WINVULN` section (SECTIONS index 39 > IAMPRIVESC 36 → post-clobber → direct
+`emit_node_vuln_edges`, before VULN/CORRELATE so its HAS_VULN edges feed attack-path
+exploitability). 4 checks. Hardened by a 29-agent read-only adversarial-verify (5 confirmed /
+4 unique defects, all fixed) + a fix-verify. 1113 tests.
+- ✅ **Agentless SSM patch-compliance** (`_check_windows_vuln`): `DescribeInstancePatches` →
+  the MISSING/FAILED patches with their real MSRC `CVEIds` → `EnrichedMatch` → HAS_VULN edges
+  (`WINVULN-01`, KEV-escalated to `WINVULN-02` via the `--vuln-db` bundle). Read-only:
+  describe/get only — `send_command`/`start_session`/`start_automation_execution` are FORBIDDEN
+  (a test asserts they are never called). `AWS-RunPatchBaseline` appears only as operator-run
+  remediation text.
+- ✅ **`WINDOWS_EOL` lifecycle signal** — honest synthetic `WINEOL-<release>` (public
+  end-of-support DATE, FP~0, floor-safe), longest-caption-needle disambiguation across the
+  shared `10.0` build major, with LTSC/LTSB/IoT suppression so still-supported long-servicing
+  editions are never false-flagged.
+- ✅ **The interim explicit-WARN `WINVULN-03`** — the headline: any Windows host the SSM path
+  could NOT fully assess (not SSM-managed / agent offline / patch read denied / never scanned)
+  is reported UNDETERMINED, so a Windows host is **never silently reported clean** — on every
+  default scan. Removes the silent false-clean the roadmap called out.
+- ✅ **`--side-scan` honesty fix** — the EBS path no longer reports a Windows host as
+  "os-release skipped"; `parse_windows_software_hive` (fail-open `regf`-magic stub) emits an
+  honest note pointing to the WINVULN (SSM) path.
+- ⏸️ **DEFERRED (documented, fail-open — never a false-clean):** the home-grown MSRC KB→CVE
+  supersedence matcher (superseded by the native `CVEIds`; a match over the sparse
+  `AWS:WindowsUpdate` set would false-positive patched CVEs — the roadmap's exact caution); the
+  full **regf SOFTWARE-hive value-walker + NTFS/EBS byte-source** (needs a committed golden hive
+  to validate, like `parse_rpmdb_bdb` / the live `DissectExtractor`); the UBR build-currency
+  signal (`PlatformVersion` lacks the 4th UBR octet); `AWS:Application` app→CVE (CPE-not-OSV).
+
+**The 8-phase vuln/misconfig roadmap is now COMPLETE (Phases 1–8, v2.18.0).**
 
 ---
 

@@ -407,3 +407,23 @@ def test_fix5_load_vuln_db_memoized_single_warn():
         b2 = s._load_vuln_db()
     assert b1 is None and b2 is None
     assert len([r for r in s.results if r.check_id == "CWPP-04"]) == 1   # warned once, not per call
+
+
+def test_fixverify_malformed_vuln_db_fails_open_no_attributeerror():
+    # fix-verify F5 regression: a malformed-but-valid-JSON --vuln-db must fail open to ONE
+    # CWPP-04 WARN + None on BOTH memoized calls — never raise / never AttributeError.
+    import json, tempfile, os as _os
+    for payload in (42, [1, 2, 3], {"kev": 5}):
+        fd, path = tempfile.mkstemp(suffix=".json")
+        with _os.fdopen(fd, "w") as fh:
+            json.dump(payload, fh)
+        try:
+            s = _win_scanner()
+            s.vuln_db_path = path
+            with patch("builtins.print"):
+                b1 = s._load_vuln_db()      # first caller (e.g. WINVULN)
+                b2 = s._load_vuln_db()      # second caller (e.g. SIDESCAN) — must not crash
+            assert b1 is None and b2 is None, payload
+            assert len([r for r in s.results if r.check_id == "CWPP-04"]) == 1, payload
+        finally:
+            _os.unlink(path)

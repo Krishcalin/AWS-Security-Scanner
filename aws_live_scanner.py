@@ -8956,9 +8956,12 @@ class AWSLiveScanner:
         double-load or double-warn."""
         if getattr(self, "_vuln_db_loaded", False):
             return self._vuln_db_bundle
+        # Assign the bundle BEFORE the flag: if _do_load_vuln_db ever raised, the flag would
+        # stay False and a later caller would retry the real error — never a stale/unset attr.
+        bundle = self._do_load_vuln_db()
+        self._vuln_db_bundle = bundle
         self._vuln_db_loaded = True
-        self._vuln_db_bundle = self._do_load_vuln_db()
-        return self._vuln_db_bundle
+        return bundle
 
     def _do_load_vuln_db(self):
         if not self.vuln_db_path:
@@ -8966,18 +8969,20 @@ class AWSLiveScanner:
         try:
             with open(self.vuln_db_path, encoding="utf-8") as fh:
                 data = json.load(fh)
+            # The record-parsing is INSIDE the try too, so a malformed-but-valid-JSON feed
+            # (e.g. a bare int, or {"kev": 5}) fails open to the WARN below — never propagates.
+            if isinstance(data, list):
+                records, epss, kev, exploits = data, {}, set(), set()
+            else:
+                records = data.get("osv") or data.get("records") or []
+                epss = data.get("epss") or {}
+                kev = set(data.get("kev") or [])
+                exploits = set(data.get("exploits") or [])
+            return (aws_sidescan.OSVFeed.from_records(records), epss, set(kev), set(exploits))
         except Exception as e:
             self._add("WARN", "CWPP-04", "SIDESCAN", "vuln-db",
                       f"could not load --vuln-db {self.vuln_db_path}: {e}")
             return None
-        if isinstance(data, list):
-            records, epss, kev, exploits = data, {}, set(), set()
-        else:
-            records = data.get("osv") or data.get("records") or []
-            epss = data.get("epss") or {}
-            kev = set(data.get("kev") or [])
-            exploits = set(data.get("exploits") or [])
-        return (aws_sidescan.OSVFeed.from_records(records), epss, set(kev), set(exploits))
 
     def _select_sidescan_targets(self, g):
         """In-scope instances for side-scan. Default 'exposed' reuses the Phase-2
