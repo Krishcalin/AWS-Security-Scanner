@@ -399,3 +399,38 @@ def test_detect_fs_unknown():
 def test_rpmdb_bdb_deferred_raises_unsupported():
     with pytest.raises(ss.Unsupported):
         ss.parse_rpmdb_bdb(b"\x00\x06\x15\x61rpmdb-bdb")
+
+
+# ── Phase 8: Windows SOFTWARE-hive detection (fail-open stub; no false-clean) ──
+def test_parse_windows_software_hive_regf_magic_deferred_note():
+    notes = ss.parse_windows_software_hive(b"regf" + b"\x00" * 200)
+    assert len(notes) == 1 and "deferred" in notes[0].lower()
+    assert "WINVULN" in notes[0]                       # points to the agentless path
+
+
+def test_parse_windows_software_hive_non_regf_skipped():
+    assert "skipped" in ss.parse_windows_software_hive(b"not a hive")[0].lower()
+    assert "skipped" in ss.parse_windows_software_hive(b"")[0].lower()
+
+
+def test_parse_windows_software_hive_never_guesses_inventory():
+    # returns only NOTES (strings) — never a package list that could false-clean a host
+    for blob in (b"regf" + b"\x00" * 50, b"junk", b""):
+        out = ss.parse_windows_software_hive(blob)
+        assert isinstance(out, list) and all(isinstance(n, str) for n in out)
+
+
+def test_sidescan_windows_host_honest_note_not_osrelease_skipped():
+    ext = ss.DictExtractor({"Windows/System32/config/SOFTWARE": b"regf" + b"\x00" * 300})
+    res = ss.sidescan_filesystem(ext, None, {}, set(), instance_id="i-win", do_secrets=False)
+    assert res.os is None                              # no Linux OSRelease
+    joined = " ".join(res.notes).lower()
+    assert "windows host detected" in joined           # honest Windows note
+    assert "os package inventory skipped" not in joined  # the old false-clean note is gone
+
+
+def test_sidescan_no_osrelease_no_hive_unchanged():
+    ext = ss.DictExtractor({"/opt/app/x": b"data"})
+    res = ss.sidescan_filesystem(ext, None, {}, set(), instance_id="i-x", do_secrets=False)
+    joined = " ".join(res.notes).lower()
+    assert "os package inventory skipped" in joined    # unchanged for a genuine non-OS image
