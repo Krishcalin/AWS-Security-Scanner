@@ -614,6 +614,28 @@ def parse_rpmdb_bdb(db: bytes):
     raise Unsupported("rpmdb Berkeley-DB decode is deferred (use a modern sqlite rpmdb)")
 
 
+def parse_windows_software_hive(hive_bytes: bytes) -> List[str]:
+    """Windows registry SOFTWARE-hive OS/software inventory — FAIL-OPEN STUB (Phase 8).
+
+    The regf (registry-hive) value-walker is DEFERRED, exactly like ``parse_rpmdb_bdb`` and
+    the live ``DissectExtractor``: it is ~200-280 pure LOC but has no offline-validatable
+    real-data path yet (the NTFS/EBS byte-source is itself deferred), and synthetic-only
+    validation risks a fixture that merely confirms a mis-read. Until a golden captured hive
+    is committed and the walker validated against it, this stub only checks the ``regf``
+    base-block magic and returns honest NOTES — NEVER a guessed inventory (which could
+    false-clean a vulnerable host) and NEVER raises. Windows OS-vuln coverage ships via the
+    agentless WINVULN section (SSM patch compliance), which needs no filesystem read.
+
+    Follow-on validation gate: ``reg save HKLM\\SOFTWARE\\...\\Uninstall <tiny>.hiv`` a
+    throwaway subtree, commit it as a golden fixture, then assert the walker's output against
+    its known contents before enabling it.
+    """
+    if not hive_bytes or hive_bytes[:4] != b"regf":
+        return ["SOFTWARE hive absent/unreadable — Windows OS inventory skipped"]
+    return ["Windows host detected (SOFTWARE registry hive present) — registry-hive OS "
+            "inventory deferred; OS-vuln coverage via the agentless WINVULN (SSM) section"]
+
+
 def collect_inventory(ext: FilesystemExtractor, os: OSRelease) -> List[Package]:
     """Dispatch to the right parser by pkgmgr. rpm tries the sqlite rpmdb, then a
     textual manifest. Raises Unsupported only for an undecodable rpmdb container."""
@@ -1945,7 +1967,22 @@ def sidescan_filesystem(ext: FilesystemExtractor, feed: Optional[OSVFeed],
     # OS package inventory (best-effort; may be empty for a scratch/app-only image)
     packages: List[Package] = []
     if osr is None:
-        notes.append("no /etc/os-release readable — OS package inventory skipped")
+        # Windows host? Probe the registry SOFTWARE hive so a Windows host is NOT silently
+        # reported as "os-release skipped" (a misleading false-clean). The regf walker is
+        # DEFERRED (parse_windows_software_hive); Windows OS-vuln coverage ships agentlessly
+        # via the WINVULN (SSM patch-compliance) section, not the side-scan.
+        sw = None
+        for wp in ("/Windows/System32/config/SOFTWARE",   # leading-slash convention (real extractor)
+                   "/windows/system32/config/SOFTWARE",
+                   "Windows/System32/config/SOFTWARE",
+                   "windows/system32/config/SOFTWARE"):
+            sw = ext.read_file(wp)
+            if sw is not None:
+                break
+        if sw is not None:
+            notes.extend(parse_windows_software_hive(sw))
+        else:
+            notes.append("no /etc/os-release readable — OS package inventory skipped")
     elif not osr.pkgmgr:
         notes.append(f"unknown distro '{osr.id}' — OS package inventory skipped")
     elif not osr.ecosystem:

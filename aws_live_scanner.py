@@ -71,9 +71,10 @@ import aws_state
 import aws_unused
 import aws_sidescan
 import aws_engine_eol
+import aws_winvuln
 import aws_graph_neptune
 
-VERSION = "2.17.0"
+VERSION = "2.18.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -95,7 +96,7 @@ SECTIONS = [
     "ELASTICACHE", "OPENSEARCH", "DYNAMODB", "STEPFUNCTIONS",
     "APIGATEWAY", "ELB", "EBS", "REDSHIFT", "EFS", "ACM",
     "SAGEMAKER", "COGNITO", "APIGATEWAYV2", "IAMPRIVESC", "EXPOSURE",
-    "COGNITO_IDENTITY",
+    "COGNITO_IDENTITY", "WINVULN",
     "VULN", "THREAT", "DATA", "CORRELATE",
 ]
 
@@ -139,6 +140,7 @@ SECTION_LABELS = {
     "IAMPRIVESC":     "IAM PRIVILEGE ESCALATION",
     "EXPOSURE":       "INTERNET EXPOSURE & ATTACK PATHS",
     "COGNITO_IDENTITY": "AMAZON COGNITO (IDENTITY POOLS)",
+    "WINVULN":        "WINDOWS OS VULNERABILITIES (AGENTLESS/SSM)",
     "VULN":           "WORKLOAD VULNERABILITIES (INSPECTOR)",
     "THREAT":         "LIVE THREAT DETECTIONS (GUARDDUTY)",
     "DATA":           "DATA SECURITY & FLAGSHIP ATTACK PATHS",
@@ -166,6 +168,9 @@ SEVERITY_WEIGHTS = {"CRITICAL": 15, "HIGH": 5, "MEDIUM": 2, "LOW": 0.5, "INFO": 
 CHECK_SEVERITY = {
     # Agentless side-scan (CWPP, Phase 6)
     "CWPP-01": "HIGH", "CWPP-02": "CRITICAL", "CWPP-03": "HIGH",
+    # Phase 8: Windows agentless OS-vuln (SSM patch compliance) — WINVULN-03 is the
+    # interim explicit-WARN that removes the silent false-clean on Windows hosts.
+    "WINVULN-01": "HIGH", "WINVULN-02": "CRITICAL", "WINVULN-03": "MEDIUM", "WINVULN-04": "LOW",
     "IAM-01": "CRITICAL", "IAM-02": "CRITICAL", "IAM-04": "HIGH",
     "IAM-05": "MEDIUM", "IAM-06": "HIGH", "IAM-10": "MEDIUM",
     "IAM-07": "MEDIUM", "IAM-08": "MEDIUM",
@@ -291,6 +296,12 @@ COMPLIANCE_MAP = {
     "CWPP-01": {"NIST": "RA-5", "PCI-DSS": "6.3.1", "SOC2": "CC7.1"},
     "CWPP-02": {"NIST": "SI-2", "PCI-DSS": "11.3.1", "SOC2": "CC7.1"},
     "CWPP-03": {"NIST": "IA-5", "PCI-DSS": "8.3.1", "SOC2": "CC6.1"},
+    # Phase 8 Windows OS-vuln (CIS omitted — no in-guest OS-patch control in CIS AWS
+    # Foundations, matching VULN-01/02). WINVULN-03 = the "must actually scan" controls.
+    "WINVULN-01": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "WINVULN-02": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5(2)"},
+    "WINVULN-03": {"PCI-DSS": "6.3.1", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5"},
+    "WINVULN-04": {"PCI-DSS": "6.3.3", "SOC2": "CC7.1", "NIST": "SI-2"},
     # IAM
     "IAM-01": {"CIS": "1.5", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
     "IAM-02": {"CIS": "1.4", "PCI-DSS": "8.2.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "IA-2"},
@@ -549,6 +560,12 @@ REMEDIATION_MAP = {
     "CWPP-01": "Patch the vulnerable package (CVE reachable on an internet-exposed host — prioritize): aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=instanceids,Values=<INSTANCE_ID> --parameters Operation=Install, then rebuild the AMI from the patched instance.",
     "CWPP-02": "KEV/exploited CVE on a reachable host — patch immediately or isolate: aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=instanceids,Values=<INSTANCE_ID> --parameters Operation=Install ; consider aws ec2 stop-instances --instance-ids <INSTANCE_ID> until patched.",
     "CWPP-03": "Rotate/revoke the exposed credential and move it off disk: aws secretsmanager rotate-secret --secret-id <SECRET_ARN> (or aws iam update-access-key / delete-access-key), attach an instance role, and reference AWS Secrets Manager instead of the on-disk file.",
+    # Phase 8 Windows OS-vuln — AWS-RunPatchBaseline is OPERATOR-run text only; the scanner
+    # only reads describe/get SSM APIs and NEVER executes anything on the host.
+    "WINVULN-01": "Install the missing Windows security/critical updates via Patch Manager (operator-run; the scanner only reads describe/get APIs, never executes on the host): aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install ; then rebuild the golden AMI. If past end-of-support, upgrade to a supported Windows release.",
+    "WINVULN-02": "PRIORITIZE — a CISA-KEV CVE maps to a missing patch: aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install ; if internet-exposed, isolate first: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --groups <QUARANTINE_SG>.",
+    "WINVULN-03": "Windows OS-vuln posture UNDETERMINED — do NOT treat as clean. Make it assessable: attach AmazonSSMManagedInstanceCore, then aws ssm create-association --name AWS-GatherSoftwareInventory --targets Key=InstanceIds,Values=<INSTANCE_ID> and scan a patch baseline: aws ssm send-command --document-name AWS-RunPatchBaseline --parameters Operation=Scan --targets Key=InstanceIds,Values=<INSTANCE_ID>.",
+    "WINVULN-04": "Assessed via SSM patch compliance — keep it continuously scanned: aws ssm create-association --name AWS-RunPatchBaseline --parameters Operation=Scan --schedule-expression \"rate(1 day)\" --targets Key=InstanceIds,Values=<INSTANCE_ID>.",
     "IAM-01": "Enable virtual MFA for root: aws iam create-virtual-mfa-device --virtual-mfa-device-name root-mfa && aws iam enable-mfa-device --user-name root --serial-number <MFA_ARN> --authentication-code1 <CODE1> --authentication-code2 <CODE2>",
     "IAM-02": "Delete root access keys: aws iam delete-access-key --access-key-id <KEY_ID>",
     "IAM-04": "Enable MFA for user: aws iam enable-mfa-device --user-name <USER> --serial-number <MFA_ARN> --authentication-code1 <CODE1> --authentication-code2 <CODE2>",
@@ -8234,6 +8251,146 @@ class AWSLiveScanner:
             g.add_node(node, "ECRImage", **{k: v for k, v in nprops.items() if v is not None})
             g.add_edge(src, node, "RUNS_IMAGE", **eprops)
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 39: WINDOWS OS VULNERABILITIES  (Phase 8 · agentless via SSM)
+    #   Closes the Linux-only CWPP blind spot WITHOUT a filesystem read: SSM Patch
+    #   Manager compliance (DescribeInstancePatches carries the real MSRC CVE ids of
+    #   each MISSING KB) -> HAS_VULN edges, plus a WINDOWS_EOL lifecycle signal. WINVULN-03
+    #   is the interim explicit-WARN so a Windows host is NEVER silently reported clean.
+    #   READ-ONLY: describe_* only (SendCommand/StartSession are FORBIDDEN). Runs at SECTIONS
+    #   index 39 > IAMPRIVESC 36 -> post-clobber -> direct emit_node_vuln_edges, no stash/replay.
+    # ══════════════════════════════════════════════════════════════════════════
+    def _collect_windows_hosts(self, ec2) -> List[str]:
+        """Running Windows EC2 instance-ids. The EC2 Platform field is only set for Windows
+        (lowercased 'windows' on the wire); re-guard client-side for the model/wire mismatch."""
+        out: List[str] = []
+        for page in ec2.get_paginator("describe_instances").paginate(
+                Filters=[{"Name": "instance-state-name", "Values": ["running"]}]):
+            for r in page.get("Reservations", []):
+                for inst in r.get("Instances", []):
+                    if (inst.get("Platform") or "").lower() == "windows":
+                        iid = inst.get("InstanceId")
+                        if iid:
+                            out.append(iid)
+        return out
+
+    def _ssm_managed_map(self, ssm) -> Dict[str, Dict]:
+        """instance-id -> DescribeInstanceInformation item (EC2 managed nodes). Presence ==
+        SSM-managed; PingStatus gates the online check."""
+        out: Dict[str, Dict] = {}
+        for page in ssm.get_paginator("describe_instance_information").paginate():
+            for info in page.get("InstanceInformationList", []):
+                iid = info.get("InstanceId")
+                if iid and info.get("ResourceType", "EC2Instance") == "EC2Instance":
+                    out[iid] = info
+        return out
+
+    def _ssm_missing_patches(self, ssm, iid) -> List[Dict]:
+        """All DescribeInstancePatches['Patches'] for one instance (bounded NextToken loop;
+        no server-side State filter — the value casing is runtime-fragile, so parsing filters
+        client-side in aws_winvuln.parse_missing_patches)."""
+        patches: List[Dict] = []
+        token = None
+        for _ in range(200):
+            kwargs = {"InstanceId": iid}
+            if token:
+                kwargs["NextToken"] = token
+            resp = ssm.describe_instance_patches(**kwargs)
+            patches += resp.get("Patches", [])
+            token = resp.get("NextToken")
+            if not token or not isinstance(token, str):
+                break
+        return patches
+
+    def _ssm_patch_state(self, ssm, iid) -> Optional[Dict]:
+        """DescribeInstancePatchStates compliance counts for one instance, or None."""
+        states = ssm.describe_instance_patch_states(
+            InstanceIds=[iid]).get("InstancePatchStates", [])
+        return states[0] if states else None
+
+    def _check_windows_vuln(self):
+        self._section_header("WINVULN")
+        self._log("Agentless Windows OS-vuln assessment via SSM Patch Manager compliance "
+                  "(DescribeInstancePatches -> real MSRC CVE ids) + end-of-support lifecycle. "
+                  "WINVULN-03 WARNs on any host that could not be assessed (never a silent clean).")
+        try:
+            ec2 = self._client("ec2")
+            win = self._collect_windows_hosts(ec2)
+        except Exception as e:
+            self._add("INFO", "WINVULN-03", "WINVULN", "ec2",
+                      f"could not enumerate instances in {self.region}: {e}")
+            return
+        if not win:
+            return                                  # silent no-op: no Windows hosts in this region
+
+        ssm, managed = None, {}
+        try:
+            ssm = self._client("ssm")
+            managed = self._ssm_managed_map(ssm)
+        except Exception as e:
+            ssm = None
+            self._add("INFO", "WINVULN-03", "WINVULN", "ssm",
+                      f"SSM inventory unavailable in {self.region} ({e}) — hosts UNDETERMINED")
+
+        bundle = self._load_vuln_db() if self.vuln_db_path else None
+        epss = bundle[1] if bundle else {}
+        kev = bundle[2] if bundle else set()
+        exploits = bundle[3] if bundle else set()
+        g = self._ensure_graph()
+
+        for iid in win:
+            arn = self._instance_arn(iid)
+            info = managed.get(iid)
+            is_managed = info is not None
+            ping_online = bool(info) and info.get("PingStatus") == "Online"
+            caption = (info or {}).get("PlatformName", "") or ""
+            osver = (info or {}).get("PlatformVersion", "") or ""
+            missing, pstate, read_ok = [], None, False
+            if ssm is not None and is_managed and ping_online:
+                try:
+                    missing = aws_winvuln.parse_missing_patches(
+                        self._ssm_missing_patches(ssm, iid))
+                    read_ok = True
+                except Exception:
+                    read_ok = False
+                try:
+                    pstate = self._ssm_patch_state(ssm, iid)
+                except Exception:
+                    pstate = None
+            matches = aws_winvuln.match_windows_vulns(
+                missing, caption, osver, today=self._scan_date(),
+                epss=epss, kev=kev, exploits=exploits)
+            verdict = aws_winvuln.assess(is_managed=is_managed, ping_online=ping_online,
+                                         patch_read_ok=read_ok, patch_state=pstate,
+                                         matches=matches)
+            if verdict == "VULN" and matches:
+                aws_sidescan.emit_node_vuln_edges(g, arn, "EC2Instance", matches,
+                                                  snapshot_id="", instance_id=iid)
+                for m in matches:
+                    g.add_edge(arn, m.cve, "HAS_VULN", scan_source="ssm-patch")
+                    fid = "WINVULN-02" if m.kev else "WINVULN-01"
+                    self._add("FAIL", fid, "WINVULN", iid,
+                              f"{m.severity} {m.cve} — missing fix {m.fixed_version} "
+                              f"({m.package}, EPSS {m.epss}, exploit={m.exploit_available}) "
+                              f"on Windows {osver or caption} | {iid}")
+            elif verdict == "VULN":                 # counts-only non-compliance (no per-CVE detail)
+                self._add("FAIL", "WINVULN-01", "WINVULN", iid,
+                          f"{(pstate or {}).get('CriticalNonCompliantCount', 0)} critical / "
+                          f"{(pstate or {}).get('SecurityNonCompliantCount', 0)} security "
+                          f"non-compliant patch(es) on Windows {caption} | {iid}")
+            elif verdict == "CLEAN":
+                self._add("PASS", "WINVULN-04", "WINVULN", iid,
+                          f"assessed via SSM patch compliance — 0 missing/critical/security "
+                          f"on Windows {osver or caption} | {iid}")
+            else:  # UNDETERMINED -> the interim explicit-WARN (removes the silent false-clean)
+                reason = ("not SSM-managed" if not is_managed else
+                          "SSM agent offline" if not ping_online else
+                          "patch read denied/failed" if not read_ok else
+                          "no patch baseline / never scanned")
+                self._add("WARN", "WINVULN-03", "WINVULN", iid,
+                          f"Windows OS-vuln posture UNDETERMINED ({reason}) — NOT assessed as "
+                          f"clean; onboard to SSM + a patch baseline | {iid}")
+
     def _check_vuln(self):
         self._section_header("VULN")
         # Replay stashed managed-engine-EOL + RUNS_IMAGE edges FIRST — before any Inspector
@@ -8793,27 +8950,39 @@ class AWSLiveScanner:
         return f"{self.account or 'acct'}-sidescan"
 
     def _load_vuln_db(self):
-        """Load the offline vulnerability feed from --vuln-db. Accepts a raw list
-        of OSV records, or an object with {osv|records, epss, kev, exploits}.
-        Returns (OSVFeed, epss_map, kev_set, exploit_set) or None (inventory +
-        secrets still run; CVE match is simply skipped)."""
+        """Load the offline vulnerability feed from --vuln-db (OSVFeed, epss, kev, exploits)
+        or None. MEMOIZED: the file is loaded — and any load-failure WARN emitted — AT MOST
+        ONCE per scan, so the WINVULN and SIDESCAN sections that share the feed never
+        double-load or double-warn."""
+        if getattr(self, "_vuln_db_loaded", False):
+            return self._vuln_db_bundle
+        # Assign the bundle BEFORE the flag: if _do_load_vuln_db ever raised, the flag would
+        # stay False and a later caller would retry the real error — never a stale/unset attr.
+        bundle = self._do_load_vuln_db()
+        self._vuln_db_bundle = bundle
+        self._vuln_db_loaded = True
+        return bundle
+
+    def _do_load_vuln_db(self):
         if not self.vuln_db_path:
             return None
         try:
             with open(self.vuln_db_path, encoding="utf-8") as fh:
                 data = json.load(fh)
+            # The record-parsing is INSIDE the try too, so a malformed-but-valid-JSON feed
+            # (e.g. a bare int, or {"kev": 5}) fails open to the WARN below — never propagates.
+            if isinstance(data, list):
+                records, epss, kev, exploits = data, {}, set(), set()
+            else:
+                records = data.get("osv") or data.get("records") or []
+                epss = data.get("epss") or {}
+                kev = set(data.get("kev") or [])
+                exploits = set(data.get("exploits") or [])
+            return (aws_sidescan.OSVFeed.from_records(records), epss, set(kev), set(exploits))
         except Exception as e:
             self._add("WARN", "CWPP-04", "SIDESCAN", "vuln-db",
                       f"could not load --vuln-db {self.vuln_db_path}: {e}")
             return None
-        if isinstance(data, list):
-            records, epss, kev, exploits = data, {}, set(), set()
-        else:
-            records = data.get("osv") or data.get("records") or []
-            epss = data.get("epss") or {}
-            kev = set(data.get("kev") or [])
-            exploits = set(data.get("exploits") or [])
-        return (aws_sidescan.OSVFeed.from_records(records), epss, set(kev), set(exploits))
 
     def _select_sidescan_targets(self, g):
         """In-scope instances for side-scan. Default 'exposed' reuses the Phase-2
@@ -9002,6 +9171,7 @@ class AWSLiveScanner:
             "IAMPRIVESC":     self._check_iam_privesc,
             "EXPOSURE":       self._check_exposure,
             "COGNITO_IDENTITY": self._check_cognito_identity,
+            "WINVULN":        self._check_windows_vuln,
             "SIDESCAN":       self._check_side_scan,
             "VULN":           self._check_vuln,
             "THREAT":         self._check_threat,

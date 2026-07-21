@@ -98,10 +98,10 @@ def _gaad_iam(users=None, roles=None, groups=None, policies=None):
 class TestDataStructures(unittest.TestCase):
 
     def test_version(self):
-        self.assertEqual(VERSION, "2.17.0")
+        self.assertEqual(VERSION, "2.18.0")
 
     def test_sections_count(self):
-        self.assertEqual(len(SECTIONS), 43)
+        self.assertEqual(len(SECTIONS), 44)   # +WINVULN (Phase 8 Windows OS-vuln)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:
@@ -199,7 +199,9 @@ class TestMaps(unittest.TestCase):
                        "CLB-01", "CLB-02", "VPC-05", "VPC-06", "WAF-05", "CFN-06",
                        "SM-05", "SM-06", "SM-07",
                        # Phase 7 attack-path fusion (L7 + identity + DSPM)
-                       "EXPOSURE-03", "IDENTITY-01", "DSPM-01", "DSPM-02"]
+                       "EXPOSURE-03", "IDENTITY-01", "DSPM-01", "DSPM-02",
+                       # Phase 8 Windows agentless OS-vuln (SSM patch compliance)
+                       "WINVULN-01", "WINVULN-02", "WINVULN-03", "WINVULN-04"]
         for c in new_checks:
             self.assertIn(c, CHECK_SEVERITY, f"{c} missing from CHECK_SEVERITY")
 
@@ -208,6 +210,17 @@ class TestMaps(unittest.TestCase):
         # confined to the allowed frameworks (no FSBP key); remediation carries a CLI cmd.
         allowed = {"CIS", "PCI-DSS", "HIPAA", "SOC2", "NIST"}
         for cid in ("EXPOSURE-03", "IDENTITY-01", "DSPM-01", "DSPM-02"):
+            self.assertIn(cid, CHECK_SEVERITY, f"{cid} missing from CHECK_SEVERITY")
+            self.assertIn(cid, COMPLIANCE_MAP, f"{cid} missing from COMPLIANCE_MAP")
+            self.assertIn(cid, REMEDIATION_MAP, f"{cid} missing from REMEDIATION_MAP")
+            self.assertLessEqual(set(COMPLIANCE_MAP[cid]), allowed,
+                                 f"{cid} has a disallowed compliance key")
+            self.assertIn("aws ", REMEDIATION_MAP[cid].lower())
+
+    def test_phase8_maps_lockstep(self):
+        # Phase-8 Windows OS-vuln checks land in all three maps in lockstep.
+        allowed = {"CIS", "PCI-DSS", "HIPAA", "SOC2", "NIST"}
+        for cid in ("WINVULN-01", "WINVULN-02", "WINVULN-03", "WINVULN-04"):
             self.assertIn(cid, CHECK_SEVERITY, f"{cid} missing from CHECK_SEVERITY")
             self.assertIn(cid, COMPLIANCE_MAP, f"{cid} missing from COMPLIANCE_MAP")
             self.assertIn(cid, REMEDIATION_MAP, f"{cid} missing from REMEDIATION_MAP")
