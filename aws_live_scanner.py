@@ -8950,10 +8950,17 @@ class AWSLiveScanner:
         return f"{self.account or 'acct'}-sidescan"
 
     def _load_vuln_db(self):
-        """Load the offline vulnerability feed from --vuln-db. Accepts a raw list
-        of OSV records, or an object with {osv|records, epss, kev, exploits}.
-        Returns (OSVFeed, epss_map, kev_set, exploit_set) or None (inventory +
-        secrets still run; CVE match is simply skipped)."""
+        """Load the offline vulnerability feed from --vuln-db (OSVFeed, epss, kev, exploits)
+        or None. MEMOIZED: the file is loaded — and any load-failure WARN emitted — AT MOST
+        ONCE per scan, so the WINVULN and SIDESCAN sections that share the feed never
+        double-load or double-warn."""
+        if getattr(self, "_vuln_db_loaded", False):
+            return self._vuln_db_bundle
+        self._vuln_db_loaded = True
+        self._vuln_db_bundle = self._do_load_vuln_db()
+        return self._vuln_db_bundle
+
+    def _do_load_vuln_db(self):
         if not self.vuln_db_path:
             return None
         try:

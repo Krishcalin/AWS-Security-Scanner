@@ -421,7 +421,8 @@ def test_parse_windows_software_hive_never_guesses_inventory():
 
 
 def test_sidescan_windows_host_honest_note_not_osrelease_skipped():
-    ext = ss.DictExtractor({"Windows/System32/config/SOFTWARE": b"regf" + b"\x00" * 300})
+    # leading-slash key, matching the real extractor convention (/etc/os-release etc.)
+    ext = ss.DictExtractor({"/Windows/System32/config/SOFTWARE": b"regf" + b"\x00" * 300})
     res = ss.sidescan_filesystem(ext, None, {}, set(), instance_id="i-win", do_secrets=False)
     assert res.os is None                              # no Linux OSRelease
     joined = " ".join(res.notes).lower()

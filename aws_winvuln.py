@@ -100,10 +100,22 @@ _CVE_RX = re.compile(r"CVE-\d{4}-\d{4,}", re.I)
 _OPEN_STATES = frozenset({"MISSING", "FAILED"})
 _SEV_MAP = {"critical": "CRITICAL", "important": "HIGH", "moderate": "MEDIUM",
             "low": "LOW", "unspecified": "MEDIUM"}
+# Only these classifications (or a Critical/Important MSRC severity) justify the no-CVE
+# KB-level fallback — so a missing Defender definition / update-rollup / feature update with
+# no CVE is never flagged as a vulnerability (a false positive).
+_SECURITY_CLASSES = frozenset({"securityupdates", "criticalupdates"})
 
 
 def _map_sev(raw: str) -> str:
     return _SEV_MAP.get((raw or "").strip().lower(), "MEDIUM")
+
+
+def _is_security_patch(mp: "MissingPatch") -> bool:
+    """A missing patch worth a no-CVE KB-level finding: a security/critical classification
+    OR a Critical/Important MSRC severity. Guards against flagging non-security missing
+    patches (definition updates, rollups, feature updates) that carry no CVE."""
+    return ((mp.classification or "").strip().lower() in _SECURITY_CLASSES
+            or _map_sev(mp.severity) in ("CRITICAL", "HIGH"))
 
 
 # ── pure parsers ─────────────────────────────────────────────────────────────
@@ -185,6 +197,7 @@ def native_patch_matches(missing: List[MissingPatch], *, os_version: str,
     for mp in missing or []:
         sev = _map_sev(mp.severity)
         if mp.cve_ids:
+            # AWS already mapped this KB to CVEs -> it IS a security fix; emit unconditionally.
             for cve in mp.cve_ids:
                 out.append(EnrichedMatch(
                     cve=cve, osv_id="", package=f"windows-kb:{mp.kb_id}",
@@ -192,8 +205,10 @@ def native_patch_matches(missing: List[MissingPatch], *, os_version: str,
                     severity=sev, cvss_base=None, epss=epss.get(cve),
                     kev=cve in kev, exploit_available="YES" if cve in exploits else None,
                     ecosystem=_ECOSYSTEM))
-        else:
-            # KB-level fallback: a missing security/critical KB with no enumerated CVEs.
+        elif _is_security_patch(mp):
+            # KB-level fallback ONLY for a missing SECURITY/critical KB with no enumerated CVE.
+            # A non-security missing patch (definition update / rollup / feature update) is
+            # skipped so it is never a phantom vulnerability.
             out.append(EnrichedMatch(
                 cve=f"WINKB-{mp.kb_id}", osv_id="", package=f"windows-kb:{mp.kb_id}",
                 installed_version=os_version or "?", fixed_version=mp.kb_id,
@@ -220,6 +235,15 @@ def windows_eol(os_caption: str, os_version: str, *, today: date) -> List[Enrich
     matches no rule OR the rule's ``eol`` is in the future (floor-safe: table lag -> FN not FP)."""
     e = _match_eol_entry(os_caption)
     if e is None or today < e.eol:
+        return []
+    # LTSC / LTSB / IoT client editions have much longer, edition-specific support than the
+    # mainstream client rule their caption would otherwise match (e.g. Win10 LTSC 2021 -> 2027,
+    # IoT Enterprise LTSC 2021 -> 2032) — suppress rather than false-positive. Floor-safe: the
+    # rare genuinely-EOL LTSC host is still caught by the native missing-patch signal (an EOL
+    # host stops receiving updates -> DescribeInstancePatches reports missing CVE-bearing KBs).
+    cap = (os_caption or "").lower()
+    if e.release in ("windows-10", "windows-11") and any(
+            k in cap for k in ("ltsc", "ltsb", "iot")):
         return []
     label = (os_caption or e.release).strip()
     if os_version:

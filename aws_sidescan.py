@@ -1971,8 +1971,14 @@ def sidescan_filesystem(ext: FilesystemExtractor, feed: Optional[OSVFeed],
         # reported as "os-release skipped" (a misleading false-clean). The regf walker is
         # DEFERRED (parse_windows_software_hive); Windows OS-vuln coverage ships agentlessly
         # via the WINVULN (SSM patch-compliance) section, not the side-scan.
-        sw = (ext.read_file("Windows/System32/config/SOFTWARE")
-              or ext.read_file("windows/system32/config/SOFTWARE"))
+        sw = None
+        for wp in ("/Windows/System32/config/SOFTWARE",   # leading-slash convention (real extractor)
+                   "/windows/system32/config/SOFTWARE",
+                   "Windows/System32/config/SOFTWARE",
+                   "windows/system32/config/SOFTWARE"):
+            sw = ext.read_file(wp)
+            if sw is not None:
+                break
         if sw is not None:
             notes.extend(parse_windows_software_hive(sw))
         else:

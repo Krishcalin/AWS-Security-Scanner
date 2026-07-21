@@ -361,3 +361,49 @@ def test_win_never_calls_send_command_or_session():
     ssm.start_session.assert_not_called()
     ssm.start_automation_execution.assert_not_called()
     ssm.put_inventory.assert_not_called()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Adversarial-verify fix regressions
+# ══════════════════════════════════════════════════════════════════════════════
+def test_fix1_ltsc_iot_editions_not_false_positive():
+    # supported Win10 LTSC / IoT-LTSC editions must NOT be flagged EOL by the broad
+    # 'windows 10' consumer rule (they are supported to 2027/2029/2032).
+    for cap in ("Microsoft Windows 10 Enterprise LTSC",
+                "Microsoft Windows 10 Enterprise 2021 LTSC",
+                "Microsoft Windows 10 Enterprise LTSC 2019",
+                "Microsoft Windows 10 IoT Enterprise LTSC"):
+        assert W.windows_eol(cap, "10.0.19044", today=TODAY) == [], cap
+    # consumer Windows 10 (no LTSC/IoT marker) still correctly fires
+    assert W.windows_eol("Microsoft Windows 10 Pro", "10.0.19045", today=TODAY)
+
+
+def test_fix2_no_winkb_for_non_security_missing_patch():
+    # a missing definition update / rollup with no CVE and no security class -> NOT a vuln
+    for cls in ("DefinitionUpdates", "UpdateRollups", "Updates", "FeaturePacks"):
+        mp = W.parse_missing_patches([{"State": "MISSING", "KBId": "KB1", "CVEIds": "",
+                                       "Classification": cls, "Severity": "Unspecified"}])
+        assert W.native_patch_matches(mp, os_version="10.0") == [], cls
+
+
+def test_fix2_winkb_still_fires_for_security_missing_patch_no_cve():
+    mp = W.parse_missing_patches([{"State": "MISSING", "KBId": "KB9", "CVEIds": "",
+                                   "Classification": "SecurityUpdates", "Severity": "Unspecified"}])
+    out = W.native_patch_matches(mp, os_version="10.0")
+    assert len(out) == 1 and out[0].cve == "WINKB-KB9"
+
+
+def test_fix2_winkb_fires_on_critical_severity_even_if_class_unknown():
+    mp = W.parse_missing_patches([{"State": "MISSING", "KBId": "KB7", "CVEIds": "",
+                                   "Classification": "", "Severity": "Critical"}])
+    assert W.native_patch_matches(mp, os_version="10.0")[0].cve == "WINKB-KB7"
+
+
+def test_fix5_load_vuln_db_memoized_single_warn():
+    s = _win_scanner()
+    s.vuln_db_path = "/nonexistent/phase8-vuln-db.json"
+    with patch("builtins.print"):
+        b1 = s._load_vuln_db()
+        b2 = s._load_vuln_db()
+    assert b1 is None and b2 is None
+    assert len([r for r in s.results if r.check_id == "CWPP-04"]) == 1   # warned once, not per call
