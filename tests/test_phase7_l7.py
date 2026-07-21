@@ -189,6 +189,46 @@ def test_f8_non_open_listener_tg_not_reachable():
     assert "i-admin" not in exposed                       # served only by SG-blocked 8080
 
 
+def test_f8_alb_rule_routed_tg_still_reachable():
+    # F8 fix-verify regression: an ALB path/host RULE (not just the DefaultAction) forwards
+    # to TG-api on the OPEN :443 listener; its backend must NOT be dropped.
+    s, g = _l7_scanner()
+    listeners = [{"Port": 443, "Protocol": "HTTPS", "ListenerArn": "arn:listener/443",
+                  "DefaultActions": [{"Type": "forward", "TargetGroupArn": "arn:tg/default"}]}]
+    tgs = [{"TargetGroupArn": "arn:tg/default", "TargetType": "instance"},
+           {"TargetGroupArn": "arn:tg/api", "TargetType": "instance"}]
+    c = _elbv2_client([_alb()], listeners=listeners, tgs=tgs)   # ALB (Type=application)
+    c.describe_rules.return_value = {"Rules": [
+        {"Actions": [{"Type": "forward", "TargetGroupArn": "arn:tg/api"}]}]}
+    c.describe_target_health.side_effect = lambda TargetGroupArn: {
+        "TargetHealthDescriptions": [
+            {"Target": {"Id": "i-default" if "default" in TargetGroupArn else "i-api"},
+             "TargetHealth": {"State": "healthy"}}]}
+    s._clients["elbv2:us-east-1"] = c
+    exposed = set()
+    s._l7_elbv2(g, "internet", PUB_SG, {}, exposed, {})
+    assert exposed == {"i-default", "i-api"}              # rule-routed TG not dropped
+
+
+def test_f8_alb_unreadable_rules_fail_open():
+    # if describe_rules is denied, fail open (never silently drop a rule-routed backend)
+    s, g = _l7_scanner()
+    listeners = [{"Port": 443, "Protocol": "HTTPS", "ListenerArn": "arn:listener/443",
+                  "DefaultActions": [{"Type": "forward", "TargetGroupArn": "arn:tg/default"}]}]
+    tgs = [{"TargetGroupArn": "arn:tg/default", "TargetType": "instance"},
+           {"TargetGroupArn": "arn:tg/api", "TargetType": "instance"}]
+    c = _elbv2_client([_alb()], listeners=listeners, tgs=tgs)
+    c.describe_rules.side_effect = RuntimeError("AccessDenied")
+    c.describe_target_health.side_effect = lambda TargetGroupArn: {
+        "TargetHealthDescriptions": [
+            {"Target": {"Id": "i-default" if "default" in TargetGroupArn else "i-api"},
+             "TargetHealth": {"State": "healthy"}}]}
+    s._clients["elbv2:us-east-1"] = c
+    exposed = set()
+    s._l7_elbv2(g, "internet", PUB_SG, {}, exposed, {})
+    assert exposed == {"i-default", "i-api"}              # fail-open -> both resolved
+
+
 def test_f8_fail_open_when_no_forward_action():
     # a listener with no resolvable forward action -> fail open to all TGs (avoid FN)
     s, g = _l7_scanner()

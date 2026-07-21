@@ -7735,6 +7735,21 @@ class AWSLiveScanner:
             return False
         return any(proto == "tcp" and lo <= p <= hi for (proto, lo, hi) in pub)
 
+    @staticmethod
+    def _forward_tg_arns(actions) -> set:
+        """Target-group ARNs a list of elbv2 listener/rule actions forwards to (Type
+        'forward' -> TargetGroupArn or ForwardConfig.TargetGroups)."""
+        out: set = set()
+        for act in actions or []:
+            if act.get("Type") != "forward":
+                continue
+            if act.get("TargetGroupArn"):
+                out.add(act["TargetGroupArn"])
+            for t in (act.get("ForwardConfig") or {}).get("TargetGroups", []):
+                if t.get("TargetGroupArn"):
+                    out.add(t["TargetGroupArn"])
+        return out
+
     def _l7_sg_public(self, sg_perms, sgids) -> set:
         pub: set = set()
         for gid in sgids or []:
@@ -7816,17 +7831,23 @@ class AWSLiveScanner:
                 continue
             # F8: only target groups served by an INTERNET-OPEN listener are reachable — a
             # leftover listener on an SG-blocked port must not mark its TG internet-facing.
-            # Fail-open to all TGs if no forward action is resolvable (avoid a false negative).
+            # Collect TGs from each open listener's DefaultActions AND (for ALBs) its path/host
+            # ROUTING RULES — the canonical ALB use case; missing them is a false negative.
+            # Fail-open to all TGs if no forward action resolves, or if rules can't be read.
             open_tg_arns: set = set()
             for ls in open_listeners:
-                for act in ls.get("DefaultActions", []):
-                    if act.get("Type") != "forward":
+                open_tg_arns |= self._forward_tg_arns(ls.get("DefaultActions", []))
+            if typ == "application":
+                for ls in open_listeners:
+                    larn = ls.get("ListenerArn")
+                    if not larn:
                         continue
-                    if act.get("TargetGroupArn"):
-                        open_tg_arns.add(act["TargetGroupArn"])
-                    for t in (act.get("ForwardConfig") or {}).get("TargetGroups", []):
-                        if t.get("TargetGroupArn"):
-                            open_tg_arns.add(t["TargetGroupArn"])
+                    try:
+                        for rule in elb.describe_rules(ListenerArn=larn).get("Rules", []):
+                            open_tg_arns |= self._forward_tg_arns(rule.get("Actions", []))
+                    except Exception:
+                        open_tg_arns = set()        # unreadable rules -> fail open, drop nothing
+                        break
             node = f"lb/{arn}"
             g.add_node(node, "LoadBalancer", name=name, dns=dns,
                        scheme="internet-facing", lb_type=typ)

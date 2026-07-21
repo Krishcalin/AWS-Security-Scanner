@@ -170,12 +170,35 @@ section runs before IAMPRIVESC's graph hard-replace, so graph edges are deferred
   `_paginate_all`), empty→INFO, and **aggregate-PASS-must-count-evaluated-vs-unknown** (denied reads
   downgrade a summary all-clear to WARN).
 
-### Phase 7 — L7 reachability + attack-path fusion + DSPM · **M**
-Wire every new node into the attack-path engine — the CNAPP differentiator.
-- Un-defer L7 in `aws_exposure`: internet-facing ALB/NLB/CloudFront/API-GW → `LoadBalancer` node + TARGETS edges → `EXPOSURE-03` + LB-fronted `ATTACK-01`
-- Component-level exploitability: boost when `HAS_VULN.reachable_service` **and** SG-open; ECRImage/Lambda CVEs on exposed workloads drive paths
-- Identity fusion: leaked old key on an admin principal → CRITICAL pre-auth takeover
-- DSPM: crown-jewel tagging for RDS/Redshift/DynamoDB/EFS (no Macie needed)
+### Phase 7 — L7 reachability + attack-path fusion + DSPM · **M** — ✅ SHIPPED (v2.17.0)
+Wired every new node into the attack-path engine — the CNAPP differentiator that un-inerts
+the Phase-5 managed nodes and Phase-6 findings into ranked paths. **4 new check IDs**
+(EXPOSURE-03, IDENTITY-01, DSPM-01/02) folded into EXPOSURE#37 / DATA#41 / CORRELATE#42 +
+the pure `aws_correlate`/`aws_deepplane` modules — **no new SECTIONS** (`len(SECTIONS)==43`
+holds). Scoped by a 5-agent research pass (botocore shapes verified offline) then hardened by
+a 48-agent read-only adversarial-verify (12 confirmed / 9 unique defects, all fixed) + a
+fix-verify. 1066 tests.
+- ✅ **L7 un-defer** (`_build_l7_exposure` in `_check_exposure`, post-IAMPRIVESC-clobber):
+  internet-facing ALB/NLB/classic-ELB/CloudFront/API-GW → `LoadBalancer`/`CloudFrontDistribution`/
+  `ApiGateway` nodes + `internet→EXPOSED_TO` + **`TARGETS`** edges (E_PATH-traversable) →
+  `EXPOSURE-03`; LB target instance-ids folded into `exposed_instances` so an over-privileged
+  LB-fronted host lights up **`ATTACK-01`** with zero duplicated emitter. Conservative
+  internet-facing gate (Scheme + active + SG-open listener; NLB SG-less ok; APIGW EDGE/REGIONAL
+  not PRIVATE); health-gated + open-listener-TG-restricted target resolution; TG-VpcId-scoped
+  ip-target resolution (cross-VPC-collision-safe).
+- ✅ **Component-level exploitability**: `_path_exploitability` + the DFS gate generalized
+  EC2-only → EC2/ECRImage/Lambda + **RUNS_IMAGE CVE inheritance** (a workload inherits its
+  image's CVEs; RUNS_IMAGE stashed-and-replayed past the clobber); `reachable_service` HAS_VULN
+  prop (set when the workload is internet-exposed) → `X_reachable_boost` clamped `min(X_kev,·)`.
+- ✅ **Identity fusion** (`IDENTITY-01`): a stale/long-unused ACTIVE access key on an
+  admin-capable IAM user → `internet→EXPOSED_TO→IAMUser` → a **pre-auth account-takeover path**
+  (ATTACK-01 semantics, scores CRITICAL via the unconditioned-admin floor). Admin-capability
+  reuses the graph reachability test, so a boundary/SCP-neutralized user is correctly NOT flagged.
+- ✅ **DSPM** (`DSPM-01/02`): crown-jewel tagging for RDS/RDSCluster/Redshift/DynamoDB/EFS via
+  data-classification tags (no Macie) — `is_crown_jewel_by_tags` (separator-folding + synonym +
+  compliance-framework aware, exact-value-safe) + `role_can_read_store` CAN_READ_DATA edges. Node
+  ids reuse the Phase-5 EOL fallback so a tagged crown **merges** onto any vulnerable EOL node
+  (a "vulnerable crown jewel"). `crown_nodes(g)` spans S3 + all DSPM stores for the flagship/correlate.
 
 ### Phase 8 — Windows agentless OS-vuln coverage · **L**
 Extend the now-live side-scan to Windows; close the Linux-only blind spot.
