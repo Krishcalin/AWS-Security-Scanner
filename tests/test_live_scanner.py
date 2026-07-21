@@ -98,10 +98,10 @@ def _gaad_iam(users=None, roles=None, groups=None, policies=None):
 class TestDataStructures(unittest.TestCase):
 
     def test_version(self):
-        self.assertEqual(VERSION, "2.17.0")
+        self.assertEqual(VERSION, "2.18.0")
 
     def test_sections_count(self):
-        self.assertEqual(len(SECTIONS), 43)
+        self.assertEqual(len(SECTIONS), 44)   # +WINVULN (Phase 8 Windows OS-vuln)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

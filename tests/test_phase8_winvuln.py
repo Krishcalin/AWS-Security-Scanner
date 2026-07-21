@@ -178,3 +178,186 @@ def test_assess_missing_but_undetailed_is_undetermined():
     assert W.assess(is_managed=True, ping_online=True, patch_read_ok=True,
                     patch_state={"CriticalNonCompliantCount": 0, "SecurityNonCompliantCount": 0,
                                  "MissingCount": 5}, matches=[]) == "UNDETERMINED"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Section integration — _check_windows_vuln driven with injected MagicMock ec2/ssm.
+# ══════════════════════════════════════════════════════════════════════════════
+from unittest.mock import MagicMock, patch          # noqa: E402
+from test_live_scanner import make_scanner          # noqa: E402
+from aws_graph import SecurityGraph                 # noqa: E402
+from aws_live_scanner import SECTIONS               # noqa: E402
+
+ACCT = "123456789012"
+
+
+def _pager(pages):
+    p = MagicMock()
+    p.paginate.return_value = pages
+    return p
+
+
+def _win_scanner():
+    s = make_scanner(sections=["WINVULN"])
+    s.account = ACCT
+    s._today = date(2026, 7, 21)
+    s.vuln_db_path = None
+    s.graph = SecurityGraph()
+    s._iam_principals = []
+    return s
+
+
+def _ec2(instance_ids, extra=None):
+    c = MagicMock()
+    insts = [{"InstanceId": iid, "Platform": "windows", "State": {"Name": "running"}}
+             for iid in instance_ids] + (extra or [])
+    c.get_paginator.return_value = _pager([{"Reservations": [{"Instances": insts}]}])
+    return c
+
+
+def _ssm(managed=None, patches_by_iid=None, state_by_iid=None, patch_error=None):
+    c = MagicMock()
+    c.get_paginator.return_value = _pager([{"InstanceInformationList": managed or []}])
+
+    def _dip(InstanceId=None, **kw):
+        if patch_error and InstanceId in patch_error:
+            raise RuntimeError("AccessDenied")
+        return {"Patches": (patches_by_iid or {}).get(InstanceId, [])}
+    c.describe_instance_patches.side_effect = _dip
+
+    def _dips(InstanceIds=None, **kw):
+        iid = (InstanceIds or [None])[0]
+        st = (state_by_iid or {}).get(iid)
+        return {"InstancePatchStates": [st] if st else []}
+    c.describe_instance_patch_states.side_effect = _dips
+    return c
+
+
+def _info(iid, name="Microsoft Windows Server 2019 Datacenter", ver="10.0.17763",
+          ping="Online"):
+    return {"InstanceId": iid, "PingStatus": ping, "PlatformType": "Windows",
+            "PlatformName": name, "PlatformVersion": ver, "ResourceType": "EC2Instance"}
+
+
+def _st(s, cid):
+    return {r.status for r in s.results if r.check_id == cid}
+
+
+def test_winvuln_section_is_post_clobber_and_pre_vuln():
+    assert SECTIONS.index("WINVULN") > SECTIONS.index("IAMPRIVESC")   # clobber-safe
+    assert SECTIONS.index("WINVULN") < SECTIONS.index("VULN")         # feeds correlation
+
+
+def test_win_managed_missing_patch_emits_winvuln01_and_hasvuln_edge():
+    s = _win_scanner()
+    iid = "i-win1"
+    s._clients["ec2:us-east-1"] = _ec2([iid])
+    patches = [{"State": "MISSING", "KBId": "KB5034441", "CVEIds": "CVE-2024-21413",
+                "Severity": "Critical", "Classification": "SecurityUpdates"}]
+    s._clients["ssm:us-east-1"] = _ssm(managed=[_info(iid)], patches_by_iid={iid: patches})
+    with patch("builtins.print"):
+        s._check_windows_vuln()
+    assert "FAIL" in _st(s, "WINVULN-01")
+    arn = s._instance_arn(iid)
+    assert any(e["kind"] == "HAS_VULN" and e["dst"] == "CVE-2024-21413"
+               for e in s.graph.out_edges(arn))
+    assert s.graph.node(arn)["kind"] == "EC2Instance"   # so correlate exploitability sees it
+
+
+def test_win_kev_cve_escalates_to_winvuln02():
+    s = _win_scanner()
+    iid = "i-win1"
+    s.vuln_db_path = "x"
+    s._load_vuln_db = lambda: (None, {"CVE-2024-21413": 0.9}, {"CVE-2024-21413"}, set())
+    s._clients["ec2:us-east-1"] = _ec2([iid])
+    patches = [{"State": "MISSING", "KBId": "KB5", "CVEIds": "CVE-2024-21413", "Severity": "Critical"}]
+    s._clients["ssm:us-east-1"] = _ssm(managed=[_info(iid)], patches_by_iid={iid: patches})
+    with patch("builtins.print"):
+        s._check_windows_vuln()
+    assert "FAIL" in _st(s, "WINVULN-02")
+
+
+def test_win_managed_clean_emits_winvuln04_pass():
+    s = _win_scanner()
+    iid = "i-win2"
+    s._clients["ec2:us-east-1"] = _ec2([iid])
+    state = {"CriticalNonCompliantCount": 0, "SecurityNonCompliantCount": 0, "MissingCount": 0}
+    s._clients["ssm:us-east-1"] = _ssm(managed=[_info(iid)], patches_by_iid={iid: []},
+                                       state_by_iid={iid: state})
+    with patch("builtins.print"):
+        s._check_windows_vuln()
+    assert "PASS" in _st(s, "WINVULN-04")
+    assert not _st(s, "WINVULN-03")
+
+
+def test_win_not_managed_is_undetermined_warn():
+    s = _win_scanner()
+    iid = "i-win3"
+    s._clients["ec2:us-east-1"] = _ec2([iid])
+    s._clients["ssm:us-east-1"] = _ssm(managed=[])           # host absent from SSM
+    with patch("builtins.print"):
+        s._check_windows_vuln()
+    assert "WARN" in _st(s, "WINVULN-03")
+    assert "PASS" not in _st(s, "WINVULN-04")
+
+
+def test_win_denied_patch_read_warn_not_phantom_pass():
+    s = _win_scanner()
+    iid = "i-win4"
+    s._clients["ec2:us-east-1"] = _ec2([iid])
+    s._clients["ssm:us-east-1"] = _ssm(managed=[_info(iid)], patch_error={iid})
+    with patch("builtins.print"):
+        s._check_windows_vuln()
+    assert "WARN" in _st(s, "WINVULN-03")
+    assert "PASS" not in _st(s, "WINVULN-04")   # never a false all-clear on a denied read
+
+
+def test_win_eol_host_flagged_even_when_offline():
+    s = _win_scanner()
+    iid = "i-win5"
+    s._clients["ec2:us-east-1"] = _ec2([iid])
+    # Server 2012 R2 (EOL 2023) — flagged regardless of patch state; here agent is offline
+    info = _info(iid, name="Microsoft Windows Server 2012 R2 Datacenter", ver="6.3.9600",
+                 ping="ConnectionLost")
+    s._clients["ssm:us-east-1"] = _ssm(managed=[info])
+    with patch("builtins.print"):
+        s._check_windows_vuln()
+    assert "FAIL" in _st(s, "WINVULN-01")
+    arn = s._instance_arn(iid)
+    assert any(e["dst"] == "WINEOL-windows-server-2012-r2" for e in s.graph.out_edges(arn))
+
+
+def test_win_zero_windows_silent_noop():
+    s = _win_scanner()
+    # only a Linux instance (no Platform) present
+    s._clients["ec2:us-east-1"] = _ec2([], extra=[{"InstanceId": "i-lin", "State": {"Name": "running"}}])
+    s._clients["ssm:us-east-1"] = _ssm(managed=[])
+    with patch("builtins.print"):
+        s._check_windows_vuln()
+    assert not any(r.check_id.startswith("WINVULN") for r in s.results)
+
+
+def test_win_ec2_enumeration_denied_is_info_not_crash():
+    s = _win_scanner()
+    ec2 = MagicMock()
+    ec2.get_paginator.side_effect = RuntimeError("UnauthorizedOperation")
+    s._clients["ec2:us-east-1"] = ec2
+    with patch("builtins.print"):
+        s._check_windows_vuln()
+    assert "INFO" in _st(s, "WINVULN-03")
+
+
+def test_win_never_calls_send_command_or_session():
+    s = _win_scanner()
+    iid = "i-win6"
+    s._clients["ec2:us-east-1"] = _ec2([iid])
+    patches = [{"State": "MISSING", "KBId": "KB5", "CVEIds": "CVE-2024-1", "Severity": "Important"}]
+    ssm = _ssm(managed=[_info(iid)], patches_by_iid={iid: patches})
+    s._clients["ssm:us-east-1"] = ssm
+    with patch("builtins.print"):
+        s._check_windows_vuln()
+    # READ-ONLY / agentless: only describe/get reads — never execute-on-host APIs
+    ssm.send_command.assert_not_called()
+    ssm.start_session.assert_not_called()
+    ssm.start_automation_execution.assert_not_called()
+    ssm.put_inventory.assert_not_called()
