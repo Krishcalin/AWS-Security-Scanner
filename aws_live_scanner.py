@@ -73,7 +73,7 @@ import aws_sidescan
 import aws_engine_eol
 import aws_graph_neptune
 
-VERSION = "2.16.0"
+VERSION = "2.17.0"
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -251,6 +251,11 @@ CHECK_SEVERITY = {
     "IAMPE-21": "HIGH", "IAMPE-22": "HIGH", "IAMPE-23": "CRITICAL",
     # Phase 2: effective internet exposure + attack paths
     "EXPOSURE-01": "HIGH", "EXPOSURE-02": "MEDIUM", "ATTACK-01": "CRITICAL",
+    # Phase 7: L7 reachability (internet-facing LB/CloudFront/API-GW fronting a
+    # workload) + identity fusion (stale admin key = pre-auth account takeover)
+    "EXPOSURE-03": "MEDIUM", "IDENTITY-01": "HIGH",
+    # Phase 7: DSPM crown-jewel datastores (RDS/Redshift/DynamoDB/EFS) w/o Macie
+    "DSPM-01": "MEDIUM", "DSPM-02": "HIGH",
     # Phase 3: deep-plane ingestion (vuln / data / threat) + flagship attack path
     "VULN-01": "HIGH", "VULN-02": "CRITICAL", "VULN-03": "HIGH",
     "VULN-04": "HIGH",
@@ -456,6 +461,8 @@ COMPLIANCE_MAP = {
     "EXPOSURE-01": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EXPOSURE-02": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "ATTACK-01":   {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EXPOSURE-03": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "IDENTITY-01": {"CIS": "1.14", "PCI-DSS": "8.6.3", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.2", "NIST": "IA-5(1)"},
     # Phase 3 deep-plane
     "VULN-01": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "VULN-02": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5(2)"},
@@ -464,6 +471,10 @@ COMPLIANCE_MAP = {
     "DATA-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "DATA-02": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "DATA-03": {"CIS": "2.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    # Phase 7 DSPM: DSPM-01 data-sensitivity (mirrors DATA-01, no single CIS control);
+    # DSPM-02 network-exposure keys (NOT CIS 2.1.1 — that is the S3-only BPA control)
+    "DSPM-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "DSPM-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EXTACCESS-01": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "AC-3"},
     "EXTACCESS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "EXTACCESS-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
@@ -718,6 +729,8 @@ REMEDIATION_MAP = {
     "EXPOSURE-01": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0  (then re-add a scoped CIDR)",
     "EXPOSURE-02": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges or place the workload behind a load balancer/WAF: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
     "ATTACK-01": "Break the path at the exposure or the privilege: remove the public ingress (aws ec2 revoke-security-group-ingress ...) AND scope the instance-profile role to least privilege / apply a permissions boundary: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>",
+    "EXPOSURE-03": "Confirm this L7 front must be internet-facing; if not, make it internal or scope its front-end security group and require WAF/auth at the edge: aws elbv2 set-security-groups --load-balancer-arn <ARN> --security-groups <SCOPED_SG> ; aws ec2 revoke-security-group-ingress --group-id <ALB_SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0 . For CloudFront/API Gateway attach a WAF Web ACL (aws wafv2 associate-web-acl ...) and require authentication.",
+    "IDENTITY-01": "Deactivate and rotate the stale/long-unused privileged access key, then bound the identity: aws iam update-access-key --user-name <USER> --access-key-id <AK_ID> --status Inactive ; aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN> . Prefer short-lived role credentials over long-lived user keys.",
     "VULN-01": "Patch the affected package to fixedInVersion, e.g. run the patch baseline: aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install, then re-scan in Inspector.",
     "VULN-02": "PRIORITIZE — this CVE is on the CISA KEV catalog (actively exploited). Patch immediately (aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install), and if internet-exposed isolate the host: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --groups <QUARANTINE_SG>",
     "VULN-03": "Rebuild the container image on a patched base and push; enable Inspector enhanced ECR scanning: aws inspector2 enable --resource-types ECR",
@@ -725,6 +738,8 @@ REMEDIATION_MAP = {
     "DATA-01": "Confirm the sensitive data is intended here; restrict access, enable default encryption with a CMK, and enable S3 Block Public Access on the bucket: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "DATA-02": "Remove public/external access from the crown-jewel bucket: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "DATA-03": "Enable default encryption on the crown-jewel bucket: aws s3api put-bucket-encryption --bucket <BUCKET> --server-side-encryption-configuration '{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\"}}]}'",
+    "DSPM-01": "Confirm this datastore is authorized to hold the tagged sensitive data class and enforce encryption-at-rest with a CMK + least-privilege reads. DynamoDB: aws dynamodb update-table --table-name <NAME> --sse-specification Enabled=true,SSEType=KMS ; RDS: restore an encrypted snapshot copy; scope reader roles: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <ARN> .",
+    "DSPM-02": "Remove public network reachability from the crown-jewel datastore and place it in private subnets. RDS: aws rds modify-db-instance --db-instance-identifier <ID> --no-publicly-accessible --apply-immediately ; Redshift: aws redshift modify-cluster --cluster-identifier <ID> --no-publicly-accessible ; then deny 0.0.0.0/0 in its security group and scope its reader roles.",
     "EXTACCESS-01": "Remove the public bucket policy / ACL grant (Access Analyzer confirmed public): aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "EXTACCESS-02": "Scope the bucket policy to remove the cross-account principal (or add an aws:PrincipalOrgID condition): aws s3api put-bucket-policy --bucket <BUCKET> --policy <SCOPED_POLICY_JSON>",
     "EXTACCESS-03": "Scope the role's S3 permissions to specific buckets/prefixes instead of s3:GetObject on '*' or 'bucket/*', and bound the role: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN> (identity-policy only — also verify the bucket policy / SCP).",
@@ -1387,6 +1402,17 @@ class AWSLiveScanner:
         # checks. Emitted LATE (in _check_vuln, after IAMPRIVESC hard-replaces the graph)
         # so the identity-graph rebuild can't clobber them.
         self._eol_graph_payloads: List[tuple] = []
+        # Phase-7 fusion: workloads found internet-reachable in EXPOSURE#37 (feeds the
+        # HAS_VULN reachable_service tag in VULN#39); RUNS_IMAGE edges stashed pre-clobber
+        # in ECS#20 for replay in VULN#39 (image-CVE inheritance survives the graph rebuild).
+        self._reachable_workloads: set = set()
+        self._runs_image_payloads: List[tuple] = []
+        # CloudFront is GLOBAL but EXPOSURE runs per-region; guard so --all-regions does
+        # not re-emit the same distributions once per region (the graph merges anyway).
+        self._l7_cf_done = False
+        self._identity_fusion_done = False          # IDENTITY-01 is global (IAM); run once
+        self._l7_read_error = False                 # any L7 describe denied -> suppress phantom PASS
+        self._l7_lb_dns: Dict[str, str] = {}        # DNS->LB node id, ACCUMULATED across regions
 
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
@@ -5261,15 +5287,25 @@ class AWSLiveScanner:
         src = td.get("taskDefinitionArn", td.get("family", "ecs-task"))
         g.add_node(src, "ECSTaskDefinition", family=td.get("family"))
         cname = cd.get("name", "")
+        # Stash each RUNS_IMAGE payload for replay in VULN#39: this section (ECS#20) runs
+        # BEFORE IAMPRIVESC#36 hard-replaces the graph, so the inline edge is clobbered —
+        # without the replay the Phase-7 image-CVE inheritance (_iter_vuln_edges) is dead.
         if digest:
             for node in ecr_image_node_ids(p["account"], p["region"], p["repo"], digest):
                 g.add_node(node, "ECRImage", repository=p["repo"], digest=digest)
                 g.add_edge(src, node, "RUNS_IMAGE", container=cname, scan_source="ecs")
+                self._runs_image_payloads.append(
+                    (src, {"family": td.get("family")}, node,
+                     {"repository": p["repo"], "digest": digest},
+                     {"container": cname, "scan_source": "ecs"}))
         else:
             # best-effort topology node (won't join digest-keyed CVE nodes)
             node = f"{p['account']}.dkr.ecr.{p['region']}.amazonaws.com/{p['repo']}:{p['tag'] or 'latest'}"
             g.add_node(node, "ECRImage", repository=p["repo"])
             g.add_edge(src, node, "RUNS_IMAGE", container=cname, resolved=False, scan_source="ecs")
+            self._runs_image_payloads.append(
+                (src, {"family": td.get("family")}, node, {"repository": p["repo"]},
+                 {"container": cname, "resolved": False, "scan_source": "ecs"}))
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 20: AWS SECRETS MANAGER
@@ -7536,7 +7572,9 @@ class AWSLiveScanner:
         if not enis:
             self._add("INFO", "EXPOSURE-02", "EXPOSURE", "network",
                       "No elastic network interfaces found in this region")
-            return
+            # Do NOT return: IDENTITY-01 (global IAM stale-admin-key fusion), the `internet`
+            # node that CORRELATE depends on, and L7 fronts are ENI-agnostic and MUST still
+            # run in a compute-light / IAM-only account. The ENI loop below simply no-ops.
 
         sg_perms = {s.get("GroupId"): s.get("IpPermissions", []) for s in sgs}
         inst_by_id = {i.get("InstanceId"): i for i in instances}
@@ -7612,6 +7650,14 @@ class AWSLiveScanner:
                               f"Internet-reachable on {family} [{summary}] "
                               f"(public IP: {ipk}) | {res}")
 
+        # Phase 7 — L7 reachability: internet-facing ALB/NLB/classic-ELB/CloudFront/API-GW
+        # -> LoadBalancer/front node + TARGETS edges. Runs HERE (after IAMPRIVESC's graph
+        # hard-replace), and feeds resolved target instance-ids into exposed_instances
+        # BEFORE the ATTACK-01 loop below, so an LB-fronted host lights up ATTACK-01 with
+        # zero duplicated emitter (the loop reads inst_by_id[id].IamInstanceProfile).
+        if self._build_l7_exposure(g, internet, sg_perms, enis, inst_by_id, exposed_instances):
+            any_finding = True
+
         # Fire the first end-to-end attack paths: exposed EC2 -> instance role -> admin
         admin = self._admin_cap_id()
         for instance_id in sorted(exposed_instances):
@@ -7650,9 +7696,474 @@ class AWSLiveScanner:
                           f"exploitable only if the attacker can satisfy the condition. Verify. "
                           f"| {instance_id}")
 
-        if not any_finding:
-            self._add("PASS", "EXPOSURE-02", "EXPOSURE", "all-enis",
-                      f"No internet-reachable workloads across {len(enis)} interface(s)")
+        # Record every internet-reachable workload (direct ENI + L7 backend, since L7
+        # targets were folded into exposed_instances above) so the VULN section can tag
+        # their HAS_VULN edges reachable_service=True (component-level exploitability).
+        # F6: ACCUMULATE across regions (|=, not =) — under --all-regions EXPOSURE sweeps
+        # every region before VULN runs, so an overwrite would keep only the last region's
+        # set and drop the boost for every earlier region. ARNs are region-qualified, so a
+        # union never mis-tags across regions.
+        self._reachable_workloads |= {self._instance_arn(i) for i in exposed_instances}
+
+        # Phase 7 identity fusion: a stale/long-unused admin access key = a pre-auth
+        # account-takeover path (draws internet -EXPOSED_TO-> IAMUser -> ...-> admin).
+        if self._build_identity_fusion(g, admin):
+            any_finding = True
+
+        if not any_finding and enis:
+            # AGGREGATE-PASS-MUST-COUNT: a clean all-clear is only honest when the L7 axis
+            # actually enumerated. If any L7 describe was denied/throttled, downgrade to WARN
+            # (UNDETERMINED) — an internet-facing LB fronting an admin-role host could be hidden.
+            if self._l7_read_error:
+                self._add("WARN", "EXPOSURE-02", "EXPOSURE", "all-enis",
+                          f"No DIRECTLY internet-reachable workloads across {len(enis)} "
+                          f"interface(s), but L7 (load-balancer / CloudFront / API-Gateway) "
+                          f"enumeration was DENIED/incomplete — internet-facing fronts could "
+                          f"not be evaluated (UNDETERMINED)")
+            else:
+                self._add("PASS", "EXPOSURE-02", "EXPOSURE", "all-enis",
+                          f"No internet-reachable workloads across {len(enis)} interface(s)")
+
+    # ── Phase 7 — L7 reachability (un-defers aws_exposure's deferred L7 axis) ──────
+    @staticmethod
+    def _l7_port_open(port, pub) -> bool:
+        """True if int ``port`` falls in any internet-open tcp range in ``pub`` (the
+        aws_exposure.sg_public_ports set of (proto, lo, hi)). L7 listeners are tcp."""
+        try:
+            p = int(port)
+        except (TypeError, ValueError):
+            return False
+        return any(proto == "tcp" and lo <= p <= hi for (proto, lo, hi) in pub)
+
+    @staticmethod
+    def _forward_tg_arns(actions) -> set:
+        """Target-group ARNs a list of elbv2 listener/rule actions forwards to (Type
+        'forward' -> TargetGroupArn or ForwardConfig.TargetGroups)."""
+        out: set = set()
+        for act in actions or []:
+            if act.get("Type") != "forward":
+                continue
+            if act.get("TargetGroupArn"):
+                out.add(act["TargetGroupArn"])
+            for t in (act.get("ForwardConfig") or {}).get("TargetGroups", []):
+                if t.get("TargetGroupArn"):
+                    out.add(t["TargetGroupArn"])
+        return out
+
+    def _l7_sg_public(self, sg_perms, sgids) -> set:
+        pub: set = set()
+        for gid in sgids or []:
+            perms = sg_perms.get(gid, [])
+            pub |= aws_exposure.sg_public_ports(perms, "ipv4")
+            pub |= aws_exposure.sg_public_ports(perms, "ipv6")
+        return pub
+
+    def _build_l7_exposure(self, g, internet, sg_perms, enis, inst_by_id,
+                           exposed_instances) -> bool:
+        """Resolve internet-facing L7 fronts (ALB/NLB/classic-ELB/CloudFront/API-GW) to
+        graph nodes + TARGETS edges to the workloads behind them, emitting EXPOSURE-03.
+        LB target instance-ids are folded into ``exposed_instances`` (before the caller's
+        ATTACK-01 loop) so an over-privileged LB-fronted host lights up ATTACK-01. Each
+        front type is isolated in its own try/except -> INFO no-op (never a phantom PASS,
+        never a crash that aborts the whole exposure section)."""
+        self._l7_read_error = False      # F2: track denied L7 describes for aggregate-PASS honesty
+        # F3: key private-IP -> instance by (vpc_id, ip). A bare-IP map mis-resolves an elbv2
+        # 'ip' target (to the wrong instance) when overlapping-CIDR VPCs reuse the same address.
+        ip_to_instance: Dict[tuple, str] = {}
+        for e in enis:
+            iid = (e.get("Attachment") or {}).get("InstanceId")
+            if not iid:
+                continue
+            vpc = e.get("VpcId", "")
+            for ip in e.get("PrivateIpAddresses", []):
+                addr = ip.get("PrivateIpAddress")
+                if addr:
+                    ip_to_instance[(vpc, addr)] = iid
+        # F9: accumulate the DNS->LB map ACROSS regions (self._l7_lb_dns) — CloudFront is global
+        # and enumerates once, so a per-region map would miss a distribution fronting an LB in
+        # a different region under --all-regions.
+        lb_dns = self._l7_lb_dns
+        found = False
+        found = self._l7_elbv2(g, internet, sg_perms, ip_to_instance,
+                               exposed_instances, lb_dns) or found
+        found = self._l7_classic_elb(g, internet, sg_perms,
+                                     exposed_instances, lb_dns) or found
+        found = self._l7_cloudfront(g, internet, lb_dns) or found
+        found = self._l7_apigateway(g, internet) or found
+        found = self._l7_apigatewayv2(g, internet) or found
+        return found
+
+    def _l7_elbv2(self, g, internet, sg_perms, ip_to_instance,
+                  exposed_instances, lb_dns) -> bool:
+        try:
+            elb = self._client("elbv2")
+            lbs: List[Dict] = []
+            for page in elb.get_paginator("describe_load_balancers").paginate():
+                lbs.extend(page.get("LoadBalancers", []))
+        except Exception as e:
+            self._l7_read_error = True                       # F2: denied -> no phantom PASS
+            self._add("INFO", "EXPOSURE-03", "EXPOSURE", "elbv2",
+                      f"Could not enumerate ALB/NLB in {self.region}: {e}")
+            return False
+        found = False
+        for lb in lbs:
+            typ = lb.get("Type", "application")
+            if typ == "gateway":                                # GWLB is not an app front
+                continue
+            if lb.get("Scheme") != "internet-facing":
+                continue
+            if ((lb.get("State") or {}).get("Code")) not in ("active", "active_impaired"):
+                continue
+            arn = lb.get("LoadBalancerArn", "")
+            name = lb.get("LoadBalancerName", "unknown")
+            dns = lb.get("DNSName", "")
+            sgids = lb.get("SecurityGroups") or []
+            pub = self._l7_sg_public(sg_perms, sgids)
+            try:
+                listeners = elb.describe_listeners(LoadBalancerArn=arn).get("Listeners", [])
+            except Exception:
+                listeners = []
+            # ALB is SG-gated; an NLB is frequently SG-less -> scheme+active+listener suffices
+            open_listeners = [ls for ls in listeners if ls.get("Port") is not None
+                              and (not sgids or self._l7_port_open(ls.get("Port"), pub))]
+            open_ports = {ls.get("Port") for ls in open_listeners}
+            if not open_ports:
+                continue
+            # F8: only target groups served by an INTERNET-OPEN listener are reachable — a
+            # leftover listener on an SG-blocked port must not mark its TG internet-facing.
+            # Collect TGs from each open listener's DefaultActions AND (for ALBs) its path/host
+            # ROUTING RULES — the canonical ALB use case; missing them is a false negative.
+            # Fail-open to all TGs if no forward action resolves, or if rules can't be read.
+            open_tg_arns: set = set()
+            for ls in open_listeners:
+                open_tg_arns |= self._forward_tg_arns(ls.get("DefaultActions", []))
+            if typ == "application":
+                for ls in open_listeners:
+                    larn = ls.get("ListenerArn")
+                    if not larn:
+                        continue
+                    try:
+                        for rule in elb.describe_rules(ListenerArn=larn).get("Rules", []):
+                            open_tg_arns |= self._forward_tg_arns(rule.get("Actions", []))
+                    except Exception:
+                        open_tg_arns = set()        # unreadable rules -> fail open, drop nothing
+                        break
+            node = f"lb/{arn}"
+            g.add_node(node, "LoadBalancer", name=name, dns=dns,
+                       scheme="internet-facing", lb_type=typ)
+            g.add_edge(internet, node, "EXPOSED_TO", basis="l7-elbv2",
+                       ports=",".join(str(p) for p in sorted(open_ports)))
+            if dns:
+                lb_dns[dns.lower()] = node
+            resolved = self._l7_resolve_target_groups(
+                g, elb, arn, node, ip_to_instance, exposed_instances, open_tg_arns)
+            found = True
+            label = "ALB" if typ == "application" else "NLB"
+            portstr = ",".join(str(p) for p in sorted(open_ports))
+            if resolved:
+                self._add("FAIL", "EXPOSURE-03", "EXPOSURE", name,
+                          f"Internet-facing {label} {name} ({dns}) on port(s) [{portstr}] "
+                          f"fronts {len(resolved)} reachable workload(s): "
+                          f"{', '.join(sorted(resolved)[:8])} | {name}")
+            else:
+                self._add("INFO", "EXPOSURE-03", "EXPOSURE", name,
+                          f"Internet-facing {label} {name} ({dns}) has no resolvable "
+                          f"in-rotation backend — internet entry, no mapped workload | {name}")
+        return found
+
+    def _l7_resolve_target_groups(self, g, elb, arn, node, ip_to_instance,
+                                  exposed_instances, open_tg_arns=None) -> List[str]:
+        """Resolve an ALB/NLB's target groups -> in-rotation workloads, emitting TARGETS
+        edges. Only TargetType 'instance' (and 'ip' backed by an enumerated ENI IN THE TG's
+        VPC) chains into the EC2 attack path; 'lambda'/'alb' are front-surface TARGETS only.
+        ``open_tg_arns`` (F8), if non-empty, restricts to target groups actually served by an
+        internet-open listener; empty means fail-open to all TGs."""
+        resolved: List[str] = []
+        try:
+            tgs = elb.describe_target_groups(LoadBalancerArn=arn).get("TargetGroups", [])
+        except Exception:
+            return resolved
+        _SKIP = {"unused", "draining", "unhealthy.draining", "unavailable"}
+        for tg in tgs:
+            tg_arn = tg.get("TargetGroupArn", "")
+            if open_tg_arns and tg_arn not in open_tg_arns:
+                continue                                        # F8: not behind an open listener
+            ttype = tg.get("TargetType", "instance")
+            tg_vpc = tg.get("VpcId", "")
+            try:
+                thds = elb.describe_target_health(
+                    TargetGroupArn=tg_arn).get("TargetHealthDescriptions", [])
+            except Exception:
+                continue
+            for thd in thds:
+                if (thd.get("TargetHealth") or {}).get("State", "") in _SKIP:
+                    continue                                    # not in rotation
+                tid = (thd.get("Target") or {}).get("Id", "")
+                if not tid:
+                    continue
+                if ttype == "instance":
+                    tarn = self._instance_arn(tid)
+                    g.add_node(tarn, "EC2Instance", instance_id=tid)
+                    g.add_edge(node, tarn, "TARGETS", basis="l7-elbv2",
+                               target_type="instance")
+                    exposed_instances.add(tid)
+                    resolved.append(tid)
+                elif ttype == "ip":
+                    iid = ip_to_instance.get((tg_vpc, tid))     # F3: VPC-scoped lookup
+                    if iid:                                     # else cross-VPC/on-prem: FN
+                        tarn = self._instance_arn(iid)
+                        g.add_node(tarn, "EC2Instance", instance_id=iid)
+                        g.add_edge(node, tarn, "TARGETS", basis="l7-elbv2-ip",
+                                   target_type="ip")
+                        exposed_instances.add(iid)
+                        resolved.append(iid)
+                elif ttype == "alb":
+                    inner = f"lb/{tid}"
+                    if g.node(inner):                           # best-effort NLB->ALB
+                        g.add_edge(node, inner, "TARGETS", basis="l7-elbv2-alb",
+                                   target_type="alb")
+                        resolved.append(tid.split("/")[-1])
+                elif ttype == "lambda":
+                    g.add_node(tid, "LambdaFunction", function_arn=tid)
+                    g.add_edge(node, tid, "TARGETS", basis="l7-elbv2-lambda",
+                               target_type="lambda")
+                    resolved.append(tid.split(":")[-1])
+        return resolved
+
+    def _l7_classic_elb(self, g, internet, sg_perms, exposed_instances, lb_dns) -> bool:
+        try:
+            elb = self._client("elb")
+            clbs: List[Dict] = []
+            for page in elb.get_paginator("describe_load_balancers").paginate():
+                clbs.extend(page.get("LoadBalancerDescriptions", []))
+        except Exception as e:
+            self._l7_read_error = True                       # F2: denied -> no phantom PASS
+            self._add("INFO", "EXPOSURE-03", "EXPOSURE", "classic-elb",
+                      f"Could not enumerate Classic ELBs in {self.region}: {e}")
+            return False
+        found = False
+        for lb in clbs:
+            if lb.get("Scheme") != "internet-facing":
+                continue
+            name = lb.get("LoadBalancerName", "unknown")
+            dns = lb.get("DNSName", "")
+            sgids = lb.get("SecurityGroups") or []
+            pub = self._l7_sg_public(sg_perms, sgids)
+            open_ports = set()
+            for ld in lb.get("ListenerDescriptions", []):
+                p = (ld.get("Listener") or {}).get("LoadBalancerPort")
+                if p is not None and (not sgids or self._l7_port_open(p, pub)):
+                    open_ports.add(p)
+            if not open_ports:
+                continue
+            node = f"clb/{name}"
+            g.add_node(node, "LoadBalancer", name=name, dns=dns,
+                       scheme="internet-facing", lb_type="classic")
+            g.add_edge(internet, node, "EXPOSED_TO", basis="l7-classic-elb",
+                       ports=",".join(str(p) for p in sorted(open_ports)))
+            if dns:
+                lb_dns[dns.lower()] = node
+            resolved: List[str] = []
+            for inst in lb.get("Instances", []):
+                iid = inst.get("InstanceId")
+                if not iid:
+                    continue
+                tarn = self._instance_arn(iid)
+                g.add_node(tarn, "EC2Instance", instance_id=iid)
+                g.add_edge(node, tarn, "TARGETS", basis="l7-classic-elb",
+                           target_type="instance")
+                exposed_instances.add(iid)
+                resolved.append(iid)
+            found = True
+            portstr = ",".join(str(p) for p in sorted(open_ports))
+            if resolved:
+                self._add("FAIL", "EXPOSURE-03", "EXPOSURE", name,
+                          f"Internet-facing Classic ELB {name} ({dns}) on port(s) "
+                          f"[{portstr}] fronts {len(resolved)} registered instance(s): "
+                          f"{', '.join(sorted(resolved)[:8])} | {name}")
+            else:
+                self._add("INFO", "EXPOSURE-03", "EXPOSURE", name,
+                          f"Internet-facing Classic ELB {name} ({dns}) has no registered "
+                          f"instances | {name}")
+        return found
+
+    def _l7_cloudfront(self, g, internet, lb_dns) -> bool:
+        if self._l7_cf_done:                # global service; enumerate once per scan
+            return False
+        try:
+            cf = self._client("cloudfront")
+            dists: List[Dict] = []
+            for page in cf.get_paginator("list_distributions").paginate():
+                dists.extend((page.get("DistributionList") or {}).get("Items", []))
+        except Exception as e:
+            self._l7_read_error = True                       # F2: denied -> no phantom PASS
+            self._add("INFO", "EXPOSURE-03", "EXPOSURE", "cloudfront",
+                      f"Could not enumerate CloudFront distributions: {e}")
+            return False
+        self._l7_cf_done = True
+        found = False
+        for d in dists:
+            if not d.get("Enabled"):
+                continue
+            did = d.get("Id", "")
+            domain = d.get("DomainName", "")
+            aliases = (d.get("Aliases") or {}).get("Items", [])
+            node = f"cf/{did}"
+            g.add_node(node, "CloudFrontDistribution", name=did, domain=domain,
+                       aliases=(",".join(aliases) or None), waf=(d.get("WebACLId") or None))
+            g.add_edge(internet, node, "EXPOSED_TO", basis="l7-cloudfront")
+            found = True
+            compute_backed, unresolved = False, False
+            for o in (d.get("Origins") or {}).get("Items", []):
+                odom = (o.get("DomainName") or "").lower()
+                if o.get("S3OriginConfig") is not None:
+                    # S3 origin -> TARGETS -> bucket (merges w/ DATA crown); NO EXPOSURE-03
+                    # (public-bucket findings belong to S3/EXTACCESS/DATA — avoid double-count).
+                    bucket = odom.split(".s3")[0] if ".s3" in odom else ""
+                    if bucket:
+                        barn = ("arn:aws:s3:::" + bucket).lower()
+                        g.add_node(barn, "S3Bucket", name=bucket)
+                        g.add_edge(node, barn, "TARGETS", basis="l7-cloudfront-s3",
+                                   target_type="s3")
+                elif o.get("CustomOriginConfig") is not None:
+                    inner = lb_dns.get(odom)
+                    if inner:
+                        g.add_edge(node, inner, "TARGETS", basis="l7-cloudfront-origin",
+                                   target_type="lb")
+                        compute_backed = True
+                    else:
+                        unresolved = True
+            if compute_backed:
+                self._add("FAIL", "EXPOSURE-03", "EXPOSURE", did,
+                          f"Internet-facing CloudFront distribution {did} ({domain}) fronts "
+                          f"an internet-facing load-balancer origin | {did}")
+            elif unresolved:
+                # F9: don't assert absence — under --all-regions the LB may live in a region
+                # not yet enumerated when this global CloudFront pass runs.
+                self._add("INFO", "EXPOSURE-03", "EXPOSURE", did,
+                          f"Internet-facing CloudFront distribution {did} ({domain}) has a "
+                          f"custom origin not matched to an enumerated in-account load balancer "
+                          f"(a cross-region origin may be unresolved under --all-regions) | {did}")
+        return found
+
+    def _l7_apigateway(self, g, internet) -> bool:
+        try:
+            api = self._client("apigateway")
+            items: List[Dict] = []
+            for page in api.get_paginator("get_rest_apis").paginate():
+                items.extend(page.get("items", []))
+        except Exception as e:
+            self._l7_read_error = True                       # F2: denied -> no phantom PASS
+            self._add("INFO", "EXPOSURE-03", "EXPOSURE", "apigateway",
+                      f"Could not enumerate REST APIs in {self.region}: {e}")
+            return False
+        found = False
+        for it in items:
+            types = (it.get("endpointConfiguration") or {}).get("types") or []
+            if not any(t in ("EDGE", "REGIONAL") for t in types):
+                continue                                        # PRIVATE = not internet-facing
+            aid = it.get("id", "")
+            name = it.get("name", aid)
+            node = f"apigw/{aid}"
+            g.add_node(node, "ApiGateway", name=name, protocol="REST",
+                       endpoint=("/".join(types) or None))
+            g.add_edge(internet, node, "EXPOSED_TO", basis="l7-apigateway")
+            found = True
+            self._add("INFO", "EXPOSURE-03", "EXPOSURE", name,
+                      f"Internet-facing REST API {name} ({aid}, {'/'.join(types)}) — "
+                      f"internet entry; backend integrations not correlated | {name}")
+        return found
+
+    def _l7_apigatewayv2(self, g, internet) -> bool:
+        try:
+            api = self._client("apigatewayv2")
+            items: List[Dict] = []
+            for page in api.get_paginator("get_apis").paginate():
+                items.extend(page.get("Items", []))
+        except Exception as e:
+            self._l7_read_error = True                       # F2: denied -> no phantom PASS
+            self._add("INFO", "EXPOSURE-03", "EXPOSURE", "apigatewayv2",
+                      f"Could not enumerate HTTP/WebSocket APIs in {self.region}: {e}")
+            return False
+        found = False
+        for it in items:
+            aid = it.get("ApiId", "")
+            name = it.get("Name", aid)
+            proto = it.get("ProtocolType", "HTTP")
+            node = f"apigwv2/{aid}"
+            g.add_node(node, "ApiGateway", name=name, protocol=proto,
+                       endpoint=(it.get("ApiEndpoint") or None))
+            g.add_edge(internet, node, "EXPOSED_TO", basis="l7-apigatewayv2")
+            found = True
+            # Best-effort Lambda integration target (front surface only — no attack path
+            # since the Lambda->role subgraph was clobbered by IAMPRIVESC).
+            try:
+                for integ in api.get_integrations(ApiId=aid).get("Items", []):
+                    uri = integ.get("IntegrationUri", "") or ""
+                    idx = uri.find("arn:aws:lambda:")
+                    if idx >= 0:
+                        larn = uri[idx:].split("/")[0]
+                        g.add_node(larn, "LambdaFunction", function_arn=larn)
+                        g.add_edge(node, larn, "TARGETS", basis="l7-apigatewayv2-lambda",
+                                   target_type="lambda")
+            except Exception:
+                pass
+            self._add("INFO", "EXPOSURE-03", "EXPOSURE", name,
+                      f"Internet-facing {proto} API {name} ({aid}) — internet entry | {name}")
+        return found
+
+    # ── Phase 7 — identity fusion (stale admin key = pre-auth account takeover) ────
+    def _build_identity_fusion(self, g, admin) -> bool:
+        """IDENTITY-01 — a stale/long-unused ACTIVE access key on an admin-capable IAM
+        user is a PRE-AUTH account-takeover path: the key IS the entry (no workload
+        compromise, no exploit). Draws ``internet -EXPOSED_TO-> IAMUser`` so
+        ``enumerate_paths`` finds internet -> user -> CAN_PRIVESC_TO/CAN_ASSUME -> admin
+        (ATTACK-01 semantics, no vuln needed). Admin-capability reuses the SAME graph test
+        as ATTACK-01, so a boundary/SCP-neutralized user is correctly NOT flagged — which is
+        what makes this distinct from (not a duplicate of) IAM-06/08. Global (IAM) -> once."""
+        if self._identity_fusion_done:
+            return False
+        report = self._get_credential_report()
+        if not self._cred_report_ok:
+            return False                            # report unavailable -> IAM-07 already WARNs
+        self._identity_fusion_done = True
+        kinds = {"CAN_PRIVESC_TO", "CAN_ASSUME"}
+        found = False
+        for row in report:
+            user = row.get("user", "")
+            if user in ("<root_account>", ""):
+                continue                            # root is not an enumerated IAMUser node
+            arn = row.get("arn", "")
+            if not arn or g.node(arn) is None:
+                continue                            # not an enumerated principal in the graph
+            confirmed = admin in g.reachable(arn, kinds, max_hops=6,
+                                             edge_filter=self._edge_unconditioned)
+            conditioned = (not confirmed) and (admin in g.reachable(arn, kinds, max_hops=6))
+            if not (confirmed or conditioned):
+                continue                            # not admin-capable -> not a takeover path
+            reasons = []
+            for k in ("access_key_1", "access_key_2"):
+                if row.get(f"{k}_active") != "true":
+                    continue
+                age = _cred_age_days(row.get(f"{k}_last_rotated", ""))
+                idle = _cred_idle_days(row.get(f"{k}_last_used_date", ""),
+                                       row.get(f"{k}_last_rotated", ""))
+                if age is not None and age > 90:
+                    reasons.append(f"{k} unrotated {age}d")
+                elif idle is not None and idle > 45:
+                    reasons.append(f"{k} unused {idle}d")
+            if not reasons:
+                continue                            # active keys are fresh + in use -> skip
+            g.add_edge("internet", arn, "EXPOSED_TO", basis="static-credential",
+                       confidence="exposed-secret")
+            found = True
+            status = "FAIL" if confirmed else "WARN"
+            note = "" if confirmed else " (admin reachable ONLY via a Condition-guarded hop)"
+            self._add(status, "IDENTITY-01", "EXPOSURE", user,
+                      f"Admin-capable IAM user {user} holds an ACTIVE long-lived access key "
+                      f"({'; '.join(reasons)}){note} — a static credential to an administrator "
+                      f"identity is a pre-auth account-takeover path | {user}")
+        return found
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTIONS 37-39: DEEP-PLANE INGESTION (Phase 3, buy-not-build)
@@ -7708,12 +8219,28 @@ class AWSLiveScanner:
             for m in matches:
                 g.add_edge(node_id, m.cve, "HAS_VULN", scan_source="managed-eol")
 
+    def _replay_runs_image_edges(self):
+        """Re-emit the ECS task-def -> ECRImage RUNS_IMAGE edges stashed pre-clobber in
+        _emit_runs_image (ECS#20). Replayed here (VULN#39, after IAMPRIVESC rebuilds the
+        graph) so image-CVE inheritance survives; MERGE-idempotent, byte-identical shape."""
+        if not self._runs_image_payloads:
+            return
+        g = self._ensure_graph()
+        if g is None:
+            return
+        for src, sprops, node, nprops, eprops in self._runs_image_payloads:
+            g.add_node(src, "ECSTaskDefinition",
+                       **{k: v for k, v in sprops.items() if v is not None})
+            g.add_node(node, "ECRImage", **{k: v for k, v in nprops.items() if v is not None})
+            g.add_edge(src, node, "RUNS_IMAGE", **eprops)
+
     def _check_vuln(self):
         self._section_header("VULN")
-        # Replay stashed managed-engine-EOL edges FIRST — before any Inspector early-return,
-        # and after IAMPRIVESC's graph rebuild — so they land and survive regardless of
-        # whether Amazon Inspector is enabled.
+        # Replay stashed managed-engine-EOL + RUNS_IMAGE edges FIRST — before any Inspector
+        # early-return, and after IAMPRIVESC's graph rebuild — so they land and survive
+        # regardless of whether Amazon Inspector is enabled.
         self._replay_eol_edges()
+        self._replay_runs_image_edges()
         self._log("Amazon Inspector v2 package vulnerabilities -> HAS_VULN edges "
                   "(EPSS native; KEV via batch_get_finding_details). INFO no-op if disabled.")
         try:
@@ -7777,9 +8304,13 @@ class AWSLiveScanner:
             g.add_node(v["cve"], "Vulnerability", severity=v["severity"], epss=v["epss"],
                        kev=v["kev"], exploit_available=v["exploit_available"],
                        fix_available=v["fix_available"])
+            # Phase 7: tag the vuln reachable_service when its workload is internet-exposed
+            # (set in EXPOSURE#37). `or None` -> False is dropped by the graph (props strip
+            # None), keeping graph.json byte-identical for unexposed workloads.
             g.add_edge(node, v["cve"], "HAS_VULN", cve=v["cve"], severity=v["severity"],
                        epss=v["epss"], kev=v["kev"], exploit_available=v["exploit_available"],
-                       fix_available=v["fix_available"], finding_arn=v["finding_arn"])
+                       fix_available=v["fix_available"], finding_arn=v["finding_arn"],
+                       reachable_service=(node in self._reachable_workloads or None))
             count += 1
             if v["kev"]:
                 fid, tag = "VULN-02", "KEV/in-the-wild"
@@ -7876,7 +8407,8 @@ class AWSLiveScanner:
         crown = self._collect_macie(g)
         self._collect_access_analyzer(g)
         self._build_can_read_data(g, crown)
-        self._correlate_flagship(g)
+        self._collect_dspm(g)                       # Phase 7 DSPM crown datastores
+        self._correlate_flagship(g)                 # crown_nodes(g) now spans S3 + DSPM
 
     def _collect_macie(self, g) -> set:
         crown: set = set()
@@ -8007,10 +8539,12 @@ class AWSLiveScanner:
         to all have contributed; if any is absent (service off) it simply does not fire."""
         if g is None or g.node("internet") is None:
             return
-        crown = {n["id"] for n in g.nodes("S3Bucket") if (n["props"] or {}).get("crown_jewel")}
+        crown = aws_correlate.crown_nodes(g)                # Phase 7: S3 + DSPM datastores
         if not crown:
-            return                                          # no data terminal (Macie off)
-        reach = g.reachable("internet", {"EXPOSED_TO", "ATTACHED_TO"}, max_hops=3)
+            return                                          # no data terminal (Macie/DSPM off)
+        # Phase 7: TARGETS traverses an internet-facing LB to its private backend, so an
+        # LB-fronted (subnet-private) EC2 is internet-reachable for the flagship path too.
+        reach = g.reachable("internet", {"EXPOSED_TO", "ATTACHED_TO", "TARGETS"}, max_hops=3)
         exposed = [nid for nid in reach if (g.node(nid) or {}).get("kind") == "EC2Instance"]
         kinds = {"CAN_ASSUME", "CAN_PRIVESC_TO", "CAN_READ_DATA"}
         for inst in exposed:
@@ -8034,7 +8568,9 @@ class AWSLiveScanner:
             cve = vulns[0]["props"].get("cve", "?")
             kev = any(v["props"].get("kev") for v in vulns)
             iid = (g.node(inst) or {}).get("props", {}).get("instance_id", inst)
-            bucket = sorted(conf or anyb)[0].split(":::")[-1]
+            # Phase 7: crown store may be a non-S3 datastore (RDS/DynamoDB/EFS ARN has no
+            # ':::' segment), so use _label (name prop / arn tail) not a bucket-only split.
+            bucket = aws_correlate._label(g, sorted(conf or anyb)[0])
             boost = (" [ACTIVE THREAT on the path — TOP priority]"
                      if self._node_has_threat(inst) or self._node_has_threat(role) else "")
             if conf:
@@ -8047,6 +8583,143 @@ class AWSLiveScanner:
                           f"FLAGSHIP ATTACK PATH (conditioned): Internet -> exposed EC2 "
                           f"{iid} -> exploitable {cve} -> role -> crown-jewel data {bucket} "
                           f"reachable only via a Condition-guarded hop; verify.{boost} | {iid}")
+
+    # ── Phase 7 DSPM: crown-jewel datastores (RDS/Redshift/DynamoDB/EFS) w/o Macie ─
+    def _collect_dspm(self, g):
+        """Extend crown-jewel identity beyond S3/Macie to RDS/RDSCluster/Redshift/DynamoDB/
+        EFS via data-classification TAGS. Emitted from DATA#41 (post-clobber). Node ids
+        reuse the Phase-5 EOL fallback so a tagged crown MERGES onto any existing vulnerable
+        EOL node ('vulnerable crown jewel'). Each store is its own try/except -> INFO no-op
+        (never _paginate_all -> never a phantom all-clear on a denied describe)."""
+        try:
+            roles = [p for p in self._get_iam_principals() if p["type"] == "role"]
+        except Exception:
+            roles = []
+        self._dspm_rds(g, roles)
+        self._dspm_redshift(g, roles)
+        self._dspm_dynamodb(g, roles)
+        self._dspm_efs(g, roles)
+
+    def _dspm_emit(self, g, arn, kind, name, cj, public, encrypted, roles, read_actions):
+        """Add the crown DataStore node + DSPM-01 (+DSPM-02 if public) + CAN_READ_DATA
+        edges for every role whose identity policy can read it (coarse for RDS/Redshift)."""
+        if not arn:
+            return
+        g.add_node(arn, kind, name=name, DataStore=True, crown_jewel=True,
+                   sensitivity=cj["sensitivity"], public=public, encrypted=encrypted)
+        mk, mv = cj["matched"]
+        self._add("FAIL", "DSPM-01", "DATA", name,
+                  f"Crown-jewel {kind} (tag {mk}={mv}) holds sensitive data"
+                  f"{'' if encrypted else ' — UNENCRYPTED'} | {name}")
+        if public:
+            self._add("FAIL", "DSPM-02", "DATA", name,
+                      f"Crown-jewel {kind} {name} is publicly reachable | {name}")
+        for p in roles:
+            r = aws_deepplane.role_can_read_store(p["statements"], arn, read_actions)
+            if r is None:
+                continue
+            g.add_edge(p["arn"], arn, "CAN_READ_DATA", basis="identity-policy",
+                       confidence="paths-to-verify", conditioned=r["conditioned"])
+            self._add("WARN" if r["conditioned"] else "FAIL", "EXTACCESS-03", "DATA",
+                      f"role:{p['name']}",
+                      f"Role {p['name']} can read crown-jewel {kind} {name} (identity "
+                      f"policy, coarse, paths-to-verify)"
+                      f"{' [conditioned]' if r['conditioned'] else ''} | {p['name']}")
+
+    def _dspm_rds(self, g, roles):
+        for op, key, kind, arn_f, id_f, enc_f in (
+                ("describe_db_instances", "DBInstances", "RDSInstance",
+                 "DBInstanceArn", "DBInstanceIdentifier", "StorageEncrypted"),
+                ("describe_db_clusters", "DBClusters", "RDSCluster",
+                 "DBClusterArn", "DBClusterIdentifier", "StorageEncrypted")):
+            try:
+                rds = self._client("rds")
+                rows: List[Dict] = []
+                for page in rds.get_paginator(op).paginate():
+                    rows += page.get(key, [])
+            except Exception as e:
+                self._add("INFO", "DSPM-01", "DATA", kind.lower(),
+                          f"Could not enumerate {kind} in {self.region}: {e}")
+                continue
+            for db in rows:
+                cj = aws_deepplane.is_crown_jewel_by_tags(db.get("TagList"))
+                if not cj:
+                    continue
+                arn = db.get(arn_f) or db.get(id_f, "")
+                self._dspm_emit(g, arn, kind, db.get(id_f, arn), cj,
+                                bool(db.get("PubliclyAccessible")), bool(db.get(enc_f)),
+                                roles, aws_deepplane.DSPM_READ_ACTIONS[kind.lower()])
+
+    def _dspm_redshift(self, g, roles):
+        try:
+            rs = self._client("redshift")
+            clusters: List[Dict] = []
+            for page in rs.get_paginator("describe_clusters").paginate():
+                clusters += page.get("Clusters", [])
+        except Exception as e:
+            self._add("INFO", "DSPM-01", "DATA", "redshift",
+                      f"Could not enumerate Redshift clusters in {self.region}: {e}")
+            return
+        for c in clusters:
+            cj = aws_deepplane.is_crown_jewel_by_tags(c.get("Tags"))
+            if not cj:
+                continue
+            cid = c.get("ClusterIdentifier", "")
+            arn = f"arn:aws:redshift:{self.region}:{self.account}:cluster:{cid}"
+            self._dspm_emit(g, arn, "RedshiftCluster", cid, cj,
+                            bool(c.get("PubliclyAccessible")), bool(c.get("Encrypted")),
+                            roles, aws_deepplane.DSPM_READ_ACTIONS["redshiftcluster"])
+
+    def _dspm_dynamodb(self, g, roles):
+        try:
+            ddb = self._client("dynamodb")
+            names: List[str] = []
+            for page in ddb.get_paginator("list_tables").paginate():
+                names += page.get("TableNames", [])
+        except Exception as e:
+            self._add("INFO", "DSPM-01", "DATA", "dynamodb",
+                      f"Could not enumerate DynamoDB tables in {self.region}: {e}")
+            return
+        # F4: the 300-table cap bounds per-table tag-read cost but MUST be visible — a silent
+        # truncation is a phantom all-clear on any crown table beyond position 300.
+        if len(names) > 300:
+            self._add("INFO", "DSPM-01", "DATA", "dynamodb",
+                      f"DynamoDB DSPM classified only the first 300 of {len(names)} tables in "
+                      f"{self.region}; {len(names) - 300} not inspected for crown-jewel tags "
+                      f"(rerun scoped, or raise the cap)")
+        for name in names[:300]:                     # bound the per-table tag read cost
+            arn = f"arn:aws:dynamodb:{self.region}:{self.account}:table/{name}"
+            try:
+                tags = ddb.list_tags_of_resource(ResourceArn=arn).get("Tags", [])
+            except Exception:
+                continue                             # skip a denied/throttled single table
+            cj = aws_deepplane.is_crown_jewel_by_tags(tags)
+            if not cj:
+                continue
+            # DynamoDB is never network-public (IAM-gated) and always encrypted at rest.
+            self._dspm_emit(g, arn, "DynamoDBTable", name, cj, False, True,
+                            roles, aws_deepplane.DSPM_READ_ACTIONS["dynamodbtable"])
+
+    def _dspm_efs(self, g, roles):
+        try:
+            efs = self._client("efs")
+            fss: List[Dict] = []
+            for page in efs.get_paginator("describe_file_systems").paginate():
+                fss += page.get("FileSystems", [])
+        except Exception as e:
+            self._add("INFO", "DSPM-01", "DATA", "efs",
+                      f"Could not enumerate EFS file systems in {self.region}: {e}")
+            return
+        for fs in fss:
+            cj = aws_deepplane.is_crown_jewel_by_tags(fs.get("Tags"))
+            if not cj:
+                continue
+            arn = fs.get("FileSystemArn", "")
+            name = fs.get("Name") or fs.get("FileSystemId", arn)
+            # EFS FS-policy public-exposure parse deferred -> public=False (fail-closed).
+            self._dspm_emit(g, arn, "EFSFileSystem", name, cj, False,
+                            bool(fs.get("Encrypted")), roles,
+                            aws_deepplane.DSPM_READ_ACTIONS["efsfilesystem"])
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 40: ATTACK-PATH CORRELATION & CHOKE POINTS (Phase 4)
@@ -8064,8 +8737,7 @@ class AWSLiveScanner:
             self._add("INFO", "PATHS-01", "CORRELATE", "graph",
                       "No internet-facing attack surface in the graph; nothing to correlate")
             return
-        crown = {n["id"] for n in g.nodes("S3Bucket")
-                 if (n["props"] or {}).get("crown_jewel")}
+        crown = aws_correlate.crown_nodes(g)                # Phase 7: S3 + DSPM datastores
         # Precompute the threat set ONCE — the enumerator calls node_has_threat per
         # edge expansion, so it must be O(1), not an O(E) scan of every graph edge.
         threatened = {e["dst"] for e in g.edges("THREAT_ON")}
@@ -8150,7 +8822,8 @@ class AWSLiveScanner:
         Returns [(instance_id, volume_ids)], capped at side_scan_max."""
         exposed: List[str] = []
         if g is not None and g.node("internet") is not None:
-            reach = g.reachable("internet", {"EXPOSED_TO", "ATTACHED_TO"}, max_hops=3)
+            # Phase 7: include TARGETS so LB-fronted private instances are side-scan-selected.
+            reach = g.reachable("internet", {"EXPOSED_TO", "ATTACHED_TO", "TARGETS"}, max_hops=3)
             for nid in reach:
                 node = g.node(nid) or {}
                 if node.get("kind") == "EC2Instance":
@@ -8358,6 +9031,10 @@ class AWSLiveScanner:
         # is never forced to build one.
         if self.graph is not None and self._eol_graph_payloads:
             self._replay_eol_edges()
+        # Same idempotent flush for stashed RUNS_IMAGE edges (a scan that graphed ECS but
+        # omitted VULN) so image-CVE inheritance survives the clobber either way.
+        if self.graph is not None and self._runs_image_payloads:
+            self._replay_runs_image_edges()
 
     def _regions_for_section(self, section: str) -> List[str]:
         """Regions to run a section in. Single-region by default; with

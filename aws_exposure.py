@@ -19,10 +19,12 @@ EC2 ENI is judged internet-reachable only when ALL FOUR gates pass — never on
                             first match wins.
 
 Everything takes raw boto3 response shapes (exact field names) so tests mirror
-reality. L7 load-balancer / CloudFront exposure is intentionally deferred and
-fails closed (never emits an EXPOSED_TO) — deferring cannot manufacture a false
-positive. Grounded in a verified AWS-semantics research pass; see the FP/FN
-catalog in tests/test_exposure.py.
+reality. This module stays the boto3-free L3/L4 oracle for DIRECT ENIs; the
+Phase-7 L7 axis (internet-facing ALB/NLB/CloudFront/API-Gateway front resolution
+-> LoadBalancer/front graph nodes + TARGETS edges) lives in
+``aws_live_scanner._build_l7_exposure``, which reuses ``sg_public_ports`` here so
+this file remains boto3-free and purely testable. Grounded in a verified
+AWS-semantics research pass; see the FP/FN catalog in tests/test_exposure.py.
 """
 from __future__ import annotations
 
