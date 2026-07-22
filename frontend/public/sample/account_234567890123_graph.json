@@ -1,0 +1,76 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "nodes": [
+    {
+      "cidr": "0.0.0.0/0",
+      "id": "internet",
+      "kind": "InternetSource"
+    },
+    {
+      "account": "234567890123",
+      "id": "capability:admin:234567890123",
+      "kind": "AdminCapability"
+    },
+    {
+      "instance_id": "i-0webfront01",
+      "id": "arn:aws:ec2:us-east-1:234567890123:instance/i-0webfront01",
+      "kind": "EC2Instance"
+    },
+    {
+      "id": "arn:aws:iam::234567890123:instance-profile/web-profile",
+      "kind": "InstanceProfile"
+    },
+    {
+      "name": "web-server-role",
+      "id": "arn:aws:iam::234567890123:role/web-server-role",
+      "kind": "IAMRole"
+    },
+    {
+      "severity": "HIGH",
+      "kev": false,
+      "epss": 0.42,
+      "exploit_available": "POC",
+      "fix_available": "YES",
+      "id": "CVE-2023-4911",
+      "kind": "Vulnerability"
+    }
+  ],
+  "edges": [
+    {
+      "basis": "sg-public",
+      "ports": "443",
+      "source": "internet",
+      "target": "arn:aws:ec2:us-east-1:234567890123:instance/i-0webfront01",
+      "kind": "EXPOSED_TO"
+    },
+    {
+      "source": "arn:aws:ec2:us-east-1:234567890123:instance/i-0webfront01",
+      "target": "arn:aws:iam::234567890123:instance-profile/web-profile",
+      "kind": "HAS_INSTANCE_PROFILE"
+    },
+    {
+      "cve": "CVE-2023-4911",
+      "severity": "HIGH",
+      "epss": 0.42,
+      "fix_available": "YES",
+      "source": "arn:aws:ec2:us-east-1:234567890123:instance/i-0webfront01",
+      "target": "CVE-2023-4911",
+      "kind": "HAS_VULN"
+    },
+    {
+      "source": "arn:aws:iam::234567890123:instance-profile/web-profile",
+      "target": "arn:aws:iam::234567890123:role/web-server-role",
+      "kind": "HAS_ROLE"
+    },
+    {
+      "rules": [
+        "IAMPE-03"
+      ],
+      "conditioned": true,
+      "source": "arn:aws:iam::234567890123:role/web-server-role",
+      "target": "capability:admin:234567890123",
+      "kind": "CAN_PRIVESC_TO"
+    }
+  ]
+}

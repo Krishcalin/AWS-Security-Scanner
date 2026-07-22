@@ -128,8 +128,45 @@ def create_app(service, *, current_role=lambda: ""):
     def graph(account_id: str):
         return service.get_graph(account_id)
 
+    @app.get("/accounts/{account_id}/summary", dependencies=[Depends(require("viewer"))])
+    def account_summary(account_id: str):
+        s = service.get_account_summary(account_id)
+        if not s:
+            raise HTTPException(status_code=404, detail="no scan results for account")
+        return s
+
     @app.get("/org/overview", dependencies=[Depends(require("viewer"))])
     def org_overview():
         return service.org_overview()
 
     return app
+
+
+def create_hosted_app(service, *, static_dir: Optional[str] = None, current_role=lambda: ""):
+    """Production single-deployable: the JSON API under ``/api`` and (if the React
+    build exists) the SPA at ``/`` with a history-API fallback so client-side deep
+    links resolve to index.html. The pure API stays reachable/testable via
+    ``create_app`` — this only wraps it for hosting, so it never affects tests."""
+    if not _HAVE_FASTAPI:                                # pragma: no cover - deploy-only
+        raise RuntimeError("cnapp_api requires fastapi + pydantic (deploy-time)")
+    import os
+    from fastapi.staticfiles import StaticFiles
+    from starlette.responses import FileResponse
+
+    api = create_app(service, current_role=current_role)
+    root = FastAPI(title="OverWatch CNAPP", version="1.0.0")
+    root.mount("/api", api)
+
+    if static_dir and os.path.isdir(static_dir):
+        index = os.path.join(static_dir, "index.html")
+
+        class _SPAStatics(StaticFiles):
+            # a missing asset that is a client-side route -> serve index.html
+            async def get_response(self, path, scope):
+                resp = await super().get_response(path, scope)
+                if resp.status_code == 404 and os.path.isfile(index):
+                    return FileResponse(index)
+                return resp
+
+        root.mount("/", _SPAStatics(directory=static_dir, html=True), name="spa")
+    return root

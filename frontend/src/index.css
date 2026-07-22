@@ -1,0 +1,56 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ── OverWatch design tokens — continuous with the shipped HTML report ──────── */
+:root {
+  --canvas:#eef3fb; --canvas2:#e6edf8; --panel:#ffffff; --panel2:#f4f8fd;
+  --ink:#0f1b2d; --ink2:#41546e; --ink3:#7488a3; --line:#dbe6f3; --line2:#eaf0f8;
+  --accent:#1570ef; --accent2:#0b5cd6; --accentdim:#e4eefe;
+  --grad1:#38bdf8; --grad2:#60a5fa; --grad3:#6366f1;
+  --gold:#e0a021; --goldbg:#fdf6e3;
+  --crit:#d92d20; --high:#e8590c; --med:#c47d04; --low:#0f9d58; --info:#1570ef;
+  --critbg:#fef3f2; --highbg:#fff4ed; --medbg:#fdf6e3; --lowbg:#ecfdf3; --infobg:#eff6ff;
+}
+.dark {
+  --canvas:#0a1120; --canvas2:#0d1526; --panel:#111c30; --panel2:#16243b;
+  --ink:#e8eef7; --ink2:#a7b6cc; --ink3:#6f819b; --line:#22334d; --line2:#1a2942;
+  --accent:#4a9bff; --accent2:#78b4ff; --accentdim:#12233d;
+  --grad1:#38bdf8; --grad2:#60a5fa; --grad3:#818cf8;
+  --gold:#f5b53d; --goldbg:#2a2313;
+  --crit:#f0776b; --high:#f39152; --med:#d9a84a; --low:#3fc07f; --info:#4a9bff;
+  --critbg:#2a1512; --highbg:#2a1c10; --medbg:#241f10; --lowbg:#0f2418; --infobg:#0f1f36;
+}
+
+/* Map tokens to Tailwind utilities via `inline` so they follow the runtime theme */
+@theme inline {
+  --color-canvas: var(--canvas); --color-canvas2: var(--canvas2);
+  --color-panel: var(--panel); --color-panel2: var(--panel2);
+  --color-ink: var(--ink); --color-ink2: var(--ink2); --color-ink3: var(--ink3);
+  --color-line: var(--line); --color-line2: var(--line2);
+  --color-accent: var(--accent); --color-accent2: var(--accent2); --color-accentdim: var(--accentdim);
+  --color-gold: var(--gold); --color-goldbg: var(--goldbg);
+  --color-crit: var(--crit); --color-high: var(--high); --color-med: var(--med);
+  --color-low: var(--low); --color-info: var(--info);
+  --color-critbg: var(--critbg); --color-highbg: var(--highbg); --color-medbg: var(--medbg);
+  --color-lowbg: var(--lowbg); --color-infobg: var(--infobg);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0; background: var(--canvas); color: var(--ink);
+  font-family: var(--font-sans); -webkit-font-smoothing: antialiased;
+}
+* { box-sizing: border-box; }
+::selection { background: color-mix(in srgb, var(--accent) 25%, transparent); }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; border: 2px solid var(--canvas); }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* the signature cyan→indigo spine (wordmark, active nav, attack-path edges) */
+.ow-grad { background-image: linear-gradient(120deg, var(--grad1), var(--grad2) 45%, var(--grad3)); }
+.ow-grad-text {
+  background-image: linear-gradient(100deg, var(--grad1), var(--grad3));
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}

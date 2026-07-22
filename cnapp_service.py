@@ -85,6 +85,7 @@ def serialize_scanner(sc) -> dict:
         "graph_full": sc.graph.to_dict() if sc.graph else None,
         "attack_paths": [p.to_dict() for p in sc.attack_paths],
         "choke_points": [c.to_dict() for c in sc.choke_points],
+        "finding_catalog": sc._build_finding_catalog(),
         "results": [
             {"status": r.status, "check_id": r.check_id, "section": r.section,
              "resource": r.resource, "message": r.message, "severity": r.severity,
@@ -257,6 +258,28 @@ class PlatformService:
                 continue
             out.append(r)
         return out
+
+    def get_account_summary(self, account_id: str) -> Optional[dict]:
+        """Dashboard-shaped slice of an account's latest scan — posture + compliance
+        + top attack paths/choke points + a severity histogram. Feeds the per-account
+        Overview screen (the registry row alone has no compliance/paths)."""
+        p = self.results.get_latest(account_id)
+        if not p:
+            return None
+        sev = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        for e in p.get("finding_catalog", []):
+            s = e.get("severity", "")
+            if s in sev:
+                sev[s] += 1
+        return {
+            "account": p.get("account"), "region": p.get("region"),
+            "posture_score": p.get("posture_score"), "posture_grade": p.get("posture_grade"),
+            "summary": p.get("summary", {}), "severity_counts": sev,
+            "compliance_scorecard": p.get("compliance_scorecard", {}),
+            "graph": p.get("graph"),
+            "attack_paths": p.get("attack_paths", [])[:10],
+            "choke_points": p.get("choke_points", [])[:10],
+        }
 
     def org_overview(self) -> dict:
         """Roll every active account's latest scan into an org posture summary.

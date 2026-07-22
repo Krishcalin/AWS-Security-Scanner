@@ -1,0 +1,193 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "nodes": [
+    {
+      "cidr": "0.0.0.0/0",
+      "id": "internet",
+      "kind": "InternetSource"
+    },
+    {
+      "account": "123456789012",
+      "id": "capability:admin:123456789012",
+      "kind": "AdminCapability"
+    },
+    {
+      "name": "prod-api-alb",
+      "scheme": "internet-facing",
+      "dns": "prod-api-alb-123.us-east-1.elb.amazonaws.com",
+      "lb_type": "application",
+      "id": "lb/arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/prod-api-alb/6d0e12",
+      "kind": "LoadBalancer"
+    },
+    {
+      "instance_id": "i-0app01server",
+      "id": "arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server",
+      "kind": "EC2Instance"
+    },
+    {
+      "id": "arn:aws:iam::123456789012:instance-profile/prod-app-profile",
+      "kind": "InstanceProfile"
+    },
+    {
+      "name": "prod-app-server-role",
+      "id": "arn:aws:iam::123456789012:role/prod-app-server-role",
+      "kind": "IAMRole"
+    },
+    {
+      "severity": "CRITICAL",
+      "kev": true,
+      "epss": 0.975,
+      "exploit_available": "YES",
+      "fix_available": "YES",
+      "id": "CVE-2021-44228",
+      "kind": "Vulnerability"
+    },
+    {
+      "name": "customers-db",
+      "DataStore": true,
+      "crown_jewel": true,
+      "sensitivity": "pii",
+      "public": true,
+      "encrypted": false,
+      "id": "arn:aws:rds:us-east-1:123456789012:db:customers-db",
+      "kind": "RDSInstance"
+    },
+    {
+      "family": "payments-api",
+      "id": "arn:aws:ecs:us-east-1:123456789012:task-definition/payments-api:14",
+      "kind": "ECSTaskDefinition"
+    },
+    {
+      "repository": "payments-api",
+      "id": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api@sha256:9f2c",
+      "kind": "ECRImage"
+    },
+    {
+      "severity": "CRITICAL",
+      "kev": true,
+      "epss": 0.94,
+      "exploit_available": "YES",
+      "fix_available": "YES",
+      "id": "CVE-2024-3094",
+      "kind": "Vulnerability"
+    },
+    {
+      "name": "ci-deploy",
+      "account": "123456789012",
+      "id": "arn:aws:iam::123456789012:user/ci-deploy",
+      "kind": "IAMUser"
+    },
+    {
+      "name": "payments-ledger",
+      "DataStore": true,
+      "crown_jewel": true,
+      "sensitivity": "pci",
+      "public": false,
+      "encrypted": true,
+      "id": "arn:aws:dynamodb:us-east-1:123456789012:table/payments-ledger",
+      "kind": "DynamoDBTable"
+    },
+    {
+      "type": "CryptoCurrency:EC2/BitcoinTool.B",
+      "severity": 8.0,
+      "band": "High",
+      "id": "threat:gd-1",
+      "kind": "ThreatFinding"
+    }
+  ],
+  "edges": [
+    {
+      "basis": "l7-elbv2",
+      "ports": "443",
+      "source": "internet",
+      "target": "lb/arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/prod-api-alb/6d0e12",
+      "kind": "EXPOSED_TO"
+    },
+    {
+      "basis": "static-credential",
+      "confidence": "exposed-secret",
+      "source": "internet",
+      "target": "arn:aws:iam::123456789012:user/ci-deploy",
+      "kind": "EXPOSED_TO"
+    },
+    {
+      "basis": "l7-elbv2",
+      "target_type": "instance",
+      "source": "lb/arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/prod-api-alb/6d0e12",
+      "target": "arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server",
+      "kind": "TARGETS"
+    },
+    {
+      "source": "arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server",
+      "target": "arn:aws:iam::123456789012:instance-profile/prod-app-profile",
+      "kind": "HAS_INSTANCE_PROFILE"
+    },
+    {
+      "cve": "CVE-2021-44228",
+      "kev": true,
+      "epss": 0.975,
+      "exploit_available": "YES",
+      "fix_available": "YES",
+      "severity": "CRITICAL",
+      "reachable_service": true,
+      "source": "arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server",
+      "target": "CVE-2021-44228",
+      "kind": "HAS_VULN"
+    },
+    {
+      "container": "payments-api",
+      "scan_source": "ecs",
+      "source": "arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server",
+      "target": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api@sha256:9f2c",
+      "kind": "RUNS_IMAGE"
+    },
+    {
+      "source": "arn:aws:iam::123456789012:instance-profile/prod-app-profile",
+      "target": "arn:aws:iam::123456789012:role/prod-app-server-role",
+      "kind": "HAS_ROLE"
+    },
+    {
+      "basis": "identity-policy",
+      "conditioned": false,
+      "source": "arn:aws:iam::123456789012:role/prod-app-server-role",
+      "target": "arn:aws:rds:us-east-1:123456789012:db:customers-db",
+      "kind": "CAN_READ_DATA"
+    },
+    {
+      "basis": "identity-policy",
+      "conditioned": false,
+      "source": "arn:aws:iam::123456789012:role/prod-app-server-role",
+      "target": "arn:aws:dynamodb:us-east-1:123456789012:table/payments-ledger",
+      "kind": "CAN_READ_DATA"
+    },
+    {
+      "cve": "CVE-2024-3094",
+      "kev": true,
+      "epss": 0.94,
+      "exploit_available": "YES",
+      "fix_available": "YES",
+      "severity": "CRITICAL",
+      "source": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api@sha256:9f2c",
+      "target": "CVE-2024-3094",
+      "kind": "HAS_VULN"
+    },
+    {
+      "rules": [
+        "IAMPE-01"
+      ],
+      "conditioned": false,
+      "source": "arn:aws:iam::123456789012:user/ci-deploy",
+      "target": "capability:admin:123456789012",
+      "kind": "CAN_PRIVESC_TO"
+    },
+    {
+      "type": "CryptoCurrency:EC2/BitcoinTool.B",
+      "severity": 8.0,
+      "band": "High",
+      "source": "threat:gd-1",
+      "target": "arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server",
+      "kind": "THREAT_ON"
+    }
+  ]
+}

@@ -1,0 +1,363 @@
+{
+  "account": "123456789012",
+  "region": "us-east-1",
+  "posture_score": 0.0,
+  "posture_grade": "F",
+  "summary": {
+    "PASS": 3,
+    "FAIL": 15,
+    "WARN": 2,
+    "INFO": 0
+  },
+  "severity_counts": {
+    "CRITICAL": 4,
+    "HIGH": 6,
+    "MEDIUM": 3,
+    "LOW": 2
+  },
+  "compliance_scorecard": {
+    "CIS": {
+      "controls_total": 48,
+      "controls_passed": 43,
+      "controls_failed": 5,
+      "pass_rate": 89.6,
+      "failed_controls": [
+        "1.14",
+        "1.4",
+        "3.6",
+        "4.15",
+        "5.2"
+      ]
+    },
+    "PCI-DSS": {
+      "controls_total": 37,
+      "controls_passed": 29,
+      "controls_failed": 8,
+      "pass_rate": 78.4,
+      "failed_controls": [
+        "1.3.1",
+        "1.3.2",
+        "10.2",
+        "11.4",
+        "3.4",
+        "6.3.3",
+        "8.2.2",
+        "8.6.3"
+      ]
+    },
+    "HIPAA": {
+      "controls_total": 11,
+      "controls_passed": 6,
+      "controls_failed": 5,
+      "pass_rate": 54.5,
+      "failed_controls": [
+        "164.308(a)(1)(ii)(A)",
+        "164.312(a)(1)",
+        "164.312(a)(2)(iv)",
+        "164.312(b)",
+        "164.312(e)(1)"
+      ]
+    },
+    "SOC2": {
+      "controls_total": 9,
+      "controls_passed": 3,
+      "controls_failed": 6,
+      "pass_rate": 33.3,
+      "failed_controls": [
+        "CC6.1",
+        "CC6.2",
+        "CC6.6",
+        "CC7.1",
+        "CC7.2",
+        "CC7.3"
+      ]
+    },
+    "NIST": {
+      "controls_total": 38,
+      "controls_passed": 28,
+      "controls_failed": 10,
+      "pass_rate": 73.7,
+      "failed_controls": [
+        "AU-2",
+        "CA-8",
+        "IA-2",
+        "IA-5(1)",
+        "RA-5(2)",
+        "SC-12",
+        "SC-28",
+        "SC-7",
+        "SI-2",
+        "SI-4"
+      ]
+    }
+  },
+  "graph": {
+    "nodes": 14,
+    "edges": 12,
+    "node_kinds": {
+      "AdminCapability": 1,
+      "DynamoDBTable": 1,
+      "EC2Instance": 1,
+      "ECRImage": 1,
+      "ECSTaskDefinition": 1,
+      "IAMRole": 1,
+      "IAMUser": 1,
+      "InstanceProfile": 1,
+      "InternetSource": 1,
+      "LoadBalancer": 1,
+      "RDSInstance": 1,
+      "ThreatFinding": 1,
+      "Vulnerability": 2
+    },
+    "edge_kinds": {
+      "CAN_PRIVESC_TO": 1,
+      "CAN_READ_DATA": 2,
+      "EXPOSED_TO": 2,
+      "HAS_INSTANCE_PROFILE": 1,
+      "HAS_ROLE": 1,
+      "HAS_VULN": 2,
+      "RUNS_IMAGE": 1,
+      "TARGETS": 1,
+      "THREAT_ON": 1
+    }
+  },
+  "attack_paths": [
+    {
+      "entry": "internet",
+      "terminal": "arn:aws:rds:us-east-1:123456789012:db:customers-db",
+      "terminal_kind": "data",
+      "nodes": [
+        "internet",
+        "lb/arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/prod-api-alb/6d0e12",
+        "arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server",
+        "arn:aws:iam::123456789012:instance-profile/prod-app-profile",
+        "arn:aws:iam::123456789012:role/prod-app-server-role",
+        "arn:aws:rds:us-east-1:123456789012:db:customers-db"
+      ],
+      "edges": [
+        [
+          "internet",
+          "lb/arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/prod-api-alb/6d0e12",
+          "EXPOSED_TO"
+        ],
+        [
+          "lb/arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/prod-api-alb/6d0e12",
+          "arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server",
+          "TARGETS"
+        ],
+        [
+          "arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server",
+          "arn:aws:iam::123456789012:instance-profile/prod-app-profile",
+          "HAS_INSTANCE_PROFILE"
+        ],
+        [
+          "arn:aws:iam::123456789012:instance-profile/prod-app-profile",
+          "arn:aws:iam::123456789012:role/prod-app-server-role",
+          "HAS_ROLE"
+        ],
+        [
+          "arn:aws:iam::123456789012:role/prod-app-server-role",
+          "arn:aws:rds:us-east-1:123456789012:db:customers-db",
+          "CAN_READ_DATA"
+        ]
+      ],
+      "score": 100,
+      "severity": "CRITICAL",
+      "conditioned": false,
+      "vuln_pivot": true,
+      "kev": true,
+      "active_threat": true,
+      "direct_public_crown": false,
+      "hard_floor_applied": true,
+      "factors": {
+        "exposure": 0.9,
+        "exploitability": 1.0,
+        "privilege": 0.6,
+        "impact": 1.0,
+        "reach": 0.855,
+        "boost": 1.875
+      },
+      "driving_findings": [
+        "VULN-02:CVE-2021-44228",
+        "ATTACK-02",
+        "THREAT-01"
+      ],
+      "rationale": "score 100 = exposure 0.90 x exploit 1.00 x impact 1.00 x reach 0.85 x boost 1.88"
+    },
+    {
+      "entry": "internet",
+      "terminal": "arn:aws:dynamodb:us-east-1:123456789012:table/payments-ledger",
+      "terminal_kind": "data",
+      "nodes": [
+        "internet",
+        "lb/arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/prod-api-alb/6d0e12",
+        "arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server",
+        "arn:aws:iam::123456789012:instance-profile/prod-app-profile",
+        "arn:aws:iam::123456789012:role/prod-app-server-role",
+        "arn:aws:dynamodb:us-east-1:123456789012:table/payments-ledger"
+      ],
+      "edges": [
+        [
+          "internet",
+          "lb/arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/prod-api-alb/6d0e12",
+          "EXPOSED_TO"
+        ],
+        [
+          "lb/arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/prod-api-alb/6d0e12",
+          "arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server",
+          "TARGETS"
+        ],
+        [
+          "arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server",
+          "arn:aws:iam::123456789012:instance-profile/prod-app-profile",
+          "HAS_INSTANCE_PROFILE"
+        ],
+        [
+          "arn:aws:iam::123456789012:instance-profile/prod-app-profile",
+          "arn:aws:iam::123456789012:role/prod-app-server-role",
+          "HAS_ROLE"
+        ],
+        [
+          "arn:aws:iam::123456789012:role/prod-app-server-role",
+          "arn:aws:dynamodb:us-east-1:123456789012:table/payments-ledger",
+          "CAN_READ_DATA"
+        ]
+      ],
+      "score": 100,
+      "severity": "CRITICAL",
+      "conditioned": false,
+      "vuln_pivot": true,
+      "kev": true,
+      "active_threat": true,
+      "direct_public_crown": false,
+      "hard_floor_applied": true,
+      "factors": {
+        "exposure": 0.9,
+        "exploitability": 1.0,
+        "privilege": 0.6,
+        "impact": 0.9,
+        "reach": 0.855,
+        "boost": 1.875
+      },
+      "driving_findings": [
+        "VULN-02:CVE-2021-44228",
+        "ATTACK-02",
+        "THREAT-01"
+      ],
+      "rationale": "score 100 = exposure 0.90 x exploit 1.00 x impact 0.90 x reach 0.85 x boost 1.88"
+    },
+    {
+      "entry": "internet",
+      "terminal": "capability:admin:123456789012",
+      "terminal_kind": "admin",
+      "nodes": [
+        "internet",
+        "arn:aws:iam::123456789012:user/ci-deploy",
+        "capability:admin:123456789012"
+      ],
+      "edges": [
+        [
+          "internet",
+          "arn:aws:iam::123456789012:user/ci-deploy",
+          "EXPOSED_TO"
+        ],
+        [
+          "arn:aws:iam::123456789012:user/ci-deploy",
+          "capability:admin:123456789012",
+          "CAN_PRIVESC_TO"
+        ]
+      ],
+      "score": 80,
+      "severity": "CRITICAL",
+      "conditioned": false,
+      "vuln_pivot": false,
+      "kev": false,
+      "active_threat": false,
+      "direct_public_crown": false,
+      "hard_floor_applied": false,
+      "factors": {
+        "exposure": 0.9,
+        "exploitability": 1.0,
+        "privilege": 1.0,
+        "impact": 0.85,
+        "reach": 0.665,
+        "boost": 1.0
+      },
+      "driving_findings": [
+        "ATTACK-01"
+      ],
+      "rationale": "score 80 = exposure 0.90 x exploit 1.00 x impact 1.00 x reach 0.66 x boost 1.00"
+    }
+  ],
+  "choke_points": [
+    {
+      "node_id": "lb/arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/prod-api-alb/6d0e12",
+      "node_kind": "LoadBalancer",
+      "label": "prod-api-alb",
+      "paths_severed": 2,
+      "total_paths": 3,
+      "weighted_score": 200.0,
+      "targets_fully_blocked": [
+        "arn:aws:dynamodb:us-east-1:123456789012:table/payments-ledger",
+        "arn:aws:rds:us-east-1:123456789012:db:customers-db"
+      ],
+      "is_true_choke": true,
+      "remediation_hint": "Make this load balancer internal or scope its front-end security group so the internet cannot reach the workloads behind it (aws elbv2 set-security-groups / aws ec2 revoke-security-group-ingress ...)."
+    },
+    {
+      "node_id": "arn:aws:iam::123456789012:role/prod-app-server-role",
+      "node_kind": "IAMRole",
+      "label": "prod-app-server-role",
+      "paths_severed": 2,
+      "total_paths": 3,
+      "weighted_score": 200.0,
+      "targets_fully_blocked": [
+        "arn:aws:dynamodb:us-east-1:123456789012:table/payments-ledger",
+        "arn:aws:rds:us-east-1:123456789012:db:customers-db"
+      ],
+      "is_true_choke": true,
+      "remediation_hint": "Scope this role to least privilege / apply a permissions boundary (aws iam put-role-permissions-boundary ...)."
+    },
+    {
+      "node_id": "arn:aws:iam::123456789012:instance-profile/prod-app-profile",
+      "node_kind": "InstanceProfile",
+      "label": "prod-app-profile",
+      "paths_severed": 2,
+      "total_paths": 3,
+      "weighted_score": 200.0,
+      "targets_fully_blocked": [
+        "arn:aws:dynamodb:us-east-1:123456789012:table/payments-ledger",
+        "arn:aws:rds:us-east-1:123456789012:db:customers-db"
+      ],
+      "is_true_choke": true,
+      "remediation_hint": "Detach or re-scope this instance profile so the workload no longer inherits the privileged role."
+    },
+    {
+      "node_id": "arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server",
+      "node_kind": "EC2Instance",
+      "label": "i-0app01server",
+      "paths_severed": 2,
+      "total_paths": 3,
+      "weighted_score": 200.0,
+      "targets_fully_blocked": [
+        "arn:aws:dynamodb:us-east-1:123456789012:table/payments-ledger",
+        "arn:aws:rds:us-east-1:123456789012:db:customers-db"
+      ],
+      "is_true_choke": true,
+      "remediation_hint": "Patch the exploitable CVE to its fixed version (or isolate the host) to break every path through it."
+    },
+    {
+      "node_id": "arn:aws:iam::123456789012:user/ci-deploy",
+      "node_kind": "IAMUser",
+      "label": "ci-deploy",
+      "paths_severed": 1,
+      "total_paths": 3,
+      "weighted_score": 80.0,
+      "targets_fully_blocked": [
+        "capability:admin:123456789012"
+      ],
+      "is_true_choke": true,
+      "remediation_hint": "Remediate this node to sever the attack paths that traverse it."
+    }
+  ]
+}

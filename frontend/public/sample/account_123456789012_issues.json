@@ -1,0 +1,267 @@
+[
+  {
+    "status": "FAIL",
+    "check_id": "EXPOSURE-03",
+    "section": "EXPOSURE",
+    "resource": "prod-api-alb",
+    "message": "Internet-facing ALB prod-api-alb fronts 1 reachable workload: i-0app01server | prod-api-alb",
+    "severity": "MEDIUM",
+    "compliance": {
+      "CIS": "5.2",
+      "PCI-DSS": "1.3.1",
+      "HIPAA": "164.312(e)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "SC-7"
+    },
+    "remediation_cmd": "Confirm this L7 front must be internet-facing; if not, make it internal or scope its front-end security group and require WAF/auth at the edge: aws elbv2 set-security-groups --load-balancer-arn <ARN> --security-groups <SCOPED_SG> ; aws ec2 revoke-security-group-ingress --group-id <ALB_SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0 . For CloudFront/API Gateway attach a WAF Web ACL (aws wafv2 associate-web-acl ...) and require authentication."
+  },
+  {
+    "status": "FAIL",
+    "check_id": "ATTACK-01",
+    "section": "EXPOSURE",
+    "resource": "i-0app01server",
+    "message": "ATTACK PATH: Internet -> exposed EC2 i-0app01server -> role prod-app-server-role -> privesc to admin | i-0app01server",
+    "severity": "CRITICAL",
+    "compliance": {
+      "CIS": "5.2",
+      "PCI-DSS": "1.3.1",
+      "HIPAA": "164.312(a)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "SC-7"
+    },
+    "remediation_cmd": "Break the path at the exposure or the privilege: remove the public ingress (aws ec2 revoke-security-group-ingress ...) AND scope the instance-profile role to least privilege / apply a permissions boundary: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>"
+  },
+  {
+    "status": "FAIL",
+    "check_id": "VULN-02",
+    "section": "VULN",
+    "resource": "i-0app01server",
+    "message": "KEV/in-the-wild CRITICAL CVE-2021-44228 (EPSS 0.975, exploit=YES) on ec2_instance i-0app01server | i-0app01server",
+    "severity": "CRITICAL",
+    "compliance": {
+      "PCI-DSS": "6.3.3",
+      "HIPAA": "164.308(a)(1)(ii)(A)",
+      "SOC2": "CC7.1",
+      "NIST": "RA-5(2)"
+    },
+    "remediation_cmd": "PRIORITIZE \u2014 this CVE is on the CISA KEV catalog (actively exploited). Patch immediately (aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install), and if internet-exposed isolate the host: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --groups <QUARANTINE_SG>"
+  },
+  {
+    "status": "FAIL",
+    "check_id": "VULN-03",
+    "section": "VULN",
+    "resource": "payments-api@sha256:9f2c",
+    "message": "container-image CRITICAL CVE-2024-3094 (EPSS 0.94, exploit=YES) on ecr image payments-api | payments-api",
+    "severity": "HIGH",
+    "compliance": {
+      "PCI-DSS": "6.3.3",
+      "HIPAA": "164.308(a)(1)(ii)(A)",
+      "SOC2": "CC7.1",
+      "NIST": "SI-2"
+    },
+    "remediation_cmd": "Rebuild the container image on a patched base and push; enable Inspector enhanced ECR scanning: aws inspector2 enable --resource-types ECR"
+  },
+  {
+    "status": "FAIL",
+    "check_id": "IDENTITY-01",
+    "section": "EXPOSURE",
+    "resource": "ci-deploy",
+    "message": "Admin-capable IAM user ci-deploy holds an ACTIVE long-lived access key unrotated 412d - pre-auth account-takeover | ci-deploy",
+    "severity": "HIGH",
+    "compliance": {
+      "CIS": "1.14",
+      "PCI-DSS": "8.6.3",
+      "HIPAA": "164.312(a)(1)",
+      "SOC2": "CC6.2",
+      "NIST": "IA-5(1)"
+    },
+    "remediation_cmd": "Deactivate and rotate the stale/long-unused privileged access key, then bound the identity: aws iam update-access-key --user-name <USER> --access-key-id <AK_ID> --status Inactive ; aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN> . Prefer short-lived role credentials over long-lived user keys."
+  },
+  {
+    "status": "FAIL",
+    "check_id": "DSPM-01",
+    "section": "DATA",
+    "resource": "customers-db",
+    "message": "Crown-jewel RDSInstance (tag DataClassification=PII) holds sensitive data - UNENCRYPTED | customers-db",
+    "severity": "MEDIUM",
+    "compliance": {
+      "PCI-DSS": "3.4",
+      "HIPAA": "164.312(a)(2)(iv)",
+      "SOC2": "CC6.1",
+      "NIST": "SC-28"
+    },
+    "remediation_cmd": "Confirm this datastore is authorized to hold the tagged sensitive data class and enforce encryption-at-rest with a CMK + least-privilege reads. DynamoDB: aws dynamodb update-table --table-name <NAME> --sse-specification Enabled=true,SSEType=KMS ; RDS: restore an encrypted snapshot copy; scope reader roles: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <ARN> ."
+  },
+  {
+    "status": "FAIL",
+    "check_id": "DSPM-02",
+    "section": "DATA",
+    "resource": "customers-db",
+    "message": "Crown-jewel RDSInstance customers-db is publicly reachable | customers-db",
+    "severity": "HIGH",
+    "compliance": {
+      "PCI-DSS": "1.3.1",
+      "HIPAA": "164.312(a)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "SC-7"
+    },
+    "remediation_cmd": "Remove public network reachability from the crown-jewel datastore and place it in private subnets. RDS: aws rds modify-db-instance --db-instance-identifier <ID> --no-publicly-accessible --apply-immediately ; Redshift: aws redshift modify-cluster --cluster-identifier <ID> --no-publicly-accessible ; then deny 0.0.0.0/0 in its security group and scope its reader roles."
+  },
+  {
+    "status": "FAIL",
+    "check_id": "DSPM-01",
+    "section": "DATA",
+    "resource": "payments-ledger",
+    "message": "Crown-jewel DynamoDBTable (tag Compliance=PCI) holds sensitive data | payments-ledger",
+    "severity": "MEDIUM",
+    "compliance": {
+      "PCI-DSS": "3.4",
+      "HIPAA": "164.312(a)(2)(iv)",
+      "SOC2": "CC6.1",
+      "NIST": "SC-28"
+    },
+    "remediation_cmd": "Confirm this datastore is authorized to hold the tagged sensitive data class and enforce encryption-at-rest with a CMK + least-privilege reads. DynamoDB: aws dynamodb update-table --table-name <NAME> --sse-specification Enabled=true,SSEType=KMS ; RDS: restore an encrypted snapshot copy; scope reader roles: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <ARN> ."
+  },
+  {
+    "status": "FAIL",
+    "check_id": "THREAT-01",
+    "section": "THREAT",
+    "resource": "i-0app01server",
+    "message": "GuardDuty: CryptoCurrency:EC2/BitcoinTool.B (severity 8.0) on i-0app01server | i-0app01server",
+    "severity": "HIGH",
+    "compliance": {
+      "CIS": "4.15",
+      "PCI-DSS": "11.4",
+      "HIPAA": "164.312(b)",
+      "SOC2": "CC7.3",
+      "NIST": "SI-4"
+    },
+    "remediation_cmd": "Triage the GuardDuty finding, then isolate/rotate as needed: aws guardduty get-findings --detector-id <DETECTOR_ID> --finding-ids <FINDING_ID>; if confirmed, quarantine the resource and rotate exposed credentials. Do not archive without triage."
+  },
+  {
+    "status": "FAIL",
+    "check_id": "VPC-01",
+    "section": "VPC",
+    "resource": "sg-0admin",
+    "message": "Security group sg-0admin allows 0.0.0.0/0 to tcp/22 (SSH) | sg-0admin",
+    "severity": "HIGH",
+    "compliance": {
+      "CIS": "5.2",
+      "PCI-DSS": "1.3.2",
+      "HIPAA": "164.312(e)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "SC-7"
+    },
+    "remediation_cmd": "Revoke risky SG rule: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0"
+  },
+  {
+    "status": "FAIL",
+    "check_id": "IAM-02",
+    "section": "IAM",
+    "resource": "root",
+    "message": "Root account has an active access key | root",
+    "severity": "CRITICAL",
+    "compliance": {
+      "CIS": "1.4",
+      "PCI-DSS": "8.2.2",
+      "HIPAA": "164.312(a)(1)",
+      "SOC2": "CC6.1",
+      "NIST": "IA-2"
+    },
+    "remediation_cmd": "Delete root access keys: aws iam delete-access-key --access-key-id <KEY_ID>"
+  },
+  {
+    "status": "FAIL",
+    "check_id": "S3-05",
+    "section": "S3",
+    "resource": "public-assets",
+    "message": "Bucket public-assets is publicly readable | public-assets",
+    "severity": "MEDIUM",
+    "compliance": {
+      "CIS": "3.6",
+      "PCI-DSS": "10.2",
+      "HIPAA": "164.312(b)",
+      "SOC2": "CC7.2",
+      "NIST": "AU-2"
+    },
+    "remediation_cmd": "Enable access logging: aws s3api put-bucket-logging --bucket <BUCKET> --bucket-logging-status '{\"LoggingEnabled\":{\"TargetBucket\":\"<LOG_BUCKET>\",\"TargetPrefix\":\"s3-logs/\"}}'"
+  },
+  {
+    "status": "WARN",
+    "check_id": "EXPOSURE-02",
+    "section": "EXPOSURE",
+    "resource": "all-enis",
+    "message": "L7 enumeration DENIED/incomplete in eu-west-1 (UNDETERMINED)",
+    "severity": "LOW",
+    "compliance": {
+      "CIS": "5.2",
+      "PCI-DSS": "1.3.1",
+      "HIPAA": "164.312(e)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "SC-7"
+    },
+    "remediation_cmd": ""
+  },
+  {
+    "status": "WARN",
+    "check_id": "KMS-03",
+    "section": "KMS",
+    "resource": "cmk-legacy",
+    "message": "CMK cmk-legacy pending deletion in 7 days | cmk-legacy",
+    "severity": "LOW",
+    "compliance": {
+      "NIST": "SC-12",
+      "SOC2": "CC6.1",
+      "HIPAA": "164.312(a)(2)(iv)"
+    },
+    "remediation_cmd": ""
+  },
+  {
+    "status": "FAIL",
+    "check_id": "ATTACK-02",
+    "section": "DATA",
+    "resource": "i-0app01server",
+    "message": "FLAGSHIP ATTACK PATH: Internet -> exposed EC2 -> KEV CVE-2021-44228 -> role -> crown-jewel data customers-db. [ACTIVE THREAT - TOP priority] | i-0app01server",
+    "severity": "CRITICAL",
+    "compliance": {
+      "CIS": "5.2",
+      "PCI-DSS": "1.3.1",
+      "HIPAA": "164.312(a)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "SC-7"
+    },
+    "remediation_cmd": "Sever the flagship chain at ANY hop: patch the exploitable CVE, remove the public ingress (aws ec2 revoke-security-group-ingress --group-id <SG> --protocol tcp --port <PORT> --cidr 0.0.0.0/0), and scope the instance-profile role's data access (aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>). Fixing the choke-point node breaks the whole path."
+  },
+  {
+    "status": "FAIL",
+    "check_id": "CHOKEPOINT-01",
+    "section": "CORRELATE",
+    "resource": "prod-api-alb",
+    "message": "CHOKE POINT: fixing LoadBalancer prod-api-alb severs 2/3 path(s) | prod-api-alb",
+    "severity": "HIGH",
+    "compliance": {
+      "CIS": "5.2",
+      "PCI-DSS": "1.3.1",
+      "HIPAA": "164.312(a)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "CA-8"
+    },
+    "remediation_cmd": "Remediate this single node to sever multiple attack paths at once: for an over-privileged role, aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>; for an exposed host, patch the exploitable CVE or aws ec2 revoke-security-group-ingress ...; see the finding for the node kind and the count of paths/crown-jewels it severs."
+  },
+  {
+    "status": "FAIL",
+    "check_id": "CHOKEPOINT-01",
+    "section": "CORRELATE",
+    "resource": "prod-app-server-role",
+    "message": "CHOKE POINT: fixing IAMRole prod-app-server-role severs 2/3 path(s) | prod-app-server-role",
+    "severity": "HIGH",
+    "compliance": {
+      "CIS": "5.2",
+      "PCI-DSS": "1.3.1",
+      "HIPAA": "164.312(a)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "CA-8"
+    },
+    "remediation_cmd": "Remediate this single node to sever multiple attack paths at once: for an over-privileged role, aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>; for an exposed host, patch the exploitable CVE or aws ec2 revoke-security-group-ingress ...; see the finding for the node kind and the count of paths/crown-jewels it severs."
+  }
+]
