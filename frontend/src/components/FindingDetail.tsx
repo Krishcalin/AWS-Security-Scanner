@@ -14,9 +14,10 @@ function Label({ children }: { children: ReactNode }) {
 function Prose({ label, children }: { label: string; children: ReactNode }) {
   return <div><Label>{label}</Label><p className="text-sm text-ink2 leading-relaxed mt-1.5">{children}</p></div>
 }
-function ActionBtn({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+function ActionBtn({ icon, children, onClick, active }: { icon: ReactNode; children: ReactNode; onClick?: () => void; active?: boolean }) {
   return (
-    <button className="flex items-center gap-1.5 rounded-lg border border-line bg-panel px-3 py-2 text-xs font-semibold text-ink2 hover:border-accent/40 hover:text-ink transition-colors">
+    <button onClick={onClick} className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors"
+      style={{ borderColor: active ? 'var(--accent)' : 'var(--line)', background: active ? 'var(--accentdim)' : 'var(--panel)', color: active ? 'var(--accent)' : 'var(--ink2)' }}>
       {icon}{children}
     </button>
   )
@@ -35,7 +36,12 @@ function CopyLine({ text }: { text: string }) {
   )
 }
 
-export function FindingDetail({ e, onPath, onClose }: { e: FindingCatalogEntry; onPath: boolean; onClose: () => void }) {
+export function FindingDetail({ e, onPath, onClose, onWaive }: { e: FindingCatalogEntry; onPath: boolean; onClose: () => void; onWaive?: (checkId: string) => void }) {
+  const [panel, setPanel] = useState<'ticket' | 'waive' | 'iac' | null>(null)
+  const [ticket, setTicket] = useState<string | null>(null)
+  const [waived, setWaived] = useState<string | null>(null)
+  const [reason, setReason] = useState('')
+  const [expiry, setExpiry] = useState('30d')
   return (
     <div className="fixed inset-0 z-40">
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={onClose} />
@@ -102,10 +108,52 @@ export function FindingDetail({ e, onPath, onClose }: { e: FindingCatalogEntry; 
             </div>
           </div>
 
-          <div className="flex gap-2 flex-wrap border-t border-line pt-4">
-            <ActionBtn icon={<Ticket size={14} />}>Raise ticket</ActionBtn>
-            <ActionBtn icon={<ShieldOff size={14} />}>Waive</ActionBtn>
-            <ActionBtn icon={<FileCode2 size={14} />}>View IaC source</ActionBtn>
+          <div className="border-t border-line pt-4">
+            <div className="flex gap-2 flex-wrap">
+              <ActionBtn icon={<Ticket size={14} />} active={panel === 'ticket'} onClick={() => setPanel(panel === 'ticket' ? null : 'ticket')}>Raise ticket</ActionBtn>
+              <ActionBtn icon={<ShieldOff size={14} />} active={panel === 'waive'} onClick={() => setPanel(panel === 'waive' ? null : 'waive')}>Waive</ActionBtn>
+              <ActionBtn icon={<FileCode2 size={14} />} active={panel === 'iac'} onClick={() => setPanel(panel === 'iac' ? null : 'iac')}>View IaC source</ActionBtn>
+            </div>
+
+            {panel === 'ticket' && (
+              <div className="mt-3 rounded-xl border border-line p-4">
+                {ticket ? (
+                  <div className="text-sm text-ink2 flex items-center gap-2"><Check size={15} style={{ color: 'var(--low)' }} /> Created <b className="text-ink font-mono">{ticket}</b> in Jira · SecOps.</div>
+                ) : (
+                  <>
+                    <div className="text-xs font-semibold text-ink mb-1">Create a tracking ticket</div>
+                    <div className="text-xs text-ink2 mb-3">Destination <b>Jira · SecOps</b> (project SEC) · priority mapped from <b>{e.severity}</b>.</div>
+                    <button onClick={() => setTicket('SEC-' + Math.floor(1000 + Math.random() * 9000))} className="rounded-lg px-3 py-1.5 text-xs font-semibold text-white ow-grad">Create ticket</button>
+                  </>
+                )}
+              </div>
+            )}
+
+            {panel === 'waive' && (
+              <div className="mt-3 rounded-xl border border-line p-4">
+                {waived ? (
+                  <div className="text-sm text-ink2 flex items-center gap-2"><Check size={15} style={{ color: 'var(--low)' }} /> Waived {waived === 'never' ? 'with no expiry' : `for ${waived}`}. It stays scored and tracked.</div>
+                ) : (
+                  <div className="flex flex-col gap-2.5">
+                    <div className="text-xs font-semibold text-ink">Waive this finding (approver: you)</div>
+                    <input value={reason} onChange={(ev) => setReason(ev.target.value)} placeholder="Reason (required)" className="rounded-lg border border-line bg-panel px-3 py-1.5 text-sm text-ink placeholder:text-ink3 outline-none focus:border-accent/50" />
+                    <div className="flex items-center gap-2">
+                      <select value={expiry} onChange={(ev) => setExpiry(ev.target.value)} className="rounded-lg border border-line bg-panel px-2 py-1.5 text-sm text-ink">
+                        <option value="30d">30 days</option><option value="90d">90 days</option><option value="never">No expiry</option>
+                      </select>
+                      <button disabled={!reason.trim()} onClick={() => { setWaived(expiry); onWaive?.(e.check_id) }} className="rounded-lg px-3 py-1.5 text-xs font-semibold text-white ow-grad disabled:opacity-50">Waive</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {panel === 'iac' && (
+              <div className="mt-3 rounded-xl border border-line p-4 flex items-start gap-2 text-sm text-ink2">
+                <FileCode2 size={15} className="mt-0.5 shrink-0 text-ink3" />
+                <span>No IaC repository connected. Connect a Terraform / CloudFormation repo in <b className="text-ink">Settings → Integrations</b> to trace this finding to its source resource and get a diff. Until then, apply the remediation steps above.</span>
+              </div>
+            )}
           </div>
         </div>
       </aside>

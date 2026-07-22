@@ -53,6 +53,11 @@ export interface GraphStats {
   edge_kinds: Record<string, number>
 }
 
+// networkx node-link graph (SecurityGraph.to_dict) — the /graph endpoint
+export interface GNode { id: string; kind: string; [k: string]: unknown }
+export interface GEdge { source: string; target: string; kind: string; [k: string]: unknown }
+export interface GraphFull { directed: boolean; multigraph: boolean; nodes: GNode[]; edges: GEdge[] }
+
 export interface OrgOverview {
   accounts_scanned: number
   summary: StatusCount

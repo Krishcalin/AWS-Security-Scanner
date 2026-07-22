@@ -5,6 +5,11 @@ import { Overview } from './routes/Overview'
 import { AttackPaths } from './routes/AttackPaths'
 import { Findings } from './routes/Findings'
 import { CloudAccounts } from './routes/CloudAccounts'
+import { Inventory } from './routes/Inventory'
+import { Identity } from './routes/Identity'
+import { Compliance } from './routes/Compliance'
+import { Remediation } from './routes/Remediation'
+import { Reports } from './routes/Reports'
 import { Placeholder } from './routes/Placeholder'
 
 export default function App() {
@@ -16,11 +21,11 @@ export default function App() {
             <Route path="/" element={<Overview />} />
             <Route path="/attack-paths" element={<AttackPaths />} />
             <Route path="/findings" element={<Findings />} />
-            <Route path="/inventory" element={<Placeholder />} />
-            <Route path="/identity" element={<Placeholder />} />
-            <Route path="/compliance" element={<Placeholder />} />
-            <Route path="/remediation" element={<Placeholder />} />
-            <Route path="/reports" element={<Placeholder />} />
+            <Route path="/inventory" element={<Inventory />} />
+            <Route path="/identity" element={<Identity />} />
+            <Route path="/compliance" element={<Compliance />} />
+            <Route path="/remediation" element={<Remediation />} />
+            <Route path="/reports" element={<Reports />} />
             <Route path="/accounts" element={<CloudAccounts />} />
             <Route path="/settings" element={<Placeholder />} />
             <Route path="*" element={<Placeholder />} />

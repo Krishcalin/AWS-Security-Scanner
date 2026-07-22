@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react'
-import { Loader2, Inbox, TriangleAlert } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
+import { Loader2, Inbox, TriangleAlert, Copy, Check } from 'lucide-react'
 import { sevColor, gradeColor } from '../lib/format'
 
 export const CARD = 'rounded-2xl border border-line bg-panel shadow-sm'
@@ -77,6 +77,22 @@ export function GradeDial({ score, grade, size = 128 }: { score: number; grade: 
         <div className="font-mono font-extrabold leading-none" style={{ fontSize: size * 0.34, color }}>{grade}</div>
         <div className="font-mono text-ink3 mt-1 tabular-nums" style={{ fontSize: size * 0.1 }}>{score.toFixed(0)}/100</div>
       </div>
+    </div>
+  )
+}
+
+/** A copyable one-line code field. */
+export function CopyField({ text }: { text: string }) {
+  const [ok, setOk] = useState(false)
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-line px-3 py-2" style={{ background: 'var(--panel2)' }}>
+      <code className="font-mono text-xs text-ink2 flex-1 overflow-x-auto whitespace-nowrap">{text}</code>
+      <button
+        onClick={() => navigator.clipboard?.writeText(text).then(() => { setOk(true); setTimeout(() => setOk(false), 1200) })}
+        className="shrink-0 h-7 w-7 grid place-items-center rounded-md hover:bg-panel text-ink3 hover:text-ink"
+      >
+        {ok ? <Check size={14} style={{ color: 'var(--low)' }} /> : <Copy size={14} />}
+      </button>
     </div>
   )
 }

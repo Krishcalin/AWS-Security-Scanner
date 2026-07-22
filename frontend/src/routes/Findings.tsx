@@ -94,6 +94,7 @@ export function Findings() {
   const [onPathOnly, setOnPathOnly] = useState(false)
   const [group, setGroup] = useState<'none' | 'section' | 'severity'>('none')
   const [open, setOpen] = useState<FindingCatalogEntry | null>(null)
+  const [waived, setWaived] = useState<Set<string>>(new Set())
 
   if (loading) return <Loader />
   if (error) return <ErrorNote msg={error} />
@@ -106,6 +107,7 @@ export function Findings() {
 
   const ql = q.trim().toLowerCase()
   const filtered = data.filter((e) => {
+    if (waived.has(e.check_id)) return false
     if (tab !== 'all' && sourceOf(e) !== tab) return false
     if (sev.size && !sev.has(e.severity)) return false
     if (onPathOnly && !isOnPath(e)) return false
@@ -189,7 +191,7 @@ export function Findings() {
         </div>
       )}
 
-      {open && <FindingDetail e={open} onPath={isOnPath(open)} onClose={() => setOpen(null)} />}
+      {open && <FindingDetail e={open} onPath={isOnPath(open)} onClose={() => setOpen(null)} onWaive={(cid) => { setWaived((s) => new Set(s).add(cid)); setOpen(null) }} />}
     </div>
   )
 }
