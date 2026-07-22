@@ -1,0 +1,95 @@
+{
+  "connectors": [
+    {
+      "connector_id": "conn-slack01",
+      "type": "slack",
+      "name": "Slack — #cloudsec",
+      "enabled": true,
+      "config": { "mode": "webhook" },
+      "secret_configured": true,
+      "created_by": "you",
+      "last_test_at": 1752900000,
+      "last_test_status": "ok",
+      "last_test_detail": "reachable · credentials valid",
+      "created_at": 1752800000,
+      "updated_at": 1752900000
+    },
+    {
+      "connector_id": "conn-pd01",
+      "type": "pagerduty",
+      "name": "PagerDuty — Cloud On-Call",
+      "enabled": true,
+      "config": { "region": "us" },
+      "secret_configured": true,
+      "created_by": "you",
+      "last_test_at": 1752900500,
+      "last_test_status": "ok",
+      "last_test_detail": "reachable · credentials valid",
+      "created_at": 1752810000,
+      "updated_at": 1752900500
+    },
+    {
+      "connector_id": "conn-jira01",
+      "type": "jira",
+      "name": "Jira — SEC project",
+      "enabled": false,
+      "config": { "site": "https://acme.atlassian.net", "email": "cnapp-bot@acme.com", "project_key": "SEC", "issue_type": "Task" },
+      "secret_configured": true,
+      "created_by": "you",
+      "last_test_at": null,
+      "last_test_status": null,
+      "last_test_detail": null,
+      "created_at": 1752820000,
+      "updated_at": 1752820000
+    }
+  ],
+  "rules": [
+    {
+      "id": 1, "connector_id": "conn-pd01", "name": "Critical attack-path page", "enabled": true,
+      "priority": 10, "min_severity": "CRITICAL", "severities": [], "sections": [],
+      "check_globs": [], "not_check_globs": [], "account_globs": [], "on_attack_path": true,
+      "statuses": ["FAIL"], "frameworks": [], "controls": [], "min_count": 0, "min_distinct": 0,
+      "dedup_mode": "notify_once", "throttle_seconds": 0, "renotify_on_escalation": true,
+      "notify_on_resolve": true, "stop_on_match": false, "connector_ids": ["conn-pd01"],
+      "tags": [], "message_template": null, "severity_override": null
+    },
+    {
+      "id": 2, "connector_id": "conn-slack01", "name": "High+ to #cloudsec", "enabled": true,
+      "priority": 30, "min_severity": "HIGH", "severities": [], "sections": [],
+      "check_globs": [], "not_check_globs": [], "account_globs": [], "on_attack_path": null,
+      "statuses": ["FAIL"], "frameworks": [], "controls": [], "min_count": 0, "min_distinct": 0,
+      "dedup_mode": "notify_once", "throttle_seconds": 0, "renotify_on_escalation": true,
+      "notify_on_resolve": false, "stop_on_match": false, "connector_ids": ["conn-slack01"],
+      "tags": [], "message_template": null, "severity_override": null
+    },
+    {
+      "id": 3, "connector_id": "conn-jira01", "name": "S3 + IAM high findings", "enabled": true,
+      "priority": 40, "min_severity": "HIGH", "severities": [], "sections": ["S3", "IAM"],
+      "check_globs": ["S3-*", "IAMPE-*"], "not_check_globs": [], "account_globs": [], "on_attack_path": null,
+      "statuses": ["FAIL"], "frameworks": [], "controls": [], "min_count": 0, "min_distinct": 0,
+      "dedup_mode": "renotify", "throttle_seconds": 604800, "renotify_on_escalation": true,
+      "notify_on_resolve": true, "stop_on_match": false, "connector_ids": ["conn-jira01"],
+      "tags": [], "message_template": null, "severity_override": null
+    }
+  ],
+  "deliveries": [
+    {
+      "id": 3, "connector_id": "conn-pd01", "dedup_key": "a1b2c3d4", "rule_id": 1,
+      "account": "123456789012", "check_id": "ATTACK-01", "state": "open", "kind": "new",
+      "status": "sent", "http_status": 202, "error": null, "external_ref": "overwatch:123456789012:ATTACK-01",
+      "created_at": 1752900800, "sent_at": 1752900800
+    },
+    {
+      "id": 2, "connector_id": "conn-slack01", "dedup_key": "e5f6a7b8", "rule_id": 2,
+      "account": "123456789012", "check_id": "S3-01", "state": "open", "kind": "new",
+      "status": "sent", "http_status": 200, "error": null, "external_ref": "C0CLOUDSEC:1752900700.000200",
+      "created_at": 1752900700, "sent_at": 1752900700
+    },
+    {
+      "id": 1, "connector_id": "conn-slack01", "dedup_key": "c9d0e1f2", "rule_id": 2,
+      "account": "123456789012", "check_id": "IAMPE-02", "state": "open", "kind": "new",
+      "status": "failed", "http_status": 404, "error": "channel_not_found", "external_ref": null,
+      "created_at": 1752900600, "sent_at": null
+    }
+  ]
+}

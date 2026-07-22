@@ -41,7 +41,10 @@ def _runner(session, spec):
                                  attack_paths=[], choke_points=[],
                                  results=[_result("FAIL", "S3-01", "HIGH"),
                                           _result("FAIL", "S3-03", "MEDIUM"),
-                                          _result("PASS", "S3-02", "")])
+                                          _result("PASS", "S3-02", "")],
+                                 # the real AWSLiveScanner always has this; serialize_scanner
+                                 # projects it into the payload's finding_catalog.
+                                 _build_finding_catalog=lambda: [])
 
 
 def _svc(**over):

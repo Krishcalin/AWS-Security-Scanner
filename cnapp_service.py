@@ -22,6 +22,7 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol
 
+import cnapp_connectors as cc
 import cnapp_onboarding
 import cnapp_validate
 from cnapp_validate import ConnectionHealth
@@ -118,6 +119,8 @@ class PlatformService:
                  scan_runner: Callable = default_scan_runner,
                  id_gen: Callable[[], str] = cnapp_onboarding.default_id_gen,
                  job_id_gen: Callable[[], str] = lambda: "job-" + secrets.token_hex(8),
+                 connectors=None, http_post: Optional[Callable] = None, hub_base: str = "",
+                 connector_id_gen: Callable[[], str] = lambda: "conn-" + secrets.token_hex(6),
                  clock: Callable[[], int] = None):
         import time
         self.registry = registry
@@ -133,7 +136,20 @@ class PlatformService:
         self.scan_runner = scan_runner
         self.id_gen = id_gen
         self.job_id_gen = job_id_gen
+        # ── connector framework (Phase-2 workflow plane) ──────────────────────
+        self.connectors = connectors            # a cnapp_connectors.ConnectorStore (or None)
+        self.hub_base = hub_base
+        self.connector_id_gen = connector_id_gen
+        self._http_post = http_post             # None -> lazy urllib default (see http_post)
         self.clock = clock or (lambda: int(time.time()))
+
+    @property
+    def http_post(self):
+        """The outbound seam. Lazily bound to the urllib impl (with the SSRF guard)
+        so tests can inject a fake and never import it."""
+        if self._http_post is None:
+            self._http_post = cc.default_http_post
+        return self._http_post
 
     def _role_arn(self, account_id: str) -> str:
         return f"arn:aws:iam::{account_id}:role/{ROLE_NAME}"
@@ -308,6 +324,166 @@ class PlatformService:
                 out.append(tagged)
         out.sort(key=lambda e: (order.get(e.get("severity", ""), 4), e.get("check_id", "")))
         return out
+
+
+    # ── connector framework (Phase-2 workflow plane) ────────────────────────────
+    def _require_connectors(self):
+        if self.connectors is None:
+            raise RuntimeError("connector store not configured on this service")
+        return self.connectors
+
+    def create_connector(self, *, type: str, name: str, config: dict,
+                         secret: Optional[str] = None, created_by: str = "") -> dict:
+        """Create a connector. The one-time plaintext ``secret`` is handed to the
+        injected secret_writer and only the returned ref is persisted; the response
+        is masked (secret_configured bool). enabled defaults to 0 (safe by default)."""
+        store = self._require_connectors()
+        now = self.clock()
+        cid = self.connector_id_gen()
+        ref = cc.store_secret(cid, secret, secret_writer=self.secret_writer) if secret else None
+        store.upsert_connector(cid, now_epoch=now, type=type, name=name, config=config or {},
+                               secret_ref=ref, enabled=False, created_by=created_by)
+        return cc.ConnectorStore._mask_connector(store.get_connector(cid))
+
+    def list_connectors(self) -> List[dict]:
+        store = self._require_connectors()
+        return [cc.ConnectorStore._mask_connector(c) for c in store.list_connectors()]
+
+    def get_connector(self, connector_id: str) -> Optional[dict]:
+        c = self._require_connectors().get_connector(connector_id)
+        return cc.ConnectorStore._mask_connector(c) if c else None
+
+    def update_connector(self, connector_id: str, *, name: Optional[str] = None,
+                        config: Optional[dict] = None) -> dict:
+        """Partial update of NON-secret fields only. Never accepts/rotates the secret."""
+        store = self._require_connectors()
+        if not store.get_connector(connector_id):
+            raise KeyError(f"connector {connector_id} not found")
+        store.upsert_connector(connector_id, now_epoch=self.clock(), name=name, config=config)
+        return cc.ConnectorStore._mask_connector(store.get_connector(connector_id))
+
+    def set_connector_enabled(self, connector_id: str, enabled: bool) -> dict:
+        store = self._require_connectors()
+        if not store.get_connector(connector_id):
+            raise KeyError(f"connector {connector_id} not found")
+        store.set_enabled(connector_id, enabled, self.clock())
+        return cc.ConnectorStore._mask_connector(store.get_connector(connector_id))
+
+    def rotate_connector_secret(self, connector_id: str, secret: str) -> dict:
+        store = self._require_connectors()
+        if not store.get_connector(connector_id):
+            raise KeyError(f"connector {connector_id} not found")
+        ref = cc.store_secret(connector_id, secret, secret_writer=self.secret_writer)
+        store.rotate_secret(connector_id, ref, self.clock())
+        return cc.ConnectorStore._mask_connector(store.get_connector(connector_id))
+
+    def delete_connector(self, connector_id: str) -> None:
+        self._require_connectors().delete_connector(connector_id)
+
+    def test_connector(self, connector_id: str) -> dict:
+        """Send the one harmless test through the injected http_post; record the
+        outcome. Surfaces the raw operator error (invalid_auth/channel_not_found/…)
+        but never a secret."""
+        store = self._require_connectors()
+        c = store.get_connector(connector_id)
+        if not c:
+            raise KeyError(f"connector {connector_id} not found")
+        now = self.clock()
+        res = cc.test_ping(c, http_post=self.http_post, secret_reader=self.secret_reader,
+                           now_epoch=now)
+        store.record_test(connector_id, "ok" if res.ok else "failed",
+                          res.detail or res.error or "", now)
+        return {"ok": res.ok, "http_status": res.http_status, "detail": res.detail,
+                "error": res.error, "external_ref": res.external_ref}
+
+    # ── rules ───────────────────────────────────────────────────────────────────
+    def list_rules(self, connector_id: str) -> List[dict]:
+        return [_rule_dict(r) for r in self._require_connectors().list_rules(connector_id)]
+
+    def create_rule(self, connector_id: str, spec: dict, *, created_by: str = "") -> dict:
+        store = self._require_connectors()
+        if not store.get_connector(connector_id):
+            raise KeyError(f"connector {connector_id} not found")
+        spec = dict(spec or {}); spec["created_by"] = created_by
+        rid = store.upsert_rule(connector_id, now_epoch=self.clock(), spec=spec)
+        return _rule_dict(store.get_rule(rid))
+
+    def update_rule(self, connector_id: str, rule_id: int, spec: dict) -> dict:
+        store = self._require_connectors()
+        if not store.get_rule(rule_id):
+            raise KeyError(f"rule {rule_id} not found")
+        store.upsert_rule(connector_id, now_epoch=self.clock(), rule_id=rule_id, spec=spec or {})
+        return _rule_dict(store.get_rule(rule_id))
+
+    def delete_rule(self, connector_id: str, rule_id: int) -> None:
+        self._require_connectors().delete_rule(connector_id, rule_id)
+
+    # ── notify + preview + deliveries ───────────────────────────────────────────
+    def _enriched_findings(self, account_id: str):
+        """Latest catalog → EnrichedFinding[], plus real scan coverage (every check
+        that emitted any result) and the on-attack-path check-id overlay."""
+        p = self.results.get_latest(account_id) or {}
+        onpath = set()
+        for ap in p.get("attack_paths", []):
+            for df in ap.get("driving_findings", []):
+                onpath.add(str(df).split(":")[0])
+        findings = [cc.to_finding(e, account_id, e.get("check_id") in onpath)
+                    for e in p.get("finding_catalog", [])]
+        coverage = {(account_id, r.get("check_id")) for r in p.get("results", [])
+                    if r.get("check_id")}
+        coverage |= {(account_id, f.check_id) for f in findings}
+        return findings, coverage
+
+    def preview_rules(self, account_id: str) -> List[dict]:
+        """Dry-run: which findings WOULD fire which connectors — zero outbound HTTP,
+        zero AWS contact. The safe way to author rules."""
+        store = self._require_connectors()
+        connectors = {c.connector_id: c for c in store.list_connectors()}
+        rules = store.list_rules(enabled_only=True)
+        findings, _ = self._enriched_findings(account_id)
+        out = []
+        for f in findings:
+            for a in cc.match_finding(rules, f, connectors):
+                c = connectors.get(a.connector_id)
+                out.append({"connector_id": a.connector_id,
+                            "connector_name": c.name if c else a.connector_id,
+                            "rule_id": a.rule_id, "check_id": a.check_id,
+                            "account": a.account, "severity": a.severity})
+        return out
+
+    def notify_account(self, account_id: str) -> dict:
+        """Fire the rule engine over the account's latest scan → real outbound sends
+        to the operator's tools (admin). Idempotent per (connector, finding)."""
+        store = self._require_connectors()
+        findings, coverage = self._enriched_findings(account_id)
+        res = cc.run_rules(store, findings, coverage, http_post=self.http_post,
+                           secret_reader=self.secret_reader, now_epoch=self.clock(),
+                           hub_base=self.hub_base)
+        return {"sent": res.sent, "suppressed": res.suppressed, "resolved": res.resolved,
+                "failed": res.failed, "digested": res.digested}
+
+    def list_deliveries(self, connector_id: Optional[str] = None, *,
+                       account: Optional[str] = None, status: Optional[str] = None) -> List[dict]:
+        return self._require_connectors().list_deliveries(connector_id, account=account,
+                                                          status=status)
+
+
+def _rule_dict(r) -> dict:
+    """Serialize a ConnectorRule for the API (no secrets involved — rules are config)."""
+    if r is None:
+        return {}
+    return {
+        "id": r.id, "connector_id": r.connector_id, "name": r.name, "enabled": r.enabled,
+        "priority": r.priority, "min_severity": r.min_severity, "severities": r.severities,
+        "sections": r.sections, "check_globs": r.check_globs, "not_check_globs": r.not_check_globs,
+        "account_globs": r.account_globs, "on_attack_path": r.on_attack_path,
+        "statuses": r.statuses, "frameworks": r.frameworks, "controls": r.controls,
+        "min_count": r.min_count, "min_distinct": r.min_distinct, "dedup_mode": r.dedup_mode,
+        "throttle_seconds": r.throttle_seconds, "renotify_on_escalation": r.renotify_on_escalation,
+        "notify_on_resolve": r.notify_on_resolve, "stop_on_match": r.stop_on_match,
+        "connector_ids": r.connector_ids, "tags": r.tags, "message_template": r.message_template,
+        "severity_override": r.severity_override, "created_by": r.created_by,
+    }
 
 
 def aggregate_overview(payloads: List[dict]) -> dict:

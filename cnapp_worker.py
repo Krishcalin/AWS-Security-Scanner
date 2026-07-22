@@ -104,6 +104,17 @@ def run_scan_job(svc, job: dict, *, spec: ScanSpec = None) -> dict:
     except Exception as e:                            # noqa: BLE001
         return fail(f"result persistence error: {type(e).__name__}: {e}")
 
+    # 5. best-effort: fire enabled connectors over the fresh results. A dead/slow
+    #    receiver or any notify error must NEVER fail a completed scan job, so this
+    #    is wrapped + swallowed. A no-op when no connector store / rules are wired.
+    if getattr(svc, "connectors", None) is not None:
+        try:
+            svc.notify_account(account_id)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:                             # noqa: BLE001
+            pass
+
     end = svc.clock()
     svc.registry.record_scan_job(account_id, job_id, "done", now_epoch=end,
                                  finished_at=end, findings_count=findings)

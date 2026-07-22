@@ -71,6 +71,28 @@ def create_app(service, *, current_role=lambda: ""):
         account_ids: Optional[List[str]] = None
         all: bool = False
 
+    class ConnectorReq(BaseModel):
+        type: str = Field(pattern=r"^(jira|slack|pagerduty|splunk|webhook)$")
+        name: str
+        config: dict = Field(default_factory=dict)
+        secret: Optional[str] = None       # one-time plaintext; stored ONLY as a ref
+
+    class ConnectorUpdateReq(BaseModel):
+        name: Optional[str] = None
+        config: Optional[dict] = None       # NON-secret fields only
+
+    class EnableReq(BaseModel):
+        enabled: bool
+
+    class SecretReq(BaseModel):
+        secret: str
+
+    class RuleReq(BaseModel):
+        spec: dict = Field(default_factory=dict)
+
+    class PreviewReq(BaseModel):
+        account_id: str
+
     # ── onboarding / validation (admin, private control plane) ────────────────
     @app.post("/accounts", status_code=201, dependencies=[Depends(require("admin"))])
     def onboard(body: OnboardReq):
@@ -146,6 +168,108 @@ def create_app(service, *, current_role=lambda: ""):
     @app.get("/org/findings", dependencies=[Depends(require("viewer"))])
     def org_findings():
         return service.org_findings()
+
+    # ── connectors (admin mutate, viewer read) ────────────────────────────────
+    # The connector control plane wields outbound HTTP + operator secrets, so every
+    # mutation is admin; reads are viewer and NEVER return a secret (masked shape).
+    @app.post("/connectors", status_code=201, dependencies=[Depends(require("admin"))])
+    def create_connector(body: ConnectorReq, role: str = Depends(current_role)):
+        try:
+            return service.create_connector(type=body.type, name=body.name,
+                                            config=body.config, secret=body.secret,
+                                            created_by=role)
+        except (ValueError, RuntimeError) as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.get("/connectors", dependencies=[Depends(require("viewer"))])
+    def list_connectors():
+        return service.list_connectors()
+
+    @app.get("/connectors/{connector_id}", dependencies=[Depends(require("viewer"))])
+    def get_connector(connector_id: str):
+        c = service.get_connector(connector_id)
+        if not c:
+            raise HTTPException(status_code=404, detail="connector not found")
+        return c
+
+    @app.put("/connectors/{connector_id}", dependencies=[Depends(require("admin"))])
+    def update_connector(connector_id: str, body: ConnectorUpdateReq):
+        try:
+            return service.update_connector(connector_id, name=body.name, config=body.config)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+    @app.post("/connectors/{connector_id}/enable", dependencies=[Depends(require("admin"))])
+    def enable_connector(connector_id: str, body: EnableReq):
+        try:
+            return service.set_connector_enabled(connector_id, body.enabled)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+    @app.post("/connectors/{connector_id}/rotate-secret", dependencies=[Depends(require("admin"))])
+    def rotate_secret(connector_id: str, body: SecretReq):
+        try:
+            return service.rotate_connector_secret(connector_id, body.secret)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/connectors/{connector_id}/test", dependencies=[Depends(require("admin"))])
+    def test_connector(connector_id: str):
+        try:
+            return service.test_connector(connector_id)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+    @app.delete("/connectors/{connector_id}", status_code=204,
+                dependencies=[Depends(require("admin"))])
+    def delete_connector(connector_id: str):
+        service.delete_connector(connector_id)
+
+    # ── rules (admin mutate, viewer read) ─────────────────────────────────────
+    @app.post("/connectors/rules/preview", dependencies=[Depends(require("admin"))])
+    def preview_rules(body: PreviewReq):
+        return service.preview_rules(body.account_id)
+
+    @app.get("/connectors/{connector_id}/rules", dependencies=[Depends(require("viewer"))])
+    def list_rules(connector_id: str):
+        return service.list_rules(connector_id)
+
+    @app.post("/connectors/{connector_id}/rules", status_code=201,
+              dependencies=[Depends(require("admin"))])
+    def create_rule(connector_id: str, body: RuleReq, role: str = Depends(current_role)):
+        try:
+            return service.create_rule(connector_id, body.spec, created_by=role)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+    @app.put("/connectors/{connector_id}/rules/{rule_id}",
+             dependencies=[Depends(require("admin"))])
+    def update_rule(connector_id: str, rule_id: int, body: RuleReq):
+        try:
+            return service.update_rule(connector_id, rule_id, body.spec)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+    @app.delete("/connectors/{connector_id}/rules/{rule_id}", status_code=204,
+                dependencies=[Depends(require("admin"))])
+    def delete_rule(connector_id: str, rule_id: int):
+        service.delete_rule(connector_id, rule_id)
+
+    # ── notify + delivery audit ───────────────────────────────────────────────
+    @app.post("/accounts/{account_id}/notify", dependencies=[Depends(require("admin"))])
+    def notify_account(account_id: str):
+        return service.notify_account(account_id)
+
+    @app.get("/connectors/{connector_id}/deliveries", dependencies=[Depends(require("viewer"))])
+    def deliveries(connector_id: str, account: Optional[str] = None,
+                   status: Optional[str] = None):
+        return service.list_deliveries(connector_id, account=account, status=status)
+
+    @app.get("/notifications", dependencies=[Depends(require("viewer"))])
+    def notifications(account: Optional[str] = None, status: Optional[str] = None):
+        return service.list_deliveries(None, account=account, status=status)
 
     return app
 

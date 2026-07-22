@@ -415,11 +415,27 @@ ViewOnlyAccess** (read-only of configuration/IAM — never workload data).
 | `cnapp_service.py` | `PlatformService` facade + `serialize_scanner` + org rollup |
 | `cnapp_worker.py` | Async scan-job execution (traps engine exit, pre-validates creds, TOCTOU re-check) |
 | `cnapp_api.py` | FastAPI routes + viewer/admin RBAC (fail-closed), guarded import |
+| `cnapp_connectors.py` | **Connector framework** — route findings to Jira / Slack / PagerDuty / Splunk / webhook (pure renderers + injected `http_post` seam + rules engine + idempotent delivery ledger) |
 
 **HTTP surface** (all delegate to `PlatformService`; admin routes stay on the private
 hub control plane): `POST /accounts` (onboard → launch URL), `POST /accounts/{id}/validate`,
 `GET /accounts`, `POST /scans`, `GET /scans/{job_id}`,
-`GET /accounts/{id}/summary|issues|findings|paths|graph`, `GET /org/overview`, `GET /org/findings`.
+`GET /accounts/{id}/summary|issues|findings|paths|graph`, `GET /org/overview`, `GET /org/findings`;
+**connectors** — `POST/GET /connectors`, `PUT/DELETE /connectors/{id}`,
+`POST /connectors/{id}/{enable,rotate-secret,test}`, `.../rules` CRUD,
+`POST /connectors/rules/preview` (dry-run), `POST /accounts/{id}/notify`,
+`GET /connectors/{id}/deliveries`, `GET /notifications`.
+
+**Connectors — notify your own tools (agentless, read-only on targets).** OverWatch can
+route findings to the **operator's own** Jira Cloud, Slack, PagerDuty (Events v2), Splunk
+HEC, or a signed generic webhook, under a rules engine (severity floor / section / check
+glob / account glob / on-attack-path / framework). It makes **no** AWS call against a
+scanned account — the only outbound is HTTP to the operator's endpoints. Every credential is
+stored **only as a `secretsmanager://`/`ssm://` reference** (never plaintext, never returned
+over the API); connectors are **admin-only, disabled by default**, and delivery is
+**idempotent** (a re-scan never re-sends an unchanged finding, and a failed send is retried).
+Configured from the console **Settings → Integrations** screen (add/test/enable, per-connector
+routing rules with a dry-run preview, and a deliveries audit log).
 
 **Shared Postgres state.** Opening the state store with a `postgresql://` URL runs
 the whole state plane (finding lifecycle/drift/waivers + the account registry) on a
@@ -446,9 +462,11 @@ cd frontend && npm install && npm run dev     # http://localhost:5173  (sample d
 ```
 
 > Status: backend + onboarding + validation + registry + scan orchestration +
-> **live Postgres state** + the **web console** (Phase 1: Overview / Attack Paths /
-> Findings / Cloud Accounts + onboarding wizard) shipped. Remaining: a connection pool
-> and the rest of the console (Inventory / Identity / Compliance / Remediation / Reports).
+> **live Postgres state** + the **web console** (Overview / Attack Paths / Findings /
+> Cloud Accounts + onboarding wizard, plus Inventory / Identity / Compliance / Remediation /
+> Reports) + the **connector framework** (Phase 2: Jira / Slack / PagerDuty / Splunk /
+> webhook + Settings screen) shipped. Remaining: a connection pool; broader compliance
+> frameworks + CTEM/GRC scheduling.
 
 ---
 

@@ -371,6 +371,59 @@ data terminals / true choke points; light + dark themes). Five screens, one desi
 - **Remaining console screens** (placeholder routes today): Inventory · Identity (CIEM) ·
   Compliance · Remediation · Reports.
 
+### CNAPP Phase 2 (workflow plane) — Connector Framework (`cnapp_connectors.py`)
+
+Routes findings from a scan to the **operator's OWN tools** — Jira Cloud, Slack, PagerDuty
+(Events v2), Splunk HEC, or a signed generic webhook — under a rules engine. The "do
+something about it" layer on the read-only scanner. **Read-only-on-targets is preserved:**
+a connector makes NO AWS call against any scanned account; the only outbound is HTTP to the
+operator's endpoints. Scoped by a scoping-research workflow (exact API shapes) + built +
+adversarially verified (a read-only 6-lens hunt confirmed **8 defects**, all fixed +
+regression-tested).
+
+- **Pure, offline-testable core** — `render_jira/slack/pagerduty/splunk/webhook` (no secret,
+  no `now()`, no http; Jira description is **ADF** not a string; Slack always carries a
+  top-level `text` fallback + Block-Kit limits; PagerDuty severity is the lowercase enum;
+  webhook envelope is **serialized ONCE** to minified sorted bytes that are both signed AND
+  posted) → `request_for` (builds the auth header from the transient secret) →
+  `interpret_response` (per-type success/error decode, incl. the **Slack 200-but-`ok:false`**
+  trap). The rules engine — `rule_matches` (AND across groups, OR within; `not_check_globs`
+  veto; `on_attack_path` tri-state; **`severities` allowlist overrides the min_severity
+  floor**), `match_finding` (priority order, fan-out, collapse per `(connector, identity)`),
+  `plan` (dedup/throttle state machine: new / **retry-a-failed-delivery** / reopened /
+  escalated / reminder / suppressed), `resolve_stale` (coverage-gated auto-resolve) — is
+  deterministic over its inputs.
+- **Injected seams** — `http_post` (the SOLE outbound seam; `default_http_post` over urllib
+  enforces the **SSRF guard**: https-only, blocks 169.254.169.254/16 IMDS, no cross-host 3xx;
+  carries a `method` so the harmless Jira test can `GET /myself`) + `secret_reader` +
+  `secret_writer` + an injected `now_epoch`. Tests pass a fake `http_post` and never touch a
+  socket.
+- **Security invariants (load-bearing)** — the operator secret (Jira token / Slack bot token
+  or webhook URL / PagerDuty routing key / Splunk HEC token / webhook signing secret) is
+  stored **ONLY as a `secretsmanager://`/`ssm://` ref** (`store_secret`, min-8-char),
+  resolved to plaintext only transiently inside `dispatch`, **never** persisted (errors
+  `_scrub`bed of any secret substring — no length gate), **never** returned over the API
+  (`_mask_connector` → `secret_configured` bool). Admin-only mutation, viewer read,
+  **fail-closed**; connectors default `enabled=0`; `dispatch` is a hard no-op unless enabled.
+  **Idempotent delivery**: `UNIQUE(connector_id, dedup_key)` + claim-then-send; `dedup_key =
+  sha1(connector_id | account|check_id)` (NOT rule-scoped, so a change of winning rule never
+  re-sends). `run_rules` orchestrates match → plan → claim/bump → dispatch → mark; the worker
+  fires it best-effort after a scan (a notify failure never fails a `done` job).
+- **Persistence** — `ConnectorStore` over `cnapp_backend.Backend` (dual-dialect), tables
+  `connectors` / `connector_rules` / `notification_log`; `SCHEMA_VERSION` **2→3** (additive
+  `IF NOT EXISTS` replay). `delete_connector` is atomic and clears the FK-referencing ledger
+  rows first.
+- **API** (`cnapp_api.py`) — admin: `POST /connectors`, `PUT /connectors/{id}`,
+  `POST /connectors/{id}/{enable,rotate-secret,test}`, `DELETE`, rules CRUD,
+  `POST /connectors/rules/preview` (dry-run, zero outbound), `POST /accounts/{id}/notify`;
+  viewer: `GET /connectors[/{id}][/rules|/deliveries]`, `GET /notifications`.
+- **Console** — the **Settings → Integrations** screen (`frontend/src/routes/Settings.tsx`):
+  connectors table (type badge · enabled toggle · secret-set pill · last-test), per-type
+  add/edit modal with a **write-only** secret field, Test/Rotate/Delete, a per-connector
+  rules sub-panel with a **dry-run Preview**, and a **Deliveries** audit tab. Interactive
+  offline via a sample-mode in-memory store (`public/sample/connectors.json`). Preview/Send-now
+  are account-scoped (disabled in org scope). No console response ever carries a secret.
+
 ### CNAPP Phase 7 additions (v2.8.0) — remediation + code-to-cloud ("close the loop")
 
 - **Remediation engine (`aws_remediate.py`, pure)** — `build_plan(...)` REUSES

@@ -34,7 +34,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-SCHEMA_VERSION = 2   # v2: + onboarding plane (accounts, scan_jobs, connection_health)
+SCHEMA_VERSION = 3   # v3: + connector framework (connectors, connector_rules, notification_log)
 KEY_VERSION = 1
 
 # Caller-injected scan timestamp (one per run). epoch = arithmetic column,
@@ -163,6 +163,51 @@ CREATE TABLE IF NOT EXISTS connection_health(
   last_validated_epoch INTEGER NOT NULL, last_validated_iso TEXT NOT NULL, next_due_epoch INTEGER NOT NULL,
   PRIMARY KEY(account, role_arn));
 CREATE INDEX IF NOT EXISTS ix_conn_due ON connection_health(next_due_epoch);
+
+-- ── connector framework (Phase-2 workflow plane): outbound notifications to the ──
+-- OPERATOR'S OWN tools (Jira/Slack/PagerDuty/Splunk/webhook). Metadata ONLY —
+-- connector settings + a secret REFERENCE (never plaintext) + a delivery audit
+-- log. Makes NO AWS call against any scanned account (read-only-on-targets holds).
+-- Managed by cnapp_connectors.ConnectorStore. BIGINT twins in POSTGRES_DDL.
+CREATE TABLE IF NOT EXISTS connectors(
+  connector_id TEXT PRIMARY KEY,
+  type TEXT NOT NULL CHECK(type IN ('jira','slack','pagerduty','splunk','webhook')),
+  name TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  config_json TEXT NOT NULL DEFAULT '{}',
+  secret_ref TEXT,
+  created_by TEXT,
+  last_test_at INTEGER, last_test_status TEXT, last_test_detail TEXT,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_conn_name ON connectors(name);
+
+CREATE TABLE IF NOT EXISTS connector_rules(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  connector_id TEXT NOT NULL REFERENCES connectors(connector_id) ON DELETE CASCADE,
+  name TEXT, enabled INTEGER NOT NULL DEFAULT 1, priority INTEGER NOT NULL DEFAULT 100,
+  min_severity TEXT NOT NULL DEFAULT 'HIGH' CHECK(min_severity IN ('CRITICAL','HIGH','MEDIUM','LOW','INFO')),
+  check_glob TEXT, section TEXT, account_glob TEXT NOT NULL DEFAULT '*',
+  on_attack_path INTEGER, status_filter TEXT NOT NULL DEFAULT 'FAIL',
+  dedup_window_sec INTEGER, options_json TEXT NOT NULL DEFAULT '{}',
+  created_by TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_rule_conn ON connector_rules(connector_id, enabled);
+
+CREATE TABLE IF NOT EXISTS notification_log(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  connector_id TEXT NOT NULL REFERENCES connectors(connector_id),
+  dedup_key TEXT NOT NULL, rule_id INTEGER, account TEXT NOT NULL, check_id TEXT,
+  finding_key TEXT,
+  state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open','resolved')),
+  kind TEXT, fingerprint TEXT,
+  first_notified_epoch INTEGER, last_notified_epoch INTEGER,
+  notify_count INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','failed','skipped')),
+  attempts INTEGER NOT NULL DEFAULT 0, http_status INTEGER, error TEXT, external_ref TEXT,
+  created_at INTEGER NOT NULL, sent_at INTEGER);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_notify_dedup ON notification_log(connector_id, dedup_key);
+CREATE INDEX IF NOT EXISTS ix_notify_status ON notification_log(connector_id, status);
+CREATE INDEX IF NOT EXISTS ix_notify_acct ON notification_log(account);
+CREATE INDEX IF NOT EXISTS ix_notify_created ON notification_log(created_at);
 """
 
 
