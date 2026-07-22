@@ -1,0 +1,88 @@
+[
+  {
+    "check_id": "IAM-08",
+    "section": "IAM",
+    "severity": "MEDIUM",
+    "status": "FAIL",
+    "compliance": {
+      "CIS": "1.12",
+      "PCI-DSS": "8.2.6",
+      "HIPAA": "164.312(a)(2)(i)",
+      "SOC2": "CC6.1",
+      "NIST": "AC-2(3)"
+    },
+    "remediation_cmd": "Disable credentials unused for 45+ days: aws iam update-access-key --access-key-id <KEY_ID> --status Inactive --user-name <USER> (and remove console access if the password is unused)",
+    "risk": "This check flags IAM credentials that are still active but have gone unused for more than 45 days: a console password unused >45 days, or an access key unused >45 days (credential report idle-days computation). Dormant-but-enabled credentials expand the attack surface for no benefit; nobody is watching them, yet they still work if stolen, and they commonly belong to departed employees or decommissioned scripts. CIS 1.12 requires disabling credentials unused for 45 or more days.",
+    "impact": "Forgotten live credentials become a stealthy, unmonitored backdoor for attackers or former staff -- each one an unwatched path into the account.",
+    "steps": [
+      "Identify idle credentials: aws iam generate-credential-report then decode aws iam get-credential-report and review last-used dates beyond 45 days.",
+      "Confirm with the owning team that the user or key is genuinely unneeded before disabling.",
+      "Deactivate an unused access key: aws iam update-access-key --access-key-id <KEY_ID> --status Inactive --user-name <USER>; for an unused console password, remove console access: aws iam delete-login-profile --user-name <USER>.",
+      "After a grace period with no impact, delete the key (aws iam delete-access-key --access-key-id <KEY_ID> --user-name <USER>) and/or the user.",
+      "Verify with a fresh credential report that the credential is inactive.",
+      "Prevent recurrence: enforce the AWS Config rule IAM_USER_UNUSED_CREDENTIALS_CHECK (maxCredentialUsageAge=45) and review IAM Access Analyzer unused-access findings on a schedule."
+    ],
+    "affected": [
+      "svc-old"
+    ],
+    "count": 1,
+    "distinct": 1
+  },
+  {
+    "check_id": "ACM-04",
+    "section": "ACM",
+    "severity": "LOW",
+    "status": "WARN",
+    "compliance": {
+      "PCI-DSS": "4.1",
+      "HIPAA": "164.312(e)(1)",
+      "SOC2": "CC6.7",
+      "NIST": "SC-12"
+    },
+    "remediation_cmd": "Re-request the failed/revoked certificate: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS",
+    "risk": "The certificate is in a broken state: FAILED or VALIDATION_TIMED_OUT (validation never completed) or REVOKED (trust withdrawn). In all three cases the certificate cannot serve valid TLS, so any endpoint relying on it either cannot start TLS or presents a certificate clients reject. VALIDATION_TIMED_OUT means DNS/email validation was not completed within 72 hours; FAILED often means the domain could not be validated or was flagged; REVOKED means the CA pulled trust (e.g. key compromise). A revoked or failed cert left associated with a listener is a live outage or, worse, a signal that a private key may be compromised.",
+    "impact": "TLS is broken for the domain (the fronted service is unreachable over HTTPS or actively distrusted by clients), and a REVOKED status may indicate private-key compromise requiring rotation.",
+    "steps": [
+      "Determine the exact status and reason: aws acm describe-certificate --certificate-arn <ARN> --query 'Certificate.[Status,FailureReason,DomainValidationOptions]'",
+      "For VALIDATION_TIMED_OUT/FAILED, request a fresh certificate and complete validation promptly: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS",
+      "Add the CNAME validation record returned by ACM to your DNS zone and wait for Status=ISSUED (validation must finish within 72 hours).",
+      "For REVOKED, treat the key as compromised: issue a new certificate, replace it on all listeners/distributions, and rotate any related material.",
+      "Associate the new ISSUED certificate, then delete the broken one after detaching it: aws acm delete-certificate --certificate-arn <OLD_ARN>",
+      "Verify end-to-end: aws acm describe-certificate --certificate-arn <NEW_ARN> --query 'Certificate.Status'  returns ISSUED and the endpoint serves a valid chain."
+    ],
+    "affected": [
+      "cert-expiring"
+    ],
+    "count": 1,
+    "distinct": 1
+  },
+  {
+    "check_id": "S3-08",
+    "section": "S3",
+    "severity": "LOW",
+    "status": "WARN",
+    "compliance": {
+      "CIS": "2.1.3",
+      "PCI-DSS": "10.5.3",
+      "HIPAA": "164.312(c)(1)",
+      "SOC2": "A1.2",
+      "NIST": "CP-9"
+    },
+    "remediation_cmd": "Enable versioning for rollback protection against overwrite/ransomware: aws s3api put-bucket-versioning --bucket <BUCKET> --versioning-configuration Status=Enabled",
+    "risk": "This check WARNs when bucket versioning is not enabled, meaning there is no rollback point after an object is overwritten or deleted. Modern ransomware and destructive-intent attackers who obtain write access encrypt-in-place or overwrite objects and delete originals; without versioning the prior clean copies are gone permanently. Versioning (ideally with MFA Delete and Object Lock) preserves immutable prior versions so data can be restored after malicious or accidental modification.",
+    "impact": "A single compromised writer or ransomware event can irreversibly destroy or encrypt the bucket's data with no recovery path, causing permanent data loss and business disruption.",
+    "steps": [
+      "Confirm scope: aws s3api get-bucket-versioning --bucket <BUCKET> returns no Status (or Suspended) when versioning is off.",
+      "Enable versioning: aws s3api put-bucket-versioning --bucket <BUCKET> --versioning-configuration Status=Enabled",
+      "Add a lifecycle rule to expire noncurrent versions after a retention window so storage cost stays bounded: aws s3api put-bucket-lifecycle-configuration --bucket <BUCKET> --lifecycle-configuration file://noncurrent-expiry.json",
+      "For high-value buckets, layer immutability with Object Lock (governance/compliance mode) or MFA Delete to block version deletion even by compromised admins.",
+      "Verify: aws s3api get-bucket-versioning --bucket <BUCKET> now returns Status=Enabled, and overwrite a test object to confirm the prior version is retained (aws s3api list-object-versions --bucket <BUCKET> --prefix <KEY>).",
+      "Prevent recurrence: enforce the AWS Config rule s3-bucket-versioning-enabled across the account/org."
+    ],
+    "affected": [
+      "logs-archive"
+    ],
+    "count": 1,
+    "distinct": 1
+  }
+]

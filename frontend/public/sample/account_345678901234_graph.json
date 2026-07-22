@@ -1,0 +1,17 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "nodes": [
+    {
+      "cidr": "0.0.0.0/0",
+      "id": "internet",
+      "kind": "InternetSource"
+    },
+    {
+      "account": "345678901234",
+      "id": "capability:admin:345678901234",
+      "kind": "AdminCapability"
+    }
+  ],
+  "edges": []
+}

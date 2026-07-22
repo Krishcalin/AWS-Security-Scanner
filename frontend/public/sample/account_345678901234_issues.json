@@ -1,0 +1,49 @@
+[
+  {
+    "status": "WARN",
+    "check_id": "ACM-04",
+    "section": "ACM",
+    "resource": "cert-expiring",
+    "message": "ACM certificate cert-expiring renews in 21 days | cert-expiring",
+    "severity": "LOW",
+    "compliance": {
+      "PCI-DSS": "4.1",
+      "HIPAA": "164.312(e)(1)",
+      "SOC2": "CC6.7",
+      "NIST": "SC-12"
+    },
+    "remediation_cmd": ""
+  },
+  {
+    "status": "WARN",
+    "check_id": "S3-08",
+    "section": "S3",
+    "resource": "logs-archive",
+    "message": "Bucket logs-archive has versioning disabled | logs-archive",
+    "severity": "LOW",
+    "compliance": {
+      "CIS": "2.1.3",
+      "PCI-DSS": "10.5.3",
+      "HIPAA": "164.312(c)(1)",
+      "SOC2": "A1.2",
+      "NIST": "CP-9"
+    },
+    "remediation_cmd": ""
+  },
+  {
+    "status": "FAIL",
+    "check_id": "IAM-08",
+    "section": "IAM",
+    "resource": "svc-old",
+    "message": "IAM user svc-old has an unused access key (67 days) | svc-old",
+    "severity": "MEDIUM",
+    "compliance": {
+      "CIS": "1.12",
+      "PCI-DSS": "8.2.6",
+      "HIPAA": "164.312(a)(2)(i)",
+      "SOC2": "CC6.1",
+      "NIST": "AC-2(3)"
+    },
+    "remediation_cmd": "Disable credentials unused for 45+ days: aws iam update-access-key --access-key-id <KEY_ID> --status Inactive --user-name <USER> (and remove console access if the password is unused)"
+  }
+]

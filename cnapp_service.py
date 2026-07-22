@@ -85,6 +85,7 @@ def serialize_scanner(sc) -> dict:
         "graph_full": sc.graph.to_dict() if sc.graph else None,
         "attack_paths": [p.to_dict() for p in sc.attack_paths],
         "choke_points": [c.to_dict() for c in sc.choke_points],
+        "finding_catalog": sc._build_finding_catalog(),
         "results": [
             {"status": r.status, "check_id": r.check_id, "section": r.section,
              "resource": r.resource, "message": r.message, "severity": r.severity,
@@ -258,6 +259,34 @@ class PlatformService:
             out.append(r)
         return out
 
+    def get_finding_catalog(self, account_id: str) -> List[dict]:
+        """The deduped, severity-ranked finding_catalog (risk / business impact /
+        step-by-step remediation / compliance / affected resources) for an account's
+        latest scan — the data source for the Findings workspace + detail panel."""
+        return list((self.results.get_latest(account_id) or {}).get("finding_catalog", []))
+
+    def get_account_summary(self, account_id: str) -> Optional[dict]:
+        """Dashboard-shaped slice of an account's latest scan — posture + compliance
+        + top attack paths/choke points + a severity histogram. Feeds the per-account
+        Overview screen (the registry row alone has no compliance/paths)."""
+        p = self.results.get_latest(account_id)
+        if not p:
+            return None
+        sev = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        for e in p.get("finding_catalog", []):
+            s = e.get("severity", "")
+            if s in sev:
+                sev[s] += 1
+        return {
+            "account": p.get("account"), "region": p.get("region"),
+            "posture_score": p.get("posture_score"), "posture_grade": p.get("posture_grade"),
+            "summary": p.get("summary", {}), "severity_counts": sev,
+            "compliance_scorecard": p.get("compliance_scorecard", {}),
+            "graph": p.get("graph"),
+            "attack_paths": p.get("attack_paths", [])[:10],
+            "choke_points": p.get("choke_points", [])[:10],
+        }
+
     def org_overview(self) -> dict:
         """Roll every active account's latest scan into an org posture summary.
         (Metadata aggregation across per-account results; cross-account graph-union
@@ -265,6 +294,20 @@ class PlatformService:
         payloads = [self.results.get_latest(a["account_id"])
                     for a in self.registry.list_accounts(onboarding_status="active")]
         return aggregate_overview([p for p in payloads if p])
+
+    def org_findings(self) -> List[dict]:
+        """Flat, severity-ranked finding_catalog across all active accounts, each
+        entry tagged with its account — the org-wide Findings queue."""
+        order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "": 4}
+        out: List[dict] = []
+        for a in self.registry.list_accounts(onboarding_status="active"):
+            p = self.results.get_latest(a["account_id"]) or {}
+            for e in p.get("finding_catalog", []):
+                tagged = dict(e)
+                tagged["account"] = a["account_id"]
+                out.append(tagged)
+        out.sort(key=lambda e: (order.get(e.get("severity", ""), 4), e.get("check_id", "")))
+        return out
 
 
 def aggregate_overview(payloads: List[dict]) -> dict:

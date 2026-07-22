@@ -1,0 +1,97 @@
+[
+  {
+    "account_id": "123456789012",
+    "alias": "prod-payments",
+    "org_id": "o-kizen00demo",
+    "onboarding_method": "stackset",
+    "onboarding_status": "active",
+    "health": "healthy",
+    "health_detail": null,
+    "last_scan_at": 1784796400,
+    "first_seen_at": 1781344000,
+    "updated_at": 1784796400,
+    "role_arn": "arn:aws:iam::123456789012:role/CnappScannerRole",
+    "enabled_regions": [
+      "us-east-1"
+    ],
+    "external_id_configured": true,
+    "posture_score": 0.0,
+    "posture_grade": "F"
+  },
+  {
+    "account_id": "234567890123",
+    "alias": "staging-web",
+    "org_id": "o-kizen00demo",
+    "onboarding_method": "single",
+    "onboarding_status": "active",
+    "health": "healthy",
+    "health_detail": null,
+    "last_scan_at": 1784792800,
+    "first_seen_at": 1781344000,
+    "updated_at": 1784792800,
+    "role_arn": "arn:aws:iam::234567890123:role/CnappScannerRole",
+    "enabled_regions": [
+      "us-east-1"
+    ],
+    "external_id_configured": true,
+    "posture_score": 86.0,
+    "posture_grade": "B"
+  },
+  {
+    "account_id": "345678901234",
+    "alias": "sandbox-data",
+    "org_id": "o-kizen00demo",
+    "onboarding_method": "single",
+    "onboarding_status": "active",
+    "health": "degraded",
+    "health_detail": "iam:SimulatePrincipalPolicy not granted",
+    "last_scan_at": 1784706400,
+    "first_seen_at": 1781344000,
+    "updated_at": 1784706400,
+    "role_arn": "arn:aws:iam::345678901234:role/CnappScannerRole",
+    "enabled_regions": [
+      "us-east-1"
+    ],
+    "external_id_configured": true,
+    "posture_score": 98.0,
+    "posture_grade": "A"
+  },
+  {
+    "account_id": "456789012345",
+    "alias": "dev-experiments",
+    "org_id": "o-kizen00demo",
+    "onboarding_method": "single",
+    "onboarding_status": "pending",
+    "health": "validating",
+    "health_detail": null,
+    "last_scan_at": null,
+    "first_seen_at": 1784792800,
+    "updated_at": 1784792800,
+    "role_arn": "arn:aws:iam::456789012345:role/CnappScannerRole",
+    "enabled_regions": [
+      "us-east-1"
+    ],
+    "external_id_configured": true,
+    "posture_score": null,
+    "posture_grade": null
+  },
+  {
+    "account_id": "567890123456",
+    "alias": "legacy-billing",
+    "org_id": "o-kizen00demo",
+    "onboarding_method": "single",
+    "onboarding_status": "denied",
+    "health": "unauthorized",
+    "health_detail": "AssumeRole denied - confirm the trust policy ExternalId condition matches the issued value",
+    "last_scan_at": null,
+    "first_seen_at": 1783936000,
+    "updated_at": 1784789200,
+    "role_arn": "arn:aws:iam::567890123456:role/CnappScannerRole",
+    "enabled_regions": [
+      "us-east-1"
+    ],
+    "external_id_configured": true,
+    "posture_score": null,
+    "posture_grade": null
+  }
+]

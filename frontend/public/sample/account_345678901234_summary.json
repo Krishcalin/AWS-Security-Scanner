@@ -1,0 +1,85 @@
+{
+  "account": "345678901234",
+  "region": "us-east-1",
+  "posture_score": 98.0,
+  "posture_grade": "A",
+  "summary": {
+    "PASS": 8,
+    "FAIL": 1,
+    "WARN": 2,
+    "INFO": 0
+  },
+  "severity_counts": {
+    "CRITICAL": 0,
+    "HIGH": 0,
+    "MEDIUM": 1,
+    "LOW": 2
+  },
+  "compliance_scorecard": {
+    "CIS": {
+      "controls_total": 48,
+      "controls_passed": 46,
+      "controls_failed": 2,
+      "pass_rate": 95.8,
+      "failed_controls": [
+        "1.12",
+        "2.1.3"
+      ]
+    },
+    "PCI-DSS": {
+      "controls_total": 37,
+      "controls_passed": 34,
+      "controls_failed": 3,
+      "pass_rate": 91.9,
+      "failed_controls": [
+        "10.5.3",
+        "4.1",
+        "8.2.6"
+      ]
+    },
+    "HIPAA": {
+      "controls_total": 11,
+      "controls_passed": 8,
+      "controls_failed": 3,
+      "pass_rate": 72.7,
+      "failed_controls": [
+        "164.312(a)(2)(i)",
+        "164.312(c)(1)",
+        "164.312(e)(1)"
+      ]
+    },
+    "SOC2": {
+      "controls_total": 9,
+      "controls_passed": 6,
+      "controls_failed": 3,
+      "pass_rate": 66.7,
+      "failed_controls": [
+        "A1.2",
+        "CC6.1",
+        "CC6.7"
+      ]
+    },
+    "NIST": {
+      "controls_total": 38,
+      "controls_passed": 35,
+      "controls_failed": 3,
+      "pass_rate": 92.1,
+      "failed_controls": [
+        "AC-2(3)",
+        "CP-9",
+        "SC-12"
+      ]
+    }
+  },
+  "graph": {
+    "nodes": 2,
+    "edges": 0,
+    "node_kinds": {
+      "AdminCapability": 1,
+      "InternetSource": 1
+    },
+    "edge_kinds": {}
+  },
+  "attack_paths": [],
+  "choke_points": []
+}

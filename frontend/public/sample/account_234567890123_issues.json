@@ -1,0 +1,96 @@
+[
+  {
+    "status": "FAIL",
+    "check_id": "EXPOSURE-01",
+    "section": "EXPOSURE",
+    "resource": "i-0webfront01",
+    "message": "EC2 i-0webfront01 internet-reachable on tcp/443 | i-0webfront01",
+    "severity": "HIGH",
+    "compliance": {
+      "CIS": "5.2",
+      "PCI-DSS": "1.3.1",
+      "HIPAA": "164.312(e)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "SC-7"
+    },
+    "remediation_cmd": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0  (then re-add a scoped CIDR)"
+  },
+  {
+    "status": "FAIL",
+    "check_id": "VULN-01",
+    "section": "VULN",
+    "resource": "i-0webfront01",
+    "message": "HIGH CVE-2023-4911 (EPSS 0.42, PoC) on ec2_instance i-0webfront01 | i-0webfront01",
+    "severity": "HIGH",
+    "compliance": {
+      "PCI-DSS": "6.3.3",
+      "HIPAA": "164.308(a)(1)(ii)(A)",
+      "SOC2": "CC7.1",
+      "NIST": "SI-2"
+    },
+    "remediation_cmd": "Patch the affected package to fixedInVersion, e.g. run the patch baseline: aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install, then re-scan in Inspector."
+  },
+  {
+    "status": "FAIL",
+    "check_id": "IAM-05",
+    "section": "IAM",
+    "resource": "web-server-role",
+    "message": "Role web-server-role can escalate to admin (conditioned) | web-server-role",
+    "severity": "MEDIUM",
+    "compliance": {
+      "CIS": "1.8",
+      "PCI-DSS": "8.3.6",
+      "HIPAA": "164.312(a)(2)(i)",
+      "SOC2": "CC6.1",
+      "NIST": "IA-5(1)"
+    },
+    "remediation_cmd": "Update password policy: aws iam update-account-password-policy --minimum-password-length 14 --require-symbols --require-numbers --require-uppercase-characters --max-password-age 90 --password-reuse-prevention 24"
+  },
+  {
+    "status": "WARN",
+    "check_id": "S3-07",
+    "section": "S3",
+    "resource": "web-uploads",
+    "message": "Bucket web-uploads has no TLS-only policy | web-uploads",
+    "severity": "LOW",
+    "compliance": {
+      "CIS": "2.1.2",
+      "PCI-DSS": "4.1",
+      "HIPAA": "164.312(e)(1)",
+      "SOC2": "CC6.7",
+      "NIST": "SC-8"
+    },
+    "remediation_cmd": ""
+  },
+  {
+    "status": "WARN",
+    "check_id": "RDS-08",
+    "section": "RDS",
+    "resource": "sessions-db",
+    "message": "RDS sessions-db has IAM DB auth disabled | sessions-db",
+    "severity": "LOW",
+    "compliance": {
+      "PCI-DSS": "8.3.1",
+      "HIPAA": "164.312(d)",
+      "SOC2": "CC6.1",
+      "NIST": "IA-2"
+    },
+    "remediation_cmd": ""
+  },
+  {
+    "status": "FAIL",
+    "check_id": "VPC-04",
+    "section": "VPC",
+    "resource": "sg-default",
+    "message": "Default security group sg-default is not locked down | sg-default",
+    "severity": "MEDIUM",
+    "compliance": {
+      "CIS": "5.4",
+      "PCI-DSS": "1.3.1",
+      "HIPAA": "164.312(e)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "SC-7"
+    },
+    "remediation_cmd": "Strip all rules from each default SG so it denies all traffic (CIS 5.4): aws ec2 revoke-security-group-ingress --group-id <SG_ID> --ip-permissions ... and aws ec2 revoke-security-group-egress --group-id <SG_ID> --ip-permissions ... ; migrate workloads to purpose-built SGs"
+  }
+]

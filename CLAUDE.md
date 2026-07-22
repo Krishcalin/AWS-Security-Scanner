@@ -27,6 +27,7 @@ no code rename.) The repo also includes a separate pre-deploy IaC static scanner
 - **Finding Detail** (`aws_finding_detail.py`) -- pure offline data module: `FINDING_DETAIL={check_id:{risk, impact, steps[...]}}` for all 204 actionable check IDs (100% of `REMEDIATION_MAP`); the detailed risk / business-impact / step-by-step remediation the JSON (`finding_catalog`) and HTML (per-finding cards) reports render. Falls back to the one-line `REMEDIATION_MAP` CLI for any uncatalogued check
 - **Managed-Engine EOL / Windows Vuln** (`aws_engine_eol.py` + `aws_winvuln.py`) -- pure offline signals: managed-service end-of-life (honest `EOL-*` date facts, not speculative CVEs) and agentless Windows OS-vuln via `ssm:DescribeInstancePatches` real MSRC `CVEIds` (+ synthetic `WINEOL-*`)
 - **Container/Lambda Side-Scan** (`aws_sidescan_image.py` + `aws_sidescan_lambda.py`) -- pure `DictExtractor` subclasses: OCI/Docker layer overlay + Lambda artifact merge → the Phase-3 OSV/SBOM pipeline verbatim (Inspector-independent image/Lambda CVEs)
+- **Web Console** (`frontend/`) -- React 19 + Vite + TS + Tailwind v4 SPA over the hub API (Phase 1): Overview / Attack Paths (interactive React Flow graph) / Findings / Cloud Accounts + onboarding wizard. Runs on engine-shaped sample fixtures (zero AWS) or the live hub
 
 ## Repository Structure
 
@@ -322,7 +323,8 @@ no boto3/psycopg/FastAPI in the pure path).
   only on success.
 - **`cnapp_api.py`** — thin FastAPI routers; `require(min_role)` RBAC that **fails closed**
   (default hook denies, never grants admin); guarded import so the backend runs without
-  FastAPI. `OnboardReq.account_id` is pattern-constrained (422, not 500).
+  FastAPI. `OnboardReq.account_id` is pattern-constrained (422, not 500). `create_hosted_app`
+  wraps the API for hosting: routes under `/api`, the SPA at `/` (history fallback).
 - **`deploy/`** — `cnapp-scanner-role.yaml` (single-account, SecurityAudit+ViewOnlyAccess,
   ExternalId trust, side-scan writes opt-in), `cnapp-stackset.md` (org service-managed
   StackSet auto-enroll), `cnapp-hub-role.yaml` (assume scoped to the role NAME + org).
@@ -334,8 +336,40 @@ no boto3/psycopg/FastAPI in the pure path).
   error string, fail-open RBAC default, TOCTOU, KeyboardInterrupt swallow, …) — all fixed +
   regression-tested. **571 tests.** Reuses `assume_role_session`/`list_org_accounts`/
   `aggregate_results` verbatim.
-- **Deferred**: live PostgresBackend rewire (registry already dual-dialect); React UI
-  (design prototype shipped).
+- **Deferred**: a psycopg connection pool (a single serialized connection works).
+
+### Web Console (`frontend/`) — Phase 1
+
+A **React 19 + Vite + TypeScript + Tailwind v4** SPA (+ `@xyflow/react` for the graph)
+over the hub API — the operator surface, styled continuous with the exported HTML report
+(`_REPORT_CSS` light tokens, one severity color-law, cyan→indigo signature, crown gold for
+data terminals / true choke points; light + dark themes). Five screens, one design system:
+
+- **Overview** — posture grade dial + deep-link Top-N tiles + ranked attack paths + choke
+  "fix-K-cut-N%" + accounts-by-posture, with an **org ↔ account scope switcher**.
+- **Attack Paths** (the hero) — ranked toxic-combination worklist + filters + choke rail;
+  a path-detail slide-over with an **interactive React Flow graph** + the 6-factor
+  gated-multiplicative score breakdown (exposure × exploitability × max(privilege,impact) ×
+  reach × boost) + "sever this path" → the choke point.
+- **Findings** — unified deduped `finding_catalog` queue (source sub-tabs, group-by,
+  on-attack-path filter, inline-expand to affected) + a risk → business-impact →
+  step-by-step remediation → compliance → affected detail panel.
+- **Cloud Accounts** — health-chipped account list (grayed inactive, failure-taxonomy hint)
+  + a keyless 5-step **onboarding wizard** (scope → identify → deploy CFN/StackSet with the
+  once-shown ExternalId → validate → first scan).
+- **Data layer** (`src/api/client.ts`): `VITE_DATA_SOURCE=sample` (default; engine-generated
+  fixtures in `public/sample/`, zero AWS) ↔ `live` (the hub under `/api`, dev-proxied to
+  `:8000`). The admin write flow (onboard/validate/scan) is mocked in sample mode.
+- **Backend additions for the console** (all additive; cnapp tests stay green): `serialize_scanner`
+  now emits `finding_catalog`; `PlatformService.get_account_summary` + `get_finding_catalog`
+  + `org_findings`; routes `GET /accounts/{id}/summary|findings` + `GET /org/findings`;
+  `create_hosted_app` for the single deployable.
+- **Run**: `cd frontend && npm install && npm run dev` → localhost:5173. Build: `npm run build`
+  (tsc + Vite → `dist/`). Frontend gotcha: `.tsx` are ESM modules, so `React.ReactNode` errors
+  ("UMD global") — use `import type { ReactNode }`; React Flow custom nodes type props as
+  `NodeProps` and cast `data`.
+- **Remaining console screens** (placeholder routes today): Inventory · Identity (CIEM) ·
+  Compliance · Remediation · Reports.
 
 ### CNAPP Phase 7 additions (v2.8.0) — remediation + code-to-cloud ("close the loop")
 
