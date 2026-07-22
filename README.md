@@ -419,7 +419,7 @@ ViewOnlyAccess** (read-only of configuration/IAM — never workload data).
 **HTTP surface** (all delegate to `PlatformService`; admin routes stay on the private
 hub control plane): `POST /accounts` (onboard → launch URL), `POST /accounts/{id}/validate`,
 `GET /accounts`, `POST /scans`, `GET /scans/{job_id}`,
-`GET /accounts/{id}/issues|paths|graph`, `GET /org/overview`.
+`GET /accounts/{id}/summary|issues|findings|paths|graph`, `GET /org/overview`, `GET /org/findings`.
 
 **Shared Postgres state.** Opening the state store with a `postgresql://` URL runs
 the whole state plane (finding lifecycle/drift/waivers + the account registry) on a
@@ -428,9 +428,27 @@ one `Backend` abstraction (`cnapp_backend.py`); the sqlite path is byte-identica
 a missing driver / unreachable server fails loudly rather than falling back to a
 local file.
 
+**Web console (`frontend/`).** A **React 19 + Vite + TypeScript + Tailwind** SPA over
+the hub API — the operator surface, styled to match the exported HTML report. Five
+screens over one design system: **Overview** (posture dashboard, org ↔ account scope),
+**Attack Paths** (ranked toxic-combination worklist + an interactive graph explorer
+showing each path's gated-multiplicative score breakdown), **Findings** (unified
+deduped queue with source sub-tabs + a risk → business-impact → step-by-step
+remediation detail panel), and **Cloud Accounts** with a keyless 5-step **onboarding
+wizard** (server-minted ExternalId + CloudFormation / Org StackSet). It runs on
+engine-shaped sample fixtures with **zero AWS**, and a `VITE_DATA_SOURCE=live` build
+flips every screen to the live hub. `cnapp_api.create_hosted_app(service,
+static_dir="frontend/dist")` serves the API under `/api` and the SPA at `/` (with a
+history-API fallback) as one deployable. See [`frontend/README.md`](frontend/README.md).
+
+```bash
+cd frontend && npm install && npm run dev     # http://localhost:5173  (sample data, no AWS)
+```
+
 > Status: backend + onboarding + validation + registry + scan orchestration +
-> **live Postgres state** shipped and tested offline (mocked STS/Org/FastAPI + a
-> fake psycopg3 driver). A connection pool and the React UI are the remaining pieces.
+> **live Postgres state** + the **web console** (Phase 1: Overview / Attack Paths /
+> Findings / Cloud Accounts + onboarding wizard) shipped. Remaining: a connection pool
+> and the rest of the console (Inventory / Identity / Compliance / Remediation / Reports).
 
 ---
 
@@ -467,6 +485,9 @@ AWS-Security-Scanner/
 ├── aws_sidescan_ebs.py      # EBS Direct-API block plane — plan/delta/checksum/sparse/cleanup (stdlib; live I/O deferred)
 ├── aws_state_dialect.py     # Postgres/SQLite dialect — DDL/upsert/parse_state_url/row-shim (stdlib)
 ├── aws_graph_neptune.py     # Neptune export — Gremlin bulk-CSV + openCypher MERGE + round-trip (stdlib)
+├── cnapp_onboarding.py · cnapp_validate.py · cnapp_registry.py · cnapp_service.py · cnapp_worker.py · cnapp_api.py · cnapp_backend.py  # Hosted platform backend
+├── frontend/                # OverWatch web console — React 19 + Vite + TS + Tailwind SPA (Overview / Attack Paths / Findings / Cloud Accounts + onboarding wizard)
+├── deploy/                  # CloudFormation scanner-role + Org StackSet + hub-role templates
 ├── tests/
 │   ├── test_live_scanner.py # 69 unit tests (mock boto3, no credentials needed)
 │   ├── test_cnapp_phase1.py # 32 unit tests (graph, chains, trust, org fan-out, compliance)
