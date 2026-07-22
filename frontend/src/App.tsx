@@ -10,6 +10,7 @@ import { Identity } from './routes/Identity'
 import { Compliance } from './routes/Compliance'
 import { Remediation } from './routes/Remediation'
 import { Reports } from './routes/Reports'
+import { Settings } from './routes/Settings'
 import { Placeholder } from './routes/Placeholder'
 
 export default function App() {
@@ -27,7 +28,7 @@ export default function App() {
             <Route path="/remediation" element={<Remediation />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/accounts" element={<CloudAccounts />} />
-            <Route path="/settings" element={<Placeholder />} />
+            <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Placeholder />} />
           </Route>
         </Routes>

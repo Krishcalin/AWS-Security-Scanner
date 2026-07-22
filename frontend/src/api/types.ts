@@ -137,6 +137,90 @@ export interface ValidationResult {
   checks: ValidationCheck[]
 }
 
+// ── connector framework (Settings) — masked shapes; a secret is NEVER returned ──
+export type ConnectorType = 'jira' | 'slack' | 'pagerduty' | 'splunk' | 'webhook'
+
+// The masked connector (cnapp_connectors.ConnectorStore._mask_connector): the API
+// exposes `secret_configured` (bool), never the secret ref or value.
+export interface Connector {
+  connector_id: string
+  type: ConnectorType
+  name: string
+  enabled: boolean
+  config: Record<string, unknown>
+  secret_configured: boolean
+  created_by: string | null
+  last_test_at: number | null
+  last_test_status: string | null // ok | failed
+  last_test_detail: string | null
+  created_at: number
+  updated_at: number
+}
+
+export interface ConnectorRule {
+  id: number
+  connector_id: string
+  name: string
+  enabled: boolean
+  priority: number
+  min_severity: string
+  severities: string[]
+  sections: string[]
+  check_globs: string[]
+  not_check_globs: string[]
+  account_globs: string[]
+  on_attack_path: boolean | null
+  statuses: string[]
+  frameworks: string[]
+  controls: string[]
+  min_count: number
+  min_distinct: number
+  dedup_mode: string // notify_once | renotify
+  throttle_seconds: number
+  renotify_on_escalation: boolean
+  notify_on_resolve: boolean
+  stop_on_match: boolean
+  connector_ids: string[]
+  tags: string[]
+  message_template: string | null
+  severity_override: string | null
+  created_by?: string
+}
+
+export interface TestResult {
+  ok: boolean
+  http_status: number
+  detail: string
+  error: string | null
+  external_ref: string | null
+}
+
+export interface Delivery {
+  id: number
+  connector_id: string
+  dedup_key: string
+  rule_id: number | null
+  account: string
+  check_id: string | null
+  state: string // open | resolved
+  kind: string | null
+  status: string // pending | sent | failed | skipped
+  http_status: number | null
+  error: string | null
+  external_ref: string | null
+  created_at: number
+  sent_at: number | null
+}
+
+export interface PreviewHit {
+  connector_id: string
+  connector_name: string
+  rule_id: number
+  check_id: string
+  account: string
+  severity: string
+}
+
 // A deduped, enriched entry from _build_finding_catalog (one per distinct FAIL/WARN check).
 export interface FindingCatalogEntry {
   check_id: string
