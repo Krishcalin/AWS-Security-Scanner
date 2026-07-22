@@ -135,9 +135,17 @@ def create_app(service, *, current_role=lambda: ""):
             raise HTTPException(status_code=404, detail="no scan results for account")
         return s
 
+    @app.get("/accounts/{account_id}/findings", dependencies=[Depends(require("viewer"))])
+    def findings(account_id: str):
+        return service.get_finding_catalog(account_id)
+
     @app.get("/org/overview", dependencies=[Depends(require("viewer"))])
     def org_overview():
         return service.org_overview()
+
+    @app.get("/org/findings", dependencies=[Depends(require("viewer"))])
+    def org_findings():
+        return service.org_findings()
 
     return app
 

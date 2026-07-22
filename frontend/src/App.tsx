@@ -3,6 +3,7 @@ import { ScopeProvider } from './state/scope'
 import { AppShell } from './components/AppShell'
 import { Overview } from './routes/Overview'
 import { AttackPaths } from './routes/AttackPaths'
+import { Findings } from './routes/Findings'
 import { Placeholder } from './routes/Placeholder'
 
 export default function App() {
@@ -13,7 +14,7 @@ export default function App() {
           <Route element={<AppShell />}>
             <Route path="/" element={<Overview />} />
             <Route path="/attack-paths" element={<AttackPaths />} />
-            <Route path="/findings" element={<Placeholder />} />
+            <Route path="/findings" element={<Findings />} />
             <Route path="/inventory" element={<Placeholder />} />
             <Route path="/identity" element={<Placeholder />} />
             <Route path="/compliance" element={<Placeholder />} />

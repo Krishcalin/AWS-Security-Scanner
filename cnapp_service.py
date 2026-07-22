@@ -259,6 +259,12 @@ class PlatformService:
             out.append(r)
         return out
 
+    def get_finding_catalog(self, account_id: str) -> List[dict]:
+        """The deduped, severity-ranked finding_catalog (risk / business impact /
+        step-by-step remediation / compliance / affected resources) for an account's
+        latest scan — the data source for the Findings workspace + detail panel."""
+        return list((self.results.get_latest(account_id) or {}).get("finding_catalog", []))
+
     def get_account_summary(self, account_id: str) -> Optional[dict]:
         """Dashboard-shaped slice of an account's latest scan — posture + compliance
         + top attack paths/choke points + a severity histogram. Feeds the per-account
@@ -288,6 +294,20 @@ class PlatformService:
         payloads = [self.results.get_latest(a["account_id"])
                     for a in self.registry.list_accounts(onboarding_status="active")]
         return aggregate_overview([p for p in payloads if p])
+
+    def org_findings(self) -> List[dict]:
+        """Flat, severity-ranked finding_catalog across all active accounts, each
+        entry tagged with its account — the org-wide Findings queue."""
+        order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "": 4}
+        out: List[dict] = []
+        for a in self.registry.list_accounts(onboarding_status="active"):
+            p = self.results.get_latest(a["account_id"]) or {}
+            for e in p.get("finding_catalog", []):
+                tagged = dict(e)
+                tagged["account"] = a["account_id"]
+                out.append(tagged)
+        out.sort(key=lambda e: (order.get(e.get("severity", ""), 4), e.get("check_id", "")))
+        return out
 
 
 def aggregate_overview(payloads: List[dict]) -> dict:

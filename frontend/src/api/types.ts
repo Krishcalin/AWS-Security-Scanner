@@ -105,3 +105,20 @@ export interface Finding {
   compliance: Record<string, string>
   remediation_cmd: string
 }
+
+// A deduped, enriched entry from _build_finding_catalog (one per distinct FAIL/WARN check).
+export interface FindingCatalogEntry {
+  check_id: string
+  section: string
+  severity: string
+  status: string
+  compliance: Record<string, string>
+  remediation_cmd: string
+  risk: string
+  impact: string
+  steps: string[]
+  affected: string[]
+  count: number
+  distinct: number
+  account?: string
+}

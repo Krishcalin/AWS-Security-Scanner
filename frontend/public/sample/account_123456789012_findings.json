@@ -1,0 +1,432 @@
+[
+  {
+    "check_id": "ATTACK-01",
+    "section": "EXPOSURE",
+    "severity": "CRITICAL",
+    "status": "FAIL",
+    "compliance": {
+      "CIS": "5.2",
+      "PCI-DSS": "1.3.1",
+      "HIPAA": "164.312(a)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "SC-7"
+    },
+    "remediation_cmd": "Break the path at the exposure or the privilege: remove the public ingress (aws ec2 revoke-security-group-ingress ...) AND scope the instance-profile role to least privilege / apply a permissions boundary: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>",
+    "risk": "OverWatch traced a complete attack path: an internet-exposed EC2 instance carries an instance-profile role whose permissions allow escalation all the way to account administrator. An attacker who compromises the exposed host (via an app flaw, exposed service, or stolen key) simply reads the instance-profile credentials from the metadata service and uses the role's over-broad permissions to become admin, with no additional exploit needed. When the path is CRITICAL the admin hop is unconditioned; a WARN means admin is reachable only if the attacker can satisfy an MFA/ExternalId/tag/SourceIp condition on a privesc or trust hop.",
+    "impact": "This is a direct internet-to-admin takeover path: one compromised public host yields full control of the AWS account and every resource, dataset, and downstream environment it governs.",
+    "steps": [
+      "Confirm both ends of the path: the public ingress on the host (aws ec2 describe-security-groups --group-ids <SG>) and the role's escalation permissions (aws iam list-attached-role-policies --role-name <ROLE>)",
+      "Break the exposure by removing the unneeded public ingress: aws ec2 revoke-security-group-ingress --group-id <SG> --protocol tcp --port <PORT> --cidr 0.0.0.0/0 (front the service with an ALB/WAF or restrict to known CIDRs if it must stay reachable)",
+      "Break the privilege by scoping the instance-profile role to least privilege and capping it with a permissions boundary: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>",
+      "Remove the specific privesc primitives (iam:PutRolePolicy/AttachRolePolicy/PassRole or wildcard *:* actions) from the role's policies",
+      "Re-scan to confirm the path no longer resolves to admin, and enforce IMDSv2 to make role-credential theft harder: aws ec2 modify-instance-metadata-options --instance-id <INSTANCE_ID> --http-tokens required --http-endpoint enabled",
+      "Prevent recurrence: add an SCP denying 0.0.0.0/0 on sensitive ports plus AWS Config rules restricted-common-ports and iam-policy-no-statements-with-admin-access"
+    ],
+    "affected": [
+      "i-0app01server"
+    ],
+    "count": 1,
+    "distinct": 1
+  },
+  {
+    "check_id": "ATTACK-02",
+    "section": "DATA",
+    "severity": "CRITICAL",
+    "status": "FAIL",
+    "compliance": {
+      "CIS": "5.2",
+      "PCI-DSS": "1.3.1",
+      "HIPAA": "164.312(a)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "SC-7"
+    },
+    "remediation_cmd": "Sever the flagship chain at ANY hop: patch the exploitable CVE, remove the public ingress (aws ec2 revoke-security-group-ingress --group-id <SG> --protocol tcp --port <PORT> --cidr 0.0.0.0/0), and scope the instance-profile role's data access (aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>). Fixing the choke-point node breaks the whole path.",
+    "risk": "This is OverWatch's flagship toxic-combination finding: an internet-exposed EC2 instance runs software with an exploitable (or KEV) CVE, carries an over-privileged instance-profile role, and that role can read classified crown-jewel data (S3/RDS/DynamoDB/EFS identified by Macie or data-classification tags). Chained together they give an attacker a full, unassisted breach route: exploit the public host via the CVE, steal the instance role, and use it to read the sensitive data, with each link independently realistic. If GuardDuty shows active threat on the path it is flagged top priority because exploitation may already be underway.",
+    "impact": "This path is a ready-made data breach: a single exposed, vulnerable host leads straight to the organization's most sensitive data, risking mass exfiltration, regulatory penalties, and reputational damage.",
+    "steps": [
+      "Map every hop from the finding: the exposed host, the exploitable CVE, the instance-profile role, and the crown-jewel datastore it can read",
+      "Sever the exposure: aws ec2 revoke-security-group-ingress --group-id <SG> --protocol tcp --port <PORT> --cidr 0.0.0.0/0 (or place the workload behind a WAF/restricted ALB)",
+      "Sever the vulnerability by patching the exploitable/KEV CVE now: aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install",
+      "Sever the privilege: scope the role's data permissions to only what it needs and bound it (aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>), and tighten the crown-jewel resource policy (bucket/KMS key policy) to explicit principals",
+      "Verify the flagship path no longer resolves and enforce IMDSv2 to blunt role-credential theft: aws ec2 modify-instance-metadata-options --instance-id <INSTANCE_ID> --http-tokens required",
+      "Prevent recurrence: layer SCPs (deny public sensitive ports), Inspector org auto-enable for continuous CVE detection, and least-privilege permissions boundaries so no single node reconstitutes the chain"
+    ],
+    "affected": [
+      "i-0app01server"
+    ],
+    "count": 1,
+    "distinct": 1
+  },
+  {
+    "check_id": "IAM-02",
+    "section": "IAM",
+    "severity": "CRITICAL",
+    "status": "FAIL",
+    "compliance": {
+      "CIS": "1.4",
+      "PCI-DSS": "8.2.2",
+      "HIPAA": "164.312(a)(1)",
+      "SOC2": "CC6.1",
+      "NIST": "IA-2"
+    },
+    "remediation_cmd": "Delete root access keys: aws iam delete-access-key --access-key-id <KEY_ID>",
+    "risk": "This check flags that programmatic access keys exist for the root user (get-account-summary returns AccountAccessKeysPresent=1). Root access keys are long-lived static credentials that grant the same unrestricted power as the root password but with no login prompt and no MFA challenge. If such a key leaks into a git repo, CI log, backup, or an SSRF-reachable location, an attacker gains instant, permanent, unconditional administrator control. CIS 1.4 requires the root account to have zero access keys.",
+    "impact": "A single leaked root key string equals immediate, total account compromise that no MFA or policy can stop.",
+    "steps": [
+      "Confirm presence: aws iam get-account-summary --query 'SummaryMap.AccountAccessKeysPresent' (1 = root keys exist); list them from the root console under My Security Credentials.",
+      "Identify any automation still using the root key and migrate it to an IAM role or a least-privilege IAM user before deleting.",
+      "Delete the root keys from the root session: aws iam delete-access-key --access-key-id <KEY_ID> (omit --user-name so it targets the calling root identity), or delete each key from the console.",
+      "Verify: aws iam get-account-summary --query 'SummaryMap.AccountAccessKeysPresent' returns 0.",
+      "Prevent recurrence: enable the AWS Config managed rule IAM_ROOT_ACCESS_KEY_CHECK and alert on root API activity via CloudTrail/EventBridge."
+    ],
+    "affected": [
+      "root"
+    ],
+    "count": 1,
+    "distinct": 1
+  },
+  {
+    "check_id": "VULN-02",
+    "section": "VULN",
+    "severity": "CRITICAL",
+    "status": "FAIL",
+    "compliance": {
+      "PCI-DSS": "6.3.3",
+      "HIPAA": "164.308(a)(1)(ii)(A)",
+      "SOC2": "CC7.1",
+      "NIST": "RA-5(2)"
+    },
+    "remediation_cmd": "PRIORITIZE \u2014 this CVE is on the CISA KEV catalog (actively exploited). Patch immediately (aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install), and if internet-exposed isolate the host: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --groups <QUARANTINE_SG>",
+    "risk": "Amazon Inspector flagged an ACTIVE CVE on this EC2 instance that is on the CISA Known Exploited Vulnerabilities (KEV) catalog, meaning it is being exploited in the wild right now with public exploit code circulating. Attackers and automated botnets scan for and weaponize KEV CVEs within days of disclosure, so an unpatched KEV bug on a reachable host is close to a guaranteed compromise. This is the highest-priority class of vulnerability finding the scanner emits.",
+    "impact": "Active in-the-wild exploitation of a KEV CVE typically results in full host takeover, theft of the instance-profile role, ransomware, or use of the box as a lateral-movement beachhead, often within hours of exposure.",
+    "steps": [
+      "Confirm the KEV CVE and whether the host is internet-exposed (prioritize exposed hosts): aws inspector2 list-findings --filter-criteria '{\"resourceId\":[{\"comparison\":\"EQUALS\",\"value\":\"<INSTANCE_ID>\"}]}'",
+      "If the host is internet-reachable, isolate it FIRST with a deny-all quarantine security group: aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --groups <QUARANTINE_SG>",
+      "Patch immediately with the patch baseline: aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install",
+      "Treat as a potential incident: review GuardDuty and CloudTrail for signs of prior exploitation and rotate the instance-profile role and any host-held secrets if compromise is suspected",
+      "Rebuild from a patched AMI and verify closure: aws inspector2 list-findings --filter-criteria '{\"vulnerabilityId\":[{\"comparison\":\"EQUALS\",\"value\":\"<CVE_ID>\"}]}'",
+      "Prevent recurrence: enable Inspector org auto-enable (aws inspector2 update-organization-configuration --auto-enable ec2=true,ecr=true,lambda=true) and route KEV findings to an EventBridge auto-patch/alert rule"
+    ],
+    "affected": [
+      "i-0app01server"
+    ],
+    "count": 1,
+    "distinct": 1
+  },
+  {
+    "check_id": "CHOKEPOINT-01",
+    "section": "CORRELATE",
+    "severity": "HIGH",
+    "status": "FAIL",
+    "compliance": {
+      "CIS": "5.2",
+      "PCI-DSS": "1.3.1",
+      "HIPAA": "164.312(a)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "CA-8"
+    },
+    "remediation_cmd": "Remediate this single node to sever multiple attack paths at once: for an over-privileged role, aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>; for an exposed host, patch the exploitable CVE or aws ec2 revoke-security-group-ingress ...; see the finding for the node kind and the count of paths/crown-jewels it severs.",
+    "risk": "OverWatch's correlation engine identified this node as a choke point: a single resource (an over-privileged role, an exposed host, or a shared security group) that sits on multiple distinct attack paths, so fixing it alone severs many routes to admin or crown-jewel data at once. The finding reports how many paths (including CRITICAL/HIGH ones) and how many crown-jewel targets the node dominates, sometimes removing EVERY known path to a target. Choke points are the highest-leverage remediations because attackers can reach the same objective through several chains, and closing one shared node collapses them together.",
+    "impact": "Leaving a choke point unaddressed keeps multiple independent attack paths to your most valuable assets open simultaneously; conversely, one well-targeted fix here delivers outsized risk reduction across the whole graph.",
+    "steps": [
+      "Open the finding to see the node kind, its label, and the count of paths / crown-jewel targets it severs, so you fix the exact shared resource",
+      "If the choke is an over-privileged role, scope it to least privilege and bound it: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>",
+      "If the choke is an exposed host, remove the public ingress (aws ec2 revoke-security-group-ingress --group-id <SG> --protocol tcp --port <PORT> --cidr 0.0.0.0/0) or patch the exploitable CVE that makes it a pivot",
+      "If the choke is a shared security group / network path, tighten it to specific sources and remove the overly broad rule feeding multiple workloads",
+      "Re-run the scan and confirm the severed paths no longer resolve to admin/crown-jewel terminals in the attack-path graph",
+      "Prevent recurrence: codify the fix (permissions boundary, SCP, or AWS Config rule) so the shared node cannot regress and re-open every path at once"
+    ],
+    "affected": [
+      "prod-api-alb",
+      "prod-app-server-role"
+    ],
+    "count": 2,
+    "distinct": 2
+  },
+  {
+    "check_id": "DSPM-02",
+    "section": "DATA",
+    "severity": "HIGH",
+    "status": "FAIL",
+    "compliance": {
+      "PCI-DSS": "1.3.1",
+      "HIPAA": "164.312(a)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "SC-7"
+    },
+    "remediation_cmd": "Remove public network reachability from the crown-jewel datastore and place it in private subnets. RDS: aws rds modify-db-instance --db-instance-identifier <ID> --no-publicly-accessible --apply-immediately ; Redshift: aws redshift modify-cluster --cluster-identifier <ID> --no-publicly-accessible ; then deny 0.0.0.0/0 in its security group and scope its reader roles.",
+    "risk": "This check FAILs when a crown-jewel datastore (RDS/Redshift/DynamoDB/EFS) tagged as holding sensitive data is publicly reachable -- for RDS/Redshift the PubliclyAccessible flag is true, giving it an internet-routable endpoint. A public database endpoint is continuously scanned and brute-forced from the internet; an attacker who guesses or phishes credentials, or exploits an unpatched engine CVE, reads or dumps the entire dataset directly, with no need to first breach the VPC perimeter. Sensitive structured data should never have an internet-facing endpoint.",
+    "impact": "A sensitive database is directly exposed to the internet, enabling credential-attack or CVE-driven full-database exfiltration without any prior network foothold -- a critical breach path.",
+    "steps": [
+      "Confirm scope and reachability: for RDS check aws rds describe-db-instances --db-instance-identifier <ID> --query 'DBInstances[0].PubliclyAccessible' (or the equivalent for Redshift), and inspect the attached security group for 0.0.0.0/0 ingress.",
+      "Remove public reachability -- RDS: aws rds modify-db-instance --db-instance-identifier <ID> --no-publicly-accessible --apply-immediately ; Redshift: aws redshift modify-cluster --cluster-identifier <ID> --no-publicly-accessible",
+      "Ensure the instance sits in private subnets and tighten its security group to allow the database port only from specific application CIDRs/security groups: aws ec2 revoke-security-group-ingress --group-id <SG> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
+      "Require access via a bastion/SSM Session Manager or VPN and rotate any database credentials that may have been exposed while public.",
+      "Verify: re-query PubliclyAccessible returns false and confirm the endpoint no longer resolves/accepts connections from outside the VPC.",
+      "Prevent recurrence: enforce Config rules rds-instance-public-access-check and redshift-cluster-public-access-check, and add an SCP denying modify operations that set PubliclyAccessible=true."
+    ],
+    "affected": [
+      "customers-db"
+    ],
+    "count": 1,
+    "distinct": 1
+  },
+  {
+    "check_id": "IDENTITY-01",
+    "section": "EXPOSURE",
+    "severity": "HIGH",
+    "status": "FAIL",
+    "compliance": {
+      "CIS": "1.14",
+      "PCI-DSS": "8.6.3",
+      "HIPAA": "164.312(a)(1)",
+      "SOC2": "CC6.2",
+      "NIST": "IA-5(1)"
+    },
+    "remediation_cmd": "Deactivate and rotate the stale/long-unused privileged access key, then bound the identity: aws iam update-access-key --user-name <USER> --access-key-id <AK_ID> --status Inactive ; aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN> . Prefer short-lived role credentials over long-lived user keys.",
+    "risk": "This identity-fusion check fires when an admin-capable IAM user -- one that reaches admin directly or through CAN_PRIVESC_TO/CAN_ASSUME graph edges, with permission boundaries and SCPs honored as a ceiling -- holds an ACTIVE long-lived access key that is unrotated for more than 90 days or unused for more than 45 days. Because the key alone grants that identity's power with no MFA and no workload exploit, a leaked or forgotten key on an admin identity is a direct pre-authentication account-takeover path: the static credential IS the entry point. It is reported FAIL when admin is reachable via an unconditioned path and WARN when only reachable through a Condition-guarded hop.",
+    "impact": "One leaked static key hands an attacker administrator-level control of the account with no further exploitation -- total compromise.",
+    "steps": [
+      "Confirm the identity's admin-reachability and inspect the key's activity: aws iam get-access-key-last-used --access-key-id <AK_ID> together with the credential report.",
+      "Deactivate the stale key immediately: aws iam update-access-key --user-name <USER> --access-key-id <AK_ID> --status Inactive.",
+      "If the key is needed for automation, issue a fresh key, migrate the workload, and delete the old one (aws iam delete-access-key --user-name <USER> --access-key-id <AK_ID>); otherwise delete it outright.",
+      "Reduce the identity's blast radius: replace standing admin with least privilege and apply a permissions boundary -- aws iam put-user-permissions-boundary --user-name <USER> --permissions-boundary <BOUNDARY_ARN>.",
+      "Prefer short-lived role credentials or IAM Identity Center over long-lived user keys for admin work, and enforce MFA.",
+      "Prevent recurrence: enforce AWS Config rules ACCESS_KEYS_ROTATED (90 days) and IAM_USER_UNUSED_CREDENTIALS_CHECK (45 days), and alert on admin-identity key use from new IPs."
+    ],
+    "affected": [
+      "ci-deploy"
+    ],
+    "count": 1,
+    "distinct": 1
+  },
+  {
+    "check_id": "THREAT-01",
+    "section": "THREAT",
+    "severity": "HIGH",
+    "status": "FAIL",
+    "compliance": {
+      "CIS": "4.15",
+      "PCI-DSS": "11.4",
+      "HIPAA": "164.312(b)",
+      "SOC2": "CC7.3",
+      "NIST": "SI-4"
+    },
+    "remediation_cmd": "Triage the GuardDuty finding, then isolate/rotate as needed: aws guardduty get-findings --detector-id <DETECTOR_ID> --finding-ids <FINDING_ID>; if confirmed, quarantine the resource and rotate exposed credentials. Do not archive without triage.",
+    "risk": "GuardDuty has an ACTIVE, unarchived finding (severity 4 or higher) on this resource, meaning AWS's threat-detection service observed behavior consistent with an in-progress attack such as crypto-mining, C2 communication, credential exfiltration, reconnaissance, or anomalous API calls. OverWatch fuses this into the attack-path graph as a live threat signal, boosting the priority of any path through the affected node. An active GuardDuty finding is not a hypothetical misconfiguration; it is evidence of adversary activity that demands triage now.",
+    "impact": "An untriaged active GuardDuty finding can mean an attacker is already operating in the account (mining, exfiltrating, or moving laterally), and every hour of delay extends dwell time and potential loss.",
+    "steps": [
+      "Pull the full finding detail to understand what was detected: aws guardduty get-findings --detector-id <DETECTOR_ID> --finding-ids <FINDING_ID>",
+      "Corroborate against CloudTrail / VPC flow logs to decide true-positive vs benign: aws cloudtrail lookup-events --lookup-attributes AttributeKey=ResourceName,AttributeValue=<RESOURCE>",
+      "If confirmed, contain the resource: isolate an EC2 host with a quarantine SG (aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --groups <QUARANTINE_SG>) or lock down the affected principal",
+      "Rotate any credentials the resource held, eradicate persistence, and recover from a known-good image",
+      "Do not archive the finding until triage is complete, and document the disposition for the audit trail",
+      "Prevent recurrence: enable GuardDuty org auto-enable (aws guardduty update-organization-configuration --detector-id <DETECTOR_ID> --auto-enable-organization-members ALL) and wire high-severity findings to an EventBridge auto-response/notification rule"
+    ],
+    "affected": [
+      "i-0app01server"
+    ],
+    "count": 1,
+    "distinct": 1
+  },
+  {
+    "check_id": "VPC-01",
+    "section": "VPC",
+    "severity": "HIGH",
+    "status": "FAIL",
+    "compliance": {
+      "CIS": "5.2",
+      "PCI-DSS": "1.3.2",
+      "HIPAA": "164.312(e)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "SC-7"
+    },
+    "remediation_cmd": "Revoke risky SG rule: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
+    "risk": "A security group ingress rule allows a high-risk service port (SSH 22, RDP 3389, or a database/cache port such as MSSQL 1433, MySQL 3306, PostgreSQL 5432, MongoDB 27017, Redis 6379, Elasticsearch 9200/9300, SMB 445, or HTTP-alt 8080) from 0.0.0.0/0 or ::/0, so any host on the internet can attempt to connect. Attackers continuously mass-scan the entire IPv4/IPv6 space for these ports and, on a hit, launch credential brute-force, exploit unauthenticated data stores (open Redis/Elasticsearch/MongoDB), or use the host as an initial foothold. Because the security group is the primary L4 control in a VPC, one over-broad rule can directly expose the workload with no additional layer to stop the traffic.",
+    "impact": "Direct internet exposure of administrative or database services enables brute-force, unauthenticated data theft, or remote code execution, leading to full workload compromise and lateral movement into the VPC.",
+    "steps": [
+      "Identify the offending rule and its port: aws ec2 describe-security-groups --group-ids <SG_ID> --query \"SecurityGroups[].IpPermissions\" and note the 0.0.0.0/0 or ::/0 range on the risky port",
+      "Revoke the world-open IPv4 rule: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
+      "Revoke the IPv6 equivalent if present: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --ip-permissions IpProtocol=tcp,FromPort=<PORT>,ToPort=<PORT>,Ipv6Ranges='[{CidrIpv6=::/0}]'",
+      "Re-add access scoped to trusted sources only, or replace direct admin access with SSM Session Manager / a bastion: aws ec2 authorize-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr <TRUSTED_CIDR>",
+      "Verify no world-open high-risk ports remain: aws ec2 describe-security-groups --filters Name=ip-permission.cidr,Values=0.0.0.0/0 --query \"SecurityGroups[].GroupId\"",
+      "Prevent recurrence with the AWS Config managed rule vpc-sg-open-only-to-authorized-ports (or restricted-ssh) org-wide, and a Firewall Manager security-group policy that auto-remediates 0.0.0.0/0 on sensitive ports"
+    ],
+    "affected": [
+      "sg-0admin"
+    ],
+    "count": 1,
+    "distinct": 1
+  },
+  {
+    "check_id": "VULN-03",
+    "section": "VULN",
+    "severity": "HIGH",
+    "status": "FAIL",
+    "compliance": {
+      "PCI-DSS": "6.3.3",
+      "HIPAA": "164.308(a)(1)(ii)(A)",
+      "SOC2": "CC7.1",
+      "NIST": "SI-2"
+    },
+    "remediation_cmd": "Rebuild the container image on a patched base and push; enable Inspector enhanced ECR scanning: aws inspector2 enable --resource-types ECR",
+    "risk": "Amazon Inspector's enhanced ECR scanning found an ACTIVE HIGH/CRITICAL CVE in a container image stored in ECR. Every task or pod launched from this image inherits the vulnerable package, so the flaw is replicated across the whole fleet running it; an attacker who reaches an exposed container can exploit the CVE for code execution inside the container and then attempt escape or credential theft. Because images are immutable, the vulnerability persists until the image is rebuilt and redeployed.",
+    "impact": "A vulnerable base image silently propagates one CVE to every running container derived from it, turning a single build defect into fleet-wide exploitable exposure and a container-breakout / credential-theft risk.",
+    "steps": [
+      "Identify the affected image and CVE: aws inspector2 list-findings --filter-criteria '{\"ecrImageRepositoryName\":[{\"comparison\":\"EQUALS\",\"value\":\"<REPO>\"}]}' --query 'findings[].{cve:vulnerabilityId,pkg:packageVulnerabilityDetails.vulnerablePackages}'",
+      "Update the Dockerfile to a patched base image / bump the vulnerable dependency, rebuild, and push a new tag to ECR",
+      "Redeploy services onto the new image and recycle old tasks, e.g. aws ecs update-service --cluster <CLUSTER> --service <SVC> --force-new-deployment",
+      "Turn on Inspector enhanced ECR scanning with scan-on-push: aws inspector2 enable --resource-types ECR then aws ecr put-registry-scanning-configuration --scan-type ENHANCED --rules '[{\"scanFrequency\":\"SCAN_ON_PUSH\",\"repositoryFilters\":[{\"filter\":\"*\",\"filterType\":\"WILDCARD\"}]}]'",
+      "Re-scan the new image and confirm no active HIGH/CRITICAL remain: aws inspector2 list-findings --filter-criteria '{\"ecrImageRepositoryName\":[{\"comparison\":\"EQUALS\",\"value\":\"<REPO>\"}],\"findingStatus\":[{\"comparison\":\"EQUALS\",\"value\":\"ACTIVE\"}]}'",
+      "Prevent recurrence: add AWS Config rule ecr-private-image-scanning-enabled and gate CI/CD to block images with unfixed HIGH/CRITICAL CVEs"
+    ],
+    "affected": [
+      "payments-api@sha256:9f2c"
+    ],
+    "count": 1,
+    "distinct": 1
+  },
+  {
+    "check_id": "DSPM-01",
+    "section": "DATA",
+    "severity": "MEDIUM",
+    "status": "FAIL",
+    "compliance": {
+      "PCI-DSS": "3.4",
+      "HIPAA": "164.312(a)(2)(iv)",
+      "SOC2": "CC6.1",
+      "NIST": "SC-28"
+    },
+    "remediation_cmd": "Confirm this datastore is authorized to hold the tagged sensitive data class and enforce encryption-at-rest with a CMK + least-privilege reads. DynamoDB: aws dynamodb update-table --table-name <NAME> --sse-specification Enabled=true,SSEType=KMS ; RDS: restore an encrypted snapshot copy; scope reader roles: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <ARN> .",
+    "risk": "This check FAILs when a non-S3 datastore (RDS instance/cluster, Redshift cluster, DynamoDB table, or EFS file system) is tagged as holding a sensitive data class yet its posture warrants review -- the message also flags UNENCRYPTED when storage encryption is off. This DSPM signal extends crown-jewel awareness beyond S3/Macie to structured databases, which typically hold the highest-value regulated data. An unencrypted crown-jewel database means snapshots, replicas, and the storage layer contain cleartext records; combined with over-broad reader roles it becomes a direct exfiltration target for an attacker who pivots to a role that can read it.",
+    "impact": "A high-value structured datastore holds confirmed sensitive data with encryption or access gaps, so a role compromise or snapshot leak exposes entire databases of regulated records.",
+    "steps": [
+      "Confirm the datastore is authorized to hold the tagged sensitive data class and record its data-classification owner; if the tag is wrong, correct it, otherwise proceed to harden.",
+      "Enforce encryption at rest with a customer-managed key -- for DynamoDB: aws dynamodb update-table --table-name <NAME> --sse-specification Enabled=true,SSEType=KMS,KMSMasterKeyId=<KMS_KEY_ARN>",
+      "For RDS/Redshift (encryption cannot be toggled in place), create an encrypted copy: snapshot the instance, copy the snapshot with --kms-key-id (aws rds copy-db-snapshot ... --kms-key-id <KMS> or aws redshift ... enable cluster encryption), then restore/cut over to the encrypted copy; for EFS create a new encrypted file system and migrate.",
+      "Scope reader access to least privilege by bounding the roles that can read the store: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>",
+      "Verify: confirm StorageEncrypted/SSEType now reports enabled (e.g. aws rds describe-db-instances --db-instance-identifier <ID> --query 'DBInstances[0].StorageEncrypted') and that only intended roles retain read permissions.",
+      "Prevent recurrence: enforce Config rules rds-storage-encrypted, redshift-cluster-kms-enabled, dynamodb-table-encryption-enabled, and efs-encrypted-check, and require the data-classification tag at provisioning time via policy-as-code."
+    ],
+    "affected": [
+      "customers-db",
+      "payments-ledger"
+    ],
+    "count": 2,
+    "distinct": 2
+  },
+  {
+    "check_id": "EXPOSURE-03",
+    "section": "EXPOSURE",
+    "severity": "MEDIUM",
+    "status": "FAIL",
+    "compliance": {
+      "CIS": "5.2",
+      "PCI-DSS": "1.3.1",
+      "HIPAA": "164.312(e)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "SC-7"
+    },
+    "remediation_cmd": "Confirm this L7 front must be internet-facing; if not, make it internal or scope its front-end security group and require WAF/auth at the edge: aws elbv2 set-security-groups --load-balancer-arn <ARN> --security-groups <SCOPED_SG> ; aws ec2 revoke-security-group-ingress --group-id <ALB_SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0 . For CloudFront/API Gateway attach a WAF Web ACL (aws wafv2 associate-web-acl ...) and require authentication.",
+    "risk": "An internet-facing L7 front -- an Application/Network/Classic Load Balancer, a CloudFront distribution, or an API Gateway -- is exposed to the internet and, in the FAIL case, resolves to one or more in-rotation backend workloads. This means traffic from anyone on the internet is routed to your compute, so the safety of those backends rests entirely on edge controls (WAF, authentication, TLS) and the application itself. If the front carries no WAF or authentication, or should not be public at all, attackers can reach the application layer directly to exploit app vulnerabilities, brute-force logins, or abuse the API.",
+    "impact": "An unprotected internet-facing L7 entry point routes untrusted traffic straight to backend workloads, exposing the application to L7 attacks (injection, credential stuffing, API abuse) and potential compromise.",
+    "steps": [
+      "Confirm the front must be internet-facing by reviewing the finding's resource (LB / distribution / API) and its resolved backends with the owner",
+      "If it should be internal, recreate the ALB/NLB as internal (Scheme=internal) or restrict its front-end security group and strip the world-open rule: aws elbv2 set-security-groups --load-balancer-arn <ARN> --security-groups <SCOPED_SG> then aws ec2 revoke-security-group-ingress --group-id <ALB_SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
+      "If it must stay public, attach a WAF Web ACL at the edge: aws wafv2 associate-web-acl --web-acl-arn <WEBACL_ARN> --resource-arn <ALB_OR_APIGW_ARN> (for CloudFront, set WebACLId in the distribution config)",
+      "Require authentication and TLS at the edge (ALB OIDC/Cognito authenticate action, API Gateway authorizer, CloudFront viewer HTTPS-only with origin access control)",
+      "Verify protection is in place: aws wafv2 get-web-acl-for-resource --resource-arn <ARN> and confirm listeners/viewer policy enforce HTTPS",
+      "Prevent recurrence by enabling AWS Config rules alb-waf-enabled and cloudfront-associated-with-waf plus a Firewall Manager WAF policy so every internet-facing front must carry a Web ACL"
+    ],
+    "affected": [
+      "prod-api-alb"
+    ],
+    "count": 1,
+    "distinct": 1
+  },
+  {
+    "check_id": "S3-05",
+    "section": "S3",
+    "severity": "MEDIUM",
+    "status": "FAIL",
+    "compliance": {
+      "CIS": "3.6",
+      "PCI-DSS": "10.2",
+      "HIPAA": "164.312(b)",
+      "SOC2": "CC7.2",
+      "NIST": "AU-2"
+    },
+    "remediation_cmd": "Enable access logging: aws s3api put-bucket-logging --bucket <BUCKET> --bucket-logging-status '{\"LoggingEnabled\":{\"TargetBucket\":\"<LOG_BUCKET>\",\"TargetPrefix\":\"s3-logs/\"}}'",
+    "risk": "This check WARNs when S3 server access logging is disabled on a bucket. Access logs record every request (requester, operation, object key, response, source IP), which is the primary forensic trail for detecting and reconstructing data theft or abuse. Without them, a breach involving mass GetObject calls or an exposed object leaves no bucket-level record of who accessed what, crippling incident response and breaking audit/compliance requirements for access monitoring.",
+    "impact": "Loss of the request-level audit trail means data exfiltration cannot be detected or attributed after the fact, failing SOC2/HIPAA logging controls and prolonging attacker dwell time.",
+    "steps": [
+      "Confirm scope: aws s3api get-bucket-logging --bucket <BUCKET> returns an empty result when logging is off.",
+      "Provision a dedicated log-destination bucket (separate from the source) with its own encryption and lifecycle policy, and grant the S3 log-delivery group write access.",
+      "Enable access logging pointing at that destination: aws s3api put-bucket-logging --bucket <BUCKET> --bucket-logging-status '{\"LoggingEnabled\":{\"TargetBucket\":\"<LOG_BUCKET>\",\"TargetPrefix\":\"s3-logs/<BUCKET>/\"}}'",
+      "For richer, near-real-time visibility on sensitive buckets, additionally enable a CloudTrail S3 data event trail scoped to the bucket.",
+      "Verify: aws s3api get-bucket-logging --bucket <BUCKET> now shows the LoggingEnabled block, and confirm log objects appear under the prefix after test requests.",
+      "Prevent recurrence: add the AWS Config rule s3-bucket-logging-enabled to flag any future bucket created without access logging."
+    ],
+    "affected": [
+      "public-assets"
+    ],
+    "count": 1,
+    "distinct": 1
+  },
+  {
+    "check_id": "EXPOSURE-02",
+    "section": "EXPOSURE",
+    "severity": "LOW",
+    "status": "WARN",
+    "compliance": {
+      "CIS": "5.2",
+      "PCI-DSS": "1.3.1",
+      "HIPAA": "164.312(e)(1)",
+      "SOC2": "CC6.6",
+      "NIST": "SC-7"
+    },
+    "remediation_cmd": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges or place the workload behind a load balancer/WAF: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
+    "risk": "The scanner has confirmed a workload is effectively reachable from the internet across all network layers (public IP, IGW route, SG ingress, and stateless NACL both directions) but on ports outside the sensitive/admin set. Any internet-facing service still enlarges the attack surface: the listening application may carry unpatched vulnerabilities, weak authentication, or information-leaking endpoints, and an attacker who exploits it gains a foothold inside the VPC. Reducing needless direct exposure -- especially by fronting workloads with a load balancer and WAF instead of exposing instances directly -- limits what the internet can touch.",
+    "impact": "An unnecessarily internet-exposed service broadens the attack surface and can become an initial-access point if the application has an exploitable flaw.",
+    "steps": [
+      "Determine whether the exposure is intentional: identify the resource and open ports from the finding and confirm with the owner that it must be public",
+      "If it should not be public, remove the internet path by restricting the security group: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
+      "If it must serve users, place it behind an internet-facing ALB/NLB with a WAF and move the instance to a private subnet (disable auto-assign public IP and release the EIP) rather than exposing the host directly",
+      "Scope any remaining direct ingress to known consumer CIDRs: aws ec2 authorize-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr <TRUSTED_CIDR>",
+      "Verify reduced exposure: aws ec2 describe-security-groups --group-ids <SG_ID> --query \"SecurityGroups[].IpPermissions\"",
+      "Prevent recurrence by defaulting new subnets to no public IP (aws ec2 modify-subnet-attribute --subnet-id <SUBNET_ID> --no-map-public-ip-on-launch) and standardizing an internet-facing-equals-load-balancer-only pattern in IaC"
+    ],
+    "affected": [
+      "all-enis"
+    ],
+    "count": 1,
+    "distinct": 1
+  },
+  {
+    "check_id": "KMS-03",
+    "section": "KMS",
+    "severity": "LOW",
+    "status": "WARN",
+    "compliance": {
+      "NIST": "SC-12",
+      "SOC2": "CC6.1",
+      "HIPAA": "164.312(a)(2)(iv)"
+    },
+    "remediation_cmd": "Cancel deletion if the CMK is still in use, or re-enable a disabled key: aws kms cancel-key-deletion --key-id <KEY_ID> ; aws kms enable-key --key-id <KEY_ID>",
+    "risk": "The scanner flags a customer-managed CMK that is either scheduled for deletion (KeyState PendingDeletion/PendingReplicaDeletion) or Disabled. A CMK in these states cannot perform Decrypt, so every ciphertext still protected by it becomes permanently unreadable once deletion completes: S3 objects, EBS/RDS snapshots, and Secrets Manager values encrypted under it become unrecoverable. Scheduling deletion is also a classic destructive/anti-forensic move; an insider or attacker with kms:ScheduleKeyDeletion can render encrypted backups and logs undecryptable to defeat recovery. Because deletion has a mandatory 7-30 day waiting window, this finding is the chance to intervene before irreversible loss.",
+    "impact": "Irreversible loss of all data encrypted under the key once the deletion window elapses, plus denial of access while the key is disabled, producing an outage or an unrecoverable-backup insider/ransomware scenario.",
+    "steps": [
+      "Determine state and dependents: aws kms describe-key --key-id <KEY_ID> --query 'KeyMetadata.[KeyState,DeletionDate]'  and identify resources still using it (S3 default encryption, EBS/RDS snapshots, Secrets Manager KmsKeyId).",
+      "If the key is still needed and pending deletion, cancel it: aws kms cancel-key-deletion --key-id <KEY_ID>",
+      "Re-enable the key so cryptographic operations resume: aws kms enable-key --key-id <KEY_ID>",
+      "If deletion is genuinely intended, first confirm nothing depends on it by reviewing CloudTrail kms:Decrypt events over the last 90 days before letting the window elapse.",
+      "Verify recovery: aws kms describe-key --key-id <KEY_ID> --query 'KeyMetadata.KeyState'  should return \"Enabled\".",
+      "Prevent recurrence: restrict kms:ScheduleKeyDeletion and kms:DisableKey via SCP to a break-glass role, and add a CloudTrail/CloudWatch alarm on ScheduleKeyDeletion and DisableKey events."
+    ],
+    "affected": [
+      "cmk-legacy"
+    ],
+    "count": 1,
+    "distinct": 1
+  }
+]

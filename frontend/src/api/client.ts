@@ -3,7 +3,7 @@
 //   VITE_DATA_SOURCE = 'sample' (default) | 'live'
 //   VITE_API_BASE    = '/api' (default; the Vite dev-proxy forwards to :8000)
 import type {
-  OrgOverview, Account, AccountSummary, Finding, AttackPath,
+  OrgOverview, Account, AccountSummary, Finding, AttackPath, FindingCatalogEntry,
 } from './types'
 
 const MODE = (import.meta.env.VITE_DATA_SOURCE as string) ?? 'sample'
@@ -29,4 +29,8 @@ export const api = {
     get<Finding[]>(endpoint(`/accounts/${id}/issues`, `account_${id}_issues.json`)),
   paths: (id: string) =>
     get<AttackPath[]>(endpoint(`/accounts/${id}/paths`, `account_${id}_paths.json`)),
+  findings: (id: string) =>
+    get<FindingCatalogEntry[]>(endpoint(`/accounts/${id}/findings`, `account_${id}_findings.json`)),
+  orgFindings: () =>
+    get<FindingCatalogEntry[]>(endpoint('/org/findings', 'org_findings.json')),
 }
