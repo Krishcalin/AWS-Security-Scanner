@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { ScopeProvider } from './state/scope'
 import { AppShell } from './components/AppShell'
 import { Overview } from './routes/Overview'
+import { AttackPaths } from './routes/AttackPaths'
 import { Placeholder } from './routes/Placeholder'
 
 export default function App() {
@@ -11,7 +12,7 @@ export default function App() {
         <Routes>
           <Route element={<AppShell />}>
             <Route path="/" element={<Overview />} />
-            <Route path="/attack-paths" element={<Placeholder />} />
+            <Route path="/attack-paths" element={<AttackPaths />} />
             <Route path="/findings" element={<Placeholder />} />
             <Route path="/inventory" element={<Placeholder />} />
             <Route path="/identity" element={<Placeholder />} />
