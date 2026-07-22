@@ -185,11 +185,12 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 - **5 compliance frameworks** -- CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
 - **Risk scoring** -- Posture score 0-100 with letter grade (A-F), severity-weighted
 - **AWS CLI remediation** -- actionable CLI commands for every failed check
+- **Detailed finding reports** -- every actionable check ships a full write-up (`aws_finding_detail.py`): the **risk** (what it is / how it's exploited / why it matters), the **business impact**, and **step-by-step remediation** with real AWS CLI, plus the mapped compliance controls. The JSON report carries a deduped, severity-ranked `finding_catalog`; the HTML report renders per-finding cards (risk -> impact -> numbered fix steps -> frameworks) above the full findings table. A check with no detailed entry falls back to its one-line CLI, so coverage grows without breaking rendering
 - **5 output formats** -- coloured console, JSON, interactive HTML, **SARIF 2.1.0** (GitHub code scanning), **ASFF** (AWS Security Hub)
 - **CI/CD gating** -- `--fail-on CRITICAL|HIGH|MEDIUM|LOW` for pipeline pass/fail control
 - **Scan diff** -- `--baseline prev.json` surfaces only what's *new* or *resolved* since a previous run (superseded by `--state` DB-backed lifecycle when both are given)
 - **Evidence collection** -- CSV/JSON artefact files saved per check
-- **483 unit tests** -- full test suite with mock boto3, no AWS credentials needed (incl. exposure, deep-plane, attack-path-scoring, Phase-5 effective-permissions/state/CIEM, Phase-6 side-scan version-comparator/OSV-matching/EBS-block-plane/backend-export, and Phase-7 remediation/code-to-cloud false-positive/false-negative catalogs; a regression test backs every defect the adversarial-verification passes found)
+- **1128 unit tests** -- full test suite with mock boto3, no AWS credentials needed (incl. exposure, deep-plane, attack-path-scoring, Phase-5 effective-permissions/state/CIEM, Phase-6 side-scan version-comparator/OSV-matching/EBS-block-plane/backend-export, Phase-7 remediation/code-to-cloud false-positive/false-negative catalogs, and the detailed finding write-ups / `finding_catalog` rendering; a regression test backs every defect the adversarial-verification passes found)
 
 ### Prerequisites (Live Scanner)
 

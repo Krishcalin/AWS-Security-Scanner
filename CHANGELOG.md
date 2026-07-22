@@ -4,6 +4,39 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.19.0] — 2026
+
+**Detailed finding reports baked into the scanner.** Every scan now emits, for every
+actionable check, a full write-up — the **risk**, the **business impact**, and
+**step-by-step remediation** with real AWS CLI — not just a one-line command.
+
+### Added — `aws_finding_detail.py` (pure, offline data module)
+- `FINDING_DETAIL = {check_id: {risk, impact, steps[...]}}` for **all 204 actionable
+  (FAIL-able) check IDs** — 100% coverage of `REMEDIATION_MAP`. Compliance references
+  are **not** duplicated; they come from `COMPLIANCE_MAP`. `get_detail()` / `steps_for()`
+  helpers. A check with no entry falls back to its one-line `REMEDIATION_MAP` CLI, so
+  rendering never breaks as coverage grows.
+
+### Changed — reports
+- `save_json` adds a deduped, severity-ranked **`finding_catalog`** (per distinct
+  FAIL/WARN check: risk / impact / steps / compliance / one-line CLI / affected
+  resources / finding count / distinct-resource count), built by `_build_finding_catalog()`.
+- `save_html` rewritten to a **light theme** (blue/white) with three sections: ranked
+  **attack paths** → per-finding **detail cards** (risk → business impact → numbered
+  remediation steps → frameworks) → the full findings table.
+
+### Hardening (from a read-only adversarial verification — 5 confirmed, all fixed)
+- **LMB-06**: `aws lambda update-function-code-signing-config` is not a real operation
+  → `put-function-code-signing-config` (the enforce-mode signing config was never bound).
+- **OSR-02**: `--encrypt-at-rest-options` is an invalid flag →
+  `--encryption-at-rest-options` (encryption-at-rest was never enabled).
+- **SM-01 / SM-04**: delete-and-recreate a SageMaker notebook (which destroys its
+  persistent ML volume) with no back-up-first step → prepend a back-up/migrate step.
+- **`+N more`** card meta counted total findings, not distinct affected resources
+  → added an uncapped `distinct` count; the card now counts resources.
+- Regression tests back all five (invalid-CLI-token denylist, notebook-delete-backs-up-first
+  guard, distinct-vs-finding-count). **Full suite: 1128 passed.**
+
 ## [2.10.0] — 2026
 
 **CNAPP Phase 9 — Live PostgresBackend.** The state plane (Phase-5 finding

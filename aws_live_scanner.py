@@ -72,9 +72,82 @@ import aws_unused
 import aws_sidescan
 import aws_engine_eol
 import aws_winvuln
+import aws_finding_detail
 import aws_graph_neptune
 
-VERSION = "2.18.0"
+VERSION = "2.19.0"
+
+# Light-theme CSS for the HTML report (plain string — real braces, no interpolation, so it
+# concatenates cleanly with the f-string body in save_html).
+_REPORT_CSS = """<style>
+:root{--bg:#eef3fb;--panel:#fff;--panel2:#f4f8fd;--line:#dde7f3;--ink:#12263f;--ink2:#51667f;
+--ink3:#8093ac;--accent:#1570ef;--accent2:#0b5cd6;--accentdim:#e4eefe;--crit:#d92d20;--high:#e8590c;
+--med:#c47d04;--low:#0f9d58;--info:#1570ef;--critbg:#fef3f2;--highbg:#fff4ed;--medbg:#fdf6e3;
+--lowbg:#ecfdf3;--infobg:#eff6ff;--sh:0 1px 2px rgba(16,40,73,.05),0 6px 18px rgba(16,40,73,.06);
+--shs:0 1px 2px rgba(16,40,73,.05);--mono:"SF Mono","Cascadia Code",ui-monospace,Consolas,monospace;
+--sans:-apple-system,"Segoe UI",system-ui,Roboto,sans-serif;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.5;
+-webkit-font-smoothing:antialiased;background-image:radial-gradient(1100px 480px at 85% -8%,rgba(21,112,239,.10),transparent 72%);}
+.wrap{max-width:1120px;margin:0 auto;padding:0 22px 70px;} code{font-family:var(--mono);}
+.rhead{display:flex;flex-wrap:wrap;align-items:center;gap:14px 20px;padding:22px 0 20px;border-bottom:1px solid var(--line);margin-bottom:24px;}
+.brand{display:flex;align-items:center;gap:12px;}
+.logo{width:38px;height:38px;border-radius:9px;display:grid;place-items:center;background:linear-gradient(150deg,#2e90fa,#1570ef);font-size:20px;box-shadow:0 4px 14px rgba(21,112,239,.35);}
+.brand h1{font-size:19px;margin:0;font-weight:700;letter-spacing:-.2px;}
+.tag{font-size:10.5px;letter-spacing:.8px;font-weight:700;color:var(--accent2);border:1px solid #bcd7fb;background:var(--accentdim);padding:3px 9px;border-radius:20px;text-transform:uppercase;vertical-align:middle;}
+.sub{font-size:12px;color:var(--ink2);}
+.rmeta{margin-left:auto;display:flex;flex-wrap:wrap;gap:6px 20px;font-size:12px;color:var(--ink2);font-family:var(--mono);} .rmeta b{color:var(--ink);}
+.exec{display:grid;grid-template-columns:auto 1fr;gap:18px;margin-bottom:8px;}
+@media(max-width:720px){.exec{grid-template-columns:1fr;}}
+.gauge{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 24px;display:flex;align-items:center;gap:18px;box-shadow:var(--sh);}
+.grade{width:88px;height:88px;border-radius:50%;display:grid;place-items:center;position:relative;flex:none;background:conic-gradient(var(--gc,var(--crit)) 0 var(--gd,90deg),#e5edf6 0);}
+.grade::before{content:"";position:absolute;inset:7px;border-radius:50%;background:var(--panel);}
+.grade span{position:relative;font-size:38px;font-weight:800;}
+.grade.crit{--gc:var(--crit);} .grade.high{--gc:var(--high);} .grade.med{--gc:var(--med);} .grade.low{--gc:var(--low);}
+.grade.crit span{color:var(--crit);} .grade.high span{color:var(--high);} .grade.med span{color:var(--med);} .grade.low span{color:var(--low);}
+.gt .score{font-size:15px;font-weight:700;} .gt .score b{font-size:26px;}
+.gt .score b.crit{color:var(--crit);} .gt .score b.high{color:var(--high);} .gt .score b.med{color:var(--med);} .gt .score b.low{color:var(--low);}
+.s100{color:var(--ink3);} .glbl{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--ink3);margin-top:3px;}
+.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;}
+@media(max-width:720px){.cards{grid-template-columns:repeat(3,1fr);}}
+.cd{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 12px;text-align:center;box-shadow:var(--shs);border-left:3px solid var(--c,var(--ink3));}
+.cd .num{font-size:28px;font-weight:800;color:var(--c,var(--ink));} .cd .cl{font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink3);margin-top:6px;}
+.cd.fail{--c:var(--crit)} .cd.warn{--c:var(--med)} .cd.pass{--c:var(--low)} .cd.info{--c:var(--info)} .cd.tot{--c:var(--accent)}
+h2.sec{font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:var(--ink3);font-weight:700;margin:36px 0 15px;display:flex;align-items:center;gap:10px;}
+h2.sec::after{content:"";flex:1;height:1px;background:var(--line);} h2.sec .n{color:var(--accent);font-family:var(--mono);text-transform:none;letter-spacing:0;}
+.pcard{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--sevc,var(--ink3));border-radius:12px;margin-bottom:11px;padding:13px 17px;box-shadow:var(--shs);}
+.pcard.crit{--sevc:var(--crit)} .pcard.high{--sevc:var(--high)} .pcard.med{--sevc:var(--med)} .pcard.low{--sevc:var(--low)}
+.ph{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.pscore{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;} .pscore.crit{color:var(--crit)} .pscore.high{color:var(--high)} .pscore.med{color:var(--med)} .pscore.low{color:var(--low)}
+.pchain{font-family:var(--mono);font-size:12.5px;color:var(--ink);font-weight:600;}
+.prat{font-family:var(--mono);font-size:11px;color:var(--ink3);margin:7px 0 8px;}
+.fcard{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--sevc,var(--ink3));border-radius:12px;margin-bottom:13px;box-shadow:var(--shs);}
+.fcard.crit{--sevc:var(--crit)} .fcard.high{--sevc:var(--high)} .fcard.med{--sevc:var(--med)} .fcard.low{--sevc:var(--low)}
+.fh{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:14px 18px 0;}
+.cid{font-family:var(--mono);font-weight:700;font-size:13px;color:var(--ink);}
+.fmeta{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--ink3);}
+.fbody{padding:6px 18px 16px;}
+.flbl{font-size:10px;letter-spacing:1.1px;text-transform:uppercase;font-weight:800;margin:14px 0 5px;color:var(--ink3);}
+.flbl.risk{color:var(--crit);} .flbl.impact{color:var(--high);} .flbl.fix{color:var(--low);} .flbl.refs{color:var(--ink3);}
+.fbody p{margin:0;font-size:13px;color:var(--ink2);line-height:1.6;}
+.fbody p.cli{font-family:var(--mono);font-size:12px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:8px 10px;color:var(--accent2);white-space:pre-wrap;word-break:break-word;}
+.fbody ol{margin:2px 0 0;padding-left:22px;font-size:13px;color:var(--ink2);line-height:1.5;}
+.fbody ol li{margin-bottom:8px;padding-left:3px;} .fbody ol li::marker{color:var(--accent);font-weight:700;}
+.fcomp{display:flex;gap:6px;flex-wrap:wrap;} .cc{font-size:10px;font-family:var(--mono);color:var(--ink2);border:1px solid var(--line);background:var(--panel2);border-radius:5px;padding:2px 8px;}
+.clean{font-size:14px;color:var(--low);font-weight:600;padding:10px 0;}
+.tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:var(--shs);}
+table{width:100%;border-collapse:collapse;font-size:12px;min-width:720px;}
+thead th{text-align:left;padding:10px 13px;font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:var(--ink3);border-bottom:1px solid var(--line);white-space:nowrap;background:var(--panel2);position:sticky;top:0;}
+tbody td{padding:8px 13px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--ink2);}
+tbody tr:last-child td{border-bottom:none;} tbody tr:hover{background:var(--panel2);}
+td.mono{font-family:var(--mono);color:var(--ink);} .comp{font-family:var(--mono);color:var(--ink3);max-width:200px;}
+.st{font-size:10px;font-weight:800;letter-spacing:.4px;padding:2px 7px;border-radius:5px;white-space:nowrap;}
+.st.FAIL{background:var(--critbg);color:var(--crit);} .st.WARN{background:var(--medbg);color:var(--med);} .st.PASS{background:var(--lowbg);color:var(--low);} .st.INFO{background:var(--infobg);color:var(--info);}
+.sv{font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;}
+.sv.CRITICAL{background:var(--critbg);color:var(--crit);} .sv.HIGH{background:var(--highbg);color:var(--high);} .sv.MEDIUM{background:var(--medbg);color:var(--med);} .sv.LOW{background:var(--lowbg);color:var(--low);}
+details summary{cursor:pointer;color:var(--accent);font-size:11px;} details code{display:block;margin-top:4px;font-size:11px;white-space:pre-wrap;word-break:break-word;color:var(--accent2);background:var(--panel2);border:1px solid var(--line);padding:6px;border-radius:5px;}
+footer{margin-top:36px;padding-top:18px;border-top:1px solid var(--line);font-size:11.5px;color:var(--ink3);line-height:1.6;}
+</style>"""
 
 # ─── Terminal colours ─────────────────────────────────────────────────────────
 RED    = "\033[0;31m"
@@ -9271,6 +9344,49 @@ class AWSLiveScanner:
                       f"{f' +{len(failed)-12} more' if len(failed) > 12 else ''}")
         return card
 
+    _SEV_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "": 4}
+
+    def _build_finding_catalog(self) -> List[Dict]:
+        """Deduped, severity-ranked catalog of the distinct FAIL/WARN checks in this scan,
+        each enriched with its detailed risk / business-impact / step-by-step remediation
+        (aws_finding_detail) + the compliance controls + the one-line CLI + the affected
+        resources. This is the per-check 'why it matters and how to fix it' write-up that the
+        JSON (finding_catalog) and HTML reports render — a check with no detailed entry falls
+        back to its one-line remediation, so rendering never breaks as coverage grows."""
+        seen: Dict[str, Dict] = {}
+        seen_res: Dict[str, set] = {}          # per-check set of distinct resources (uncapped)
+        order: List[str] = []
+        for r in self.results:
+            if r.status not in ("FAIL", "WARN"):
+                continue
+            e = seen.get(r.check_id)
+            if e is None:
+                d = aws_finding_detail.get_detail(r.check_id) or {}
+                seen[r.check_id] = {
+                    "check_id": r.check_id, "section": r.section, "severity": r.severity,
+                    "status": r.status,
+                    "compliance": COMPLIANCE_MAP.get(r.check_id, {}),
+                    "remediation_cmd": REMEDIATION_MAP.get(r.check_id, ""),
+                    "risk": d.get("risk", ""), "impact": d.get("impact", ""),
+                    "steps": list(d.get("steps", [])),
+                    # affected: up to 25 distinct resource names for display; distinct: the true
+                    # distinct-resource count (uncapped) so reports say '+N more' by resource, not
+                    # by finding count; count: total FAIL/WARN findings for this check.
+                    "affected": [r.resource] if r.resource else [], "count": 1,
+                    "distinct": 1 if r.resource else 0,
+                }
+                seen_res[r.check_id] = {r.resource} if r.resource else set()
+                order.append(r.check_id)
+            else:
+                e["count"] += 1
+                if r.resource and r.resource not in seen_res[r.check_id]:
+                    seen_res[r.check_id].add(r.resource)
+                    e["distinct"] += 1
+                    if len(e["affected"]) < 25:
+                        e["affected"].append(r.resource)
+        return sorted((seen[cid] for cid in order),
+                      key=lambda x: (self._SEV_ORDER.get(x["severity"], 4), x["check_id"]))
+
     def save_json(self, path: str):
         score = compute_risk_score(self.results)
         data = {
@@ -9287,6 +9403,9 @@ class AWSLiveScanner:
                 "INFO": sum(1 for r in self.results if r.status == "INFO"),
             },
             "compliance_scorecard": compliance_scorecard(self.results),
+            # Per-check risk explanation + business impact + step-by-step remediation for
+            # every distinct FAIL/WARN in this scan (deduped, severity-ranked).
+            "finding_catalog": self._build_finding_catalog(),
             "graph": self.graph.stats() if self.graph else None,
             "attack_paths": [p.to_dict() for p in self.attack_paths],
             "choke_points": [c.to_dict() for c in self.choke_points],
@@ -9499,130 +9618,124 @@ class AWSLiveScanner:
                 print(f"  {GREEN}-{RESET} {d_.get('check_id')}: {d_.get('message')}{res}")
 
     def save_html(self, path: str):
-        STATUS_BADGE = {
-            "PASS": '<span class="badge pass">PASS</span>',
-            "FAIL": '<span class="badge fail">FAIL</span>',
-            "WARN": '<span class="badge warn">WARN</span>',
-            "INFO": '<span class="badge info">INFO</span>',
-        }
-        SEV_BADGE = {
-            "CRITICAL": '<span class="sev crit">CRITICAL</span>',
-            "HIGH":     '<span class="sev high">HIGH</span>',
-            "MEDIUM":   '<span class="sev med">MEDIUM</span>',
-            "LOW":      '<span class="sev low">LOW</span>',
-        }
-        counts = {
-            "PASS": sum(1 for r in self.results if r.status == "PASS"),
-            "FAIL": sum(1 for r in self.results if r.status == "FAIL"),
-            "WARN": sum(1 for r in self.results if r.status == "WARN"),
-            "INFO": sum(1 for r in self.results if r.status == "INFO"),
-        }
+        import html as html_mod
+        esc = html_mod.escape
+        counts = {k: sum(1 for r in self.results if r.status == k)
+                  for k in ("PASS", "FAIL", "WARN", "INFO")}
         score = compute_risk_score(self.results)
         grade = score_to_grade(score)
+        gclass = ("crit" if score < 40 else "high" if score < 60
+                  else "med" if score < 80 else "low")
+        svc = {"CRITICAL": "crit", "HIGH": "high", "MEDIUM": "med", "LOW": "low"}
 
-        import html as html_mod
+        # Detailed finding cards: per distinct FAIL/WARN check -> risk + business impact +
+        # step-by-step remediation (aws_finding_detail) + compliance references.
+        cards = []
+        for e in self._build_finding_catalog():
+            sc = svc.get(e["severity"], "")
+            aff = e["affected"][:6]
+            aff_txt = ", ".join(esc(a) for a in aff)
+            if e["distinct"] > len(aff):
+                aff_txt += f" +{e['distinct'] - len(aff)} more"
+            meta = (f"{esc(e['section'])} &middot; {e['count']} finding(s)"
+                    + (f" &middot; {aff_txt}" if aff_txt else ""))
+            risk = f'<div class="flbl risk">Risk</div><p>{esc(e["risk"])}</p>' if e["risk"] else ""
+            impact = (f'<div class="flbl impact">Business impact</div><p>{esc(e["impact"])}</p>'
+                      if e["impact"] else "")
+            if e["steps"]:
+                steps = ('<div class="flbl fix">Remediation &mdash; step by step</div><ol>'
+                         + "".join(f"<li>{esc(s)}</li>" for s in e["steps"]) + "</ol>")
+            elif e["remediation_cmd"]:
+                steps = (f'<div class="flbl fix">Remediation</div>'
+                         f'<p class="cli">{esc(e["remediation_cmd"])}</p>')
+            else:
+                steps = ""
+            refs = "".join(f'<span class="cc">{esc(k)} {esc(v)}</span>'
+                           for k, v in e["compliance"].items())
+            refs_html = (f'<div class="flbl refs">Frameworks</div><div class="fcomp">{refs}</div>'
+                         if refs else "")
+            sevlbl = esc(e["severity"] or "")
+            cards.append(
+                f'<div class="fcard {sc}"><div class="fh">'
+                f'<span class="st {e["status"]}">{e["status"]}</span>'
+                f'<span class="sv {sevlbl}">{sevlbl}</span>'
+                f'<span class="cid">{esc(e["check_id"])}</span>'
+                f'<span class="fmeta">{meta}</span></div>'
+                f'<div class="fbody">{risk}{impact}{steps}{refs_html}</div></div>')
+        cards_html = ("\n".join(cards) if cards
+                      else '<p class="clean">No FAIL or WARN findings in this scan. &#10003;</p>')
+
+        # Ranked attack paths (the CNAPP differentiator) — internet -> ... -> crown/admin.
+        paths_html = ""
+        if self.attack_paths and self.graph is not None:
+            prows = []
+            for p in self.attack_paths[:8]:
+                pc = svc.get(p.severity, "")
+                chain = " &rarr; ".join(esc(aws_correlate._label(self.graph, n)) for n in p.nodes)
+                drivers = "".join(f'<span class="cc">{esc(x)}</span>' for x in p.driving_findings)
+                prows.append(
+                    f'<div class="pcard {pc}"><div class="ph">'
+                    f'<span class="pscore {pc}">{p.score}</span>'
+                    f'<span class="sv {esc(p.severity)}">{esc(p.severity)}</span>'
+                    f'<span class="pchain">{chain}</span></div>'
+                    f'<div class="prat">{esc(p.rationale)}</div>'
+                    f'<div class="fcomp">{drivers}</div></div>')
+            paths_html = ('<h2 class="sec">Attack paths <span class="n">ranked toxic combinations '
+                          '(internet &rarr; crown-jewel / admin)</span></h2>' + "\n".join(prows))
+
+        # Full findings table (every result)
         rows = ""
         for r in self.results:
-            badge = STATUS_BADGE.get(r.status, r.status)
-            sev = SEV_BADGE.get(r.severity, "") if r.severity else ""
             comp = ", ".join(f"{k}:{v}" for k, v in r.compliance.items()) if r.compliance else ""
-            rem = html_mod.escape(r.remediation_cmd) if r.remediation_cmd else ""
-            rem_cell = f'<details><summary>CLI</summary><code>{rem}</code></details>' if rem else ""
+            sevsp = f'<span class="sv {esc(r.severity)}">{esc(r.severity)}</span>' if r.severity else ""
+            rem = (f'<details><summary>CLI</summary><code>{esc(r.remediation_cmd)}</code></details>'
+                   if r.remediation_cmd else "")
             rows += (
-                f"<tr class='row-{r.status.lower()}'>"
-                f"<td>{badge}</td>"
-                f"<td>{sev}</td>"
-                f"<td>{html_mod.escape(r.check_id)}</td>"
-                f"<td>{html_mod.escape(r.section)}</td>"
-                f"<td>{html_mod.escape(r.resource)}</td>"
-                f"<td>{html_mod.escape(r.message)}</td>"
-                f"<td class='comp'>{html_mod.escape(comp)}</td>"
-                f"<td>{rem_cell}</td>"
-                f"</tr>\n"
-            )
+                f'<tr class="row-{r.status.lower()}">'
+                f'<td><span class="st {r.status}">{r.status}</span></td>'
+                f'<td>{sevsp}</td><td class="mono">{esc(r.check_id)}</td>'
+                f'<td>{esc(r.section)}</td><td class="mono">{esc(r.resource)}</td>'
+                f'<td>{esc(r.message)}</td><td class="comp">{esc(comp)}</td>'
+                f'<td>{rem}</td></tr>\n')
 
-        html_content = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>AWS Live Security Audit — {html_mod.escape(self.account)}</title>
-  <style>
-    body  {{ font-family:'Segoe UI',Arial,sans-serif; background:#0d1117;
-             color:#c9d1d9; margin:0; }}
-    h1    {{ background:#161b22; padding:20px 30px; margin:0; font-size:1.4em;
-             border-bottom:1px solid #30363d; }}
-    .summary {{ display:flex; gap:20px; padding:20px 30px;
-                background:#161b22; flex-wrap:wrap; }}
-    .card    {{ background:#21262d; border-radius:8px; padding:15px 25px;
-                text-align:center; min-width:90px; }}
-    .card .num {{ font-size:2em; font-weight:bold; }}
-    .card .lbl {{ font-size:0.85em; color:#8b949e; }}
-    .fail-num {{ color:#f85149; }} .pass-num {{ color:#3fb950; }}
-    .warn-num {{ color:#d29922; }} .info-num {{ color:#58a6ff; }}
-    table {{ width:100%; border-collapse:collapse; margin:0; }}
-    th    {{ background:#161b22; padding:12px 15px; text-align:left;
-             font-size:0.85em; color:#8b949e; border-bottom:1px solid #30363d;
-             position:sticky; top:0; }}
-    td    {{ padding:10px 15px; border-bottom:1px solid #21262d;
-             font-size:0.9em; }}
-    tr.row-fail {{ background:rgba(248,81,73,0.08); }}
-    tr.row-warn {{ background:rgba(210,153,34,0.06); }}
-    .badge {{ padding:3px 8px; border-radius:4px; font-size:0.8em;
-              font-weight:bold; white-space:nowrap; }}
-    .badge.pass {{ background:#1a4731; color:#3fb950; }}
-    .badge.fail {{ background:#4d1f1f; color:#f85149; }}
-    .badge.warn {{ background:#3d2e00; color:#d29922; }}
-    .badge.info {{ background:#1c2e46; color:#58a6ff; }}
-    .sev {{ padding:2px 6px; border-radius:3px; font-size:0.75em; font-weight:bold; }}
-    .sev.crit {{ background:#4d1f1f; color:#f85149; }}
-    .sev.high {{ background:#3d2e00; color:#d29922; }}
-    .sev.med  {{ background:#2a2a00; color:#e3b341; }}
-    .sev.low  {{ background:#1a3a1a; color:#3fb950; }}
-    .comp {{ font-size:0.75em; color:#8b949e; max-width:200px; }}
-    details summary {{ cursor:pointer; color:#58a6ff; font-size:0.8em; }}
-    details code {{ display:block; margin-top:4px; font-size:0.75em;
-                    white-space:pre-wrap; word-break:break-all; color:#c9d1d9;
-                    background:#161b22; padding:6px; border-radius:4px; }}
-    .meta {{ padding:8px 30px 16px; font-size:0.82em; color:#8b949e; }}
-    .score {{ font-size:2.4em; font-weight:bold; }}
-    .grade {{ font-size:1.4em; color:#8b949e; }}
-    .tbl-wrap {{ overflow-x:auto; padding:0 20px 30px; }}
-  </style>
-</head>
-<body>
-<h1>AWS Live Security Audit &nbsp;·&nbsp;
-    Account: {html_mod.escape(self.account)} &nbsp;·&nbsp;
-    Region: {html_mod.escape(self.region)}</h1>
-<div class="summary">
-  <div class="card"><div class="score">{score}</div>
-    <div class="grade">Grade {grade}</div><div class="lbl">POSTURE</div></div>
-  <div class="card"><div class="num fail-num">{counts['FAIL']}</div>
-    <div class="lbl">FAIL</div></div>
-  <div class="card"><div class="num warn-num">{counts['WARN']}</div>
-    <div class="lbl">WARN</div></div>
-  <div class="card"><div class="num pass-num">{counts['PASS']}</div>
-    <div class="lbl">PASS</div></div>
-  <div class="card"><div class="num info-num">{counts['INFO']}</div>
-    <div class="lbl">INFO</div></div>
-  <div class="card"><div class="num">{sum(counts.values())}</div>
-    <div class="lbl">TOTAL</div></div>
+        gen = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        html_content = (
+            "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            f"<title>OverWatch Report &middot; {esc(self.account)}</title>"
+            + _REPORT_CSS + "</head><body><div class='wrap'>"
+            + f"""
+<header class="rhead">
+  <div class="brand"><div class="logo">&#128737;</div>
+    <div><h1>OverWatch <span class="tag">Security Report</span></h1>
+      <div class="sub">Agentless AWS CNAPP &middot; risk, impact &amp; step-by-step remediation</div></div></div>
+  <div class="rmeta"><span>account <b>{esc(self.account)}</b></span><span>region <b>{esc(self.region)}</b></span>
+    <span>engine <b>v{VERSION}</b></span><span>{gen} UTC</span></div>
+</header>
+<div class="exec">
+  <div class="gauge"><div class="grade {gclass}" style="--gd:{round(score * 3.6)}deg"><span>{grade}</span></div>
+    <div class="gt"><div class="score"><b class="{gclass}">{score}</b><span class="s100">/100</span></div>
+      <div class="glbl">Security posture</div></div></div>
+  <div class="cards">
+    <div class="cd fail"><div class="num">{counts['FAIL']}</div><div class="cl">Fail</div></div>
+    <div class="cd warn"><div class="num">{counts['WARN']}</div><div class="cl">Warn</div></div>
+    <div class="cd pass"><div class="num">{counts['PASS']}</div><div class="cl">Pass</div></div>
+    <div class="cd info"><div class="num">{counts['INFO']}</div><div class="cl">Info</div></div>
+    <div class="cd tot"><div class="num">{sum(counts.values())}</div><div class="cl">Total</div></div>
+  </div>
 </div>
-<p class="meta">Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC
-  &nbsp;|&nbsp; AWS Live Security Scanner v{VERSION}</p>
-<div class="tbl-wrap">
-<table>
-  <thead>
-    <tr>
-      <th>Status</th><th>Severity</th><th>Check ID</th><th>Section</th>
-      <th>Resource</th><th>Message</th><th>Compliance</th><th>Remediation</th>
-    </tr>
-  </thead>
+{paths_html}
+<h2 class="sec">Detailed findings &amp; remediation <span class="n">risk &middot; impact &middot; step-by-step fix</span></h2>
+{cards_html}
+<h2 class="sec">All findings <span class="n">complete result listing</span></h2>
+<div class="tbl-wrap"><table>
+  <thead><tr><th>Status</th><th>Sev</th><th>Check</th><th>Section</th><th>Resource</th><th>Message</th><th>Compliance</th><th>CLI</th></tr></thead>
   <tbody>
 {rows}  </tbody>
-</table>
-</div>
-</body>
-</html>"""
+</table></div>
+<footer>Generated by OverWatch v{VERSION} &middot; read-only / agentless (describe/get/list only). Every finding
+above carries a risk explanation, business impact and step-by-step remediation from the OverWatch finding catalog.</footer>
+</div></body></html>""")
 
         with open(path, "w", encoding="utf-8") as f:
             f.write(html_content)
