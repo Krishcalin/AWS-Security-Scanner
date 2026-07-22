@@ -4,6 +4,7 @@ import { AppShell } from './components/AppShell'
 import { Overview } from './routes/Overview'
 import { AttackPaths } from './routes/AttackPaths'
 import { Findings } from './routes/Findings'
+import { CloudAccounts } from './routes/CloudAccounts'
 import { Placeholder } from './routes/Placeholder'
 
 export default function App() {
@@ -20,7 +21,7 @@ export default function App() {
             <Route path="/compliance" element={<Placeholder />} />
             <Route path="/remediation" element={<Placeholder />} />
             <Route path="/reports" element={<Placeholder />} />
-            <Route path="/accounts" element={<Placeholder />} />
+            <Route path="/accounts" element={<CloudAccounts />} />
             <Route path="/settings" element={<Placeholder />} />
             <Route path="*" element={<Placeholder />} />
           </Route>

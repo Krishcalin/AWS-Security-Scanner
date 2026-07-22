@@ -106,6 +106,32 @@ export interface Finding {
   remediation_cmd: string
 }
 
+// ── onboarding / validation (write flow) ─────────────────────────────────────
+export interface OnboardRequest { account_id: string; region?: string; method?: string; alias?: string }
+export interface OnboardResult {
+  account_id: string
+  role_name: string
+  external_id_ref: string
+  reused: boolean
+  cfn_launch_url: string
+  cli: string
+  external_id?: string // plaintext, shown once (sample synthesizes; live embeds it in the URL)
+}
+export interface ValidationCheck { name: string; ok: boolean; detail?: string }
+export interface ValidationResult {
+  expected_account_id: string
+  observed_account_id: string | null
+  role_arn: string
+  region: string
+  org_mode: boolean
+  health: string // validating | healthy | degraded | unauthorized
+  ok: boolean
+  summary: string
+  next_revalidation_epoch: number | null
+  org_account_count: number | null
+  checks: ValidationCheck[]
+}
+
 // A deduped, enriched entry from _build_finding_catalog (one per distinct FAIL/WARN check).
 export interface FindingCatalogEntry {
   check_id: string
