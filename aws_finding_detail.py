@@ -1539,7 +1539,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Check the function's current code-signing config: aws lambda get-function-code-signing-config --function-name <FUNC>",
             "Create an AWS Signer signing profile for Lambda: aws signer put-signing-profile --profile-name <PROFILE> --platform-id AWSLambda-SHA384-ECDSA",
             "Create an Enforce-mode code-signing config referencing that profile: aws lambda create-code-signing-config --allowed-publishers SigningProfileVersionArns=<SIGNER_PROFILE_VERSION_ARN> --code-signing-policies UntrustedArtifactOnDeployment=Enforce",
-            "Attach it to the function: aws lambda update-function-code-signing-config --function-name <FUNC> --code-signing-config-arn <CSC_ARN>",
+            "Attach it to the function: aws lambda put-function-code-signing-config --function-name <FUNC> --code-signing-config-arn <CSC_ARN>",
             "Sign artifacts in the build pipeline and confirm unsigned deployments are now rejected: aws lambda get-function-code-signing-config --function-name <FUNC>",
             "Prevent recurrence by attaching the code-signing config to all functions via IaC and monitoring for functions deployed without one.",
         ],
@@ -1680,7 +1680,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         "impact": "The full contents of the search cluster's indices and snapshots are exposed in plaintext if storage or a backup is accessed, producing a data breach and failing PCI-DSS 3.4 / HIPAA 164.312(a)(2)(iv) / SOC2 CC6.1 / NIST SC-28 at-rest-encryption controls.",
         "steps": [
             "Confirm the setting: aws opensearch describe-domain --domain-name <DOMAIN> --query 'DomainStatus.EncryptionAtRestOptions.Enabled' returns false.",
-            "Enable encryption at rest with a customer-managed KMS key (this triggers a blue/green deployment; ensure node-to-node encryption is enabled too for full coverage): aws opensearch update-domain-config --domain-name <DOMAIN> --encrypt-at-rest-options Enabled=true,KmsKeyId=<KMS_KEY> --node-to-node-encryption-options Enabled=true",
+            "Enable encryption at rest with a customer-managed KMS key (this triggers a blue/green deployment; ensure node-to-node encryption is enabled too for full coverage): aws opensearch update-domain-config --domain-name <DOMAIN> --encryption-at-rest-options Enabled=true,KmsKeyId=<KMS_KEY> --node-to-node-encryption-options Enabled=true",
             "If the engine version predates in-place encryption support, instead register a manual snapshot, create a new domain with encryption enabled, and restore into it.",
             "Monitor the blue/green rollout to completion, then verify: aws opensearch describe-domain --domain-name <DOMAIN> --query 'DomainStatus.EncryptionAtRestOptions.[Enabled,KmsKeyId]' -- expect true and your CMK.",
             "Prevent recurrence with the AWS Config managed rule opensearch-encrypted-at-rest, or an SCP denying opensearch:CreateDomain when encryption at rest is not enabled.",
@@ -2076,6 +2076,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         "steps": [
             "Confirm the setting: aws sagemaker describe-notebook-instance --notebook-instance-name <NB> --query '{net:DirectInternetAccess,subnet:SubnetId}'",
             "Because DirectInternetAccess is fixed at creation, stop the instance: aws sagemaker stop-notebook-instance --notebook-instance-name <NB>",
+            "Back up the notebook's contents first -- commit /home/ec2-user/SageMaker to its linked Git repository or copy it to S3 -- because deleting the instance permanently destroys its attached ML storage volume.",
             "Delete and recreate it on a private subnet with direct internet access disabled: aws sagemaker delete-notebook-instance --notebook-instance-name <NB> ; aws sagemaker create-notebook-instance --notebook-instance-name <NB> --instance-type <TYPE> --role-arn <ROLE> --subnet-id <PRIVATE_SUBNET> --security-group-ids <SG> --direct-internet-access Disabled",
             "Provision VPC interface endpoints (or a controlled NAT with egress filtering) for the SageMaker, S3, and package access the notebook legitimately needs",
             "Verify: aws sagemaker describe-notebook-instance --notebook-instance-name <NB> --query DirectInternetAccess",
@@ -2111,6 +2112,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         "steps": [
             "Confirm no subnet is configured: aws sagemaker describe-notebook-instance --notebook-instance-name <NB> --query SubnetId",
             "Identify a private subnet and a security group with appropriately restricted egress for the notebook",
+            "Back up the notebook's contents first -- commit /home/ec2-user/SageMaker to its linked Git repository or copy it to S3 -- because deleting the instance permanently destroys its attached ML storage volume.",
             "Because SubnetId is set only at creation, stop, delete, and recreate the notebook in the VPC: aws sagemaker delete-notebook-instance --notebook-instance-name <NB> ; aws sagemaker create-notebook-instance --notebook-instance-name <NB> --instance-type <TYPE> --role-arn <ROLE> --subnet-id <PRIVATE_SUBNET> --security-group-ids <SG> --direct-internet-access Disabled",
             "Add VPC endpoints for the services the notebook uses (S3, SageMaker API and runtime) so it works without broad egress",
             "Verify: aws sagemaker describe-notebook-instance --notebook-instance-name <NB> --query SubnetId",

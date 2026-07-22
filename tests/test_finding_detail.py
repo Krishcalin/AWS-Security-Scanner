@@ -124,3 +124,47 @@ def test_html_falls_back_to_cli_when_no_detail():
 def test_html_clean_when_no_findings():
     _, html = _render([("PASS", "IAM-03", "IAM", "root", "ok")])
     assert "No FAIL or WARN findings" in html
+
+
+# ── remediation-content regressions (adversarial-verify findings) ─────────────
+def test_no_known_invalid_cli_tokens():
+    # these exact tokens shipped wrong (verified against the botocore service model) and were
+    # fixed — a real AWS CLI aborts on them. Never reintroduce them into any write-up.
+    BANNED = {
+        "update-function-code-signing-config": "not a Lambda op; use put-function-code-signing-config",
+        "--encrypt-at-rest-options": "OpenSearch flag is --encryption-at-rest-options",
+    }
+    for cid, d in D.FINDING_DETAIL.items():
+        blob = d["risk"] + d["impact"] + " ".join(d["steps"])
+        for bad, why in BANNED.items():
+            assert bad not in blob, f"{cid} uses invalid CLI token {bad!r} ({why})"
+
+
+def test_notebook_delete_remediations_back_up_first():
+    # deleting a SageMaker notebook instance permanently destroys its ML storage volume, so every
+    # delete-and-recreate write-up must tell the operator to back up (or migrate) content first.
+    covered = []
+    for cid, d in D.FINDING_DETAIL.items():
+        steps = d["steps"]
+        di = next((i for i, s in enumerate(steps) if "delete-notebook-instance" in s), None)
+        if di is None:
+            continue
+        covered.append(cid)
+        upto = " ".join(steps[: di + 1]).lower()     # the delete step + everything before it
+        assert "back up" in upto or "migrate" in upto, \
+            f"{cid} deletes a notebook instance without a prior back-up/migrate step"
+    assert {"SM-01", "SM-03", "SM-04"} <= set(covered)   # the guard actually exercises these
+
+
+def test_more_counts_distinct_resources_not_findings():
+    # regression: the detailed-card '+N more' must count DISTINCT affected resources, not the
+    # total FAIL/WARN finding count. 100 findings on one resource -> distinct 1 -> no '+N more'.
+    data, html = _render([("FAIL", "DSPM-02", "DATA", "the-only-db", f"f{i}") for i in range(100)])
+    e = data["finding_catalog"][0]
+    assert e["count"] == 100 and e["distinct"] == 1
+    assert "+99 more" not in html                        # old count-based code rendered this
+    # a genuinely multi-resource check summarizes by distinct resources (6 shown, +remainder)
+    data2, html2 = _render([("FAIL", "DSPM-02", "DATA", f"db{i}", "x") for i in range(10)])
+    e2 = data2["finding_catalog"][0]
+    assert e2["count"] == 10 and e2["distinct"] == 10
+    assert "+4 more" in html2                             # 10 distinct - 6 shown

@@ -9354,6 +9354,7 @@ class AWSLiveScanner:
         JSON (finding_catalog) and HTML reports render — a check with no detailed entry falls
         back to its one-line remediation, so rendering never breaks as coverage grows."""
         seen: Dict[str, Dict] = {}
+        seen_res: Dict[str, set] = {}          # per-check set of distinct resources (uncapped)
         order: List[str] = []
         for r in self.results:
             if r.status not in ("FAIL", "WARN"):
@@ -9368,13 +9369,21 @@ class AWSLiveScanner:
                     "remediation_cmd": REMEDIATION_MAP.get(r.check_id, ""),
                     "risk": d.get("risk", ""), "impact": d.get("impact", ""),
                     "steps": list(d.get("steps", [])),
+                    # affected: up to 25 distinct resource names for display; distinct: the true
+                    # distinct-resource count (uncapped) so reports say '+N more' by resource, not
+                    # by finding count; count: total FAIL/WARN findings for this check.
                     "affected": [r.resource] if r.resource else [], "count": 1,
+                    "distinct": 1 if r.resource else 0,
                 }
+                seen_res[r.check_id] = {r.resource} if r.resource else set()
                 order.append(r.check_id)
             else:
                 e["count"] += 1
-                if r.resource and r.resource not in e["affected"] and len(e["affected"]) < 25:
-                    e["affected"].append(r.resource)
+                if r.resource and r.resource not in seen_res[r.check_id]:
+                    seen_res[r.check_id].add(r.resource)
+                    e["distinct"] += 1
+                    if len(e["affected"]) < 25:
+                        e["affected"].append(r.resource)
         return sorted((seen[cid] for cid in order),
                       key=lambda x: (self._SEV_ORDER.get(x["severity"], 4), x["check_id"]))
 
@@ -9626,8 +9635,8 @@ class AWSLiveScanner:
             sc = svc.get(e["severity"], "")
             aff = e["affected"][:6]
             aff_txt = ", ".join(esc(a) for a in aff)
-            if e["count"] > len(aff):
-                aff_txt += f" +{e['count'] - len(aff)} more"
+            if e["distinct"] > len(aff):
+                aff_txt += f" +{e['distinct'] - len(aff)} more"
             meta = (f"{esc(e['section'])} &middot; {e['count']} finding(s)"
                     + (f" &middot; {aff_txt}" if aff_txt else ""))
             risk = f'<div class="flbl risk">Risk</div><p>{esc(e["risk"])}</p>' if e["risk"] else ""
