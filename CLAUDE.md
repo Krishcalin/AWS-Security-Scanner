@@ -12,7 +12,7 @@ remediation, and code-to-cloud mapping. It ships as the live scanner + its
 gold `#f5b53d`, critical red `#ff3b5c`. Python module names stay `aws_*`/`cnapp_*` —
 no code rename.) The repo also includes a separate pre-deploy IaC static scanner.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **OverWatch — Live CNAPP** (`aws_live_scanner.py` v2.10.0) -- live AWS account audit via boto3 (160+ checks, 40 sections, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure engine**, **deep-plane ingestion + flagship attack path**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing**, **agentless EBS side-scan (CWPP)**, **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**, **hosted multi-account onboarding + live Postgres backend**)
+- **OverWatch — Live CNAPP** (`aws_live_scanner.py` v2.19.0) -- live AWS account audit via boto3 (**267 severity-mapped checks across 44 sections**, **204 actionable checks each with a full risk/impact/step-by-step remediation write-up**, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure + L7 reachability engine**, **deep-plane ingestion + flagship attack paths**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing**, **agentless side-scan CWPP** (Linux OS-pkg + language-dep + container-image + Lambda + managed-engine-EOL + Windows-via-SSM), **tag-based DSPM**, **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**, **hosted multi-account onboarding + live Postgres backend**). The full 8-phase vuln/misconfig detection roadmap (`docs/OVERWATCH_VULN_ROADMAP.md`) is COMPLETE; per-release history is in `CHANGELOG.md`.
 - **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
 - **Exposure Oracle** (`aws_exposure.py`) -- pure, dependency-free internet-reachability core (SG ∩ stateless NACL ∩ IGW route ∩ public-IP)
 - **Deep-Plane Core** (`aws_deepplane.py`) -- pure Inspector/Macie/GuardDuty/Access-Analyzer parsers + the CAN_READ_DATA object-probe matcher
@@ -24,15 +24,23 @@ no code rename.) The repo also includes a separate pre-deploy IaC static scanner
 - **Persistence Backends** (`aws_state_dialect.py` + `aws_graph_neptune.py` + `aws_graph_neptune_loader.py`) -- pure Postgres DDL/upsert/dialect generators + Neptune Gremlin-CSV / openCypher graph export + live bulk-load/openCypher runners
 - **Remediation Engine** (`aws_remediate.py`) -- pure prioritized fix plan (reuses `aws_correlate.minimal_cut`/`ChokePoint`) + remediation-as-code (Terraform/CFN/CLI) + runbook/JSON/issue/PR exports; read-only, never applies
 - **Code-to-Cloud** (`aws_codetocloud.py`) -- pure IaC index (Terraform block extractor + CFN parse) + tiered T1–T5 matcher mapping a live finding to its source IaC resource
+- **Finding Detail** (`aws_finding_detail.py`) -- pure offline data module: `FINDING_DETAIL={check_id:{risk, impact, steps[...]}}` for all 204 actionable check IDs (100% of `REMEDIATION_MAP`); the detailed risk / business-impact / step-by-step remediation the JSON (`finding_catalog`) and HTML (per-finding cards) reports render. Falls back to the one-line `REMEDIATION_MAP` CLI for any uncatalogued check
+- **Managed-Engine EOL / Windows Vuln** (`aws_engine_eol.py` + `aws_winvuln.py`) -- pure offline signals: managed-service end-of-life (honest `EOL-*` date facts, not speculative CVEs) and agentless Windows OS-vuln via `ssm:DescribeInstancePatches` real MSRC `CVEIds` (+ synthetic `WINEOL-*`)
+- **Container/Lambda Side-Scan** (`aws_sidescan_image.py` + `aws_sidescan_lambda.py`) -- pure `DictExtractor` subclasses: OCI/Docker layer overlay + Lambda artifact merge → the Phase-3 OSV/SBOM pipeline verbatim (Inspector-independent image/Lambda CVEs)
 
 ## Repository Structure
 
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.10.0 (boto3, graph, exposure, deep-plane, correlate, effperm, state, ciem, sidescan, backends, remediate, codetocloud)
+├── aws_live_scanner.py      # Live audit scanner v2.19.0 (boto3, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem, sidescan, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM)
 ├── aws_remediate.py         # Remediation engine — prioritized plan (reuses minimal_cut/ChokePoint) + remediation-as-code + exports, pure
 ├── aws_codetocloud.py       # Code-to-cloud — IaC index (TF block extractor + CFN parse) + tiered T1–T5 matcher, pure
+├── aws_finding_detail.py    # Finding detail — risk/impact/step-by-step remediation for all 204 actionable checks, pure offline data (GENERATED)
+├── aws_engine_eol.py        # Managed-service EOL — honest EOL-* date signals for RDS/Aurora/ElastiCache/OpenSearch/Redshift, pure
+├── aws_winvuln.py           # Windows OS-vuln — SSM DescribeInstancePatches real MSRC CVEs + WINEOL-* lifecycle, pure
+├── aws_sidescan_lambda.py   # Lambda artifact side-scan — zip/layer merge → OSV pipeline (DictExtractor subclass), pure
+├── aws_sidescan_image.py    # Container-image side-scan — OCI/Docker layer overlay + ECR fetch → OSV pipeline, pure
 ├── aws_graph_neptune_loader.py # Neptune live loader — S3 bulk-load + openCypher runners (mock-tested), pure builders
 ├── aws_graph.py             # SecurityGraph — nodes/edges, bounded traversal, graph.json (stdlib)
 ├── aws_exposure.py          # Internet-reachability oracle — 4-gate AND, pure/testable (stdlib)
@@ -112,11 +120,11 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.10.0)
+## Live Audit Scanner (`aws_live_scanner.py` v2.19.0)
 
-- **Type**: Live AWS account audit via boto3 (evolving toward CNAPP)
-- **Lines**: ~6,700
-- **Dependencies**: `boto3` (required), `aws_graph.py` + `aws_exposure.py` + `aws_deepplane.py` + `aws_correlate.py` + `aws_effperm.py` + `aws_state.py` + `aws_unused.py` (bundled, stdlib), Python 3.10+
+- **Type**: Live AWS account audit via boto3 (a full CNAPP)
+- **Lines**: ~10,600
+- **Dependencies**: `boto3` (required); bundled stdlib engine modules `aws_graph.py`, `aws_exposure.py`, `aws_deepplane.py`, `aws_correlate.py`, `aws_effperm.py`, `aws_state.py`, `aws_unused.py`, `aws_sidescan*.py`, `aws_state_dialect.py`, `aws_graph_neptune*.py`, `aws_remediate.py`, `aws_codetocloud.py`, `aws_engine_eol.py`, `aws_winvuln.py`, `aws_finding_detail.py`; Python 3.10+
 - **IAM permissions**: `SecurityAudit` AWS-managed policy (read-only) covers the deep-plane reads (Inspector2/Macie/GuardDuty/Access Analyzer) and the effective-permissions reads (`iam:GetAccountAuthorizationDetails` for boundaries, `organizations:Describe*/List*` for SCPs — all degrade gracefully); multi-account adds `sts:AssumeRole` into a read-only role per target account, and `organizations:ListAccounts` for `--org`. `--ciem` additionally uses `iam:GenerateServiceLastAccessedDetails` and `access-analyzer:ListFindingsV2`
 - **Compliance**: CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
 
@@ -370,6 +378,49 @@ no boto3/psycopg/FastAPI in the pure path).
   generators shipped Phase 6), rpm Berkeley-DB decode + real ext4/xfs parse
   (dissect), and any live cloud/repo mutation.
 
+### Vulnerability & Misconfiguration Roadmap (Phases 1–8, COMPLETE)
+
+A second, detection-depth roadmap (`docs/OVERWATCH_VULN_ROADMAP.md`) layered ~150
+checks + new pillars on top of the CNAPP-platform phases above. All 8 phases are
+merged to `main`: (1) quick-win detection sweep, (2) marquee critical misconfigs
+(public KMS/secret policies, federated-OIDC trust, CloudTrail depth, Cognito
+identity-pool, subdomain-takeover, CloudWatch CIS §4), (3) application-dependency
+CVE engine (7 lockfile parsers + SemVer/PEP440/RubyGems comparators + CycloneDX/SPDX
+SBOM), (4) container-image + Lambda dependency scanning (Inspector-independent, via
+`DictExtractor` subclasses), (5) managed-service vuln axis (`aws_engine_eol.py`
+EOL signals + Aurora/Redshift-Serverless planes), (6) per-service misconfig depth
+(SSM patch, launch-template/ASG IMDSv2 drift, NACL, ECS/EKS, SageMaker), (7) **L7
+reachability + attack-path FUSION + tag-based DSPM** (the differentiator: un-inerts
+managed/findings nodes into ranked toxic-combination paths), (8) **Windows agentless
+OS-vuln** (`aws_winvuln.py` via `ssm:DescribeInstancePatches` real MSRC CVEs —
+closes the Linux-only CWPP false-clean). Every phase followed the same rigor:
+scoping-research workflow → committed batches → read-only adversarial-verify → fix
+with regression tests → `--no-ff` merge.
+
+### Detailed finding reports (`aws_finding_detail.py`, v2.19.0)
+
+Every scan emits, for each of the 204 actionable checks, a full write-up — the
+**risk** (what it is / how it's exploited / why it matters), the **business impact**,
+and **step-by-step remediation** with real AWS CLI — not just a one-line command.
+
+- **`aws_finding_detail.py`** (pure offline data, GENERATED) — `FINDING_DETAIL =
+  {check_id: {risk, impact, steps[...]}}` covering 100% of `REMEDIATION_MAP`.
+  Compliance refs are NOT duplicated (they come from `COMPLIANCE_MAP`). `get_detail()`
+  / `steps_for()` helpers. A check with no entry falls back to its one-line
+  `REMEDIATION_MAP` CLI, so rendering never breaks as coverage grows.
+- **`_build_finding_catalog()`** — the shared builder: deduped, severity-ranked
+  distinct FAIL/WARN checks, each enriched with risk / impact / steps / compliance /
+  one-line CLI / `affected` (≤25 resource names) / `count` (total findings) /
+  `distinct` (uncapped distinct-resource count).
+- **`save_json`** adds a `finding_catalog` block; **`save_html`** renders a
+  **light theme** (blue/white; module const `_REPORT_CSS`) in three sections —
+  ranked attack-path cards → per-finding detail cards (Risk → Business impact →
+  numbered steps → Frameworks) → the full findings table.
+- **Content-accuracy guard**: because the write-ups were LLM-authored, remediation
+  CLI is verified against the real botocore service model (a regression test denylists
+  known-invalid tokens) and any delete/recreate step must back up first (a regression
+  test enforces backup-before-notebook-delete).
+
 ### Architecture
 
 ```python
@@ -389,8 +440,9 @@ class AWSLiveScanner:
     def _client(self, service, region=None): ...   # lazy boto3 client cache
     def _add(self, status, check_id, section, resource, message): ...  # auto-populates severity/compliance/remediation
     def run(self): ...
-    def save_json(self, path): ...   # includes posture_score, compliance, remediation
-    def save_html(self, path): ...   # severity badges, compliance tags, CLI accordions
+    def _build_finding_catalog(self): ...  # deduped, severity-ranked distinct FAIL/WARN checks, enriched with risk/impact/steps/compliance/affected/count/distinct (shared by JSON+HTML)
+    def save_json(self, path): ...   # posture_score, compliance, remediation, attack_paths, choke_points, finding_catalog (detailed)
+    def save_html(self, path): ...   # light theme: ranked attack-path cards -> per-finding detail cards (risk/impact/steps/frameworks) -> full findings table
     def save_sarif(self, path): ...  # SARIF 2.1.0 (FAIL+WARN) for GitHub code scanning
     def save_asff(self, path): ...   # AWS Security Finding Format for Security Hub import
     def print_diff(self, baseline): ...  # new/resolved vs a prior JSON report
@@ -407,9 +459,9 @@ fails_threshold(results, severity) -> bool   # --fail-on gating
 diff_findings(current, baseline_results) -> {new, resolved}
 ```
 
-- **CHECK_MAP**: Dict mapping 35 section names -> bound check methods
-- **35 sections**: IAM, S3, VPC, LOGGING, KMS, EC2, ECR, BACKUP, RDS, GLACIER, SNS, SQS, CLOUDFRONT, ROUTE53, BEDROCK, BEDROCK_AGENTS, LAMBDA, EKS, ECS, SECRETS, WAF, ELASTICACHE, OPENSEARCH, DYNAMODB, STEPFUNCTIONS, APIGATEWAY, ELB, EBS, REDSHIFT, EFS, ACM, SAGEMAKER, COGNITO, APIGATEWAYV2, IAMPRIVESC
-- **145+ checks** total; severity auto-assigned per check_id on FAIL
+- **CHECK_MAP**: Dict mapping 44 section names -> bound check methods
+- **44 sections**: IAM, S3, VPC, LOGGING, CLOUDWATCH, KMS, EC2, AMI, ECR, BACKUP, RDS, GLACIER, SNS, SQS, CLOUDFRONT, ROUTE53, BEDROCK, BEDROCK_AGENTS, LAMBDA, EKS, ECS, SECRETS, WAF, ELASTICACHE, OPENSEARCH, DYNAMODB, STEPFUNCTIONS, APIGATEWAY, ELB, EBS, REDSHIFT, EFS, ACM, SAGEMAKER, COGNITO, APIGATEWAYV2, IAMPRIVESC, EXPOSURE, COGNITO_IDENTITY, WINVULN, VULN, THREAT, DATA, CORRELATE
+- **Three lockstep maps** (a check_id lands in all three when actionable): `CHECK_SEVERITY` (267 entries), `COMPLIANCE_MAP` (250), `REMEDIATION_MAP` (204). The 204 `REMEDIATION_MAP` keys are the actionable (FAIL-able) checks — each also has a full `aws_finding_detail.FINDING_DETAIL` write-up (100% coverage)
 - **Risk scoring**: Score = 100 - (CRIT×15 + HIGH×5 + MED×2 + LOW×0.5), Grade A-F
 
 ### Check ID Prefixes
@@ -498,7 +550,7 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 571 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 1128 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
@@ -525,6 +577,11 @@ Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:
   plan/delta-zeroing/checksum/sparse-reassembly/provenance-cleanup; Postgres dialect
   (URL parse, qmark→pyformat, upsert, row-shim); Neptune CSV/openCypher + round-trip;
   the ATTACK-02-from-agentless pillar; and a regression per adversarial-verify defect
+- **Finding detail** (`test_finding_detail.py`): 100%-coverage of actionable checks,
+  well-formed risk/impact/≥3-steps, unescaped (no HTML entities), the `finding_catalog`
+  dedup/severity-rank/count/distinct builder, light-theme HTML + CLI fallback, and the
+  content-accuracy regressions (invalid-CLI-token denylist, backup-before-notebook-delete,
+  distinct-vs-finding-count)
 
 ## Conventions
 
