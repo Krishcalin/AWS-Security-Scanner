@@ -4,7 +4,7 @@ import { useScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'
 import { api } from '../api/client'
 import { Card, Loader, ErrorNote } from '../components/ui'
-import type { OrgOverview, AccountSummary, FindingCatalogEntry } from '../api/types'
+import type { OrgOverview, AccountSummary, FindingCatalogEntry, AccountCompliance } from '../api/types'
 
 const SECTIONS = [
   { k: 'summary', label: 'Executive summary' },
@@ -28,15 +28,16 @@ function toCsv(findings: FindingCatalogEntry[]): string {
   return [head, ...rows].map((r) => r.map(esc).join(',')).join('\n')
 }
 
-interface RepData { o: OrgOverview | null; s: AccountSummary | null; f: FindingCatalogEntry[] }
+interface RepData { o: OrgOverview | null; s: AccountSummary | null; f: FindingCatalogEntry[]; c: AccountCompliance | null }
 
 export function Reports() {
   const { scope } = useScope()
   const isOrg = scope === 'org'
   const { data, loading, error } = useFetch<RepData>(
     () => isOrg
-      ? Promise.all([api.orgOverview(), api.orgFindings()]).then(([o, f]) => ({ o, s: null, f }))
-      : Promise.all([api.accountSummary(scope), api.findings(scope)]).then(([s, f]) => ({ o: null, s, f })),
+      ? Promise.all([api.orgOverview(), api.orgFindings()]).then(([o, f]) => ({ o, s: null, f, c: null }))
+      : Promise.all([api.accountSummary(scope), api.findings(scope), api.accountCompliance(scope)])
+          .then(([s, f, c]) => ({ o: null, s, f, c })),
     [scope])
   const [sections, setSections] = useState<Set<string>>(new Set(SECTIONS.map((s) => s.k)))
   const [schedule, setSchedule] = useState('none')
@@ -54,7 +55,10 @@ export function Reports() {
       ? { org_posture_score: data.o?.org_posture_score, accounts_scanned: data.o?.accounts_scanned, critical_attack_paths: data.o?.critical_attack_paths, crown_jewels_at_risk: data.o?.crown_jewels_at_risk }
       : { posture_score: data.s?.posture_score, posture_grade: data.s?.posture_grade, summary: data.s?.summary, severity_counts: data.s?.severity_counts }
     if (sections.has('paths')) rep.attack_paths = isOrg ? data.o?.top_attack_paths : data.s?.attack_paths
-    if (sections.has('compliance') && !isOrg) rep.compliance_scorecard = data.s?.compliance_scorecard
+    if (sections.has('compliance') && !isOrg) {
+      rep.compliance_scorecard = data.s?.compliance_scorecard
+      if (data.c) { rep.compliance_crosswalk = data.c.derived; rep.crosswalk_version = data.c.crosswalk_version }
+    }
     if (sections.has('remediation')) rep.choke_points = isOrg ? data.o?.top_choke_points : data.s?.choke_points
     if (sections.has('findings')) rep.finding_catalog = data.f
     return JSON.stringify(rep, null, 2)

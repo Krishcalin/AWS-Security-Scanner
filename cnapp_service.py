@@ -81,7 +81,7 @@ def serialize_scanner(sc) -> dict:
             "WARN": sum(1 for r in sc.results if r.status == "WARN"),
             "INFO": sum(1 for r in sc.results if r.status == "INFO"),
         },
-        "compliance_scorecard": als.compliance_scorecard(sc.results),
+        **als.compliance_payload(sc.results),
         "graph": sc.graph.stats() if sc.graph else None,
         "graph_full": sc.graph.to_dict() if sc.graph else None,
         "attack_paths": [p.to_dict() for p in sc.attack_paths],
@@ -121,7 +121,7 @@ class PlatformService:
                  job_id_gen: Callable[[], str] = lambda: "job-" + secrets.token_hex(8),
                  connectors=None, http_post: Optional[Callable] = None, hub_base: str = "",
                  connector_id_gen: Callable[[], str] = lambda: "conn-" + secrets.token_hex(6),
-                 clock: Callable[[], int] = None):
+                 crosswalk=None, clock: Callable[[], int] = None):
         import time
         self.registry = registry
         self.results = results
@@ -140,6 +140,7 @@ class PlatformService:
         self.connectors = connectors            # a cnapp_connectors.ConnectorStore (or None)
         self.hub_base = hub_base
         self.connector_id_gen = connector_id_gen
+        self._crosswalk = crosswalk             # None -> lazy bundled compliance_crosswalk
         self._http_post = http_post             # None -> lazy urllib default (see http_post)
         self.clock = clock or (lambda: int(time.time()))
 
@@ -466,6 +467,97 @@ class PlatformService:
                        account: Optional[str] = None, status: Optional[str] = None) -> List[dict]:
         return self._require_connectors().list_deliveries(connector_id, account=account,
                                                           status=status)
+
+    # ── compliance breadth (crosswalk from the NIST 800-53 spine) ───────────────
+    def _get_crosswalk(self):
+        """(CROSSWALK, FRAMEWORKS, digest). Injected for tests, else the memoized
+        bundled reference data (fail-open to empty)."""
+        if getattr(self, "_crosswalk", None) is not None:
+            return self._crosswalk
+        import compliance_crosswalk
+        return compliance_crosswalk.get_crosswalk()
+
+    def list_compliance_frameworks(self) -> dict:
+        """The framework catalog (5 native + 30+ crosswalk-derived) with authority,
+        family, version, sources, and the crosswalk_version stamp. Reference data."""
+        _xw, frameworks, digest = self._get_crosswalk()
+        fams = sorted(frameworks.values(),
+                      key=lambda m: (not m.get("native"), m.get("family", ""), m.get("id", "")))
+        return {"crosswalk_version": digest, "spine": "NIST-800-53-Rev5", "frameworks": fams}
+
+    def get_crosswalk(self, framework: Optional[str] = None) -> List[dict]:
+        """The resolved crosswalk edges ({nist, framework, targets, confidence, note,
+        sources}), optionally filtered to one framework — the 'show your work' surface."""
+        crosswalk, _fw, _d = self._get_crosswalk()
+        rows: List[dict] = []
+        for _nist, fwmap in crosswalk.items():
+            for fid, edge in fwmap.items():
+                if framework and fid != framework:
+                    continue
+                rows.append(edge)
+        rows.sort(key=lambda e: (e["framework"], e["nist"]))
+        return rows
+
+    def get_account_compliance(self, account_id: str, *, min_confidence: Optional[str] = None,
+                              frameworks: Optional[List[str]] = None) -> Optional[dict]:
+        """Native (5 hand-tagged) + derived (30+ crosswalked) scorecards for an
+        account's latest scan. ``min_confidence`` RE-DERIVES the crosswalk at that
+        tier (dropping lower-confidence mappings from the universe, failures, and
+        pass_rate) — precise, not a lossy post-filter. The native card comes from the
+        stored payload; the crosswalk fold is pure + cheap so it re-runs per call."""
+        import aws_live_scanner as als
+        p = self.results.get_latest(account_id)
+        if not p:
+            return None
+        native = p.get("compliance_scorecard", {})
+        crosswalk, fw, digest = self._get_crosswalk()
+        derived = als.crosswalk_scorecard(native, crosswalk, fw, min_confidence=min_confidence)
+        if frameworks:
+            keep = set(frameworks)
+            derived = {k: v for k, v in derived.items() if k in keep}
+        return {"account": account_id, "native": native, "derived": derived,
+                "crosswalk_version": digest, "generated_from": "NIST-800-53-Rev5",
+                "min_confidence": min_confidence}
+
+    def org_compliance(self, *, min_confidence: Optional[str] = None) -> dict:
+        """Portfolio roll-up of native + derived scorecards across active accounts
+        (a SUM of controls, mirroring the console's existing org merge — read org
+        numbers as portfolio totals, not a dedup)."""
+        merged_native: Dict[str, dict] = {}
+        merged_derived: Dict[str, dict] = {}
+        for a in self.registry.list_accounts(onboarding_status="active"):
+            comp = self.get_account_compliance(a["account_id"], min_confidence=min_confidence)
+            if not comp:
+                continue
+            _merge_scorecard(merged_native, comp["native"])
+            _merge_scorecard(merged_derived, comp["derived"])
+        _xw, _fw, digest = self._get_crosswalk()
+        return {"native": merged_native, "derived": merged_derived,
+                "crosswalk_version": digest, "min_confidence": min_confidence}
+
+
+def _merge_scorecard(acc: Dict[str, dict], card: Dict[str, dict]) -> None:
+    """Portfolio SUM of a per-framework scorecard into an accumulator (in place) —
+    mirrors the console's mergeScorecards, incl. the derived-only confidence_mix +
+    control_provenance so org numbers carry the same provenance as per-account ones."""
+    for fw, c in (card or {}).items():
+        cur = acc.setdefault(fw, {"controls_total": 0, "controls_passed": 0,
+                                  "controls_failed": 0, "failed_controls": []})
+        cur["controls_total"] += c.get("controls_total", 0)
+        cur["controls_passed"] += c.get("controls_passed", 0)
+        cur["controls_failed"] += c.get("controls_failed", 0)
+        cur["failed_controls"] = sorted(set(cur["failed_controls"]) | set(c.get("failed_controls", [])))
+        for k in ("derived", "via", "min_confidence"):
+            if k in c:
+                cur[k] = c[k]
+        if c.get("confidence_mix"):
+            mix = cur.setdefault("confidence_mix", {"high": 0, "medium": 0, "low": 0})
+            for tier in ("high", "medium", "low"):
+                mix[tier] += c["confidence_mix"].get(tier, 0)
+        if c.get("control_provenance"):
+            cur.setdefault("control_provenance", {}).update(c["control_provenance"])
+        t = cur["controls_total"]
+        cur["pass_rate"] = round(100 * cur["controls_passed"] / t, 1) if t else 100.0
 
 
 def _rule_dict(r) -> dict:

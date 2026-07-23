@@ -424,6 +424,54 @@ regression-tested).
   offline via a sample-mode in-memory store (`public/sample/connectors.json`). Preview/Send-now
   are account-scoped (disabled in org scope). No console response ever carries a secret.
 
+### CNAPP Phase 2 (compliance breadth) — 30+ frameworks from the NIST spine
+
+Every one of the ~250 checks already carries a **NIST 800-53 Rev 5** control (a *total*
+axis — 38 distinct controls). So instead of hand-tagging 250 checks × 30 frameworks,
+a sourced **crosswalk** maps each of those 38 NIST controls to the equivalent
+control(s) in **34 other frameworks** (ISO 27001:2022 / 27002 / 27017 / 27018 / 27701,
+FedRAMP-Mod, NIST 800-171 r3, CMMC 2.0, NIST CSF 2.0, PCI-DSS 4.0, SWIFT CSCF,
+NYDFS-500, DORA, MAS-TRM, HIPAA, HITRUST, GDPR, CCPA/CPRA, PIPEDA, CSA CCM v4, CIS
+Controls v8, CIS AWS Foundations, COBIT-2019, BSI C5, NIS2, NCSC-CAF, ATT&CK-Cloud, …),
+and coverage is **derived transitively**. A derived tag always reads *"satisfied via
+NIST 800-53 AC-3 (crosswalk)"* — traceable, never a bare claim.
+
+- **`compliance_crosswalk.py`** (pure loader, like `COMPLIANCE_MAP`) — `load_crosswalk`
+  / `get_crosswalk` over the bundled `compliance/crosswalk.json` (frameworks + edges +
+  a self-declared `nist_universe`). Load-time accuracy guards (fail-loud): an edge to a
+  **native** framework is rejected; every `edge.nist` must be in the in-scope universe
+  (fabrication/drift guard, enforced in **production** via the data-file field, not only
+  CI); non-empty targets + a valid confidence tier required; unique ids; overlay merge
+  (operator custom controls) cannot flip a native flag. **Fail-open** in prod (a corrupt
+  file → empty derived block, native pipeline byte-identical). A `sha256` `crosswalk_version`
+  digest (order-stable) stamps every export for reproducibility.
+- **`aws_live_scanner.crosswalk_scorecard`** (pure fold) — derives the non-native
+  frameworks purely from the NIST axis of the already-computed native scorecard. A
+  derived control **FAILS iff ANY** contributing NIST control failed (conservative,
+  auditor-safe — same direction as native); its **confidence = MAX** over contributing
+  edges; `min_confidence` **re-derives** at a tier (drops lower edges from the universe,
+  failures AND pass_rate — precise, not a lossy post-filter). Iterates `sorted(nist_all)`
+  so provenance is deterministic. Emitted under a NEW `compliance_crosswalk` key via
+  `compliance_payload` (the single lockstep source for `save_json` + `serialize_scanner`);
+  the native `compliance_scorecard` (the 5) stays **byte-identical** — every frozen test passes.
+- **API** (viewer; reference data) — `GET /compliance/frameworks` (catalog + version),
+  `GET /compliance/crosswalk?framework=` (the 'show your work' edges), `GET /accounts/{id}/compliance?min_confidence=&frameworks=`, `GET /org/compliance`.
+- **Console** — the **Compliance** screen now has two sections: *Directly tested* (5 native)
+  and *Crosswalk-derived via NIST 800-53* (34), with a family filter, a confidence-tier
+  filter (re-derives), a per-mapping confidence pill from `confidence_mix`, failing-control
+  chips carrying provenance (`control ← NIST X · confidence`) on hover, a per-framework
+  **sources** popover (auditor citations), and an "informational — confirm with your
+  assessor" disclaimer. `frontend/src/lib/crosswalk.ts` ports the fold for sample mode
+  (byte-identical to Python: sorted NIST iteration + round-half-to-even).
+- **Accuracy rigor** — a scoping workflow sourced the crosswalk from authoritative
+  mappings; a read-only adversarial-verify workflow **web-checked a sample of edges** and
+  caught **9 mapping errors** (a fabricated PCI id `3.7.9`, a FedRAMP-Moderate control
+  that is actually High-only, a CSA CCM off-by-one, NIS2 over-confidence) + **7 code
+  defects** (nondeterministic provenance order, TS/Python rounding divergence, an org-merge
+  dropping confidence data) — all fixed + regression-tested. A CI **accuracy validator**
+  gates the shipped file (every edge's NIST control ∈ the actual 38; no native target;
+  sources present; the file's declared universe == `COMPLIANCE_MAP`).
+
 ### CNAPP Phase 7 additions (v2.8.0) — remediation + code-to-cloud ("close the loop")
 
 - **Remediation engine (`aws_remediate.py`, pure)** — `build_plan(...)` REUSES

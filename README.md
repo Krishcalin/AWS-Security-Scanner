@@ -416,6 +416,7 @@ ViewOnlyAccess** (read-only of configuration/IAM — never workload data).
 | `cnapp_worker.py` | Async scan-job execution (traps engine exit, pre-validates creds, TOCTOU re-check) |
 | `cnapp_api.py` | FastAPI routes + viewer/admin RBAC (fail-closed), guarded import |
 | `cnapp_connectors.py` | **Connector framework** — route findings to Jira / Slack / PagerDuty / Splunk / webhook (pure renderers + injected `http_post` seam + rules engine + idempotent delivery ledger) |
+| `compliance_crosswalk.py` | **Compliance breadth** — sourced NIST 800-53 → 30+ framework crosswalk loader (accuracy-gated, fail-open); `aws_live_scanner.crosswalk_scorecard` derives per-framework coverage |
 
 **HTTP surface** (all delegate to `PlatformService`; admin routes stay on the private
 hub control plane): `POST /accounts` (onboard → launch URL), `POST /accounts/{id}/validate`,
@@ -425,6 +426,22 @@ hub control plane): `POST /accounts` (onboard → launch URL), `POST /accounts/{
 `POST /connectors/{id}/{enable,rotate-secret,test}`, `.../rules` CRUD,
 `POST /connectors/rules/preview` (dry-run), `POST /accounts/{id}/notify`,
 `GET /connectors/{id}/deliveries`, `GET /notifications`.
+
+**Compliance breadth — 30+ frameworks from one verifiable spine.** Every check is tagged
+with a **NIST 800-53 Rev 5** control, so instead of hand-tagging every check against every
+regime, OverWatch cross-walks its 38 in-use NIST controls to **34 more frameworks** (ISO
+27001:2022, FedRAMP, NIST 800-171 / CMMC, NIST CSF 2.0, PCI-DSS 4.0, SWIFT, DORA, HIPAA,
+HITRUST, GDPR/CCPA, CSA CCM v4, CIS Controls v8, COBIT, NIS2, ATT&CK-Cloud, …) and **derives**
+coverage transitively — each derived control reads *"satisfied via NIST 800-53 AC-3
+(crosswalk)"* with a per-mapping **confidence tier** and authoritative **source** citations.
+The crosswalk was sourced from published authoritative mappings and **web-verified by an
+adversarial review** (which caught + fixed real mapping errors); a CI accuracy validator gates
+the shipped data (no fabricated ids, no native-framework targets). The 5 directly-tested
+frameworks keep their per-check tags and are byte-identical; derived data is **informational**
+(confirm scope with your assessor). Routes (viewer): `GET /compliance/frameworks`,
+`GET /compliance/crosswalk`, `GET /accounts/{id}/compliance?min_confidence=`, `GET /org/compliance`.
+Surfaced in the console **Compliance** screen (directly-tested vs crosswalk-derived, family +
+confidence filters, per-control provenance, source links).
 
 **Connectors — notify your own tools (agentless, read-only on targets).** OverWatch can
 route findings to the **operator's own** Jira Cloud, Slack, PagerDuty (Events v2), Splunk
@@ -464,9 +481,10 @@ cd frontend && npm install && npm run dev     # http://localhost:5173  (sample d
 > Status: backend + onboarding + validation + registry + scan orchestration +
 > **live Postgres state** + the **web console** (Overview / Attack Paths / Findings /
 > Cloud Accounts + onboarding wizard, plus Inventory / Identity / Compliance / Remediation /
-> Reports) + the **connector framework** (Phase 2: Jira / Slack / PagerDuty / Splunk /
-> webhook + Settings screen) shipped. Remaining: a connection pool; broader compliance
-> frameworks + CTEM/GRC scheduling.
+> Reports) + the **connector framework** (Jira / Slack / PagerDuty / Splunk / webhook +
+> Settings screen) + **compliance breadth** (30+ frameworks via the NIST-800-53 crosswalk)
+> shipped. Remaining: a connection pool; CTEM/GRC continuous-evidence scheduling; unified
+> SARIF/SBOM ingestion + reachability-verified vuln prioritization.
 
 ---
 

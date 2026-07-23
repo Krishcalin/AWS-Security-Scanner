@@ -169,6 +169,28 @@ def create_app(service, *, current_role=lambda: ""):
     def org_findings():
         return service.org_findings()
 
+    # ── compliance breadth (viewer; reference data + derived scorecards) ───────
+    @app.get("/compliance/frameworks", dependencies=[Depends(require("viewer"))])
+    def compliance_frameworks():
+        return service.list_compliance_frameworks()
+
+    @app.get("/compliance/crosswalk", dependencies=[Depends(require("viewer"))])
+    def compliance_crosswalk(framework: Optional[str] = None):
+        return service.get_crosswalk(framework)
+
+    @app.get("/accounts/{account_id}/compliance", dependencies=[Depends(require("viewer"))])
+    def account_compliance(account_id: str, min_confidence: Optional[str] = None,
+                           frameworks: Optional[str] = None):
+        fw = [f for f in frameworks.split(",") if f] if frameworks else None
+        c = service.get_account_compliance(account_id, min_confidence=min_confidence, frameworks=fw)
+        if c is None:
+            raise HTTPException(status_code=404, detail="no scan results for account")
+        return c
+
+    @app.get("/org/compliance", dependencies=[Depends(require("viewer"))])
+    def org_compliance(min_confidence: Optional[str] = None):
+        return service.org_compliance(min_confidence=min_confidence)
+
     # ── connectors (admin mutate, viewer read) ────────────────────────────────
     # The connector control plane wields outbound HTTP + operator secrets, so every
     # mutation is admin; reads are viewer and NEVER return a secret (masked shape).

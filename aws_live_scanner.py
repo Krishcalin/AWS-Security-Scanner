@@ -1355,6 +1355,120 @@ def compliance_scorecard(results: List[Result],
     return out
 
 
+# ─── Crosswalk-derived compliance (NIST 800-53 spine → 30+ frameworks) ──────────
+# Every check carries a NIST 800-53 control, so the NIST axis is TOTAL: we derive
+# per-framework coverage for 30+ non-native frameworks purely from the NIST rollup
+# via an authoritative crosswalk (see compliance_crosswalk.py). Emitted under a
+# SEPARATE key from compliance_scorecard so the 5 native frameworks stay byte-
+# identical and every frozen/lockstep test is unaffected.
+_CONF_RANK = {"low": 0, "medium": 1, "high": 2}
+
+
+def _nist_universe_from_map(cmap: Dict) -> frozenset:
+    """The distinct NIST controls the product actually tags — derived from
+    COMPLIANCE_MAP so the crosswalk can never reference a control we don't use."""
+    return frozenset(v["NIST"] for v in cmap.values() if v.get("NIST"))
+
+
+def _min_conf_present(mix: Dict[str, int]) -> str:
+    for c in ("low", "medium", "high"):
+        if mix.get(c, 0) > 0:
+            return c
+    return "high"
+
+
+def crosswalk_scorecard(native_card: Dict, crosswalk: Optional[Dict] = None,
+                        frameworks: Optional[Dict] = None,
+                        nist_universe: Optional[frozenset] = None,
+                        min_confidence: Optional[str] = None) -> Dict[str, Dict]:
+    """Derive per-framework rollups for the NON-native frameworks purely from the
+    NIST axis of an already-computed native scorecard. Returns ``{}`` when
+    ``crosswalk`` is falsy (feature off / fail-open) so every existing caller is
+    unchanged. A derived control FAILS iff ANY contributing NIST control failed
+    (conservative, auditor-safe — same direction as native); its confidence is the
+    MAX over contributing edges (best available provenance). ``min_confidence``
+    (high|medium|low) drops edges below that tier BEFORE folding, so the universe,
+    failures, and pass_rate are all computed precisely at the requested tier."""
+    if not crosswalk:
+        return {}
+
+    def _maxc(a, b):
+        return a if _CONF_RANK.get(a, 0) >= _CONF_RANK.get(b, 0) else b
+
+    floor = _CONF_RANK.get(min_confidence, 0)
+    nist_all = frozenset(nist_universe or _nist_universe_from_map(COMPLIANCE_MAP))
+    failed_nist = set(native_card.get("NIST", {}).get("failed_controls", []))
+    out: Dict[str, Dict] = {}
+    for fid, meta in (frameworks or {}).items():
+        if meta.get("native"):                 # never derive a native framework
+            continue
+        universe: set = set()
+        failed: set = set()
+        prov: Dict[str, dict] = {}
+        for n in sorted(nist_all):             # deterministic — the note/first-edge for a
+            edge = crosswalk.get(n, {}).get(fid)   # multi-edge control must not depend on set order
+            if not edge:
+                continue
+            if _CONF_RANK.get(edge["confidence"], 0) < floor:
+                continue                       # below the requested confidence tier
+            for t in edge["targets"]:
+                universe.add(t)
+                p = prov.setdefault(t, {"control": t, "via_nist": [], "confidence": "low",
+                                        "note": edge.get("note", ""),
+                                        "sources": edge.get("sources") or meta.get("sources", [])})
+                p["via_nist"].append(n)
+                p["confidence"] = _maxc(p["confidence"], edge["confidence"])
+                if n in failed_nist:
+                    failed.add(t)
+        if not universe:                        # framework maps nothing → omit it
+            continue
+        failed_in = failed & universe
+        total = len(universe)
+        mix = {"high": 0, "medium": 0, "low": 0}
+        for t in universe:
+            mix[prov[t]["confidence"]] += 1
+        passed = total - len(failed_in)
+        out[fid] = {
+            "controls_total": total,
+            "controls_passed": passed,
+            "controls_failed": len(failed_in),
+            "pass_rate": round(100 * passed / total, 1) if total else 100.0,
+            "failed_controls": sorted(failed_in),
+            # additive, derived-only metadata (native dicts NEVER get these keys):
+            "derived": True, "via": "NIST-800-53",
+            "confidence_mix": mix, "min_confidence": _min_conf_present(mix),
+            # provenance only for FAILED controls (payload discipline):
+            "control_provenance": {t: {**prov[t], "via_nist": sorted(prov[t]["via_nist"])}
+                                   for t in sorted(failed_in)},
+        }
+    return out
+
+
+def compliance_payload(results: List[Result], *, crosswalk: Optional[Dict] = None,
+                       frameworks: Optional[Dict] = None,
+                       version: Optional[str] = None) -> Dict:
+    """The 3 compliance keys emitted into every serialized scan — the SINGLE source
+    of truth so ``save_json`` and ``cnapp_service.serialize_scanner`` stay byte-
+    identical (the lockstep invariant). ``compliance_scorecard`` (the native 5) is
+    unchanged; ``compliance_crosswalk`` derives 30+ frameworks from the NIST spine;
+    ``compliance_crosswalk_meta`` self-describes the export for reproducibility.
+    Fail-open: an absent/corrupt crosswalk yields an empty derived block."""
+    card = compliance_scorecard(results)
+    if crosswalk is None:
+        import compliance_crosswalk as _cc
+        crosswalk, frameworks, version = _cc.get_crosswalk()
+    derived = crosswalk_scorecard(card, crosswalk, frameworks)
+    return {
+        "compliance_scorecard": card,
+        "compliance_crosswalk": derived,
+        "compliance_crosswalk_meta": {
+            "crosswalk_version": version or "",
+            "generated_from": "NIST-800-53-Rev5",
+            "frameworks": len(derived),
+        },
+    }
+
+
 # ─── Workflow-integration helpers (SARIF / ASFF / gating / diff) ─────────────
 # Ordinal ranking so we can compare severities for --fail-on thresholds.
 SEVERITY_ORDER = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1, "": 0}
@@ -9402,7 +9516,7 @@ class AWSLiveScanner:
                 "WARN": sum(1 for r in self.results if r.status == "WARN"),
                 "INFO": sum(1 for r in self.results if r.status == "INFO"),
             },
-            "compliance_scorecard": compliance_scorecard(self.results),
+            **compliance_payload(self.results),
             # Per-check risk explanation + business impact + step-by-step remediation for
             # every distinct FAIL/WARN in this scan (deduped, severity-ranked).
             "finding_catalog": self._build_finding_catalog(),
