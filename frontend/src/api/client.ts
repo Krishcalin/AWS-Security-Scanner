@@ -6,7 +6,9 @@ import type {
   OrgOverview, Account, AccountSummary, Finding, AttackPath, FindingCatalogEntry,
   OnboardRequest, OnboardResult, ValidationResult, GraphFull,
   Connector, ConnectorRule, TestResult, Delivery, PreviewHit,
+  CrosswalkData, CrosswalkEdge, AccountCompliance, ComplianceFrameworkMeta,
 } from './types'
+import { deriveCrosswalk } from '../lib/crosswalk'
 
 const MODE = (import.meta.env.VITE_DATA_SOURCE as string) ?? 'sample'
 const API_BASE = (import.meta.env.VITE_API_BASE as string) ?? '/api'
@@ -225,8 +227,52 @@ const connectorApi = {
   },
 }
 
+// ── compliance breadth (crosswalk from the NIST spine) ─────────────────────────
+let _cwCache: CrosswalkData | null = null
+async function crosswalkData(): Promise<CrosswalkData> {
+  if (!SAMPLE) return get<CrosswalkData>(`${API_BASE}/compliance/crosswalk?_full=1`)
+  if (!_cwCache) _cwCache = await get<CrosswalkData>('/sample/crosswalk.json')
+  return _cwCache
+}
+
+const complianceApi = {
+  complianceFrameworks: async (): Promise<{ crosswalk_version: string; spine: string; frameworks: ComplianceFrameworkMeta[] }> => {
+    if (!SAMPLE) return get(`${API_BASE}/compliance/frameworks`)
+    const cw = await crosswalkData()
+    return { crosswalk_version: cw.schema, spine: cw.spine, frameworks: cw.frameworks }
+  },
+  crosswalkEdges: async (framework?: string): Promise<CrosswalkEdge[]> => {
+    if (!SAMPLE) return get(`${API_BASE}/compliance/crosswalk${framework ? `?framework=${framework}` : ''}`)
+    const cw = await crosswalkData()
+    const meta = new Map(cw.frameworks.map((f) => [f.id, f]))
+    const rows: CrosswalkEdge[] = []
+    for (const [nist, fwmap] of Object.entries(cw.crosswalk))
+      for (const [fid, e] of Object.entries(fwmap))
+        if (!framework || fid === framework)
+          rows.push({ nist, framework: fid, targets: e.targets, confidence: e.confidence, note: e.note, sources: meta.get(fid)?.sources ?? [] })
+    return rows.sort((a, b) => a.framework.localeCompare(b.framework) || a.nist.localeCompare(b.nist))
+  },
+  accountCompliance: async (id: string, opts?: { minConfidence?: string; frameworks?: string[] }): Promise<AccountCompliance> => {
+    if (!SAMPLE) {
+      const q = new URLSearchParams()
+      if (opts?.minConfidence) q.set('min_confidence', opts.minConfidence)
+      if (opts?.frameworks?.length) q.set('frameworks', opts.frameworks.join(','))
+      return get(`${API_BASE}/accounts/${id}/compliance${q.toString() ? `?${q}` : ''}`)
+    }
+    const [summary, cw] = await Promise.all([
+      get<AccountSummary>(`/sample/account_${id}_summary.json`), crosswalkData()])
+    let derived = deriveCrosswalk(summary.compliance_scorecard, cw, opts?.minConfidence)
+    if (opts?.frameworks?.length) {
+      const keep = new Set(opts.frameworks)
+      derived = Object.fromEntries(Object.entries(derived).filter(([k]) => keep.has(k)))
+    }
+    return { account: id, native: summary.compliance_scorecard, derived, crosswalk_version: cw.schema, min_confidence: opts?.minConfidence ?? null }
+  },
+}
+
 export const api = {
   ...connectorApi,
+  ...complianceApi,
   orgOverview: () => get<OrgOverview>(endpoint('/org/overview', 'org_overview.json')),
   listAccounts: () => get<Account[]>(endpoint('/accounts', 'accounts.json')),
   accountSummary: (id: string) =>

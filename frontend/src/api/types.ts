@@ -37,14 +37,62 @@ export interface ChokePoint {
   account?: string
 }
 
+export interface ControlProvenance {
+  control: string
+  via_nist: string[]
+  confidence: string // high | medium | low
+  note: string
+  sources: string[]
+}
 export interface ComplianceFramework {
   controls_total: number
   controls_passed: number
   controls_failed: number
   pass_rate: number
   failed_controls: string[]
+  // additive, crosswalk-derived only (native frameworks never carry these):
+  derived?: boolean
+  via?: string
+  confidence_mix?: { high: number; medium: number; low: number }
+  min_confidence?: 'high' | 'medium' | 'low'
+  control_provenance?: Record<string, ControlProvenance>
 }
 export type ComplianceScorecard = Record<string, ComplianceFramework>
+
+// The framework catalog + crosswalk reference data (GET /compliance/frameworks + crosswalk.json).
+export interface ComplianceFrameworkMeta {
+  id: string
+  name: string
+  version: string
+  authority: string
+  family: string // ISO | cloud | federal | payments | healthcare | privacy | general | …
+  native: boolean
+  near_identity: boolean
+  description: string
+  catalog_size: number
+  sources: string[]
+}
+export interface CrosswalkEdge {
+  nist: string
+  framework: string
+  targets: string[]
+  confidence: string
+  note: string
+  sources: string[]
+}
+export interface CrosswalkData {
+  schema: string
+  spine: string
+  frameworks: ComplianceFrameworkMeta[]
+  crosswalk: Record<string, Record<string, { targets: string[]; confidence: string; note: string }>>
+}
+export interface AccountCompliance {
+  account?: string
+  native: ComplianceScorecard
+  derived: ComplianceScorecard
+  crosswalk_version: string
+  min_confidence?: string | null
+}
 
 export interface GraphStats {
   nodes: number
