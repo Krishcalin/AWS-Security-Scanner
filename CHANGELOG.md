@@ -4,6 +4,49 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.22.0] — 2026
+
+**Agentless KSPM + KIEM — CIS-EKS + Kubernetes RBAC via the read-only Kubernetes API, folded
+into the attack-path graph (Phase-3 · agentless coverage).** OverWatch now reads Kubernetes
+posture without an in-cluster agent, and discovers cross-plane attack paths that bridge a
+compromised pod into the AWS account.
+
+### Added — `aws_kube.py` (pure, boto3-free, socket-free core)
+- The **EKS Kubernetes-API bearer-token minter** (`k8s-aws-v1.` presigned STS
+  `GetCallerIdentity`, cluster-bound via the signed `x-k8s-aws-id` header — pure SigV4, offline),
+  the EKS **access-policy tier** classifier, the **RBAC effective-privilege evaluator** (anonymous
+  bindings, wildcard/cluster-admin, escalate/bind/impersonate, secret-read), and the **IRSA /
+  Pod-Security / PSA / NetworkPolicy** classifiers + the reachability decision. READ-ONLY:
+  effective RBAC is computed here from listed objects, so the scanner never issues a
+  `*SubjectAccessReview` / `TokenReview` (those are POST/create).
+
+### Added — layered, fail-open collection (`aws_live_scanner.py`)
+- **Layer A (always on, no grant, no reachability):** the AWS **EKS Access Entries** API →
+  AWS-principal cluster-admin / over-priv (**KIEM-01/02/03**), **EKS Pod Identity** →
+  ServiceAccount→IAM-role edges, and the `authenticationMode` posture (**EKS-08**). Uses only
+  `eks:List*/Describe*` already covered by `SecurityAudit` — no CFN change.
+- **Layer B (optional, injected read-only K8s-API seam):** `GET`/`LIST` on RBAC / ServiceAccounts /
+  Pods / Pod-Security-Admission labels / NetworkPolicies → **KSPM-01..07** (CIS Amazon EKS
+  K8s-side). Reachability-gated (private-only endpoint / no grant / `CONFIG_MAP`-only →
+  **KSPM-00** INFO naming the prerequisite; never a crash or a phantom PASS).
+
+### Added — cross-plane graph + the marquee path
+- New node kinds `EKSCluster` / `KubeServiceAccount` / `KubePod` / **`KubeAdminCapability`**
+  (`crown_jewel=True`, picked up prop-based by `crown_nodes`). Every K8s edge reuses an existing
+  `E_PATH` kind (`HAS_ROLE` / `CAN_ASSUME` / `CAN_PRIVESC_TO`), so **`aws_correlate.py` is
+  UNCHANGED** (the `RUNS_IMAGE` ex-gate is kind-agnostic — a pod inherits image CVEs with no
+  `_EXPLOIT_KINDS` edit, exactly like Fargate). Clobber-safe `_kube_payloads` stash → `_emit_one_kube`
+  / `_replay_kube_edges`, emitted inline in EXPOSURE for exposed pods and replayed in VULN#40.
+- **KIEM-04** — IRSA / Pod-Identity cross-plane: a ServiceAccount whose assumed AWS role reaches
+  AWS admin or crown data. `enumerate_paths` discovers the ranked path
+  `internet → exposed pod (image CVE) → ServiceAccount → IRSA role → AWS admin / crown`; an EKS pod
+  behind an internet-facing ALB (ip-target = the pod's VPC-CNI IP) is the internet entry hop.
+
+### Read-only + onboarding
+- `GET`/`LIST` only on both planes. The Layer-B K8s API needs one *optional, opt-in* onboarding
+  step (an EKS read access entry / read-only ClusterRole) documented in
+  `deploy/cnapp-scanner-role.yaml`; the scanner never creates it. `VERSION` → 2.22.0.
+
 ## [2.21.0] — 2026
 
 **Fargate serverless-container workloads folded into the attack-path graph (Phase-3 · agentless coverage).**

@@ -43,6 +43,25 @@ Resources:
         # (s3:GetObject, dynamodb:GetItem, sqs:ReceiveMessage, ...) which would
         # violate the read-only-of-CONFIG contract. SecurityAudit + ViewOnlyAccess
         # are the tighter list/describe surface a CNAPP actually needs.
+        #
+        # ── OPTIONAL: EKS KSPM/KIEM Kubernetes-API layer ─────────────────────────
+        # The always-on KIEM (EKS Access Entries + Pod Identity) needs NOTHING beyond
+        # the eks:List*/Describe* already in SecurityAudit above. To ALSO read in-cluster
+        # RBAC / Pod-Security / NetworkPolicies (the KSPM-01..07 + RBAC-graph layer),
+        # grant this role a READ-ONLY Kubernetes access entry on each target cluster
+        # (a WRITE the scanner never performs itself — run it once at onboarding):
+        #   aws eks create-access-entry --cluster-name <CLUSTER> \
+        #       --principal-arn <THIS_ROLE_ARN> --type STANDARD
+        #   aws eks associate-access-policy --cluster-name <CLUSTER> \
+        #       --principal-arn <THIS_ROLE_ARN> --access-scope type=cluster \
+        #       --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy
+        # AmazonEKSViewPolicy covers pods/SA/PSA/NetworkPolicy. For the RBAC identity
+        # graph (list roles/bindings) use AmazonEKSAdminViewPolicy, or — least privilege —
+        # bind a custom read-only ClusterRole (get/list/watch on rbac.authorization.k8s.io
+        # + core, EXCLUDING secrets) to a K8s group mapped via the access entry's
+        # kubernetesGroups. The cluster API endpoint must also be reachable from the hub
+        # (public endpoint, or run the hub in-VPC / via PrivateLink for a private endpoint);
+        # otherwise OverWatch fails open with a KSPM-00 INFO. The scanner only ever GETs.
       Policies:
         - PolicyName: CnappScannerReadOnlyExtras
           PolicyDocument:
