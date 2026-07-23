@@ -96,6 +96,11 @@ def create_app(service, *, current_role=lambda: ""):
     class PreviewReq(BaseModel):
         account_id: str
 
+    class IngestReq(BaseModel):
+        doc: dict                                    # SARIF / CycloneDX / SPDX object
+        source_tool: Optional[str] = None            # override the sniffed producer
+        target_resource: Optional[str] = None        # explicit owner (EC2/Lambda ARN / image ref)
+
     # ── onboarding / validation (admin, private control plane) ────────────────
     @app.post("/accounts", status_code=201, dependencies=[Depends(require("admin"))])
     def onboard(body: OnboardReq):
@@ -197,6 +202,50 @@ def create_app(service, *, current_role=lambda: ""):
     @app.get("/org/findings", dependencies=[Depends(require("viewer"))])
     def org_findings():
         return service.org_findings()
+
+    # ── external-vuln ingest + reachability-ranked inventory ──────────────────
+    @app.post("/accounts/{account_id}/ingest", dependencies=[Depends(require("admin"))])
+    def ingest(account_id: str, body: IngestReq):
+        try:
+            return service.ingest_document(
+                account_id, doc=body.doc, source_tool=body.source_tool,
+                target_resource=body.target_resource)
+        except ValueError as e:                     # unparseable doc / cross-account ARN
+            raise HTTPException(status_code=400, detail=str(e))
+        except RuntimeError as e:                   # ingest requires a state store
+            raise HTTPException(status_code=503, detail=str(e))
+
+    @app.get("/accounts/{account_id}/vulns", dependencies=[Depends(require("viewer"))])
+    def vulns(account_id: str, min_band: Optional[str] = None, kev: Optional[bool] = None,
+              on_path: Optional[bool] = None, source: Optional[str] = None,
+              node: Optional[str] = None, include_suppressed: bool = True,
+              sort: str = "priority", limit: int = 2000):
+        return service.list_vulns(
+            account_id, min_band=min_band, kev=kev, on_path=on_path, source=source,
+            node=node, include_suppressed=include_suppressed, sort=sort, limit=limit)
+
+    @app.get("/accounts/{account_id}/vulns/{cve}", dependencies=[Depends(require("viewer"))])
+    def vuln_detail(account_id: str, cve: str):
+        rows = service.get_vuln(account_id, cve)
+        if not rows:
+            raise HTTPException(status_code=404, detail="no ingested rows for this CVE")
+        return rows
+
+    @app.get("/accounts/{account_id}/ingest/docs", dependencies=[Depends(require("viewer"))])
+    def ingest_docs(account_id: str, limit: int = 200):
+        return service.list_ingest_docs(account_id, limit)
+
+    @app.post("/accounts/{account_id}/vulns/refresh", dependencies=[Depends(require("admin"))])
+    def vulns_refresh(account_id: str):
+        try:
+            return service.refresh_vuln_reachability(account_id)
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+
+    @app.get("/org/vulns", dependencies=[Depends(require("viewer"))])
+    def org_vulns(min_band: Optional[str] = None, kev: Optional[bool] = None,
+                  on_path: Optional[bool] = None, limit: int = 2000):
+        return service.org_vulns(min_band=min_band, kev=kev, on_path=on_path, limit=limit)
 
     # ── compliance breadth (viewer; reference data + derived scorecards) ───────
     @app.get("/compliance/frameworks", dependencies=[Depends(require("viewer"))])

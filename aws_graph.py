@@ -143,6 +143,24 @@ class SecurityGraph:
                       for lst in self._out.values() for e in lst],
         }
 
+    @classmethod
+    def from_dict(cls, d: Dict) -> "SecurityGraph":
+        """Reconstruct a graph from node-link JSON — the exact inverse of
+        :meth:`to_dict`. ``to_dict`` writes the reserved keys (``id``/``kind`` on
+        nodes; ``source``/``target``/``kind`` on edges) LAST, so popping them here
+        is loss-safe by construction: ``from_dict(to_dict(g)).to_dict() ==
+        to_dict(g)``. ``add_node``/``add_edge`` MERGE semantics make re-loading
+        idempotent. Tolerant of malformed rows (missing id/endpoints are skipped
+        by the underlying mutators)."""
+        g = cls()
+        for n in d.get("nodes", []):
+            props = {k: v for k, v in n.items() if k not in ("id", "kind")}
+            g.add_node(n.get("id"), n.get("kind", "Unknown"), **props)
+        for e in d.get("edges", []):
+            props = {k: v for k, v in e.items() if k not in ("source", "target", "kind")}
+            g.add_edge(e.get("source"), e.get("target"), e.get("kind", ""), **props)
+        return g
+
     def save_json(self, path: str) -> None:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=2, default=str)

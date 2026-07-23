@@ -28,13 +28,14 @@ Design invariants
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-SCHEMA_VERSION = 4   # v4: + drift-digest delivery ledger (digest_log)
+SCHEMA_VERSION = 5   # v5: + external-vuln ingest (ingest_docs, ingested_vulns)
 KEY_VERSION = 1
 
 # Caller-injected scan timestamp (one per run). epoch = arithmetic column,
@@ -225,6 +226,39 @@ CREATE TABLE IF NOT EXISTS digest_log(
 CREATE UNIQUE INDEX IF NOT EXISTS ix_digest_dedup ON digest_log(connector_id, digest_key);
 CREATE INDEX IF NOT EXISTS ix_digest_acct ON digest_log(account);
 CREATE INDEX IF NOT EXISTS ix_digest_created ON digest_log(created_at);
+
+-- ── external-vuln ingest plane (SARIF/CycloneDX/SPDX) ─────────────────────────
+-- Durable, own-once inventory of externally-reported CVEs, ranked by ACTUAL
+-- attack-path reachability (not raw CVSS). Read-only on scanned targets: rows are
+-- built purely from uploaded docs + the account's stored graph_full. One owned row
+-- per (account, node_id, cve); N reporters = a sources set-union. BIGINT twins in
+-- aws_state_dialect.POSTGRES_DDL. Managed by StateStore (ingest_* helpers).
+CREATE TABLE IF NOT EXISTS ingest_docs(
+  doc_id TEXT PRIMARY KEY, account TEXT NOT NULL,
+  source_format TEXT NOT NULL CHECK(source_format IN ('sarif','cyclonedx','spdx')),
+  source_tool TEXT, target_resource TEXT, resolved_node TEXT,
+  finding_count INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'ingested'
+    CHECK(status IN ('ingested','unmapped','rejected')),
+  error TEXT, ingested_epoch INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_ingdoc_acct ON ingest_docs(account, ingested_epoch);
+
+CREATE TABLE IF NOT EXISTS ingested_vulns(
+  account TEXT NOT NULL, node_id TEXT NOT NULL, cve TEXT NOT NULL,
+  node_kind TEXT, package TEXT, installed_version TEXT, fixed_version TEXT,
+  severity TEXT, cvss_base REAL, epss REAL, kev INTEGER NOT NULL DEFAULT 0,
+  exploit_available TEXT, sources_json TEXT NOT NULL DEFAULT '[]',
+  suppressed INTEGER NOT NULL DEFAULT 0,
+  reachable_from_internet INTEGER NOT NULL DEFAULT 0,
+  on_attack_path INTEGER NOT NULL DEFAULT 0,
+  reaches_crown INTEGER NOT NULL DEFAULT 0,
+  terminal_kinds_json TEXT NOT NULL DEFAULT '[]',
+  priority_score INTEGER NOT NULL DEFAULT 0, priority_band TEXT,
+  driving_path TEXT, mapping_status TEXT NOT NULL DEFAULT 'resolved',
+  first_ingested_epoch INTEGER NOT NULL, last_seen_epoch INTEGER NOT NULL, doc_id TEXT,
+  PRIMARY KEY(account, node_id, cve));
+CREATE INDEX IF NOT EXISTS ix_ingv_rank    ON ingested_vulns(account, priority_score);
+CREATE INDEX IF NOT EXISTS ix_ingv_kevpath ON ingested_vulns(account, kev, on_attack_path);
 """
 
 
@@ -621,8 +655,142 @@ class StateStore:
             "AND collected_epoch >= ?", (account, arn, fresh_after_epoch))
         return dict(row) if row else None
 
+    # ── external-vuln ingest plane (v5) ───────────────────────────────────────
+    _INGV_OWNED_COLS = ["account", "node_id", "cve", "node_kind", "package",
+                        "installed_version", "fixed_version", "severity", "cvss_base",
+                        "epss", "kev", "exploit_available", "sources_json", "suppressed",
+                        "mapping_status", "first_ingested_epoch", "last_seen_epoch", "doc_id"]
+
+    def upsert_ingest_doc(self, account: str, doc_id: str, source_format: str,
+                          source_tool: Optional[str], target_resource: Optional[str],
+                          resolved_node: Optional[str], finding_count: int, status: str,
+                          error: Optional[str], epoch: int) -> None:
+        """Record an upload in the audit ledger. ``doc_id`` is the content hash, so
+        re-uploading identical content is a stable no-op refresh (idempotent)."""
+        self._be.upsert(
+            "ingest_docs",
+            ["doc_id", "account", "source_format", "source_tool", "target_resource",
+             "resolved_node", "finding_count", "status", "error", "ingested_epoch"],
+            ["doc_id"],
+            ["account", "source_format", "source_tool", "target_resource",
+             "resolved_node", "finding_count", "status", "error", "ingested_epoch"],
+            (doc_id, account, source_format, source_tool, target_resource,
+             resolved_node, int(finding_count), status, error, int(epoch)))
+
+    def get_ingest_doc(self, doc_id: str) -> Optional[Dict]:
+        row = self._be.query_one("SELECT * FROM ingest_docs WHERE doc_id=?", (doc_id,))
+        return dict(row) if row else None
+
+    def list_ingest_docs(self, account: str, limit: int = 200) -> List[Dict]:
+        rows = self._be.query_all(
+            "SELECT * FROM ingest_docs WHERE account=? ORDER BY ingested_epoch DESC "
+            "LIMIT ?", (account, int(limit)))
+        return [dict(r) for r in rows]
+
+    def upsert_ingested_vuln(self, row: Dict) -> None:
+        """Upsert the OWNED facts for one (account, node_id, cve). N reporters =
+        a ``sources`` set-union; ``first_ingested_epoch`` keeps the MIN. Verdict
+        (reachability) columns are NOT written here — ``write_ingested_verdict``
+        does that AFTER the re-run, so a verdict is never reset to 0 mid-flight."""
+        acct, node, cve = row["account"], row["node_id"], row["cve"]
+        sources = set(row.get("sources") or [])
+        first = int(row["last_seen_epoch"])
+        existing = self._be.query_one(
+            "SELECT sources_json, first_ingested_epoch FROM ingested_vulns "
+            "WHERE account=? AND node_id=? AND cve=?", (acct, node, cve))
+        if existing:
+            e = dict(existing)
+            sources |= set(_load_json_list(e.get("sources_json")))
+            if e.get("first_ingested_epoch") is not None:
+                first = min(first, int(e["first_ingested_epoch"]))
+        self._be.upsert(
+            "ingested_vulns", self._INGV_OWNED_COLS, ["account", "node_id", "cve"],
+            self._INGV_OWNED_COLS[3:],
+            (acct, node, cve, row.get("node_kind"), row.get("package"),
+             row.get("installed_version"), row.get("fixed_version"), row.get("severity"),
+             row.get("cvss_base"), row.get("epss"), int(bool(row.get("kev"))),
+             row.get("exploit_available"), json.dumps(sorted(sources)),
+             int(bool(row.get("suppressed"))), row.get("mapping_status", "resolved"),
+             first, int(row["last_seen_epoch"]), row.get("doc_id")))
+
+    def write_ingested_verdict(self, account: str, node_id: str, cve: str, v: Dict) -> None:
+        self._be.execute(
+            "UPDATE ingested_vulns SET reachable_from_internet=?, on_attack_path=?, "
+            "reaches_crown=?, terminal_kinds_json=?, priority_score=?, priority_band=?, "
+            "driving_path=? WHERE account=? AND node_id=? AND cve=?",
+            (int(bool(v.get("reachable_from_internet"))), int(bool(v.get("on_attack_path"))),
+             int(bool(v.get("reaches_crown"))), json.dumps(v.get("terminal_kinds") or []),
+             int(v.get("priority_score") or 0), v.get("priority_band"),
+             v.get("driving_path"), account, node_id, cve))
+
+    def account_ingested_rows(self, account: str) -> List[Dict]:
+        """Every owned row for an account (unfiltered) — the verdict recompute
+        reads these to rebuild reachability against the latest graph."""
+        return [self._ingv_row(dict(r)) for r in self._be.query_all(
+            "SELECT * FROM ingested_vulns WHERE account=?", (account,))]
+
+    def list_ingested_vulns(self, account: str, *, min_band: Optional[str] = None,
+                            kev: Optional[bool] = None, on_path: Optional[bool] = None,
+                            source: Optional[str] = None, node: Optional[str] = None,
+                            include_suppressed: bool = True, sort: str = "priority",
+                            limit: int = 2000) -> List[Dict]:
+        sql = ["SELECT * FROM ingested_vulns WHERE account=?"]
+        params: List = [account]
+        if kev is not None:
+            sql.append("AND kev=?"); params.append(int(bool(kev)))
+        if on_path is not None:
+            sql.append("AND on_attack_path=?"); params.append(int(bool(on_path)))
+        if node:
+            sql.append("AND node_id=?"); params.append(node)
+        if not include_suppressed:
+            sql.append("AND suppressed=0")
+        # A leading "(col IS NULL)" term is NULLS-LAST on BOTH engines (sqlite sorts the
+        # 0/1 ASC, Postgres sorts the boolean FALSE-first) — priority_score is NOT NULL,
+        # but epss/cvss_base are nullable and would otherwise order differently per engine.
+        order = {"priority": "priority_score DESC",
+                 "epss": "(epss IS NULL), epss DESC",
+                 "severity": "(cvss_base IS NULL), cvss_base DESC"}.get(sort, "priority_score DESC")
+        # min_band (derived from priority_band) and source (a JSON set) are filtered in
+        # Python, so the LIMIT is applied AFTER them — never truncating before filtering.
+        sql.append(f"ORDER BY {order}, cve")
+        rows = [self._ingv_row(dict(r))
+                for r in self._be.query_all(" ".join(sql), tuple(params))]
+        if min_band:
+            floor = _BAND_ORDER.get(min_band.upper(), 0)
+            rows = [r for r in rows
+                    if _BAND_ORDER.get((r.get("priority_band") or "").upper(), 0) >= floor]
+        if source:
+            rows = [r for r in rows if source in (r.get("sources") or [])]
+        return rows[:int(limit)]
+
+    def get_ingested_cve(self, account: str, cve: str) -> List[Dict]:
+        rows = self._be.query_all(
+            "SELECT * FROM ingested_vulns WHERE account=? AND cve=? "
+            "ORDER BY priority_score DESC", (account, cve))
+        return [self._ingv_row(dict(r)) for r in rows]
+
+    @staticmethod
+    def _ingv_row(r: Dict) -> Dict:
+        r["sources"] = _load_json_list(r.get("sources_json"))
+        r["terminal_kinds"] = _load_json_list(r.get("terminal_kinds_json"))
+        for f in ("kev", "suppressed", "reachable_from_internet",
+                  "on_attack_path", "reaches_crown"):
+            r[f] = bool(r.get(f))
+        return r
+
 
 # ── module helpers ───────────────────────────────────────────────────────────
+_BAND_ORDER = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "INFO": 0}
+
+
+def _load_json_list(raw) -> List:
+    if not raw:
+        return []
+    try:
+        v = json.loads(raw)
+        return v if isinstance(v, list) else []
+    except Exception:
+        return []
 def _grade(score: float) -> str:
     if score >= 90: return "A"
     if score >= 80: return "B"

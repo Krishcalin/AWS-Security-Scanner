@@ -23,6 +23,8 @@ from collections import namedtuple
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol
 
+import aws_ingest
+import aws_sidescan
 import aws_state
 import cnapp_connectors as cc
 import cnapp_onboarding
@@ -130,7 +132,8 @@ class PlatformService:
                  job_id_gen: Callable[[], str] = lambda: "job-" + secrets.token_hex(8),
                  connectors=None, http_post: Optional[Callable] = None, hub_base: str = "",
                  connector_id_gen: Callable[[], str] = lambda: "conn-" + secrets.token_hex(6),
-                 crosswalk=None, state=None, clock: Callable[[], int] = None):
+                 crosswalk=None, state=None, vuln_bundle=None,
+                 clock: Callable[[], int] = None):
         import time
         self.registry = registry
         self.results = results
@@ -151,6 +154,12 @@ class PlatformService:
         self.connector_id_gen = connector_id_gen
         self._crosswalk = crosswalk             # None -> lazy bundled compliance_crosswalk
         self.state = state                      # an aws_state.StateStore (or None) — lifecycle/drift/trend
+        # ── external-vuln ingest plane (Phase-2 capstone) ─────────────────────
+        # The SAME {records/osv, epss, kev, exploits} bundle the native side-scan
+        # uses, so an ingested CVE gets byte-identical KEV/EPSS. Fail-open: None →
+        # CVEs are owned but enrichment is empty (reachability surfaced honestly).
+        self._vuln_bundle_data = vuln_bundle
+        self._osv_feed_cache = None
         self._http_post = http_post             # None -> lazy urllib default (see http_post)
         self.clock = clock or (lambda: int(time.time()))
 
@@ -399,6 +408,153 @@ class PlatformService:
         out.sort(key=lambda e: (order.get(e.get("severity", ""), 4), e.get("check_id", "")))
         return out
 
+    # ── external-vuln ingest plane (SARIF/CycloneDX/SPDX) ───────────────────────
+    def _require_state(self):
+        if self.state is None:
+            raise RuntimeError("ingest requires a state store; none configured")
+        return self.state
+
+    def _vuln_bundle(self) -> dict:
+        b = self._vuln_bundle_data
+        if callable(b):
+            b = b()
+        if not b:
+            return {"records": [], "epss": {}, "kev": set(), "exploits": set()}
+        return {"records": b.get("records") or b.get("osv") or [],
+                "epss": b.get("epss") or {}, "kev": set(b.get("kev") or ()),
+                "exploits": set(b.get("exploits") or ())}
+
+    def _osv_feed(self, bundle: dict):
+        # Key the cache on the records-list identity so a refreshed bundle (vuln_bundle
+        # may be a callable returning a new records list) rebuilds the feed instead of
+        # serving a stale one — the inventory lane tracks refreshes like the findings lane.
+        records = bundle["records"]
+        if self._osv_feed_cache is None or self._osv_feed_cache[0] is not records:
+            self._osv_feed_cache = (records, aws_sidescan.OSVFeed.from_records(records))
+        return self._osv_feed_cache[1]
+
+    @staticmethod
+    def _row_to_owned(r: dict) -> dict:
+        """Rebuild the (node, EnrichedMatch, suppressed) owned item from a stored
+        row — the verdict recompute runs off the DURABLE owned facts, so it works
+        identically for a fresh doc and a graph-only refresh."""
+        m = aws_sidescan.EnrichedMatch(
+            cve=r["cve"], osv_id="", package=r.get("package") or "",
+            installed_version=r.get("installed_version") or "",
+            fixed_version=r.get("fixed_version"), severity=r.get("severity") or "",
+            cvss_base=r.get("cvss_base"), epss=r.get("epss"), kev=bool(r.get("kev")),
+            exploit_available=r.get("exploit_available"), ecosystem="")
+        return {"node_id": r["node_id"], "node_kind": r.get("node_kind") or "Unknown",
+                "match": m, "suppressed": bool(r.get("suppressed")),
+                "tool": "", "doc_id": r.get("doc_id") or ""}
+
+    def _recompute_account_verdicts(self, account_id: str, graph_dict):
+        """Rebuild reachability verdicts for EVERY owned row of an account against
+        the latest ``graph_full`` and persist them. Returns the per-CVE deltas
+        (became_reachable / became_unreachable), annotated with kev/severity."""
+        state = self.state
+        rows = state.account_ingested_rows(account_id)
+        owned = [self._row_to_owned(r) for r in rows]
+        verdicts, _ = aws_ingest.compute_reachability_verdicts(graph_dict, owned)
+        for (node, cve), v in verdicts.items():
+            state.write_ingested_verdict(account_id, node, cve, v)
+        became, gone = aws_ingest.diff_reachability(rows, verdicts)
+        by_key = {(r["node_id"], r["cve"]): r for r in rows}
+
+        def _annot(items):
+            out = []
+            for it in items:
+                r = by_key.get((it["node_id"], it["cve"]), {})
+                out.append({**it, "kev": bool(r.get("kev")),
+                            "severity": r.get("severity")})
+            return out
+        return _annot(became), _annot(gone)
+
+    def ingest_document(self, account_id: str, *, doc: dict,
+                        source_tool: Optional[str] = None,
+                        target_resource: Optional[str] = None) -> dict:
+        """Parse an uploaded SARIF/CycloneDX/SPDX doc → own its CVEs against the
+        account's graph → enrich from OverWatch's own bundle → persist → re-run
+        reachability. Read-only on the scanned account (works off the uploaded doc
+        + stored graph_full only). Raises ValueError on an unparseable doc or a
+        cross-account target ARN (→ 400)."""
+        state = self._require_state()
+        now = self.clock()
+        parsed = aws_ingest.parse_document(doc)                 # ValueError → 400
+        doc_id = aws_ingest.doc_content_id(doc)
+        bundle = self._vuln_bundle()
+        epss, kev, exploits = bundle["epss"], bundle["kev"], bundle["exploits"]
+
+        graph_dict = self.get_graph(account_id)
+        g = aws_ingest.SecurityGraph.from_dict(graph_dict or {})
+        node_id, node_kind, mapping_status = aws_ingest.resolve_owner(
+            g, account_id, target_resource, parsed.subject_locator)
+
+        owned = []
+        if parsed.lane == "findings":
+            cve_index = aws_ingest.build_cve_index(bundle["records"])
+            for f in parsed.findings:
+                m = aws_ingest.enrich_finding(f, cve_index, epss, kev, exploits)
+                owned.append((m, aws_ingest.vex_suppressed(f.vex_state)))
+        else:                                                   # inventory lane
+            feed = self._osv_feed(bundle)
+            for m in aws_sidescan.match_vulns(parsed.packages, feed, epss, kev, exploits):
+                owned.append((m, False))
+
+        tool = source_tool or parsed.source_tool
+        with state._be.transaction():
+            state.upsert_ingest_doc(
+                account_id, doc_id, parsed.source_format, tool, target_resource,
+                node_id, len(owned),
+                "unmapped" if mapping_status == "unmapped" else "ingested", None, now)
+            for m, suppressed in owned:
+                state.upsert_ingested_vuln({
+                    "account": account_id, "node_id": node_id, "cve": m.cve,
+                    "node_kind": node_kind, "package": m.package,
+                    "installed_version": m.installed_version, "fixed_version": m.fixed_version,
+                    "severity": m.severity, "cvss_base": m.cvss_base, "epss": m.epss,
+                    "kev": m.kev, "exploit_available": m.exploit_available,
+                    "sources": [f"ingest:{tool}"], "suppressed": suppressed,
+                    "mapping_status": mapping_status, "last_seen_epoch": now,
+                    "doc_id": doc_id})
+            became, _ = self._recompute_account_verdicts(account_id, graph_dict)
+
+        return {"doc_id": doc_id, "resolved_node": node_id, "node_kind": node_kind,
+                "mapping_status": mapping_status, "lane": parsed.lane,
+                "finding_count": len(owned), "notes": parsed.notes,
+                "newly_reachable_kev": [x for x in became if x.get("kev")],
+                "top": state.list_ingested_vulns(account_id, limit=10)}
+
+    def list_vulns(self, account_id: str, **filters) -> List[dict]:
+        # Reads fail OPEN: no state store yet = nothing ingested (empty), never a 500.
+        return [] if self.state is None else self.state.list_ingested_vulns(account_id, **filters)
+
+    def get_vuln(self, account_id: str, cve: str) -> List[dict]:
+        return [] if self.state is None else self.state.get_ingested_cve(account_id, cve)
+
+    def list_ingest_docs(self, account_id: str, limit: int = 200) -> List[dict]:
+        return [] if self.state is None else self.state.list_ingest_docs(account_id, limit)
+
+    def refresh_vuln_reachability(self, account_id: str) -> dict:
+        """Force a verdict re-run against the latest graph_full (no new doc) — the
+        cadence hook after a native scan lands a fresh graph. Returns the deltas."""
+        state = self._require_state()
+        graph_dict = self.get_graph(account_id)
+        with state._be.transaction():
+            became, gone = self._recompute_account_verdicts(account_id, graph_dict)
+        return {"became_reachable": became, "became_unreachable": gone}
+
+    def org_vulns(self, **filters) -> List[dict]:
+        """Org-wide ranked owned inventory, each row account-tagged."""
+        if self.state is None:
+            return []
+        out: List[dict] = []
+        for a in self.registry.list_accounts(onboarding_status="active"):
+            for r in self.state.list_ingested_vulns(a["account_id"], **filters):
+                r["account"] = a["account_id"]
+                out.append(r)
+        out.sort(key=lambda r: -(r.get("priority_score") or 0))
+        return out
 
     # ── connector framework (Phase-2 workflow plane) ────────────────────────────
     def _require_connectors(self):
@@ -503,10 +659,48 @@ class PlatformService:
                 onpath.add(str(df).split(":")[0])
         findings = [cc.to_finding(e, account_id, e.get("check_id") in onpath)
                     for e in p.get("finding_catalog", [])]
+        # Append the ingest plane's reachable survivors as two CHECK-LEVEL aggregates
+        # (VULN-ING-KEV / VULN-ING) so they route through the existing VULN-* +
+        # on_attack_path rules — SEPARATE check_ids so ingested/native never mix.
+        for e in self._ingested_finding_entries(account_id):
+            findings.append(cc.to_finding(e, account_id, True))
         coverage = {(account_id, r.get("check_id")) for r in p.get("results", [])
                     if r.get("check_id")}
         coverage |= {(account_id, f.check_id) for f in findings}
         return findings, coverage
+
+    def _ingested_finding_entries(self, account_id: str) -> List[dict]:
+        """Two synthetic finding_catalog entries from the account's REACHABLE,
+        non-suppressed ingested survivors: ``VULN-ING-KEV`` (CRITICAL, reachable KEV)
+        and ``VULN-ING`` (HIGH, reachable non-KEV). Per-CVE detail rides ``affected``;
+        per-CVE notifications are deliberately not sent (the plane is check-level)."""
+        if self.state is None:
+            return []
+        survivors = self.state.list_ingested_vulns(
+            account_id, on_path=True, include_suppressed=False, limit=5000)
+        buckets = (("VULN-ING-KEV", "CRITICAL", [r for r in survivors if r.get("kev")],
+                    "known-exploited (KEV)"),
+                   ("VULN-ING", "HIGH", [r for r in survivors if not r.get("kev")],
+                    "exploitable"))
+        out: List[dict] = []
+        for check_id, band, rows, blurb in buckets:
+            if not rows:
+                continue
+            out.append({
+                "check_id": check_id, "section": "Vulnerabilities", "severity": band,
+                "status": "FAIL", "compliance": {"NIST 800-53": "RA-5", "CIS": "7.x"},
+                "remediation_cmd": ("Upgrade the affected package to its fixed version and "
+                                    "rebuild/redeploy the image; re-scan to confirm the path "
+                                    "is severed."),
+                "risk": (f"{len(rows)} externally-reported {blurb} CVE(s) on internet-reachable "
+                         f"resources with a path to crown-jewel data."),
+                "impact": "Reachable, exploitable vulnerability on an attack path to sensitive data.",
+                "steps": [f"Open /accounts/{account_id}/vulns (ranked by reachability).",
+                          "Patch to fixed_version; re-scan to confirm the path is severed."],
+                "affected": [f"{r['cve']}@{str(r['node_id']).split('/')[-1]}" for r in rows][:200],
+                "count": len(rows), "distinct": len(rows),
+            })
+        return out
 
     def preview_rules(self, account_id: str) -> List[dict]:
         """Dry-run: which findings WOULD fire which connectors — zero outbound HTTP,
@@ -543,9 +737,12 @@ class PlatformService:
 
     # ── drift digests ───────────────────────────────────────────────────────────
     def _build_digest(self, account_id: str, drift: dict, *, scan_id: str, scan_epoch: int,
-                     prev_payload: Optional[dict] = None, frequency: str = "per_scan") -> dict:
+                     prev_payload: Optional[dict] = None, frequency: str = "per_scan",
+                     became_reachable: Optional[List[dict]] = None) -> dict:
         """Assemble the pure drift-digest inputs from the stored payload + the state
-        store (trend/mttr) + the crosswalk-native compliance delta. Pure builder call."""
+        store (trend/mttr) + the crosswalk-native compliance delta. Pure builder call.
+        ``became_reachable`` (from the ingest reachability re-run) is shaped into the
+        digest's ``newly_on_path`` per-CVE signal."""
         p = self.results.get_latest(account_id) or {}
         onpath = {str(df).split(":")[0] for ap in p.get("attack_paths", [])
                   for df in ap.get("driving_findings", [])}
@@ -559,16 +756,19 @@ class PlatformService:
             onpath=onpath,
             compliance_delta=cc.compliance_delta((prev_payload or {}).get("compliance_scorecard"),
                                                  p.get("compliance_scorecard")),
+            extra_newly_on_path=_ingest_digest_items(became_reachable or []),
             window_id=cc.digest_window(frequency, scan_id, scan_epoch), hub_base=self.hub_base)
 
     def notify_digest(self, account_id: str, drift: dict, *, scan_id: str, scan_epoch: int,
-                     prev_payload: Optional[dict] = None, frequency: str = "per_scan") -> dict:
+                     prev_payload: Optional[dict] = None, frequency: str = "per_scan",
+                     became_reachable: Optional[List[dict]] = None) -> dict:
         """Deliver ONE drift digest per (account, window) through the opted-in connectors
         (real outbound). Idempotent per window. A no-op when no connectors/state wired."""
         if self.connectors is None or self.state is None:
             return {"digested": 0}
         digest = self._build_digest(account_id, drift, scan_id=scan_id, scan_epoch=scan_epoch,
-                                    prev_payload=prev_payload, frequency=frequency)
+                                    prev_payload=prev_payload, frequency=frequency,
+                                    became_reachable=became_reachable)
         res = cc.run_digest(self.connectors, digest, http_post=self.http_post,
                             secret_reader=self.secret_reader, now_epoch=self.clock(),
                             hub_base=self.hub_base)
@@ -689,6 +889,22 @@ def _merge_scorecard(acc: Dict[str, dict], card: Dict[str, dict]) -> None:
             cur.setdefault("control_provenance", {}).update(c["control_provenance"])
         t = cur["controls_total"]
         cur["pass_rate"] = round(100 * cur["controls_passed"] / t, 1) if t else 100.0
+
+
+def _ingest_digest_items(became_reachable: List[dict]) -> List[dict]:
+    """Shape ingest ``became_reachable`` deltas into digest ``newly_on_path`` items —
+    ``{check_id: "VULN-ING[-KEV]:<cve>", severity, on_attack_path: True}`` — so a
+    newly-REACHABLE KEV renders in every digest with zero new renderer code."""
+    out = []
+    for it in became_reachable or []:
+        kev = bool(it.get("kev"))
+        out.append({
+            "check_id": f"{'VULN-ING-KEV' if kev else 'VULN-ING'}:{it.get('cve', '')}",
+            "severity": "CRITICAL" if kev else (it.get("severity") or "HIGH"),
+            "resource": str(it.get("node_id", "")).split("/")[-1],
+            "on_attack_path": True,
+        })
+    return out
 
 
 def _rule_dict(r) -> dict:

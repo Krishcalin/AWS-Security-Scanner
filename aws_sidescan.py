@@ -1894,21 +1894,25 @@ def scan_text_secrets(data, source: str = "", entropy_min: float = 4.0) -> List[
 
 # ── graph emit (HAS_VULN edges, 1:1 with Inspector) ──────────────────────────
 def to_has_vuln_edges(instance_arn: str, matches: List[EnrichedMatch],
-                      snapshot_id: str = "") -> List[VulnEdge]:
+                      snapshot_id: str = "", scan_source: str = "side-scan") -> List[VulnEdge]:
     """Convert enriched matches to graph-ready HAS_VULN edges whose props match
     aws_live_scanner._check_vuln exactly (so aws_correlate is unchanged), plus a
-    few harmless side-scan extras (fixed_version/package/installed_version/source)."""
+    few harmless side-scan extras (fixed_version/package/installed_version/source).
+
+    ``scan_source`` labels edge provenance ("side-scan" by default; the external
+    ingest lane passes "ingest:<tool>" so an owned CVE's origin is queryable
+    without widening the frozen EnrichedMatch)."""
     out: List[VulnEdge] = []
     for m in matches:
         props = {
             "cve": m.cve, "severity": m.severity, "epss": m.epss, "kev": m.kev,
             "exploit_available": m.exploit_available,
             "fix_available": "YES" if m.fixed_version else "NO",
-            "finding_arn": f"sidescan:{snapshot_id}:{m.cve}",
+            "finding_arn": f"{scan_source}:{snapshot_id}:{m.cve}",
             "fixed_version": m.fixed_version, "package": m.package,
             # NB: prop key must NOT be "source"/"target"/"id"/"kind" — those
             # collide with the node-link edge-endpoint keys in graph.to_dict().
-            "installed_version": m.installed_version, "scan_source": "side-scan",
+            "installed_version": m.installed_version, "scan_source": scan_source,
         }
         out.append(VulnEdge(node_arn=instance_arn, cve=m.cve, props=props))
     return out
@@ -1916,13 +1920,15 @@ def to_has_vuln_edges(instance_arn: str, matches: List[EnrichedMatch],
 
 def emit_node_vuln_edges(graph, node_id: str, node_kind: str,
                          matches: List[EnrichedMatch], snapshot_id: str = "",
-                         **node_props) -> int:
+                         scan_source: str = "side-scan", **node_props) -> int:
     """Emit HAS_VULN edges from an arbitrary-kind node (ECRImage / LambdaFunction /
     EC2Instance) to Vulnerability nodes. MERGE-idempotent, so it converges byte-for-byte
-    with the Inspector paths that build the same node ids (CWPP-05 / LMB-07 / VULN-*)."""
+    with the Inspector paths that build the same node ids (CWPP-05 / LMB-07 / VULN-*).
+
+    ``scan_source`` is threaded to ``to_has_vuln_edges`` for ingest provenance."""
     graph.add_node(node_id, node_kind, **node_props)
     n = 0
-    for e in to_has_vuln_edges(node_id, matches, snapshot_id):
+    for e in to_has_vuln_edges(node_id, matches, snapshot_id, scan_source):
         graph.add_node(e.cve, "Vulnerability", severity=e.props["severity"],
                        epss=e.props["epss"], kev=e.props["kev"],
                        exploit_available=e.props["exploit_available"],

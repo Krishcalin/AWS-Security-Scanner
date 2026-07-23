@@ -346,3 +346,57 @@ export interface FindingCatalogEntry {
   distinct: number
   account?: string
 }
+
+// ── external-vuln ingest plane (SARIF/CycloneDX/SPDX) ────────────────────────
+export interface IngestedVuln {
+  account?: string
+  node_id: string
+  node_kind: string
+  cve: string
+  package: string
+  installed_version: string
+  fixed_version: string | null
+  severity: string
+  cvss_base: number | null
+  epss: number | null
+  kev: boolean
+  exploit_available: string | null
+  sources: string[]
+  suppressed: boolean
+  reachable_from_internet: boolean
+  on_attack_path: boolean
+  reaches_crown: boolean
+  terminal_kinds: string[]
+  priority_score: number
+  priority_band: string
+  driving_path: string | null
+  mapping_status: string
+  first_ingested_epoch: number
+  last_seen_epoch: number
+  doc_id: string
+}
+
+export interface IngestDoc {
+  doc_id: string
+  account: string
+  source_format: string
+  source_tool: string | null
+  target_resource: string | null
+  resolved_node: string | null
+  finding_count: number
+  status: string
+  error: string | null
+  ingested_epoch: number
+}
+
+export interface IngestResult {
+  doc_id: string
+  resolved_node: string
+  node_kind: string
+  mapping_status: string
+  lane: string
+  finding_count: number
+  notes: string[]
+  newly_reachable_kev: { cve: string; node_id: string; kev: boolean }[]
+  top: IngestedVuln[]
+}

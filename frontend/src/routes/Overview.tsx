@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { Waypoints, Gem, ShieldCheck, CircleAlert, Cloud, ArrowRight, Scissors } from 'lucide-react'
+import { Waypoints, Gem, ShieldCheck, CircleAlert, Cloud, ArrowRight, Scissors, ShieldAlert, Flame } from 'lucide-react'
 import { useScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'
 import { api } from '../api/client'
@@ -8,7 +8,33 @@ import { Card, GradeDial, Loader, ErrorNote, Empty, SevDot, StackBar } from '../
 import { SeverityChip, PathBadges, PathChain, ChokeRow } from '../components/paths'
 import { DriftCard } from '../components/DriftCard'
 import { SEVERITIES, sevColor, scoreColor, gradeColor } from '../lib/format'
-import type { OrgOverview as TOrg, AccountSummary, AttackPath } from '../api/types'
+import type { OrgOverview as TOrg, AccountSummary, AttackPath, IngestedVuln } from '../api/types'
+
+/** External-CVE reachability roll-up — renders only when the account has ingested
+ *  scanner output, so it never adds noise to accounts with no external scans. */
+function VulnRollup({ id }: { id: string }) {
+  const { data } = useFetch<IngestedVuln[]>(() => api.listVulns(id).catch(() => []), [id])
+  const rows = data ?? []
+  if (rows.length === 0) return null
+  const reachable = rows.filter((v) => v.on_attack_path && !v.suppressed).length
+  const kevReach = rows.filter((v) => v.kev && v.on_attack_path && !v.suppressed).length
+  return (
+    <Link to="/vulnerabilities" className="group block">
+      <Card className="p-4 flex items-center gap-4 hover:border-accent/40 transition-colors">
+        <span className="h-10 w-10 rounded-xl grid place-items-center shrink-0" style={{ background: 'var(--panel2)', color: 'var(--crit)' }}><ShieldAlert size={20} /></span>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-bold text-ink">External vulnerabilities · reachability-ranked</div>
+          <div className="text-xs text-ink3 mt-0.5">{rows.length} CVE{rows.length === 1 ? '' : 's'} owned from SARIF/CycloneDX/SPDX uploads</div>
+        </div>
+        <div className="flex items-center gap-5">
+          <div className="text-center"><div className="text-2xl font-extrabold tabular-nums" style={{ color: 'var(--high)' }}>{reachable}</div><div className="text-[10px] text-ink3 flex items-center gap-1"><Waypoints size={10} /> reachable</div></div>
+          <div className="text-center"><div className="text-2xl font-extrabold tabular-nums" style={{ color: 'var(--crit)' }}>{kevReach}</div><div className="text-[10px] text-ink3 flex items-center gap-1"><Flame size={10} /> reachable KEV</div></div>
+          <ArrowRight size={16} className="text-ink3 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
+      </Card>
+    </Link>
+  )
+}
 
 const scoreToGrade = (s: number) => (s >= 90 ? 'A' : s >= 80 ? 'B' : s >= 70 ? 'C' : s >= 60 ? 'D' : 'F')
 
@@ -210,6 +236,7 @@ function AccountView({ id }: { id: string }) {
         </Card>
       </div>
 
+      <div className="mb-4"><VulnRollup id={id} /></div>
       <div className="mb-4"><DriftCard account={id} /></div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-4">

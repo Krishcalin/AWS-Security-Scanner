@@ -8,6 +8,7 @@ import type {
   Connector, ConnectorRule, TestResult, Delivery, PreviewHit,
   CrosswalkData, CrosswalkEdge, AccountCompliance, ComplianceFrameworkMeta,
   TrendRow, DriftDigest, DigestDelivery,
+  IngestedVuln, IngestDoc, IngestResult,
 } from './types'
 import { deriveCrosswalk } from '../lib/crosswalk'
 
@@ -337,10 +338,63 @@ const schedulingApi = {
   },
 }
 
+// ── external-vuln ingest plane (SARIF/CycloneDX/SPDX → reachability-ranked) ──
+interface VulnQuery { min_band?: string; kev?: boolean; on_path?: boolean; source?: string; node?: string; include_suppressed?: boolean; sort?: string }
+function vulnQS(q: VulnQuery = {}): string {
+  const p = new URLSearchParams()
+  if (q.min_band) p.set('min_band', q.min_band)
+  if (q.kev !== undefined) p.set('kev', String(q.kev))
+  if (q.on_path !== undefined) p.set('on_path', String(q.on_path))
+  if (q.source) p.set('source', q.source)
+  if (q.node) p.set('node', q.node)
+  if (q.include_suppressed !== undefined) p.set('include_suppressed', String(q.include_suppressed))
+  if (q.sort) p.set('sort', q.sort)
+  const s = p.toString()
+  return s ? `?${s}` : ''
+}
+
+const vulnApi = {
+  // The whole sample vuln set is one account-tagged fixture; filter it per scope.
+  _allVulns: () => get<IngestedVuln[]>('/sample/vulns.json').catch(() => [] as IngestedVuln[]),
+  listVulns: async (id: string, q: VulnQuery = {}): Promise<IngestedVuln[]> => {
+    if (!SAMPLE) return get<IngestedVuln[]>(`${API_BASE}/accounts/${id}/vulns${vulnQS(q)}`)
+    let rows = (await vulnApi._allVulns()).filter((r) => r.account === id)
+    if (q.include_suppressed === false) rows = rows.filter((r) => !r.suppressed)
+    if (q.kev !== undefined) rows = rows.filter((r) => r.kev === q.kev)
+    if (q.on_path !== undefined) rows = rows.filter((r) => r.on_attack_path === q.on_path)
+    return rows.sort((a, b) => b.priority_score - a.priority_score)
+  },
+  orgVulns: async (q: VulnQuery = {}): Promise<IngestedVuln[]> => {
+    if (!SAMPLE) return get<IngestedVuln[]>(`${API_BASE}/org/vulns${vulnQS(q)}`)
+    return (await vulnApi._allVulns()).sort((a, b) => b.priority_score - a.priority_score)
+  },
+  getVuln: async (id: string, cve: string): Promise<IngestedVuln[]> => {
+    if (!SAMPLE) return get<IngestedVuln[]>(`${API_BASE}/accounts/${id}/vulns/${cve}`)
+    return (await vulnApi._allVulns()).filter((r) => r.account === id && r.cve === cve)
+  },
+  listIngestDocs: async (id: string): Promise<IngestDoc[]> => {
+    if (!SAMPLE) return get<IngestDoc[]>(`${API_BASE}/accounts/${id}/ingest/docs`)
+    return []
+  },
+  ingest: async (id: string, doc: unknown, target_resource?: string): Promise<IngestResult> => {
+    if (!SAMPLE) return post<IngestResult>(`/accounts/${id}/ingest`, { doc, target_resource })
+    // sample mode: accept + echo a plausible result (no persistence)
+    return { doc_id: 'sha256:' + randHex(8), resolved_node: target_resource ?? 'ingest:image:demo',
+             node_kind: 'ECRImage', mapping_status: target_resource ? 'resolved' : 'unmapped',
+             lane: 'findings', finding_count: 0, notes: ['sample mode — not persisted'],
+             newly_reachable_kev: [], top: [] }
+  },
+  refreshVulns: async (id: string): Promise<{ became_reachable: unknown[]; became_unreachable: unknown[] }> => {
+    if (!SAMPLE) return post(`/accounts/${id}/vulns/refresh`, {})
+    return { became_reachable: [], became_unreachable: [] }
+  },
+}
+
 export const api = {
   ...connectorApi,
   ...complianceApi,
   ...schedulingApi,
+  ...vulnApi,
   orgOverview: () => get<OrgOverview>(endpoint('/org/overview', 'org_overview.json')),
   listAccounts: () => get<Account[]>(endpoint('/accounts', 'accounts.json')),
   accountSummary: (id: string) =>
