@@ -4,6 +4,50 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.21.0] — 2026
+
+**Fargate serverless-container workloads folded into the attack-path graph (Phase-3 · agentless coverage).**
+An ECS-Fargate task's image CVEs now drive attack paths — closing the "KubeArmor's biggest AWS
+gap" blind spot, agentlessly.
+
+### Added — running Fargate workloads (`aws_live_scanner.py`)
+- **`_check_fargate_tasks`** (called from `_check_ecs`, ECS#20): enumerate RUNNING Fargate tasks
+  (`list_tasks(launchType=FARGATE, desiredStatus=RUNNING)` → `describe_tasks`, re-guarded for
+  capacity-provider tasks), resolve each container image (reusing `parse_ecr_image_ref` /
+  `ecr_image_node_ids`, `:tag`→digest via `describe_images`), the **task role** (`taskRoleArn`,
+  not `executionRoleArn`), and the awsvpc **ENI / private IP**. The running task — not the
+  task-definition — is the exposure + identity anchor a serverless-container attack path needs.
+- New node kind **`ECSFargateTask`** with three edges the reachability engine already
+  understands: `RUNS_IMAGE → ECRImage` (image CVEs), `HAS_ROLE → taskRoleArn` (→ the role's
+  existing `CAN_PRIVESC_TO` / `CAN_READ_DATA` edges), and `LB -TARGETS→ task` /
+  `eni -ATTACHED_TO→ task` (internet exposure). Resulting native path:
+  `internet → LB → FargateTask → taskRole → admin`/`crown`, CVE-gated exactly like EC2.
+- **Zero `aws_correlate.py` change** — the `runs_image_src` DFS ex-gate is kind-agnostic, so a
+  Fargate task inherits image-CVE exploitability via `RUNS_IMAGE` for free (no `_EXPLOIT_KINDS`
+  edit). Clobber-safe: a **separate** `_fargate_payloads` stash (ECS#20) replayed in
+  `_replay_fargate_edges` (VULN#40) survives the IAMPRIVESC graph rebuild; the existing
+  `ECSTaskDefinition` replay stays byte-identical.
+
+### Added — exposure + attack paths
+- The verified false-negative fixed: `ip_to_instance` only held ENIs with an `InstanceId`, so an
+  ALB **IP target** pointing at a Fargate awsvpc ENI (no `InstanceId`) resolved to nothing. A
+  parallel `(VpcId, ip)`-keyed `ip_to_fargate`, built region-locally from the already-fetched ENI
+  list, now binds it — collision-safe (EC2 consulted first).
+- **FARGATE-01** (LOW · inventory), **FARGATE-02** (HIGH · `assignPublicIp=ENABLED` direct
+  internet exposure), plus **ATTACK-01 / ATTACK-02** reused for the Fargate path + flagship
+  (`_correlate_flagship` gained a Fargate branch), and the reachable-service boost on the task's
+  ECRImage nodes.
+
+### Added — EKS-Fargate boundary
+- **EKS-07** (INFO): enumerate EKS-Fargate profiles (`list_fargate_profiles` /
+  `describe_fargate_profile`) — namespaces + pod-execution role — with an explicit documented
+  boundary that running pod images / IPs / IRSA app-role bindings require the Kubernetes API and
+  are deferred to the KSPM item (no inert graph node).
+
+### Read-only on scanned targets
+- All new calls are `describe`/`list` only, each in its own try/except → INFO/WARN no-op on a
+  denied API. `VERSION` → 2.21.0.
+
 ## [2.20.0] — 2026
 
 **OverWatch — external vulnerability ingest, ranked by reachability not CVSS (Phase-2 capstone).**

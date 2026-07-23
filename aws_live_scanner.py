@@ -75,7 +75,7 @@ import aws_winvuln
 import aws_finding_detail
 import aws_graph_neptune
 
-VERSION = "2.19.0"
+VERSION = "2.21.0"
 
 # Light-theme CSS for the HTML report (plain string — real braces, no interpolation, so it
 # concatenates cleanly with the f-string body in save_html).
@@ -354,6 +354,7 @@ CHECK_SEVERITY = {
     "EKS-04": "MEDIUM", "EKS-05": "MEDIUM", "EKS-06": "HIGH",
     "ECS-04": "HIGH", "ECS-05": "MEDIUM",
     "ECS-06": "HIGH", "ECS-07": "CRITICAL", "ECS-08": "HIGH",
+    "FARGATE-01": "LOW", "FARGATE-02": "HIGH", "EKS-07": "MEDIUM",
     "SEC-03": "MEDIUM", "SEC-04": "MEDIUM",
     "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
     "ELC-04": "MEDIUM", "OSR-03": "MEDIUM",
@@ -601,6 +602,8 @@ COMPLIANCE_MAP = {
     "ECS-06": {"PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
     "ECS-07": {"PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
     "ECS-08": {"PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-6"},
+    "FARGATE-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EKS-07": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "SEC-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SEC-04": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "SEC-05": {"CIS": "1.16", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
@@ -816,6 +819,7 @@ REMEDIATION_MAP = {
     "ECS-06": "Register a task-def revision without host namespace sharing (networkMode=awsvpc, drop pidMode/ipcMode): aws ecs register-task-definition --network-mode awsvpc --cli-input-json file://taskdef.json ; aws ecs update-service --cluster <C> --service <S> --task-definition <FAMILY>",
     "ECS-07": "Remove the hostPath (especially the Docker socket) and use an EFS/Docker volume: aws ecs register-task-definition --cli-input-json file://taskdef.json (delete the volumes[].host entry)",
     "ECS-08": "Drop all capabilities and add back only what is needed: aws ecs register-task-definition --cli-input-json file://taskdef.json (set linuxParameters.capabilities.drop=[\"ALL\"], remove the add list)",
+    "FARGATE-02": "Remove the public IP from the Fargate task: aws ecs update-service --cluster <C> --service <S> --network-configuration 'awsvpcConfiguration={subnets=[<PRIVATE_SUBNETS>],securityGroups=[<SG>],assignPublicIp=DISABLED}' — run the task in private subnets and reach the internet via a NAT gateway; front any inbound access with an internet-facing ALB/NLB instead of a public task IP.",
     "EXPOSURE-01": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0  (then re-add a scoped CIDR)",
     "EXPOSURE-02": "Restrict the security group ingress from 0.0.0.0/0 to known source ranges or place the workload behind a load balancer/WAF: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
     "ATTACK-01": "Break the path at the exposure or the privilege: remove the public ingress (aws ec2 revoke-security-group-ingress ...) AND scope the instance-profile role to least privilege / apply a permissions boundary: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>",
@@ -1611,6 +1615,15 @@ class AWSLiveScanner:
         # in ECS#20 for replay in VULN#39 (image-CVE inheritance survives the graph rebuild).
         self._reachable_workloads: set = set()
         self._runs_image_payloads: List[tuple] = []
+        # Phase-3 Fargate: running ECS-Fargate tasks stashed in ECS#20 (pre-clobber),
+        # replayed in VULN#40 (node + RUNS_IMAGE + HAS_ROLE) and folded into internet
+        # exposure in EXPOSURE#37 — the running task, not the task-def, is the exposure +
+        # identity anchor a serverless-container attack path needs.
+        self._fargate_payloads: List[dict] = []
+        # EXPOSURE#37 (re)builds these region-locally from the stash + region ENIs so an
+        # ALB ip-target / public-IP ENI resolves to the owning Fargate task node.
+        self._ip_to_fargate: Dict[tuple, str] = {}   # (vpc_id, private_ip) -> taskArn
+        self._exposed_fargate: set = set()           # internet-reachable Fargate task nodes
         # CloudFront is GLOBAL but EXPOSURE runs per-region; guard so --all-regions does
         # not re-emit the same distributions once per region (the graph merges anyway).
         self._l7_cf_done = False
@@ -5359,6 +5372,34 @@ class AWSLiveScanner:
                 self._add("WARN", "EKS-06", "EKS", cname,
                           f"could not enumerate nodegroups (SSH exposure not evaluated): {e}")
 
+            # EKS-07 — EKS-Fargate profiles (documented agentless boundary). An AWS-only
+            # reader can see the profile (namespaces/labels that run on Fargate + the pod
+            # EXECUTION role), but NOT the running pod images / IPs / IRSA app-role bindings
+            # — those require the Kubernetes API and are deferred to the KSPM item. So there
+            # is no side-scan / attack-path node here; EKS-07 records the surface honestly.
+            try:
+                fp_names = eks.list_fargate_profiles(
+                    clusterName=cname).get("fargateProfileNames", [])
+                if not isinstance(fp_names, list):
+                    fp_names = []
+            except Exception:
+                fp_names = []
+            for fp_name in fp_names:
+                try:
+                    fp = eks.describe_fargate_profile(
+                        clusterName=cname, fargateProfileName=fp_name)["fargateProfile"]
+                except Exception:
+                    continue
+                pod_role = fp.get("podExecutionRoleArn", "")
+                ns = sorted({s.get("namespace", "") for s in (fp.get("selectors") or [])
+                             if s.get("namespace")})
+                self._add("INFO", "EKS-07", "EKS", f"{cname}/{fp_name}",
+                          f"EKS-Fargate profile '{fp_name}' runs pods in namespace(s) "
+                          f"{ns or ['*']} under pod-execution role "
+                          f"{(pod_role or 'none').split('/')[-1]}. AGENTLESS BOUNDARY: running "
+                          f"pod images / IPs / IRSA app-role bindings need the Kubernetes API "
+                          f"(KSPM) and are NOT side-scanned here. | {cname}/{fp_name}")
+
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 19: AMAZON ECS
     # ══════════════════════════════════════════════════════════════════════════
@@ -5461,6 +5502,10 @@ class AWSLiveScanner:
                     self._add("WARN", "ECS-07", "ECS", td_name,
                               f"Task bind-mounts host path '{sp}' (hostPath mount) | {td_name}")
 
+        # Phase-3: fold RUNNING Fargate tasks into the attack-path graph (task-defs above
+        # are hygiene only; the running task is the exposure + identity anchor).
+        self._check_fargate_tasks(ecs, cluster_arns)
+
     # ECS-07/08 dangerous-primitive tables (bare cap names, no CAP_ prefix in the ECS API)
     _DANGEROUS_CAPS = {"ALL", "SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE",
                        "DAC_READ_SEARCH", "SYS_RAWIO", "BPF", "NET_RAW"}
@@ -5510,6 +5555,158 @@ class AWSLiveScanner:
             self._runs_image_payloads.append(
                 (src, {"family": td.get("family")}, node, {"repository": p["repo"]},
                  {"container": cname, "resolved": False, "scan_source": "ecs"}))
+
+    # ── Phase 3: running Fargate tasks (the exposure + identity anchor) ───────────
+    _FARGATE_TASK_CAP = 200         # running tasks scanned per cluster (bounds cost)
+
+    def _check_fargate_tasks(self, ecs, cluster_arns: List[str]) -> None:
+        """Enumerate RUNNING Fargate tasks and STASH one payload per task (image ECRImage
+        node ids + task role + ENI/IP). The running task — not the task-def — is what a
+        serverless-container attack path hangs off, so EXPOSURE#37 folds it into internet
+        exposure and VULN#40 replays its RUNS_IMAGE/HAS_ROLE edges past the graph clobber.
+        Read-only; every ECS call is guarded so a denied API degrades to INFO, never crashes."""
+        td_cache: Dict[str, Dict] = {}
+        for carn in cluster_arns:
+            cname = carn.split("/")[-1]
+            try:
+                # NB: do NOT server-side filter launchType="FARGATE" — a capacity-provider
+                # task (FARGATE_SPOT) has launchType UNSET, so that filter would drop the
+                # common Fargate-Spot shape. List ALL running tasks; classify client-side in
+                # _stash_fargate_task (which accepts launchType==FARGATE OR a FARGATE* provider).
+                task_arns: List[str] = []
+                for page in ecs.get_paginator("list_tasks").paginate(
+                        cluster=carn, desiredStatus="RUNNING"):
+                    task_arns.extend(page.get("taskArns", []))
+            except Exception as e:
+                self._add("INFO", "FARGATE-01", "ECS", cname,
+                          f"Fargate task enumeration unavailable on cluster {cname}: {e}")
+                continue
+            task_arns = task_arns[:self._FARGATE_TASK_CAP]
+            for i in range(0, len(task_arns), 100):
+                try:
+                    tasks = ecs.describe_tasks(
+                        cluster=carn, tasks=task_arns[i:i + 100]).get("tasks", [])
+                except Exception as e:
+                    self._add("INFO", "FARGATE-01", "ECS", cname,
+                              f"Fargate task detail unavailable on cluster {cname} "
+                              f"(DescribeTasks denied) — those tasks are not graphed: {e}")
+                    continue
+                for t in tasks:
+                    self._stash_fargate_task(ecs, cname, t, td_cache)
+
+    def _stash_fargate_task(self, ecs, cluster: str, t: Dict, td_cache: Dict) -> None:
+        # Re-guard launch type client-side: capacity-provider tasks can report launchType
+        # unset, so accept a FARGATE/FARGATE_SPOT capacityProviderName too.
+        lt = t.get("launchType")
+        cp = (t.get("capacityProviderName") or "").upper()
+        if lt != "FARGATE" and not cp.startswith("FARGATE"):
+            return
+        task_arn = t.get("taskArn")
+        if not task_arn:
+            return
+        td_arn = t.get("taskDefinitionArn", "")
+        td = td_cache.get(td_arn)
+        if td is None and td_arn:
+            try:
+                td = ecs.describe_task_definition(taskDefinition=td_arn)["taskDefinition"]
+            except Exception:
+                td = {}
+            td_cache[td_arn] = td
+        td = td or {}
+        # taskRoleArn is the APP identity (what the container's code assumes) — the privesc/
+        # data anchor; executionRoleArn (image-pull/logs) is deliberately ignored.
+        task_role = (t.get("overrides") or {}).get("taskRoleArn") or td.get("taskRoleArn")
+
+        eni_ids: List[str] = []
+        private_ips: List[str] = []
+        subnet_id = None
+        for att in t.get("attachments", []):
+            if att.get("type") != "ElasticNetworkInterface":
+                continue
+            for d in att.get("details", []):
+                name, val = d.get("name"), d.get("value")
+                if not val:
+                    continue
+                if name == "networkInterfaceId":
+                    eni_ids.append(val)
+                elif name in ("privateIPv4Address", "privateIpv4Address"):  # attachment vs container form
+                    private_ips.append(val)
+                elif name == "subnetId":
+                    subnet_id = val
+
+        # Prefer the running container's ALREADY-RESOLVED imageDigest (present on Fargate
+        # platform 1.4+ in describe_tasks) so a mutable :tag ref still keys the digest-keyed
+        # ECRImage node CNT-02/Inspector build — WITHOUT needing ecr:DescribeImages. Fall
+        # back to the task def (no resolved digest there) and only then to describe_images.
+        imgs = [(c.get("name", ""), c.get("image", ""), c.get("imageDigest"))
+                for c in (t.get("containers") or []) if c.get("image")]
+        if not imgs:
+            imgs = [(c.get("name", ""), c.get("image", ""), None) for c in
+                    (td.get("containerDefinitions") or []) if c.get("image")]
+        image_nodes: List[tuple] = []
+        for container, image, running_digest in imgs:
+            p = parse_ecr_image_ref(image)
+            if not p:
+                continue                      # non-ECR (Docker Hub etc.) — no ECRImage node
+            digest = p["digest"] or running_digest      # embedded @sha256, else the resolved one
+            if not digest and p["tag"] and p["account"] == self.account:
+                try:
+                    di = self._client("ecr", p["region"]).describe_images(
+                        repositoryName=p["repo"], imageIds=[{"imageTag": p["tag"]}]
+                    ).get("imageDetails", [])
+                    if di:
+                        digest = di[0].get("imageDigest")
+                except Exception:
+                    digest = None
+            if digest:
+                for node in ecr_image_node_ids(p["account"], p["region"], p["repo"], digest):
+                    image_nodes.append((node, {"repository": p["repo"], "digest": digest}, container))
+            else:
+                node = (f"{p['account']}.dkr.ecr.{p['region']}.amazonaws.com/"
+                        f"{p['repo']}:{p['tag'] or 'latest'}")
+                image_nodes.append((node, {"repository": p["repo"]}, container))
+
+        props = {"cluster": cluster, "group": t.get("group"), "launch_type": "FARGATE",
+                 "family": td.get("family"), "task_definition": td_arn,
+                 "private_ip": private_ips[0] if private_ips else None,
+                 "eni_id": eni_ids[0] if eni_ids else None, "subnet_id": subnet_id,
+                 "assign_public_ip": None}
+        self._fargate_payloads.append({
+            "node_id": task_arn, "node_props": props, "task_role_arn": task_role,
+            "image_nodes": image_nodes, "eni_ids": eni_ids, "private_ips": private_ips,
+            "subnet_id": subnet_id, "cluster": cluster})
+        self._add("INFO", "FARGATE-01", "ECS", cluster,
+                  f"Running Fargate task {task_arn.split('/')[-1]} "
+                  f"(family {td.get('family') or '?'}, {len(image_nodes)} image ref(s), "
+                  f"task role {(task_role or 'none').split('/')[-1]}) — folded into the "
+                  f"attack-path graph | {task_arn}")
+
+    @staticmethod
+    def _emit_one_fargate(g, pl: dict) -> None:
+        """Emit ONE stashed task's node + RUNS_IMAGE + HAS_ROLE (MERGE-idempotent). Shared by
+        the EXPOSURE#37 inline path (exposed tasks, so the attack path is graph-complete for
+        DATA#42/CORRELATE#43 even when VULN is deselected) and the VULN#40 full replay."""
+        g.add_node(pl["node_id"], "ECSFargateTask",
+                   **{k: v for k, v in pl["node_props"].items() if v is not None})
+        for node, nprops, container in pl["image_nodes"]:
+            g.add_node(node, "ECRImage", **{k: v for k, v in nprops.items() if v is not None})
+            g.add_edge(pl["node_id"], node, "RUNS_IMAGE",
+                       container=container, scan_source="ecs-fargate")
+        if pl.get("task_role_arn"):
+            g.add_edge(pl["node_id"], pl["task_role_arn"], "HAS_ROLE", role_type="task")
+
+    def _replay_fargate_edges(self) -> None:
+        """Re-emit ALL stashed Fargate task node + RUNS_IMAGE + HAS_ROLE edges (VULN#40, after
+        IAMPRIVESC#36 rebuilds the graph — covers private tasks EXPOSURE didn't wire). A
+        SEPARATE lane from _replay_runs_image_edges (which hardcodes ECSTaskDefinition), so the
+        existing ECS task-def replay stays byte-identical. MERGE-idempotent."""
+        if not self._fargate_payloads:
+            return
+        g = self._ensure_graph()
+        if g is None:
+            return
+        for pl in self._fargate_payloads:
+            self._emit_one_fargate(g, pl)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 20: AWS SECRETS MANAGER
@@ -7805,6 +8002,27 @@ class AWSLiveScanner:
         exposed_instances: set = set()
         any_finding = False
 
+        # Phase 3: region-local Fargate task maps from the ECS#20 stash. Join the stashed
+        # eni-ids against THIS region's ENIs (a cross-region eni-id won't appear, so it
+        # can't bind), and key ip->task by (VpcId, ip) to dodge the cross-VPC collision the
+        # F3 guard fixed for EC2. Rebuilt each EXPOSURE run; disjoint from ip_to_instance.
+        fargate_by_node = {pl["node_id"]: pl for pl in self._fargate_payloads}
+        eni_by_id = {e.get("NetworkInterfaceId"): e for e in enis}
+        self._ip_to_fargate = {}
+        eni_to_task: Dict[str, str] = {}
+        for pl in self._fargate_payloads:
+            for eid in pl["eni_ids"]:
+                e = eni_by_id.get(eid)
+                if not e:
+                    continue
+                eni_to_task[eid] = pl["node_id"]
+                vpc = e.get("VpcId", "")
+                for ipo in e.get("PrivateIpAddresses", []):
+                    addr = ipo.get("PrivateIpAddress")
+                    if addr:
+                        self._ip_to_fargate[(vpc, addr)] = pl["node_id"]
+        self._exposed_fargate = set()
+
         for eni in enis:
             if eni.get("InterfaceType", "interface") in self._MANAGED_IFACE:
                 continue
@@ -7835,6 +8053,20 @@ class AWSLiveScanner:
                 g.add_node(target_arn, "EC2Instance", instance_id=instance_id, vpc_id=vpc_id)
                 g.add_edge(eni_id, target_arn, "ATTACHED_TO")
                 exposed_instances.add(instance_id)
+            else:
+                # Route 2 — a Fargate task with assignPublicIp=ENABLED: its awsvpc ENI has no
+                # InstanceId, so wire the task directly and flag the public task IP (FARGATE-02).
+                task_node = eni_to_task.get(eni_id)
+                if task_node:
+                    g.add_node(task_node, "ECSFargateTask", vpc_id=vpc_id)
+                    g.add_edge(eni_id, task_node, "ATTACHED_TO")
+                    if task_node not in self._exposed_fargate:
+                        self._exposed_fargate.add(task_node)
+                        any_finding = True
+                        self._add("FAIL", "FARGATE-02", "EXPOSURE", task_node.split("/")[-1],
+                                  f"Fargate task {task_node.split('/')[-1]} has a PUBLIC task IP "
+                                  f"(assignPublicIp=ENABLED) — the container ENI is directly "
+                                  f"internet-reachable, no load-balancer/WAF in front. | {task_node}")
 
             for family, ports in exposure.items():
                 summary, hits = aws_exposure.iter_exposed_ports(ports)
@@ -7908,6 +8140,43 @@ class AWSLiveScanner:
         # set and drop the boost for every earlier region. ARNs are region-qualified, so a
         # union never mis-tags across regions.
         self._reachable_workloads |= {self._instance_arn(i) for i in exposed_instances}
+
+        # Phase 3: exposed Fargate tasks — (a) boost reachable_service on their IMAGE nodes
+        # (the HAS_VULN lives on the ECRImage; Inspector tags reachable_service by that id),
+        # and (b) fire ATTACK-01 when the task role can escalate to admin. The role node +
+        # its CAN_PRIVESC_TO/CAN_ASSUME edges are live post-#36 (IAMPRIVESC built them
+        # regardless of attachment), so this does not depend on the VULN#40 HAS_ROLE replay.
+        for task_node in sorted(self._exposed_fargate):
+            pl = fargate_by_node.get(task_node)
+            if not pl:
+                continue
+            # Emit the exposed task's RUNS_IMAGE + HAS_ROLE INLINE here (mirrors the EC2
+            # HAS_INSTANCE_PROFILE/HAS_ROLE emitted in EXPOSURE) so the Fargate attack path is
+            # graph-complete for DATA#42/CORRELATE#43 even when the VULN section (which also
+            # replays these) is not selected. MERGE-idempotent with the VULN#40 replay.
+            self._emit_one_fargate(g, pl)
+            self._reachable_workloads |= {n for n, _, _ in pl["image_nodes"]}
+            role_arn = pl.get("task_role_arn")
+            if not role_arn:
+                continue
+            kinds = {"CAN_PRIVESC_TO", "CAN_ASSUME"}
+            rname = (g.node(role_arn) or {}).get("props", {}).get("name",
+                                                                  role_arn.split("/")[-1])
+            tid = task_node.split("/")[-1]
+            if admin in g.reachable(role_arn, kinds, max_hops=6,
+                                    edge_filter=self._edge_unconditioned):
+                any_finding = True
+                self._add("FAIL", "ATTACK-01", "EXPOSURE", tid,
+                          f"ATTACK PATH: Internet -> exposed Fargate task {tid} -> task role "
+                          f"{rname} -> privilege escalation to admin. An attacker who "
+                          f"compromises this serverless container inherits a role that can "
+                          f"become account administrator. | {tid}")
+            elif admin in g.reachable(role_arn, kinds, max_hops=6):
+                any_finding = True
+                self._add("WARN", "ATTACK-01", "EXPOSURE", tid,
+                          f"ATTACK PATH (conditioned): Internet -> exposed Fargate task {tid} "
+                          f"-> task role {rname} -> admin reachable ONLY via a Condition-guarded "
+                          f"privesc/trust — exploitable only if the attacker satisfies it. | {tid}")
 
         # Phase 7 identity fusion: a stale/long-unused admin access key = a pre-auth
         # account-takeover path (draws internet -EXPOSED_TO-> IAMUser -> ...-> admin).
@@ -8121,6 +8390,16 @@ class AWSLiveScanner:
                                    target_type="ip")
                         exposed_instances.add(iid)
                         resolved.append(iid)
+                    else:
+                        # Phase 3: an ip-target that is a Fargate task (awsvpc ENI, no
+                        # InstanceId) — resolve via the region-local (vpc,ip) Fargate map.
+                        tnode = self._ip_to_fargate.get((tg_vpc, tid))
+                        if tnode:
+                            g.add_node(tnode, "ECSFargateTask")
+                            g.add_edge(node, tnode, "TARGETS",
+                                       basis="l7-elbv2-ip-fargate", target_type="ip")
+                            self._exposed_fargate.add(tnode)
+                            resolved.append(tnode.split("/")[-1])
                 elif ttype == "alb":
                     inner = f"lb/{tid}"
                     if g.node(inner):                           # best-effort NLB->ALB
@@ -8585,6 +8864,7 @@ class AWSLiveScanner:
         # regardless of whether Amazon Inspector is enabled.
         self._replay_eol_edges()
         self._replay_runs_image_edges()
+        self._replay_fargate_edges()
         self._log("Amazon Inspector v2 package vulnerabilities -> HAS_VULN edges "
                   "(EPSS native; KEV via batch_get_finding_details). INFO no-op if disabled.")
         try:
@@ -8927,6 +9207,40 @@ class AWSLiveScanner:
                           f"FLAGSHIP ATTACK PATH (conditioned): Internet -> exposed EC2 "
                           f"{iid} -> exploitable {cve} -> role -> crown-jewel data {bucket} "
                           f"reachable only via a Condition-guarded hop; verify.{boost} | {iid}")
+
+        # Phase 3: the same flagship for a Fargate task — the container image's CVE is
+        # inherited via RUNS_IMAGE (_iter_vuln_edges), the role via HAS_ROLE (task -> role).
+        fargate = [nid for nid in reach if (g.node(nid) or {}).get("kind") == "ECSFargateTask"]
+        for task in fargate:
+            vulns = [e for e in aws_correlate._iter_vuln_edges(task, g.node(task), g)
+                     if aws_deepplane.is_exploitable(e["props"])]
+            if not vulns:
+                continue
+            role = next((e["dst"] for e in g.out_edges(task, {"HAS_ROLE"})), None)
+            if not role:
+                continue
+            conf = crown & set(g.reachable(role, kinds, max_hops=7,
+                                           edge_filter=self._edge_unconditioned))
+            anyb = crown & set(g.reachable(role, kinds, max_hops=7))
+            if not anyb:
+                continue
+            cve = vulns[0]["props"].get("cve", "?")
+            kev = any(v["props"].get("kev") for v in vulns)
+            tid = task.split("/")[-1]
+            bucket = aws_correlate._label(g, sorted(conf or anyb)[0])
+            boost = (" [ACTIVE THREAT on the path — TOP priority]"
+                     if self._node_has_threat(task) or self._node_has_threat(role) else "")
+            if conf:
+                self._add("FAIL", "ATTACK-02", "DATA", tid,
+                          f"FLAGSHIP ATTACK PATH: Internet -> exposed Fargate task {tid} -> "
+                          f"exploitable{'/KEV' if kev else ''} {cve} (container image) -> "
+                          f"task role -> reads crown-jewel data {bucket}.{boost} | {tid}")
+            else:
+                self._add("WARN", "ATTACK-02", "DATA", tid,
+                          f"FLAGSHIP ATTACK PATH (conditioned): Internet -> exposed Fargate "
+                          f"task {tid} -> exploitable {cve} (container image) -> task role -> "
+                          f"crown-jewel data {bucket} reachable only via a Condition-guarded "
+                          f"hop; verify.{boost} | {tid}")
 
     # ── Phase 7 DSPM: crown-jewel datastores (RDS/Redshift/DynamoDB/EFS) w/o Macie ─
     def _collect_dspm(self, g):
@@ -9392,6 +9706,8 @@ class AWSLiveScanner:
         # omitted VULN) so image-CVE inheritance survives the clobber either way.
         if self.graph is not None and self._runs_image_payloads:
             self._replay_runs_image_edges()
+        if self.graph is not None and self._fargate_payloads:
+            self._replay_fargate_edges()
 
     def _regions_for_section(self, section: str) -> List[str]:
         """Regions to run a section in. Single-region by default; with
