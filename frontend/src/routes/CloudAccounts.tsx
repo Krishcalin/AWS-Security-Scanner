@@ -16,12 +16,13 @@ function Stat({ n, label, tone }: { n: number; label: string; tone: string }) {
   )
 }
 
-function Row({ a, busy, onRevalidate, onRescan, onOffboard }: {
+function Row({ a, busy, onRevalidate, onRescan, onOffboard, onSchedule }: {
   a: Account; busy: boolean
-  onRevalidate: () => void; onRescan: () => void; onOffboard: () => void
+  onRevalidate: () => void; onRescan: () => void; onOffboard: () => void; onSchedule: (s: string) => void
 }) {
   const tone = healthTone(a.health)
   const active = a.onboarding_status === 'active'
+  const sched = a.scan_schedule && a.scan_schedule !== 'off' ? a.scan_schedule : 'off'
   return (
     <div className="rounded-xl border border-line bg-panel">
       <div className={`flex items-center gap-3 px-4 py-3 ${active ? '' : 'opacity-70'}`}>
@@ -42,6 +43,14 @@ function Row({ a, busy, onRevalidate, onRescan, onOffboard }: {
         </div>
         <span className="text-xs text-ink3 w-24 text-right hidden lg:block">{relTime(a.last_scan_at)}</span>
         <span className="ml-auto text-xs font-semibold px-2 py-0.5 rounded-full whitespace-nowrap" style={{ color: tone.fg, background: tone.bg }}>{tone.label}</span>
+        <select value={sched} disabled={busy || !active} title="Scan cadence"
+          onChange={(e) => onSchedule(e.target.value)}
+          className="h-7 rounded-md border border-line bg-panel px-1.5 text-[11px] font-semibold text-ink2 hidden md:block disabled:opacity-40">
+          <option value="off">manual</option>
+          <option value="hourly">hourly</option>
+          <option value="daily">daily</option>
+          <option value="weekly">weekly</option>
+        </select>
         <div className="flex items-center gap-0.5 shrink-0">
           <button onClick={onRevalidate} disabled={busy} title="Re-validate" className="h-7 w-7 grid place-items-center rounded-md text-ink3 hover:text-ink hover:bg-panel2 disabled:opacity-50">
             {busy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
@@ -91,6 +100,10 @@ export function CloudAccounts() {
     if (!window.confirm(`Offboard ${acctLabel(a.alias, a.account_id)}? This stops scanning it. Delete the CloudFormation stack in the account to fully revoke access.`)) return
     setRemoved((s) => new Set(s).add(a.account_id))
   }
+  const schedule = async (a: Account, s: string) => {
+    setOverrides((o) => ({ ...o, [a.account_id]: { ...o[a.account_id], scan_schedule: s } }))  // optimistic
+    try { await api.setSchedule(a.account_id, s) } catch { /* ignore */ }
+  }
 
   const count = (fn: (a: Account) => boolean) => merged.filter(fn).length
 
@@ -119,7 +132,8 @@ export function CloudAccounts() {
         <div className="flex flex-col gap-2">
           {merged.map((a) => (
             <Row key={a.account_id} a={a} busy={busyIds.has(a.account_id)}
-              onRevalidate={() => revalidate(a)} onRescan={() => rescan(a)} onOffboard={() => offboard(a)} />
+              onRevalidate={() => revalidate(a)} onRescan={() => rescan(a)} onOffboard={() => offboard(a)}
+              onSchedule={(s) => schedule(a, s)} />
           ))}
         </div>
       )}

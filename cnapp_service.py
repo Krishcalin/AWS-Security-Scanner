@@ -19,15 +19,24 @@ Production defaults wire to boto3 lazily; tests inject fakes and never import it
 from __future__ import annotations
 
 import secrets
+from collections import namedtuple
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol
 
+import aws_state
 import cnapp_connectors as cc
 import cnapp_onboarding
 import cnapp_validate
 from cnapp_validate import ConnectionHealth
 
+# Lightweight result row reconstructed from the serialized payload — enough for the
+# StateStore lifecycle fold (status/check_id/section/resource/message/severity), so the
+# lifecycle path is decoupled from the engine's mutable object model + dict-fake testable.
+_LR = namedtuple("_LR", "status check_id section resource message severity")
+
 ROLE_NAME = "CnappScannerRole"
+SLA_DAYS = 30                # open-finding SLA window for MTTR / drift-digest breaches
+HOSTED_REGION = "all"        # byte-stable lifecycle partition label for a full multi-region hosted scan
 
 
 # ── scan spec + result store protocol ────────────────────────────────────────
@@ -121,7 +130,7 @@ class PlatformService:
                  job_id_gen: Callable[[], str] = lambda: "job-" + secrets.token_hex(8),
                  connectors=None, http_post: Optional[Callable] = None, hub_base: str = "",
                  connector_id_gen: Callable[[], str] = lambda: "conn-" + secrets.token_hex(6),
-                 crosswalk=None, clock: Callable[[], int] = None):
+                 crosswalk=None, state=None, clock: Callable[[], int] = None):
         import time
         self.registry = registry
         self.results = results
@@ -141,6 +150,7 @@ class PlatformService:
         self.hub_base = hub_base
         self.connector_id_gen = connector_id_gen
         self._crosswalk = crosswalk             # None -> lazy bundled compliance_crosswalk
+        self.state = state                      # an aws_state.StateStore (or None) — lifecycle/drift/trend
         self._http_post = http_post             # None -> lazy urllib default (see http_post)
         self.clock = clock or (lambda: int(time.time()))
 
@@ -252,6 +262,69 @@ class PlatformService:
 
     def pending_jobs(self) -> List[dict]:
         return self.registry.list_scan_jobs(status="queued")
+
+    # ── continuous scheduling (cadence) ─────────────────────────────────────────
+    def set_scan_schedule(self, account_id: str, schedule: Optional[str]) -> dict:
+        """Set an account's scan cadence (off | hourly | daily | weekly | interval:N).
+        Validates the grammar (fail-loud) before persisting to accounts.scan_schedule."""
+        import cnapp_validate
+        cnapp_validate.scan_interval(schedule)      # raises ValueError on a bad grammar
+        if not self.registry.get_account(account_id):
+            raise KeyError(f"account {account_id} not found")
+        self.registry.upsert_account(account_id, now_epoch=self.clock(),
+                                     scan_schedule=(schedule or "off"))
+        return _mask_account(self.registry.get_account(account_id))
+
+    def schedule_due_scans(self) -> List[str]:
+        """Enqueue a scan for every active account whose cadence has elapsed and which
+        has no queued/running job. Returns the new job ids. The whole read+enqueue is
+        one transaction so a concurrent tick can't double-enqueue (single-process)."""
+        now = self.clock()
+        job_ids: List[str] = []
+        with self.registry._be.transaction():
+            for a in self.registry.scans_due(now):
+                jid = self.job_id_gen()
+                self.registry.record_scan_job(a["account_id"], jid, "queued", now_epoch=now)
+                job_ids.append(jid)
+        return job_ids
+
+    # ── lifecycle / drift readers (fail-open when no state store) ────────────────
+    def get_trend(self, account_id: str) -> List[dict]:
+        return self.state.trend(account_id) if self.state is not None else []
+
+    def get_mttr(self, account_id: str) -> dict:
+        if self.state is None:
+            return {}
+        return self.state.mttr(account_id, by_severity=True, sla_days=SLA_DAYS,
+                               now_epoch=self.clock())
+
+    def get_drift(self, account_id: str) -> dict:
+        """The latest scan row's drift counters (populated by record_posture)."""
+        if self.state is None:
+            return {}
+        rows = self.state.trend(account_id)
+        return rows[-1] if rows else {}
+
+    def record_lifecycle(self, account_id: str, payload: dict, *, scan_id: str,
+                        scan_epoch: int) -> dict:
+        """Fold a completed scan's results into the shared StateStore (drift / trend /
+        MTTR). Mirrors the CLI's ``--state`` pipeline (record_scan → classify_and_diff →
+        record_posture). Region is pinned to ``HOSTED_REGION`` ('all') for a full
+        multi-region hosted scan — a byte-stable coverage partition, never
+        ``payload['region']`` (the engine mutates self.region during iteration).
+        Returns the drift dict."""
+        import aws_live_scanner as als
+        ts = aws_state.make_scan_ts(scan_epoch)
+        rows = [_LR(r.get("status", ""), r.get("check_id", ""), r.get("section", ""),
+                    r.get("resource", ""), r.get("message", ""), r.get("severity", ""))
+                for r in payload.get("results", [])]
+        counts = aws_state.severity_counts(rows)
+        self.state.record_scan(account_id, scan_id, ts, payload.get("posture_score", 0.0),
+                               counts, region=HOSTED_REGION, scanner_version=als.VERSION)
+        drift = self.state.classify_and_diff(account_id, scan_id, ts, rows, region=HOSTED_REGION,
+                                             global_sections=als.AWSLiveScanner.GLOBAL_SECTIONS)
+        self.state.record_posture(account_id, scan_id, drift)
+        return drift
 
     # ── results ───────────────────────────────────────────────────────────────
     def get_paths(self, account_id: str) -> List[dict]:
@@ -467,6 +540,64 @@ class PlatformService:
                        account: Optional[str] = None, status: Optional[str] = None) -> List[dict]:
         return self._require_connectors().list_deliveries(connector_id, account=account,
                                                           status=status)
+
+    # ── drift digests ───────────────────────────────────────────────────────────
+    def _build_digest(self, account_id: str, drift: dict, *, scan_id: str, scan_epoch: int,
+                     prev_payload: Optional[dict] = None, frequency: str = "per_scan") -> dict:
+        """Assemble the pure drift-digest inputs from the stored payload + the state
+        store (trend/mttr) + the crosswalk-native compliance delta. Pure builder call."""
+        p = self.results.get_latest(account_id) or {}
+        onpath = {str(df).split(":")[0] for ap in p.get("attack_paths", [])
+                  for df in ap.get("driving_findings", [])}
+        mttr = (self.state.mttr(account_id, by_severity=True, sla_days=SLA_DAYS,
+                                now_epoch=scan_epoch) if self.state is not None else {})
+        trend = self.state.trend(account_id) if self.state is not None else []
+        return cc.build_drift_digest(
+            account=account_id, scan_id=scan_id, scan_epoch=scan_epoch, drift=drift,
+            trend=trend, mttr=mttr,
+            catalog_by_check={e.get("check_id"): e for e in p.get("finding_catalog", [])},
+            onpath=onpath,
+            compliance_delta=cc.compliance_delta((prev_payload or {}).get("compliance_scorecard"),
+                                                 p.get("compliance_scorecard")),
+            window_id=cc.digest_window(frequency, scan_id, scan_epoch), hub_base=self.hub_base)
+
+    def notify_digest(self, account_id: str, drift: dict, *, scan_id: str, scan_epoch: int,
+                     prev_payload: Optional[dict] = None, frequency: str = "per_scan") -> dict:
+        """Deliver ONE drift digest per (account, window) through the opted-in connectors
+        (real outbound). Idempotent per window. A no-op when no connectors/state wired."""
+        if self.connectors is None or self.state is None:
+            return {"digested": 0}
+        digest = self._build_digest(account_id, drift, scan_id=scan_id, scan_epoch=scan_epoch,
+                                    prev_payload=prev_payload, frequency=frequency)
+        res = cc.run_digest(self.connectors, digest, http_post=self.http_post,
+                            secret_reader=self.secret_reader, now_epoch=self.clock(),
+                            hub_base=self.hub_base)
+        return {"digested": res.digested, "failed": res.failed}
+
+    def preview_digest(self, account_id: str) -> Optional[dict]:
+        """Build (do NOT send) the drift digest from the account's latest persisted
+        drift — the safe way to see what a digest would say. None if no scan/state."""
+        if self.state is None:
+            return None
+        drift = self._latest_drift(account_id)
+        if drift is None:
+            return None
+        return self._build_digest(account_id, drift, scan_id="preview", scan_epoch=self.clock())
+
+    def _latest_drift(self, account_id: str) -> Optional[dict]:
+        """Reconstruct the classify_and_diff-shaped drift for the latest scan from the
+        stored scan-row counters + open findings (preview only)."""
+        rows = self.state.trend(account_id)
+        if not rows:
+            return None
+        r = rows[-1]
+        return {"new": [], "resolved": [], "reopened": [], "mutated": [],
+                "still_open": r.get("total_open", 0), "suppressed_count": r.get("suppressed_count", 0),
+                "posture_delta": r.get("delta")}
+
+    def list_digests(self, connector_id: Optional[str] = None, *,
+                    account: Optional[str] = None, status: Optional[str] = None) -> List[dict]:
+        return self._require_connectors().list_digests(connector_id, account=account, status=status)
 
     # ── compliance breadth (crosswalk from the NIST 800-53 spine) ───────────────
     def _get_crosswalk(self):

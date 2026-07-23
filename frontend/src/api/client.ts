@@ -7,6 +7,7 @@ import type {
   OnboardRequest, OnboardResult, ValidationResult, GraphFull,
   Connector, ConnectorRule, TestResult, Delivery, PreviewHit,
   CrosswalkData, CrosswalkEdge, AccountCompliance, ComplianceFrameworkMeta,
+  TrendRow, DriftDigest, DigestDelivery,
 } from './types'
 import { deriveCrosswalk } from '../lib/crosswalk'
 
@@ -270,9 +271,76 @@ const complianceApi = {
   },
 }
 
+// ── continuous scheduling + drift (CTEM) ───────────────────────────────────────
+const _sched: Record<string, string> = {}       // sample-mode schedule overrides
+
+function synthTrend(id: string, score: number): TrendRow[] {
+  // a deterministic 6-point posture history converging to the account's current score
+  const rows: TrendRow[] = []
+  const base = 1_700_000_000
+  for (let i = 5; i >= 0; i--) {
+    const s = Math.max(0, Math.min(100, Math.round(score - i * 2 + (i % 2 ? 1 : 0))))
+    const prev = rows.length ? rows[rows.length - 1].posture_score : null
+    rows.push({
+      scan_id: `${id}-s${5 - i}`, ts_epoch: base - i * 86400, ts_iso: new Date((base - i * 86400) * 1000).toISOString(),
+      posture_score: s, grade: s >= 90 ? 'A' : s >= 80 ? 'B' : s >= 70 ? 'C' : s >= 60 ? 'D' : 'F',
+      crit: 0, high: 0, med: 0, low: 0, total_open: Math.max(0, 40 - Math.round(s / 3)),
+      new_count: i === 0 ? 3 : 1, resolved_count: i === 0 ? 1 : 0, reopened_count: 0, suppressed_count: 0,
+      delta: prev === null ? null : Math.round((s - prev) * 10) / 10,
+    })
+  }
+  return rows
+}
+
+const schedulingApi = {
+  setSchedule: async (id: string, schedule: string): Promise<{ account_id: string; scan_schedule: string }> => {
+    if (!SAMPLE) return put(`/accounts/${id}/schedule`, { schedule })   // backend route is PUT
+    _sched[id] = schedule
+    return { account_id: id, scan_schedule: schedule }
+  },
+  scheduleTick: async (): Promise<{ job_ids: string[] }> => {
+    if (!SAMPLE) return post('/scans/schedule-tick', {})
+    return { job_ids: [] }
+  },
+  getSchedule: (id: string): string => _sched[id] ?? 'off',
+  trend: async (id: string): Promise<TrendRow[]> => {
+    if (!SAMPLE) return get<TrendRow[]>(`${API_BASE}/accounts/${id}/trend`)
+    const s = await get<AccountSummary>(`/sample/account_${id}_summary.json`).catch(() => null)
+    return s ? synthTrend(id, s.posture_score) : []
+  },
+  drift: async (id: string): Promise<TrendRow | Record<string, never>> => {
+    if (!SAMPLE) return get(`${API_BASE}/accounts/${id}/drift`)
+    const t = await schedulingApi.trend(id)
+    return t.length ? t[t.length - 1] : {}
+  },
+  digestPreview: async (id: string): Promise<DriftDigest | null> => {
+    if (!SAMPLE) return post(`/accounts/${id}/digest/preview`, {})
+    const [s, findings] = await Promise.all([
+      get<AccountSummary>(`/sample/account_${id}_summary.json`).catch(() => null),
+      get<FindingCatalogEntry[]>(`/sample/account_${id}_findings.json`).catch(() => [] as FindingCatalogEntry[])])
+    if (!s) return null
+    const t = await schedulingApi.trend(id)
+    const cur = t[t.length - 1]
+    const newly = findings.slice(0, 5).map((f) => ({ check_id: f.check_id, severity: f.severity, resource: f.affected[0] ?? '', on_attack_path: false }))
+    return {
+      account: id, scan_id: 'preview', ts_epoch: cur.ts_epoch, ts_iso: cur.ts_iso, window_id: 'preview',
+      posture_score: cur.posture_score, posture_grade: cur.grade, posture_delta: cur.delta,
+      counts: { new: 3, resolved: 1, reopened: 0, mutated: 0, still_open: findings.length, suppressed: 0 },
+      sev_delta: {}, material_change: true, newly_exposed: newly, newly_on_path: newly.filter((_, i) => i === 0),
+      resolved_wins: [], reopened: [], sla: { open_over_sla: 2, sla_days: 30 }, mttr_days_mean: 4.2,
+      compliance_delta: null, headline: `Drift · acct ${id} · +3 new · -1 resolved`, link: `/accounts/${id}`,
+    }
+  },
+  listDigests: async (connectorId?: string): Promise<DigestDelivery[]> => {
+    if (!SAMPLE) return get<DigestDelivery[]>(`${API_BASE}${connectorId ? `/connectors/${connectorId}/digests` : '/digests'}`)
+    return []       // sample: digests are produced by scans; none pre-seeded
+  },
+}
+
 export const api = {
   ...connectorApi,
   ...complianceApi,
+  ...schedulingApi,
   orgOverview: () => get<OrgOverview>(endpoint('/org/overview', 'org_overview.json')),
   listAccounts: () => get<Account[]>(endpoint('/accounts', 'accounts.json')),
   accountSummary: (id: string) =>

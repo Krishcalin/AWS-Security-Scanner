@@ -84,8 +84,14 @@ function ConnectorModal({ existing, onClose, onSaved }:
   const editing = !!existing
   const [type, setType] = useState<ConnectorType>(existing?.type ?? 'slack')
   const [name, setName] = useState(existing?.name ?? '')
+  const exDigest = (existing?.config?.digest ?? {}) as { enabled?: boolean; only_on_material_change?: boolean; min_new?: number }
   const [config, setConfig] = useState<Record<string, string>>(
-    () => Object.fromEntries(Object.entries(existing?.config ?? {}).map(([k, v]) => [k, String(v ?? '')])))
+    () => Object.fromEntries(Object.entries(existing?.config ?? {})
+      .filter(([k]) => k !== 'digest')       // digest is a nested object, handled separately
+      .map(([k, v]) => [k, String(v ?? '')])))
+  const [digestOn, setDigestOn] = useState(!!exDigest.enabled)
+  const [digestMaterial, setDigestMaterial] = useState(exDigest.only_on_material_change ?? true)
+  const [digestMinNew, setDigestMinNew] = useState(String(exDigest.min_new ?? 0))
   const [secret, setSecret] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -97,6 +103,7 @@ function ConnectorModal({ existing, onClose, onSaved }:
     try {
       const cfg: Record<string, unknown> = { ...config }
       if (cfg.port) cfg.port = Number(cfg.port)
+      if (digestOn) cfg.digest = { enabled: true, only_on_material_change: digestMaterial, min_new: Number(digestMinNew) || 0 }
       if (editing) {
         await api.updateConnector(existing!.connector_id, { name, config: cfg })
         if (secret) await api.rotateSecret(existing!.connector_id, secret)
@@ -142,6 +149,28 @@ function ConnectorModal({ existing, onClose, onSaved }:
                 : <input className={inputCls} value={config[f.key] ?? ''} onChange={(e) => setCfg(f.key, e.target.value)} placeholder={f.placeholder} />}
             </Field>
           ))}
+
+          {/* drift digest — one summary per scan (independent of per-finding rules) */}
+          <div className="rounded-xl border border-line p-3 flex flex-col gap-2.5" style={{ background: 'var(--panel2)' }}>
+            <label className="flex items-center gap-2 text-sm font-semibold text-ink cursor-pointer">
+              <input type="checkbox" checked={digestOn} onChange={(e) => setDigestOn(e.target.checked)} className="accent-[var(--accent)]" />
+              <Bell size={13} className="text-accent" /> Send drift digests
+              <span className="text-xs font-normal text-ink3">— one "what changed" summary per scan</span>
+            </label>
+            {digestOn && (
+              <div className="flex items-center gap-4 pl-6 text-xs text-ink2 flex-wrap">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="checkbox" checked={digestMaterial} onChange={(e) => setDigestMaterial(e.target.checked)} className="accent-[var(--accent)]" />
+                  only when something changed
+                </label>
+                <label className="flex items-center gap-1.5">
+                  min new
+                  <input type="number" min={0} value={digestMinNew} onChange={(e) => setDigestMinNew(e.target.value)}
+                    className="w-14 rounded-md border border-line bg-panel px-2 py-1 text-xs text-ink text-right tabular-nums" />
+                </label>
+              </div>
+            )}
+          </div>
 
           <Field label={`${meta.secretLabel}${meta.secretOptional ? ' (optional)' : ''}`}
             hint={editing ? (existing!.secret_configured ? '•••••••• set — enter a new value to rotate, or leave blank to keep' : 'no secret set') : 'stored as a secret reference only — never shown again'}>

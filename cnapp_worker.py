@@ -94,8 +94,11 @@ def run_scan_job(svc, job: dict, *, spec: ScanSpec = None) -> dict:
     except Exception as e:                            # noqa: BLE001
         return fail(f"scan error: {type(e).__name__}: {e}")
 
-    # 4. persist results + stamp the account's last_scan_at (terminal 'done')
+    # 4. persist results + stamp the account's last_scan_at (terminal 'done').
+    #    Capture the PREVIOUS payload first (for the digest's compliance delta) before
+    #    results.put overwrites it.
     try:
+        prev_payload = svc.results.get_latest(account_id) if getattr(svc, "state", None) else None
         payload = serialize_scanner(sc)
         svc.results.put(account_id, payload)
         findings = payload.get("summary", {}).get("FAIL", 0)
@@ -104,9 +107,21 @@ def run_scan_job(svc, job: dict, *, spec: ScanSpec = None) -> dict:
     except Exception as e:                            # noqa: BLE001
         return fail(f"result persistence error: {type(e).__name__}: {e}")
 
-    # 5. best-effort: fire enabled connectors over the fresh results. A dead/slow
-    #    receiver or any notify error must NEVER fail a completed scan job, so this
-    #    is wrapped + swallowed. A no-op when no connector store / rules are wired.
+    # 4.5 best-effort: fold this scan into the lifecycle store (drift / trend / MTTR).
+    #     After the expensive AWS work; wrapped so a state error never fails a 'done' job.
+    drift = None
+    scan_epoch = svc.clock()
+    if getattr(svc, "state", None) is not None:
+        try:
+            drift = svc.record_lifecycle(account_id, payload, scan_id=job_id, scan_epoch=scan_epoch)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:                             # noqa: BLE001
+            drift = None
+
+    # 5. best-effort: fire enabled connectors — the per-finding queue AND (if we have a
+    #    drift dict) one drift-digest per scan. A dead/slow receiver or any notify error
+    #    must NEVER fail a completed job, so each is wrapped + swallowed.
     if getattr(svc, "connectors", None) is not None:
         try:
             svc.notify_account(account_id)
@@ -114,6 +129,14 @@ def run_scan_job(svc, job: dict, *, spec: ScanSpec = None) -> dict:
             raise
         except Exception:                             # noqa: BLE001
             pass
+        if drift is not None:
+            try:
+                svc.notify_digest(account_id, drift, scan_id=job_id, scan_epoch=scan_epoch,
+                                  prev_payload=prev_payload)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception:                         # noqa: BLE001
+                pass
 
     end = svc.clock()
     svc.registry.record_scan_job(account_id, job_id, "done", now_epoch=end,
@@ -129,6 +152,16 @@ def drain_once(svc, *, spec: ScanSpec = None, limit: int = 100) -> list:
     for job in svc.pending_jobs()[:limit]:
         done.append(run_scan_job(svc, job, spec=spec))
     return done
+
+
+def scheduler_tick(svc, *, spec: ScanSpec = None, limit: int = 100) -> dict:
+    """One continuous-scanning tick: enqueue every account whose cadence is due, then
+    drain the queue. Driven by an external cron (k8s CronJob / systemd timer) or
+    ``POST /scans/schedule-tick``. Deterministic under the injected clock, so a test
+    drives it directly."""
+    enqueued = svc.schedule_due_scans()
+    ran = drain_once(svc, spec=spec, limit=limit)
+    return {"enqueued": enqueued, "ran": ran}
 
 
 def make_session_factory(registry, secret_reader, *, role_name: str = "CnappScannerRole",

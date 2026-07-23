@@ -144,6 +144,7 @@ export interface Account {
   role_arn: string | null
   enabled_regions: string[]
   external_id_configured: boolean
+  scan_schedule?: string | null   // off | hourly | daily | weekly | interval:<seconds>
   posture_score?: number | null
   posture_grade?: string | null
 }
@@ -267,6 +268,66 @@ export interface PreviewHit {
   check_id: string
   account: string
   severity: string
+}
+
+// ── continuous scheduling + drift (CTEM) ─────────────────────────────────────
+export interface TrendRow {
+  scan_id: string
+  ts_epoch: number
+  ts_iso: string
+  posture_score: number
+  grade: string
+  crit: number
+  high: number
+  med: number
+  low: number
+  total_open: number
+  new_count: number
+  resolved_count: number
+  reopened_count: number
+  suppressed_count: number
+  delta: number | null
+}
+export interface DigestFinding { check_id: string; severity: string; resource: string; on_attack_path: boolean }
+export interface DriftDigest {
+  account: string
+  scan_id: string
+  ts_epoch: number
+  ts_iso: string
+  window_id: string
+  posture_score: number | null
+  posture_grade: string | null
+  posture_delta: number | null
+  counts: { new: number; resolved: number; reopened: number; mutated: number; still_open: number; suppressed: number }
+  sev_delta: Record<string, number>
+  material_change: boolean
+  newly_exposed: DigestFinding[]
+  newly_on_path: DigestFinding[]
+  resolved_wins: DigestFinding[]
+  reopened: DigestFinding[]
+  sla: { open_over_sla: number | null; sla_days: number | null }
+  mttr_days_mean: number | null
+  compliance_delta: { framework: string; pass_rate_delta: number; newly_failed_controls: string[] }[] | null
+  headline: string
+  link: string
+}
+export interface DigestDelivery {
+  id: number
+  connector_id: string
+  account: string
+  scan_id: string
+  window_id: string
+  new_count: number
+  resolved_count: number
+  reopened_count: number
+  posture_delta: number | null
+  material: number
+  status: string
+  http_status: number | null
+  error: string | null
+  external_ref: string | null
+  created_at: number
+  sent_at: number | null
 }
 
 // A deduped, enriched entry from _build_finding_catalog (one per distinct FAIL/WARN check).

@@ -1067,6 +1067,10 @@ NOTIFY_COLS = ["connector_id", "dedup_key", "rule_id", "account", "check_id", "f
                "notify_count", "status", "attempts", "http_status", "error", "external_ref",
                "created_at", "sent_at"]
 
+DIGEST_COLS = ["connector_id", "digest_key", "account", "scan_id", "window_id", "new_count",
+               "resolved_count", "reopened_count", "posture_delta", "material", "status",
+               "attempts", "http_status", "error", "external_ref", "created_at", "sent_at"]
+
 # rich list-valued predicates live in options_json (queryable ones are first-class columns)
 _RULE_OPTION_KEYS = ["severities", "sections", "check_globs", "not_check_globs",
                      "account_globs", "frameworks", "controls", "min_count", "min_distinct",
@@ -1155,6 +1159,7 @@ class ConnectorStore:
         # NO cascade, so its rows MUST be cleared first or (with PRAGMA foreign_keys=ON)
         # the connector delete raises FOREIGN KEY constraint failed and half-deletes.
         with self._be.transaction():
+            self._be.execute("DELETE FROM digest_log WHERE connector_id=?", (connector_id,))
             self._be.execute("DELETE FROM notification_log WHERE connector_id=?", (connector_id,))
             self._be.execute("DELETE FROM connector_rules WHERE connector_id=?", (connector_id,))
             self._be.execute("DELETE FROM connectors WHERE connector_id=?", (connector_id,))
@@ -1299,6 +1304,61 @@ class ConnectorStore:
     def list_deliveries(self, connector_id: str = None, *, account: str = None,
                         status: str = None) -> List[dict]:
         sql, params, clauses = "SELECT * FROM notification_log", [], []
+        if connector_id:
+            clauses.append("connector_id=?"); params.append(connector_id)
+        if account:
+            clauses.append("account=?"); params.append(account)
+        if status:
+            clauses.append("status=?"); params.append(status)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY created_at DESC, id DESC"
+        return [dict(r) for r in self._be.query_all(sql, params)]
+
+    # ── drift-digest ledger (separate from the per-finding notification_log) ────
+    def claim_digest(self, connector_id: str, digest: dict, digest_key: str, *,
+                     now_epoch: int) -> Optional[int]:
+        """Claim-then-send for a per-window digest. INSERT a fresh digest_log row; the
+        UNIQUE(connector_id, digest_key) index makes a duplicate window fail → None
+        (idempotent skip). A returned id means we WON the claim and must dispatch once."""
+        counts = digest.get("counts", {})
+        vals = [connector_id, digest_key, digest.get("account", ""), digest.get("scan_id", ""),
+                digest.get("window_id", ""), int(counts.get("new", 0)),
+                int(counts.get("resolved", 0)), int(counts.get("reopened", 0)),
+                digest.get("posture_delta"), 1 if digest.get("material_change") else 0,
+                "pending", 0, None, None, None, int(now_epoch), None]
+        ph = ",".join(["?"] * len(DIGEST_COLS))
+        try:
+            return self._be.insert_returning_id(
+                f"INSERT INTO digest_log({','.join(DIGEST_COLS)}) VALUES({ph})", vals)
+        except Exception as e:                          # noqa: BLE001
+            if not _is_unique_violation(e):
+                raise
+            # window already claimed — RETRY it iff the prior attempt never landed
+            # (failed/pending), so one transient error doesn't drop the digest forever
+            # (at-least-once, mirroring plan()'s failed→retry). A 'sent' row → None (skip).
+            row = self._be.query_one(
+                "SELECT id, status FROM digest_log WHERE connector_id=? AND digest_key=?",
+                (connector_id, digest_key))
+            if row and row["status"] in ("failed", "pending"):
+                return row["id"]
+            return None
+
+    def mark_digest_sent(self, digest_id: int, res: DispatchResult, now_epoch: int) -> None:
+        self._be.execute(
+            "UPDATE digest_log SET status='sent', http_status=?, external_ref=?, error=NULL, "
+            "attempts=attempts+1, sent_at=? WHERE id=?",
+            (res.http_status, res.external_ref, int(now_epoch), digest_id))
+
+    def mark_digest_failed(self, digest_id: int, res: DispatchResult, now_epoch: int) -> None:
+        self._be.execute(
+            "UPDATE digest_log SET status='failed', http_status=?, error=?, "
+            "attempts=attempts+1 WHERE id=?",
+            (res.http_status, (res.error or "")[:500], digest_id))
+
+    def list_digests(self, connector_id: str = None, *, account: str = None,
+                     status: str = None) -> List[dict]:
+        sql, params, clauses = "SELECT * FROM digest_log", [], []
         if connector_id:
             clauses.append("connector_id=?"); params.append(connector_id)
         if account:
@@ -1483,3 +1543,270 @@ def _resolve_finding(a: ConnectorAction) -> EnrichedFinding:
         check_id=a.check_id, section="", severity="INFO", status="INFO", compliance={},
         remediation_cmd="", risk="", impact="", steps=[], affected=[], count=0, distinct=0,
         account=a.account, on_attack_path=False)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Drift digests — ONE summary per (account, window) delivered through the connectors
+#  (a sibling path to the per-finding run_rules; own ledger digest_log; own dedup key).
+# ═══════════════════════════════════════════════════════════════════════════════
+_DIGEST_SEV = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4, "": 5}
+
+
+def digest_window(frequency: str, scan_id: str, scan_epoch: int) -> str:
+    """PURE. The idempotency window: per_scan (default) → the unique scan_id; daily →
+    a UTC day bucket (folds several same-day scans into one digest)."""
+    if frequency == "daily":
+        return "d:" + datetime.fromtimestamp(int(scan_epoch), tz=timezone.utc).strftime("%Y%m%d")
+    return scan_id
+
+
+def digest_dedup_key(connector_id: str, account: str, window_id: str) -> str:
+    """PURE. Stable per (connector, account, window). Disjoint namespace from the
+    per-finding dedup_key (a sha1 hex), and lives in a separate table."""
+    return f"digest:{connector_id}:{account}:{window_id}"
+
+
+def compliance_delta(prev: Optional[dict], cur: Optional[dict]) -> Optional[list]:
+    """PURE. Per-framework pass_rate change + newly-failed controls between two native
+    compliance scorecards. None when either side is missing (first scan / restart)."""
+    if not prev or not cur:
+        return None
+    out = []
+    for fw, c in cur.items():
+        p = prev.get(fw)
+        if not p:
+            continue
+        d = round(float(c.get("pass_rate", 0)) - float(p.get("pass_rate", 0)), 1)
+        newly = sorted(set(c.get("failed_controls", [])) - set(p.get("failed_controls", [])))
+        if d != 0 or newly:
+            out.append({"framework": fw, "pass_rate_delta": d, "newly_failed_controls": newly})
+    return out or None
+
+
+def _digest_findings(keys: Sequence[str], catalog_by_check: dict, onpath: set) -> List[dict]:
+    """finding-keys (check_id|resource) → deduped-by-check entries with severity + on-path."""
+    seen, out = set(), []
+    for fk in keys:
+        cid = fk.split("|", 1)[0]
+        if cid in seen:
+            continue
+        seen.add(cid)
+        e = catalog_by_check.get(cid, {})
+        out.append({"check_id": cid, "severity": e.get("severity", ""),
+                    "resource": fk.split("|", 1)[1] if "|" in fk else "",
+                    "on_attack_path": cid in onpath})
+    # severity first; on-attack-path wins ties so the CTEM signal is favored in the top cut
+    return sorted(out, key=lambda x: (_DIGEST_SEV.get(x["severity"], 5), 0 if x["on_attack_path"] else 1))
+
+
+def build_drift_digest(*, account: str, scan_id: str, scan_epoch: int, drift: dict,
+                       trend: list, mttr: dict, catalog_by_check: dict, onpath: set,
+                       compliance_delta: Optional[list] = None, window_id: str,
+                       top: int = 10, hub_base: str = "") -> dict:
+    """PURE. Assemble the drift digest from already-computed inputs (the classify_and_diff
+    drift dict, trend, mttr, the finding catalog, the on-attack-path set). ``counts``
+    carry EVERY folded change (lossless len()); only the displayed lists truncate.
+    ``material_change`` is derived from the PERSISTED drift so it survives a restart."""
+    cur = trend[-1] if trend else {}
+    counts = {
+        "new": len(drift.get("new", [])), "resolved": len(drift.get("resolved", [])),
+        "reopened": len(drift.get("reopened", [])), "mutated": len(drift.get("mutated", [])),
+        "still_open": drift.get("still_open", 0), "suppressed": drift.get("suppressed_count", 0),
+    }
+    posture_delta = drift.get("posture_delta")
+    sev_delta = {}
+    if len(trend) >= 2:
+        prev = trend[-2]
+        for k in ("crit", "high", "med", "low"):
+            sev_delta[k] = int(cur.get(k, 0)) - int(prev.get(k, 0))
+    material = (any(counts[k] for k in ("new", "resolved", "reopened", "mutated"))
+                or (posture_delta not in (None, 0, 0.0)) or bool(compliance_delta))
+    newly = _digest_findings(drift.get("new", []), catalog_by_check, onpath)
+    resolved_wins = _digest_findings(drift.get("resolved", []), catalog_by_check, onpath)
+    reopened = _digest_findings(drift.get("reopened", []), catalog_by_check, onpath)
+    mean_s = mttr.get("mean_seconds")
+    parts = [f"+{counts['new']} new", f"-{counts['resolved']} resolved"]
+    if counts["reopened"]:
+        parts.append(f"{counts['reopened']} reopened")
+    if posture_delta:
+        parts.append(f"posture {'▼' if posture_delta < 0 else '▲'}{abs(posture_delta)}")
+    return {
+        "account": account, "scan_id": scan_id, "ts_epoch": int(scan_epoch),
+        "ts_iso": _iso(scan_epoch), "window_id": window_id,
+        "posture_score": cur.get("posture_score"), "posture_grade": cur.get("grade"),
+        "posture_delta": posture_delta, "counts": counts, "sev_delta": sev_delta,
+        "material_change": material,
+        # newly_on_path is derived from the SAME truncated list, so it is always a
+        # strict subset of newly_exposed (the on-path tie-break keeps them in the cut).
+        "newly_exposed": newly[:top], "newly_on_path": [x for x in newly[:top] if x["on_attack_path"]],
+        "resolved_wins": resolved_wins[:top], "reopened": reopened[:top],
+        "sla": {"open_over_sla": mttr.get("open_over_sla"), "sla_days": mttr.get("sla_days")},
+        "mttr_days_mean": round(mean_s / 86400, 1) if mean_s else None,
+        "compliance_delta": compliance_delta,
+        "headline": f"Drift · acct {account} · " + " · ".join(parts),
+        "link": f"{hub_base.rstrip('/')}/accounts/{account}" if hub_base else "",
+    }
+
+
+# ── per-type digest renderers (pure) ────────────────────────────────────────────
+def _digest_posture_str(digest: dict) -> str:
+    d = digest.get("posture_delta")
+    return (f"{digest.get('posture_score', '?')} ({digest.get('posture_grade', '?')})"
+            + (f" Δ{d}" if d else ""))
+
+
+def render_slack_digest(connector: Connector, digest: dict, *, hub_base: str = "") -> dict:
+    cfg = connector.config or {}
+    d = digest.get("posture_delta") or 0
+    emoji = "🔻" if d < 0 else "🔺" if d > 0 else "🔎"
+    c = digest["counts"]
+    fields = [_slack_field("New", str(c["new"])), _slack_field("Resolved", str(c["resolved"])),
+              _slack_field("Reopened", str(c["reopened"])), _slack_field("Posture", _digest_posture_str(digest))]
+    if digest["sla"].get("open_over_sla") is not None:
+        fields.append(_slack_field("Over SLA", str(digest["sla"]["open_over_sla"])))
+    blocks: List[dict] = [
+        {"type": "header", "text": {"type": "plain_text", "emoji": True,
+                                    "text": f"{emoji} Drift · acct {digest['account']}"[:150]}},
+        {"type": "section", "fields": fields[:10]}]
+    if digest["newly_on_path"]:
+        txt = "\n".join(f"• {x['check_id']} ({x['severity']})" for x in digest["newly_on_path"][:5])
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Newly exposed on attack path:*\n{txt[:2900]}"}})
+    if digest.get("link"):
+        blocks.append({"type": "actions", "elements": [
+            {"type": "button", "style": "primary", "text": {"type": "plain_text", "text": "View in OverWatch"}, "url": digest["link"]}]})
+    body: Dict = {"text": digest.get("headline", "drift digest")[:3000], "blocks": blocks}
+    if (cfg.get("mode", "webhook") == "chat") and cfg.get("channel"):
+        body["channel"] = cfg["channel"]
+    return body
+
+
+def render_jira_digest(connector: Connector, digest: dict) -> dict:
+    cfg = connector.config or {}
+    project = ({"id": cfg["project_id"]} if cfg.get("project_id") else {"key": cfg.get("project_key", "SEC")})
+    issuetype = ({"id": cfg["issue_type_id"]} if cfg.get("issue_type_id") else {"name": cfg.get("issue_type", "Task")})
+    c = digest["counts"]
+    content = [_adf_text(digest.get("headline", "")),
+               _adf_heading("Change since last scan"),
+               _adf_text(f"New {c['new']} · Resolved {c['resolved']} · Reopened {c['reopened']} · "
+                         f"Mutated {c['mutated']} · Still open {c['still_open']} · Posture {_digest_posture_str(digest)}")]
+    if digest["newly_on_path"]:
+        content.append(_adf_heading("Newly exposed on an attack path"))
+        content.append({"type": "bulletList", "content": [
+            {"type": "listItem", "content": [_adf_text(f"{x['check_id']} ({x['severity']})")]}
+            for x in digest["newly_on_path"][:15]]})
+    return {"fields": {"project": project, "issuetype": issuetype,
+                       "summary": digest.get("headline", "OverWatch drift digest")[:255],
+                       "description": {"type": "doc", "version": 1, "content": content},
+                       "labels": ["overwatch", "drift-digest", f"owdigest-{digest['scan_id']}"[:255]]}}
+
+
+def render_pagerduty_digest(connector: Connector, digest: dict, *, hub_base: str = "") -> dict:
+    d = digest.get("posture_delta") or 0
+    sev = "error" if d < -10 else "warning" if d < 0 else "info"
+    body = {
+        "event_action": "trigger",
+        "dedup_key": f"overwatch:digest:{digest['account']}:{digest['window_id']}",
+        "client": "OverWatch CNAPP",
+        "payload": {"summary": digest.get("headline", "OverWatch drift digest")[:1024],
+                    "source": f"aws:{digest['account']}", "severity": sev, "component": "drift-digest",
+                    "custom_details": {"counts": digest["counts"], "posture_delta": d,
+                                       "newly_on_path": digest["newly_on_path"], "sla": digest["sla"]}},
+    }
+    if digest.get("link"):
+        body["client_url"] = digest["link"]
+        body["links"] = [{"href": digest["link"], "text": "View in OverWatch"}]
+    return body
+
+
+def render_splunk_digest(connector: Connector, digest: dict) -> dict:
+    cfg = connector.config or {}
+    envelope = {"host": "overwatch", "source": "overwatch-cnapp",
+                "sourcetype": cfg.get("digest_sourcetype", "overwatch:drift"), "event": digest,
+                "fields": {"account_id": digest["account"], "material": str(digest["material_change"]).lower(),
+                           "new": str(digest["counts"]["new"])}}
+    if cfg.get("index"):
+        envelope["index"] = cfg["index"]
+    return envelope
+
+
+def render_webhook_digest(connector: Connector, digest: dict, *, event_id: str,
+                          now_epoch: int) -> bytes:
+    envelope = {"specversion": "overwatch/v1", "id": event_id, "type": "overwatch.drift_digest",
+                "timestamp": _iso(now_epoch), "ts_epoch": int(now_epoch), "source": "overwatch",
+                "account": digest["account"], "data": digest}
+    return json.dumps(envelope, separators=(",", ":"), sort_keys=True, ensure_ascii=False).encode("utf-8")
+
+
+def render_digest(connector: Connector, digest: dict, *, event_id: str = "", now_epoch: int = 0,
+                  hub_base: str = "") -> Union[dict, bytes]:
+    t = connector.type
+    if t == "slack":
+        return render_slack_digest(connector, digest, hub_base=hub_base)
+    if t == "jira":
+        return render_jira_digest(connector, digest)
+    if t == "pagerduty":
+        return render_pagerduty_digest(connector, digest, hub_base=hub_base)
+    if t == "splunk":
+        return render_splunk_digest(connector, digest)
+    if t == "webhook":
+        return render_webhook_digest(connector, digest, event_id=event_id, now_epoch=now_epoch)
+    raise ValueError(f"unknown connector type {t!r}")
+
+
+def dispatch_digest(connector: Connector, digest: dict, *, http_post: HttpPost,
+                    secret_reader: SecretReader, now_epoch: int, event_id: str = "",
+                    hub_base: str = "") -> DispatchResult:
+    """Impure boundary — reuses request_for / interpret_response / _resolve_secret /
+    _scrub unchanged (they are per-type + payload-shape-agnostic), so the SSRF guard,
+    byte-stable webhook signing, and secret-scrubbing all carry over."""
+    if not connector.enabled:
+        return DispatchResult(False, 0, error="connector disabled", detail="skipped")
+    secret = None
+    try:
+        payload = render_digest(connector, digest, event_id=event_id, now_epoch=now_epoch, hub_base=hub_base)
+        secret = _resolve_secret(connector, secret_reader)
+        req = request_for(connector, payload, secret, event_id=event_id, now_epoch=now_epoch)
+        resp = http_post(req.url, headers=req.headers, json_body=req.json_body,
+                         data=req.raw_body, timeout=req.timeout)
+        res = interpret_response(connector, resp)
+        return replace(res, error=_scrub(res.error, secret), detail=_scrub(res.detail, secret) or "")
+    except Exception as e:                              # noqa: BLE001
+        return DispatchResult(False, 0, error=_scrub(f"{type(e).__name__}: {e}", secret),
+                              detail="digest dispatch error")
+
+
+def _digest_opt_in(c: Connector, account: str) -> bool:
+    d = (c.config or {}).get("digest") or {}
+    if not d.get("enabled"):
+        return False
+    globs = d.get("account_globs")
+    return True if not globs else any(_glob(g, account) for g in globs)
+
+
+def run_digest(store: ConnectorStore, digest: dict, *, http_post: HttpPost,
+               secret_reader: SecretReader, now_epoch: int, hub_base: str = "") -> RunResult:
+    """Impure orchestrator (sibling to run_rules). For each enabled connector that
+    opts into digests (config.digest.enabled): apply the material/min_new gates, then
+    claim-then-send exactly once per (connector, account, window)."""
+    conns = [c for c in store.list_connectors() if c.enabled and _digest_opt_in(c, digest["account"])]
+    digested = failed = 0
+    results: List[DispatchResult] = []
+    for c in conns:
+        d = (c.config or {}).get("digest") or {}
+        if d.get("only_on_material_change", True) and not digest["material_change"]:
+            continue
+        if digest["counts"]["new"] < int(d.get("min_new", 0)):
+            continue
+        dk = digest_dedup_key(c.connector_id, digest["account"], digest["window_id"])
+        nid = store.claim_digest(c.connector_id, digest, dk, now_epoch=now_epoch)
+        if nid is None:
+            continue                                    # window already sent → idempotent skip
+        eid = "ow_dig_" + hashlib.sha1(dk.encode()).hexdigest()[:16]
+        res = dispatch_digest(c, digest, http_post=http_post, secret_reader=secret_reader,
+                              now_epoch=now_epoch, event_id=eid, hub_base=hub_base)
+        results.append(res)
+        if res.ok:
+            store.mark_digest_sent(nid, res, now_epoch); digested += 1
+        else:
+            store.mark_digest_failed(nid, res, now_epoch); failed += 1
+    return RunResult(digested=digested, failed=failed, results=results)

@@ -73,7 +73,8 @@ def test_migration_v3_creates_connector_tables_idempotently():
         "SELECT name FROM sqlite_master WHERE type='table' "
         "AND name IN ('connectors','connector_rules','notification_log') ORDER BY name")]
     assert names == ["connector_rules", "connectors", "notification_log"]
-    assert store._be.raw.execute("PRAGMA user_version").fetchone()[0] == 3
+    import aws_state
+    assert store._be.raw.execute("PRAGMA user_version").fetchone()[0] == aws_state.SCHEMA_VERSION
     store._be.migrate()          # replay is a no-op (IF NOT EXISTS)
 
 

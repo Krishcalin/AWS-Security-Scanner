@@ -427,6 +427,19 @@ hub control plane): `POST /accounts` (onboard → launch URL), `POST /accounts/{
 `POST /connectors/rules/preview` (dry-run), `POST /accounts/{id}/notify`,
 `GET /connectors/{id}/deliveries`, `GET /notifications`.
 
+**Continuous scanning + drift digests (CTEM).** Set a per-account scan **cadence** (hourly /
+daily / weekly / custom) and OverWatch scans on a schedule — a `scheduler_tick` enqueues due
+accounts (a failing scan backs off exponentially, never flapping) and drains the queue. Each
+scan folds into the finding-lifecycle store (**drift / trend / MTTR**), and one **drift digest**
+— *"what changed since last scan"* (new / resolved / reopened, posture Δ, newly-exposed on an
+attack path, SLA breaches, compliance drift) — is delivered per scan through the connectors, to
+the connectors that opt in (`config.digest`). Digests are **idempotent** per window (a separate
+`digest_log` ledger; a failed one is retried) and gated to **material change** so a quiet scan
+sends nothing. The console shows a "What changed" + posture-trend card, a per-account cadence
+selector, and a digest toggle per connector. Routes: `POST /scans/schedule-tick`,
+`PUT /accounts/{id}/schedule`, `GET /accounts/{id}/{trend,mttr,drift}`, `GET /digests`,
+`POST /accounts/{id}/digest/preview`.
+
 **Compliance breadth — 30+ frameworks from one verifiable spine.** Every check is tagged
 with a **NIST 800-53 Rev 5** control, so instead of hand-tagging every check against every
 regime, OverWatch cross-walks its 38 in-use NIST controls to **34 more frameworks** (ISO
@@ -482,9 +495,10 @@ cd frontend && npm install && npm run dev     # http://localhost:5173  (sample d
 > **live Postgres state** + the **web console** (Overview / Attack Paths / Findings /
 > Cloud Accounts + onboarding wizard, plus Inventory / Identity / Compliance / Remediation /
 > Reports) + the **connector framework** (Jira / Slack / PagerDuty / Splunk / webhook +
-> Settings screen) + **compliance breadth** (30+ frameworks via the NIST-800-53 crosswalk)
-> shipped. Remaining: a connection pool; CTEM/GRC continuous-evidence scheduling; unified
-> SARIF/SBOM ingestion + reachability-verified vuln prioritization.
+> Settings screen) + **compliance breadth** (30+ frameworks via the NIST-800-53 crosswalk) +
+> **continuous scheduled scanning + drift digests** (CTEM cadence + lifecycle drift/trend/MTTR
+> + per-scan digests through the connectors) shipped. Remaining: a connection pool; unified
+> SARIF/CycloneDX/SPDX ingestion + reachability-verified vuln prioritization.
 
 ---
 

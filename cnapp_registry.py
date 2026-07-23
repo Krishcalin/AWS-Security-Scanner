@@ -30,7 +30,7 @@ import json
 from typing import Dict, List, Optional
 
 from aws_state import make_scan_ts
-from cnapp_validate import ConnectionHealth, cadence
+from cnapp_validate import ConnectionHealth, cadence, scan_interval
 
 # ── column orders (single source of truth; update sets EXCLUDE preserved cols) ──
 ACCT_COLS = ["account_id", "alias", "org_id", "onboarding_method", "onboarding_status",
@@ -51,6 +51,12 @@ CONN_UPDATE = CONN_COLS[2:]     # everything except the (account, role_arn) PK
 
 _ONBOARDING_STATUSES = {"pending", "active", "denied", "disabled"}
 _ACCOUNT_HEALTHS = {"unknown", "validating", "healthy", "degraded", "unauthorized"}
+
+# Failed scheduled scans back off exponentially (mirrors cnapp_validate.cadence for
+# connection re-validation) so a persistently-broken account is not re-scanned every
+# tick forever — which would defeat the cadence, amplify cost, and trip AWS throttling.
+_SCAN_RETRY_BASE = 900          # 15 min after the first failure
+_SCAN_RETRY_CAP = 86400         # capped at 24h
 
 
 class AccountRegistry:
@@ -210,6 +216,55 @@ class AccountRegistry:
         return [dict(r) for r in self._all(
             "SELECT * FROM connection_health WHERE next_due_epoch<=? ORDER BY next_due_epoch",
             (int(now_epoch),))]
+
+    def scans_due(self, now_epoch: int) -> List[Dict]:
+        """Active, healthily-connected accounts with a scan cadence whose interval has
+        elapsed since ``last_scan_at`` — and which have NO queued/running job (the SQL
+        NOT EXISTS is the no-double-enqueue guard). next-due is DERIVED from
+        ``last_scan_at + interval`` (a pure function of a static interval), so no
+        ``next_scan_due`` column / ALTER on the hot accounts table is needed. A
+        never-scanned scheduled account is due now."""
+        rows = self._all(
+            "SELECT * FROM accounts a "
+            "WHERE a.onboarding_status='active' AND a.health!='unauthorized' "
+            "  AND a.scan_schedule IS NOT NULL AND a.scan_schedule NOT IN ('','off') "
+            "  AND NOT EXISTS (SELECT 1 FROM scan_jobs j WHERE j.account_id=a.account_id "
+            "                  AND j.status IN ('queued','running')) "
+            "ORDER BY (a.last_scan_at IS NULL), a.last_scan_at, a.account_id")
+        out = []
+        for r in rows:
+            try:
+                iv = scan_interval(r["scan_schedule"])
+            except ValueError:
+                continue                              # a malformed schedule never scans
+            if iv is None:
+                continue
+            hold = self._error_backoff_until(r["account_id"])
+            if hold is not None and hold > int(now_epoch):
+                continue                              # recent failures — backing off
+            last = r["last_scan_at"]
+            if last is None or int(last) + iv <= int(now_epoch):
+                out.append(_account_row(r))
+        return out
+
+    def _error_backoff_until(self, account_id: str) -> Optional[int]:
+        """If the account's most recent terminal scan FAILED, the epoch until which to
+        hold off re-scanning (exponential backoff over consecutive trailing failures).
+        None when the last terminal scan succeeded / there are none — no backoff."""
+        jobs = self._all(
+            "SELECT status, finished_at FROM scan_jobs WHERE account_id=? "
+            "AND status IN ('done','error') "
+            "ORDER BY (finished_at IS NULL), finished_at DESC, job_id DESC LIMIT 20",
+            (account_id,))
+        if not jobs or jobs[0]["status"] != "error" or jobs[0]["finished_at"] is None:
+            return None
+        n = 0
+        for j in jobs:
+            if j["status"] != "error":
+                break
+            n += 1
+        backoff = min(_SCAN_RETRY_BASE * (2 ** min(n - 1, 6)), _SCAN_RETRY_CAP)
+        return int(jobs[0]["finished_at"]) + backoff
 
     # ── scan jobs ─────────────────────────────────────────────────────────────
     def record_scan_job(self, account_id: str, job_id: str, status: str, *,

@@ -71,6 +71,9 @@ def create_app(service, *, current_role=lambda: ""):
         account_ids: Optional[List[str]] = None
         all: bool = False
 
+    class ScheduleReq(BaseModel):
+        schedule: str = "off"       # off | hourly | daily | weekly | interval:<seconds>
+
     class ConnectorReq(BaseModel):
         type: str = Field(pattern=r"^(jira|slack|pagerduty|splunk|webhook)$")
         name: str
@@ -135,6 +138,32 @@ def create_app(service, *, current_role=lambda: ""):
         if not j:
             raise HTTPException(status_code=404, detail="job not found")
         return j
+
+    # ── continuous scheduling + lifecycle/drift readers ───────────────────────
+    @app.post("/scans/schedule-tick", dependencies=[Depends(require("admin"))])
+    def schedule_tick():
+        return {"job_ids": service.schedule_due_scans()}
+
+    @app.put("/accounts/{account_id}/schedule", dependencies=[Depends(require("admin"))])
+    def set_schedule(account_id: str, body: ScheduleReq):
+        try:
+            return service.set_scan_schedule(account_id, body.schedule)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.get("/accounts/{account_id}/trend", dependencies=[Depends(require("viewer"))])
+    def trend(account_id: str):
+        return service.get_trend(account_id)
+
+    @app.get("/accounts/{account_id}/mttr", dependencies=[Depends(require("viewer"))])
+    def mttr(account_id: str):
+        return service.get_mttr(account_id)
+
+    @app.get("/accounts/{account_id}/drift", dependencies=[Depends(require("viewer"))])
+    def drift(account_id: str):
+        return service.get_drift(account_id)
 
     # ── results (viewer) ──────────────────────────────────────────────────────
     @app.get("/accounts/{account_id}/issues", dependencies=[Depends(require("viewer"))])
@@ -292,6 +321,23 @@ def create_app(service, *, current_role=lambda: ""):
     @app.get("/notifications", dependencies=[Depends(require("viewer"))])
     def notifications(account: Optional[str] = None, status: Optional[str] = None):
         return service.list_deliveries(None, account=account, status=status)
+
+    # ── drift-digest delivery audit + preview ─────────────────────────────────
+    @app.get("/connectors/{connector_id}/digests", dependencies=[Depends(require("viewer"))])
+    def connector_digests(connector_id: str, account: Optional[str] = None,
+                          status: Optional[str] = None):
+        return service.list_digests(connector_id, account=account, status=status)
+
+    @app.get("/digests", dependencies=[Depends(require("viewer"))])
+    def digests(account: Optional[str] = None, status: Optional[str] = None):
+        return service.list_digests(None, account=account, status=status)
+
+    @app.post("/accounts/{account_id}/digest/preview", dependencies=[Depends(require("admin"))])
+    def digest_preview(account_id: str):
+        d = service.preview_digest(account_id)
+        if d is None:
+            raise HTTPException(status_code=404, detail="no drift state for account")
+        return d
 
     return app
 
