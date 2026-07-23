@@ -938,6 +938,18 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Prevent recurrence with a CI or admission policy that rejects task definitions adding SYS_ADMIN, ALL, SYS_PTRACE, SYS_MODULE, or other high-risk capabilities.",
         ],
     },
+    "FARGATE-02": {
+        "risk": "This Fargate task runs with assignPublicIp=ENABLED, so its awsvpc elastic network interface has a public IP and the container is directly reachable from the internet with no load balancer or WAF in front. Any port the task's security group leaves open to 0.0.0.0/0 is exposed straight to the container process. Combined with a vulnerable container image and a task role that can reach sensitive data or escalate privilege, a public task IP is the internet-facing entry hop of a serverless-container attack path -- the Fargate equivalent of a public EC2 instance -- and it bypasses the centralized ingress controls (ALB listener rules, WAF, TLS termination) that a fronted design would enforce.",
+        "impact": "The container is a direct internet entry point: an attacker can hit exposed ports and, on compromise, inherit the task role's permissions -- turning an image CVE into a path to crown-jewel data or account takeover.",
+        "steps": [
+            "Confirm the public-IP assignment: aws ecs describe-services --cluster <CLUSTER> --services <SERVICE> --query 'services[0].networkConfiguration.awsvpcConfiguration.assignPublicIp' (or describe-tasks for a standalone task) -- expect ENABLED.",
+            "Move the task to private subnets and disable the public IP: aws ecs update-service --cluster <CLUSTER> --service <SERVICE> --network-configuration 'awsvpcConfiguration={subnets=[<PRIVATE_SUBNETS>],securityGroups=[<SG>],assignPublicIp=DISABLED}'",
+            "Give the private task outbound internet via a NAT gateway (in the route table for its subnets) rather than a public IP.",
+            "If the task must receive inbound traffic, put an internet-facing ALB/NLB (with a WAF and TLS) in front and register the task as an ip target -- never expose the task IP directly.",
+            "Tighten the task security group so no port is open to 0.0.0.0/0, and re-scan to confirm the task is no longer a direct internet entry point.",
+            "Prevent recurrence with an admission/CI check or an SCP-style guardrail that rejects ECS services/tasks created with assignPublicIp=ENABLED.",
+        ],
+    },
     "EFS-01": {
         "risk": "Encryption at rest is disabled on this EFS file system, so every file stored on it -- and its automatic backups -- is written to AWS-managed storage in cleartext. EFS is shared network storage often mounted across many EC2/ECS/Lambda workloads and commonly holds application data, uploads, config, and sometimes secrets or regulated records. Without at-rest encryption there is no KMS key governing that data: anyone who can reach the storage layer or an EFS backup, or who gains broad account access, can recover file contents with no cryptographic barrier, and because EFS encryption at rest can only be set at file-system creation, an unencrypted file system stays exposed until its data is migrated to an encrypted one.",
         "impact": "All files and backups on the file system are recoverable in plaintext if storage or a backup is accessed, producing a data breach and failing PCI-DSS 3.4 / HIPAA 164.312(a)(2)(iv) / SOC2 CC6.1 / NIST SC-28 at-rest-encryption requirements.",

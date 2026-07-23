@@ -299,8 +299,8 @@ options:
 | **Bedrock** | BDR-01 to 05 | Model logging, guardrails, KMS encryption, VPC endpoint, IAM least privilege |
 | **Bedrock Agents** | AGT-01 to 05 | Agent KMS encryption, execution role, KB security, Lambda security, prompt injection |
 | **Lambda** | LMB-01 to 05 | Public access, VPC config, plaintext secrets in env vars, deprecated runtimes, concurrency |
-| **EKS** | EKS-01 to 05 | Public API endpoint, control plane logging, secrets encryption, version, security groups |
-| **ECS** | ECS-01 to 05 | Privileged containers, root user, log drivers, plaintext secrets, writable rootfs |
+| **EKS** | EKS-01 to 07 | Public API endpoint, control plane logging, secrets encryption, version, security groups, worker-node SSH, **EKS-Fargate profile boundary** |
+| **ECS** | ECS-01 to 08, **FARGATE-01/02** | Privileged containers, root user, log drivers, plaintext secrets, writable rootfs, host-namespace/hostPath escapes, dangerous caps; **running Fargate tasks folded into the attack-path graph** + public-task-IP exposure |
 | **Secrets Manager** | SEC-01 to 04 | Rotation enabled, rotation frequency, KMS (CMK vs managed), unused secrets |
 | **WAF** | WAF-01 to 04 | Web ACL presence, logging, rules count, default action |
 | **ElastiCache** | ELC-01 to 04 | Encryption at rest, encryption in transit, AUTH token, auto failover |
