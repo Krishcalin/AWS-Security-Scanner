@@ -66,6 +66,7 @@ from aws_graph import SecurityGraph
 import aws_exposure
 import aws_deepplane
 import aws_correlate
+import aws_kube
 import aws_effperm
 import aws_state
 import aws_unused
@@ -75,7 +76,7 @@ import aws_winvuln
 import aws_finding_detail
 import aws_graph_neptune
 
-VERSION = "2.21.0"
+VERSION = "2.22.0"
 
 # Light-theme CSS for the HTML report (plain string — real braces, no interpolation, so it
 # concatenates cleanly with the f-string body in save_html).
@@ -355,6 +356,11 @@ CHECK_SEVERITY = {
     "ECS-04": "HIGH", "ECS-05": "MEDIUM",
     "ECS-06": "HIGH", "ECS-07": "CRITICAL", "ECS-08": "HIGH",
     "FARGATE-01": "LOW", "FARGATE-02": "HIGH", "EKS-07": "MEDIUM",
+    # Phase 3 KSPM/KIEM (agentless CIS-EKS + K8s RBAC / EKS Access Entries)
+    "EKS-08": "MEDIUM",
+    "KIEM-01": "HIGH", "KIEM-02": "MEDIUM", "KIEM-03": "MEDIUM", "KIEM-04": "HIGH",
+    "KSPM-01": "HIGH", "KSPM-02": "HIGH", "KSPM-03": "CRITICAL", "KSPM-04": "MEDIUM",
+    "KSPM-05": "MEDIUM", "KSPM-06": "MEDIUM", "KSPM-07": "HIGH",
     "SEC-03": "MEDIUM", "SEC-04": "MEDIUM",
     "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
     "ELC-04": "MEDIUM", "OSR-03": "MEDIUM",
@@ -604,6 +610,19 @@ COMPLIANCE_MAP = {
     "ECS-08": {"PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-6"},
     "FARGATE-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EKS-07": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    # Phase 3 KSPM/KIEM — CIS Amazon EKS Benchmark + NIST 800-53
+    "EKS-08": {"CIS": "3.1", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "IA-2"},
+    "KIEM-01": {"CIS": "4.1.1", "PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6(1)"},
+    "KIEM-02": {"CIS": "4.1.3", "PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "KIEM-03": {"CIS": "4.1.2", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-6"},
+    "KIEM-04": {"CIS": "4.1.1", "PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "KSPM-01": {"CIS": "4.1.7", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "KSPM-02": {"CIS": "4.1.3", "PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "KSPM-03": {"CIS": "4.1.1", "PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6(1)"},
+    "KSPM-04": {"CIS": "4.1.5", "PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "KSPM-05": {"CIS": "4.2.1", "PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
+    "KSPM-06": {"CIS": "4.3.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "KSPM-07": {"CIS": "4.2.1", "PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
     "SEC-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SEC-04": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "SEC-05": {"CIS": "1.16", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
@@ -711,7 +730,14 @@ REMEDIATION_MAP = {
     "AUR-03": "Upgrade the cluster to a supported engine version: aws rds modify-db-cluster --db-cluster-identifier <CLUSTER_ID> --engine-version <SUPPORTED_VERSION> --allow-major-version-upgrade --apply-immediately",
     "AUR-04": "Remove public restore access from the cluster snapshot: aws rds modify-db-cluster-snapshot-attribute --db-cluster-snapshot-identifier <SNAP_ID> --attribute-name restore --values-to-remove all",
     "AUR-05": "Recreate the cluster snapshot encrypted with a KMS key: aws rds copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier <SNAP_ID> --target-db-cluster-snapshot-identifier <SNAP_ID>-enc --kms-key-id <KMS_KEY>",
-    "CFN-01": "Enforce HTTPS: aws cloudfront update-distribution --id <DIST_ID> --default-cache-behavior '{\"ViewerProtocolPolicy\":\"https-only\"}'",
+    "KSPM-01": "Remove RBAC that binds a role to a built-in group (system:anonymous / system:unauthenticated / system:authenticated). Find it with `kubectl get clusterrolebindings,rolebindings -A -o json` (audit access grants first with aws eks list-access-entries --cluster-name <CLUSTER>), then delete the offending binding: kubectl delete clusterrolebinding <NAME> (or `kubectl delete rolebinding <NAME> -n <NS>`), and re-grant only to specific authenticated ServiceAccounts/users.",
+    "KSPM-02": "Replace the wildcard RBAC role with least-privilege rules (no '*' in apiGroups/resources/verbs). Review with `kubectl get clusterrole <ROLE> -o yaml` (and audit the AWS side: aws eks list-associated-access-policies --cluster-name <CLUSTER> --principal-arn <ARN>), then edit the ClusterRole/Role to enumerate only the exact apiGroups, resources, and verbs the workload needs and re-apply it.",
+    "KSPM-03": "Remove the unexpected cluster-admin ClusterRoleBinding. Confirm with `kubectl get clusterrolebinding <NAME> -o yaml` (and check for an AWS access entry: aws eks list-access-entries --cluster-name <CLUSTER>), then delete it: kubectl delete clusterrolebinding <NAME>, and grant the subject a scoped Role/ClusterRole instead of cluster-admin.",
+    "KSPM-05": "Enforce a Pod Security Admission profile on the namespace. Set the label so the API server rejects privileged pods: kubectl label namespace <NS> pod-security.kubernetes.io/enforce=restricted --overwrite (audit clusters via aws eks describe-cluster --name <CLUSTER>); use 'baseline' if 'restricted' breaks required workloads, and roll workloads to comply.",
+    "KSPM-06": "Add a default-deny NetworkPolicy so pods do not accept all traffic. Apply a policy selecting all pods with empty ingress/egress: kubectl apply -f default-deny.yaml (podSelector: {}, policyTypes: [Ingress, Egress]); ensure the CNI enforces NetworkPolicy (on EKS, the VPC CNI network-policy feature: aws eks update-addon --cluster-name <CLUSTER> --addon-name vpc-cni --configuration-values '{\"enableNetworkPolicy\":\"true\"}'), then add explicit allow policies for required flows.",
+    "KSPM-07": "Remove the pod escape primitives (privileged / hostNetwork / hostPID / hostIPC / hostPath / dangerous capabilities). Inspect with `kubectl get pod <POD> -n <NS> -o yaml` (audit the cluster: aws eks describe-cluster --name <CLUSTER>), then edit the workload's securityContext to drop privileged and ALL capabilities (add back only what is required), remove host namespaces and hostPath mounts, and redeploy.",
+    "KIEM-04": "Scope the IRSA / EKS Pod Identity role so a ServiceAccount cannot reach AWS admin or crown-jewel data. Identify the binding: aws eks list-pod-identity-associations --cluster-name <CLUSTER> (or read the ServiceAccount annotation eks.amazonaws.com/role-arn), then attach a least-privilege permissions boundary or tighten the role policy: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN> and remove the admin/data-access statements. Also restrict which ServiceAccounts may assume it via the role trust policy's OIDC sub condition.",
+    "KIEM-01": "Remove the over-broad AWS->Kubernetes cluster-admin grant. If it is an EKS access entry: aws eks list-associated-access-policies --cluster-name <CLUSTER> --principal-arn <PRINCIPAL_ARN> then aws eks disassociate-access-policy --cluster-name <CLUSTER> --principal-arn <PRINCIPAL_ARN> --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy (and delete the entry if it should not exist: aws eks delete-access-entry --cluster-name <CLUSTER> --principal-arn <PRINCIPAL_ARN>). Re-associate a least-privilege policy (AmazonEKSViewPolicy) scoped to the namespaces the principal actually needs. If the grant is a legacy aws-auth mapRoles entry mapping the ARN to system:masters, remove/scope it.",
     "CFN-03": "Associate WAF: aws cloudfront update-distribution --id <DIST_ID> --web-acl-id <WAF_ACL_ARN>",
     "CFN-06": "Restrict each custom origin to TLS 1.2: aws cloudfront update-distribution --id <DIST_ID> --if-match <ETAG> --distribution-config <CONFIG with CustomOriginConfig.OriginSslProtocols.Items=[\"TLSv1.2\"]>",
     "LMB-01": "Remove public access: aws lambda remove-permission --function-name <FUNC> --statement-id <SID>",
@@ -1624,6 +1650,13 @@ class AWSLiveScanner:
         # ALB ip-target / public-IP ENI resolves to the owning Fargate task node.
         self._ip_to_fargate: Dict[tuple, str] = {}   # (vpc_id, private_ip) -> taskArn
         self._exposed_fargate: set = set()           # internet-reachable Fargate task nodes
+        # Phase-3 KSPM/KIEM: K8s graph edges (principal->KubeAdminCap, SA->IRSA role, pod->SA,
+        # SA->KubeAdminCap) stashed in EKS#18 (pre-clobber), replayed in VULN#40 so the
+        # cross-plane path survives IAMPRIVESC's graph rebuild. Injected read-only K8s API seam.
+        self._kube_payloads: List[dict] = []
+        self._k8s_get = None                          # test/prod seam: (cluster_ctx, path) -> dict|None
+        self._ip_to_kube_pod: Dict[tuple, str] = {}   # (vpc_id, pod_ip) -> KubePod node
+        self._exposed_kube: set = set()               # internet-reachable KubePod nodes
         # CloudFront is GLOBAL but EXPOSURE runs per-region; guard so --all-regions does
         # not re-emit the same distributions once per region (the graph merges anyway).
         self._l7_cf_done = False
@@ -1644,6 +1677,25 @@ class AWSLiveScanner:
                 service, region_name=region or self.region
             )
         return self._clients[key]
+
+    @property
+    def k8s_get(self):
+        """The read-only Kubernetes-API seam ``(cluster_ctx, path) -> dict | None``. Lazily bound
+        to ``aws_kube.default_k8s_get`` (the only socket-touching fn: mints an EKS bearer token,
+        TLS-pins to the cluster CA, GETs). Tests assign ``s._k8s_get = fake``. GET-only."""
+        if self._k8s_get is None:
+            self._k8s_get = aws_kube.default_k8s_get
+        return self._k8s_get
+
+    def _cluster_ctx(self, c: Dict, cname: str) -> Dict:
+        creds = None
+        try:
+            creds = self._session.get_credentials() if self._session else None
+        except Exception:
+            creds = None
+        return {"cluster": cname, "region": self.region, "endpoint": c.get("endpoint", ""),
+                "ca_data": (c.get("certificateAuthority") or {}).get("data", ""),
+                "credentials": creds}
 
     # ── Result helpers ────────────────────────────────────────────────────────
     def _add(self, status: str, check_id: str, section: str,
@@ -5400,6 +5452,295 @@ class AWSLiveScanner:
                           f"pod images / IPs / IRSA app-role bindings need the Kubernetes API "
                           f"(KSPM) and are NOT side-scanned here. | {cname}/{fp_name}")
 
+            # Phase-3 KSPM/KIEM: always-on AWS-side identity/entitlement (EKS Access Entries +
+            # Pod Identity) — no cluster reachability, no grant — then the optional K8s-API layer.
+            self._check_eks_kiem(eks, cname, c)
+
+    # ── Phase 3: KSPM (CIS-EKS K8s-side) + KIEM (identity/entitlement) ───────────
+    _KUBE_ENTRY_CAP = 400        # access entries / pod-identity assocs scanned per cluster
+
+    def _check_eks_kiem(self, eks, cname: str, c: Dict) -> None:
+        """Layer A (always on, no grant, no reachability): EKS Access Entries -> AWS-principal
+        cluster-admin/over-priv (KIEM-01/02/03), EKS Pod Identity -> ServiceAccount->IAM-role
+        edges, and the authenticationMode posture (EKS-08). Stashes cross-plane graph edges for
+        the VULN#40 replay. Every AWS call is guarded -> fail-open INFO, never a phantom PASS."""
+        cluster_arn = c.get("arn") or f"eks:{cname}"
+        acct = self.account
+        admin_cap = f"capability:k8s-admin:{cluster_arn}"
+
+        # EKS-08 — authentication mode posture (read from the already-fetched describe_cluster).
+        acfg = c.get("accessConfig") or {}
+        mode = acfg.get("authenticationMode") or "API_AND_CONFIG_MAP"
+        bootstrap = acfg.get("bootstrapClusterCreatorAdminPermissions")
+        if mode == "CONFIG_MAP":
+            self._add("WARN", "EKS-08", "EKS", cname,
+                      f"EKS '{cname}' authenticationMode=CONFIG_MAP — the AWS->Kubernetes identity "
+                      f"mapping lives ONLY in the aws-auth ConfigMap, invisible to AWS APIs. Grant "
+                      f"an EKS access entry (aws eks update-cluster-config --access-config "
+                      f"authenticationMode=API_AND_CONFIG_MAP) so identity/entitlement is auditable "
+                      f"| {cname}")
+        else:
+            extra = " (residual aws-auth entries still AWS-blind)" if mode == "API_AND_CONFIG_MAP" else ""
+            self._add("INFO", "EKS-08", "EKS", cname,
+                      f"EKS '{cname}' authenticationMode={mode}{extra}; "
+                      f"bootstrapClusterCreatorAdminPermissions={bool(bootstrap)}")
+
+        # KIEM — EKS Access Entries: AWS principal -> K8s access policy / group.
+        try:
+            entries: List[str] = []
+            for page in eks.get_paginator("list_access_entries").paginate(clusterName=cname):
+                entries.extend(page.get("accessEntries", []))
+        except Exception as e:
+            self._add("INFO", "KIEM-01", "EKS", cname,
+                      f"EKS access entries unavailable on '{cname}' (identity mapping not "
+                      f"evaluated): {e}")
+            entries = []
+        for parn in entries[:self._KUBE_ENTRY_CAP]:
+            try:
+                entry = eks.describe_access_entry(
+                    clusterName=cname, principalArn=parn)["accessEntry"]
+            except Exception:
+                continue
+            if (entry.get("type") or "STANDARD") != "STANDARD":
+                continue                          # EC2_LINUX/FARGATE_LINUX = node bootstrap identity
+            try:
+                assoc = []
+                for page in eks.get_paginator("list_associated_access_policies").paginate(
+                        clusterName=cname, principalArn=parn):
+                    assoc.extend(page.get("associatedAccessPolicies", []))
+            except Exception as e:
+                # Fail-open: a denied policy list is NOT the same as "no policy" — a
+                # cluster-admin grant could be hidden. Emit INFO (unless system:masters in the
+                # entry's groups already makes it admin) rather than silently under-reporting.
+                if "system:masters" not in (entry.get("kubernetesGroups") or []):
+                    self._add("INFO", "KIEM-01", "EKS", (parn or "?").split("/")[-1],
+                              f"AWS principal {parn} on EKS '{cname}': access-policy list denied "
+                              f"(eks:ListAssociatedAccessPolicies) — entitlement NOT evaluated: {e} "
+                              f"| {parn}")
+                    continue
+                assoc = []
+            tier, scope, groups = aws_kube.classify_access_entry(entry, assoc)
+            self._kiem_access_finding(cname, cluster_arn, admin_cap, parn, tier, scope, groups)
+
+        # KIEM — EKS Pod Identity: ServiceAccount -> IAM role (readable without the K8s API).
+        try:
+            pias: List[Dict] = []
+            for page in eks.get_paginator("list_pod_identity_associations").paginate(
+                    clusterName=cname):
+                pias.extend(page.get("associations", []))
+        except Exception:
+            pias = []
+        for pia in pias[:self._KUBE_ENTRY_CAP]:
+            ns, sa, role_arn = pia.get("namespace"), pia.get("serviceAccount"), pia.get("roleArn")
+            if ns and sa and role_arn:
+                self._stash_kube_sa_role(cluster_arn, ns, sa, role_arn, basis="pod-identity")
+
+        # Layer B (optional, injected read-only K8s API): CIS-EKS K8s-side KSPM + RBAC graph.
+        self._check_kspm(cname, c, cluster_arn, admin_cap)
+
+    def _check_kspm(self, cname: str, c: Dict, cluster_arn: str, admin_cap: str) -> None:
+        """Layer B — the read-only Kubernetes API (behind the injected ``k8s_get`` seam):
+        KSPM-01..07 (CIS-EKS RBAC/PSA/NetworkPolicy/pod) + stash the K8s-RBAC + pod/SA graph
+        edges. FAIL-OPEN: private-only endpoint / no grant / GET failure → KSPM-00 INFO naming
+        the prerequisite, never a crash and never a phantom PASS. READ-ONLY (GET/LIST only)."""
+        attemptable, reason = aws_kube.cluster_reachability(c)
+        if not attemptable:
+            self._add("INFO", "KSPM-00", "EKS", cname,
+                      f"K8s-API KSPM/RBAC layer NOT run for '{cname}': {reason}. To enable, grant "
+                      f"the scanner role an EKS read access entry (AmazonEKSViewPolicy for "
+                      f"KSPM; AmazonEKSAdminViewPolicy or a read-only ClusterRole for the RBAC "
+                      f"graph) via `aws eks create-access-entry` + a reachable endpoint. | {cname}")
+            return
+        ctx = self._cluster_ctx(c, cname)
+        probe = self.k8s_get(ctx, "/api/v1/namespaces")
+        if probe is None:
+            self._add("INFO", "KSPM-00", "EKS", cname,
+                      f"K8s API for '{cname}' reachable but the GET was denied/failed — grant the "
+                      f"scanner role an EKS read access entry (AmazonEKSViewPolicy) so KSPM/RBAC "
+                      f"can be evaluated via `aws eks create-access-entry`. | {cname}")
+            return
+
+        def _items(path):
+            r = self.k8s_get(ctx, path)
+            return (r or {}).get("items", []) or []
+
+        namespaces = probe.get("items", []) or []
+        pods = _items("/api/v1/pods")
+        sas = _items("/api/v1/serviceaccounts")
+        # NetworkPolicy absence is treated as a FAIL (KSPM-06), so a DENIED read must NOT look
+        # like "no policies" — preserve None (denied) vs [] (genuinely none) to avoid a phantom
+        # FAIL for every namespace. RBAC lists, by contrast, only FIND-then-FAIL, so [] is safe.
+        _np_raw = self.k8s_get(ctx, "/apis/networking.k8s.io/v1/networkpolicies")
+        netpols = None if _np_raw is None else (_np_raw.get("items") or [])
+        crs = _items("/apis/rbac.authorization.k8s.io/v1/clusterroles")
+        crbs = _items("/apis/rbac.authorization.k8s.io/v1/clusterrolebindings")
+        roles = _items("/apis/rbac.authorization.k8s.io/v1/roles")
+        rbs = _items("/apis/rbac.authorization.k8s.io/v1/rolebindings")
+
+        # ── KSPM-01/02/03: RBAC (empty when only ViewPolicy is granted → RBAC lists 403 → []) ──
+        ev = aws_kube.evaluate_rbac(crs, crbs, roles, rbs)
+        for a in ev["anonymous"]:
+            sname = (a["subject"] or {}).get("name", "?")
+            self._add("FAIL", "KSPM-01", "EKS", f"{cname}/{a['binding']}",
+                      f"EKS '{cname}': RBAC binding '{a['binding']}' ({a['scope']}) grants role "
+                      f"'{a['role']}' to the built-in group {sname} — every matching caller "
+                      f"inherits it{' (CLUSTER-ADMIN!)' if a['admin'] else ''}. | {cname}")
+        for w in ev["wildcard"]:
+            subj = w["subject"] or {}
+            self._add("FAIL", "KSPM-02", "EKS", f"{cname}/{w['binding']}",
+                      f"EKS '{cname}': binding '{w['binding']}' ({w['scope']}) grants a wildcard "
+                      f"role '{w['role']}' (apiGroups/resources/verbs '*') to "
+                      f"{subj.get('kind')}/{subj.get('name')} — over-broad RBAC. | {cname}")
+        for ca in ev["cluster_admin"]:
+            subj = ca["subject"] or {}
+            if str(subj.get("name", "")).startswith("system:"):
+                continue                                  # built-in controllers are expected
+            self._add("FAIL", "KSPM-03", "EKS", f"{cname}/{ca['binding']}",
+                      f"EKS '{cname}': ClusterRoleBinding '{ca['binding']}' grants CLUSTER-ADMIN to "
+                      f"{subj.get('kind')}/{subj.get('name')} (ns {subj.get('namespace')}) — "
+                      f"compromising that subject is full cluster takeover. | {cname}")
+            if subj.get("kind") == "ServiceAccount" and subj.get("name"):
+                self._kube_payloads.append({
+                    "kind": "sa_admin", "admin_cap": admin_cap, "cluster_arn": cluster_arn,
+                    "sa_node": f"k8s:sa:{cluster_arn}:{subj.get('namespace')}:{subj.get('name')}",
+                    "namespace": subj.get("namespace"), "sa_name": subj.get("name")})
+
+        # ── KSPM-04: default ServiceAccount auto-mounts its token ──
+        for sa in sas:
+            meta = sa.get("metadata") or {}
+            if meta.get("name") == "default" and not aws_kube.is_system_namespace(meta.get("namespace")) \
+                    and aws_kube.sa_automounts_token(sa):
+                self._add("WARN", "KSPM-04", "EKS", f"{cname}/{meta.get('namespace')}",
+                          f"EKS '{cname}' ns {meta.get('namespace')}: the default ServiceAccount "
+                          f"auto-mounts its API token (set automountServiceAccountToken: false). | {cname}")
+
+        # ── KSPM-05: Pod Security Admission enforce level ──
+        for ns in namespaces:
+            name = (ns.get("metadata") or {}).get("name")
+            if aws_kube.is_system_namespace(name):
+                continue
+            lvl = aws_kube.psa_enforce_level(ns)
+            if lvl == "privileged":
+                self._add("FAIL", "KSPM-05", "EKS", f"{cname}/{name}",
+                          f"EKS '{cname}' ns {name}: Pod Security Admission enforce=privileged "
+                          f"(no pod hardening enforced). | {cname}")
+            elif lvl is None:
+                self._add("INFO", "KSPM-05", "EKS", f"{cname}/{name}",
+                          f"EKS '{cname}' ns {name}: no namespace PSA enforce label (cluster "
+                          f"default applies; not readable via the API here). | {cname}")
+
+        # ── KSPM-06: default-deny NetworkPolicy per namespace (skip if the read was denied) ──
+        if netpols is None:
+            self._add("INFO", "KSPM-00", "EKS", cname,
+                      f"EKS '{cname}': NetworkPolicy read denied — KSPM-06 (default-deny) NOT "
+                      f"evaluated. Grant networking.k8s.io get/list to the scanner role. | {cname}")
+        for ns in (namespaces if netpols is not None else []):
+            name = (ns.get("metadata") or {}).get("name")
+            if aws_kube.is_system_namespace(name):
+                continue
+            if not aws_kube.namespace_has_default_deny(netpols, name):
+                self._add("FAIL", "KSPM-06", "EKS", f"{cname}/{name}",
+                          f"EKS '{cname}' ns {name}: no default-deny NetworkPolicy — pods accept "
+                          f"all ingress/egress (flat network eases lateral movement). | {cname}")
+
+        # ── KSPM-07: privileged / host-namespace / hostPath pods ──
+        for pod in pods:
+            meta = pod.get("metadata") or {}
+            pns = meta.get("namespace")
+            if aws_kube.is_system_namespace(pns):
+                continue
+            issues = aws_kube.pod_security_findings(pod, self._DANGEROUS_CAPS)
+            if issues:
+                self._add("FAIL", "KSPM-07", "EKS", f"{cname}/{pns}/{meta.get('name')}",
+                          f"EKS '{cname}' pod {pns}/{meta.get('name')}: escape primitive(s) "
+                          f"{issues}. | {cname}")
+
+        # Layer-B graph edges (pod -> SA -> IRSA role; RBAC SA -> cluster-admin) — B5.
+        cluster_vpc = (c.get("resourcesVpcConfig") or {}).get("vpcId", "")
+        self._stash_kube_workload_graph(cluster_arn, cluster_vpc, pods, sas)
+
+    def _stash_kube_workload_graph(self, cluster_arn: str, cluster_vpc: str,
+                                   pods: List[Dict], sas: List[Dict]) -> None:
+        """Stash the Layer-B workload graph for the VULN#40 replay: SA -CAN_ASSUME-> IRSA role
+        (annotation), pod -HAS_ROLE-> SA, pod -RUNS_IMAGE-> ECRImage (image CVEs inherited via the
+        kind-agnostic RUNS_IMAGE ex-gate, exactly like Fargate — no _EXPLOIT_KINDS change).
+        ``cluster_vpc`` keys the pod IP so the EXPOSURE ip-target join can't cross clusters/VPCs."""
+        for sa in sas:
+            meta = sa.get("metadata") or {}
+            ns, name = meta.get("namespace"), meta.get("name")
+            role = aws_kube.irsa_role_arn(sa)
+            if ns and name and role:
+                self._stash_kube_sa_role(cluster_arn, ns, name, role, basis="irsa")
+        for pod in pods:
+            meta = pod.get("metadata") or {}
+            ns, pname = meta.get("namespace"), meta.get("name")
+            if not ns or not pname:
+                continue
+            sa = aws_kube.pod_service_account(pod)
+            # Prefer the resolved running imageID (carries @sha256) for the digest, but take the
+            # ECR COORDINATES from whichever ref parses — and fall back to the spec image's own
+            # embedded @sha256 — so a digest-pinned spec ref isn't dropped when the running imageID
+            # lacks a digest (mirrors the Fargate imageDigest fix; all-or-nothing 'or' was wrong).
+            status_img = {cs.get("name"): cs.get("imageID", "")
+                          for cs in ((pod.get("status") or {}).get("containerStatuses") or [])}
+            image_nodes: List[tuple] = []
+            for cont in ((pod.get("spec") or {}).get("containers") or []):
+                cn = cont.get("name", "")
+                resolved_p = parse_ecr_image_ref((status_img.get(cn) or "").split("://")[-1])
+                spec_p = parse_ecr_image_ref(cont.get("image", ""))
+                p = resolved_p or spec_p
+                digest = (resolved_p and resolved_p["digest"]) or (spec_p and spec_p["digest"])
+                if not p or not digest:
+                    continue                          # non-ECR or unresolved → no digest CVE join
+                for node in ecr_image_node_ids(p["account"], p["region"], p["repo"], digest):
+                    image_nodes.append((node, {"repository": p["repo"], "digest": digest}, cn))
+            self._kube_payloads.append({
+                "kind": "pod_sa", "pod_node": f"k8s:pod:{cluster_arn}:{ns}:{pname}",
+                "sa_node": f"k8s:sa:{cluster_arn}:{ns}:{sa}", "cluster_arn": cluster_arn,
+                "cluster_vpc": cluster_vpc, "namespace": ns, "pod_name": pname, "sa_name": sa,
+                "private_ip": (pod.get("status") or {}).get("podIP"), "image_nodes": image_nodes})
+
+    def _kiem_access_finding(self, cname, cluster_arn, admin_cap, parn, tier, scope, groups):
+        """One access-entry principal -> KIEM finding + (for admin/edit) a stashed cross-plane
+        CAN_PRIVESC_TO edge principal -> KubeAdminCapability (namespace scope -> conditioned)."""
+        acct = self.account
+        # cross-account / external / root sharpen the severity (mirror IAMPRIVESC's external flag)
+        external = bool(acct) and f":{acct}:" not in (parn or "")
+        is_root = (parn or "").endswith(":root")
+        pshort = (parn or "?").split("/")[-1] or parn
+        if aws_kube.tier_is_admin(tier) or "system:masters" in groups:
+            crit = external or is_root
+            via = "system:masters group" if "system:masters" in groups else "AmazonEKSClusterAdminPolicy"
+            self._add("FAIL", "KIEM-01", "EKS", pshort,
+                      f"AWS principal {parn} has KUBERNETES CLUSTER-ADMIN on EKS '{cname}' (via "
+                      f"{via}) — de-facto full control-plane admin (all Secrets, exec any pod, "
+                      f"pivot via every ServiceAccount's IRSA role)"
+                      f"{'; CROSS-ACCOUNT/root — treat as CRITICAL' if crit else ''}. | {parn}")
+            # stash the cross-plane escalation edge (principal already a graph node post-IAMPRIVESC)
+            self._kube_payloads.append({
+                "kind": "principal_admin", "principal": parn, "admin_cap": admin_cap,
+                "cluster_arn": cluster_arn, "conditioned": (scope != "cluster")})
+        elif tier in ("NAMESPACE_ADMIN", "EDIT"):
+            self._add("WARN", "KIEM-02", "EKS", pshort,
+                      f"AWS principal {parn} has {tier.lower().replace('_', '-')} "
+                      f"({scope} scope) on EKS '{cname}' — in-cluster privilege that can often be "
+                      f"escalated (rbac write / SA impersonation / secrets). Scope to least "
+                      f"privilege. | {parn}")
+        elif tier == "SECRET":
+            self._add("WARN", "KIEM-03", "EKS", pshort,
+                      f"AWS principal {parn} can READ Kubernetes Secrets on EKS '{cname}' "
+                      f"(AmazonEKSAdminViewPolicy). K8s Secrets often hold DB/cloud credentials — "
+                      f"a crown-jewel read surface. | {parn}")
+
+    def _stash_kube_sa_role(self, cluster_arn, ns, sa, role_arn, basis):
+        """Stash a KubeServiceAccount -CAN_ASSUME-> IAM-role cross-plane edge (IRSA / Pod
+        Identity). conditioned=False: the role's web-identity/pod-identity trust is definitionally
+        satisfied from the SA, so it must not be capped to the conditioned band."""
+        sa_node = f"k8s:sa:{cluster_arn}:{ns}:{sa}"
+        self._kube_payloads.append({
+            "kind": "sa_role", "sa_node": sa_node, "cluster_arn": cluster_arn,
+            "namespace": ns, "sa_name": sa, "role_arn": role_arn, "basis": basis})
+
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 19: AMAZON ECS
     # ══════════════════════════════════════════════════════════════════════════
@@ -5707,6 +6048,57 @@ class AWSLiveScanner:
             return
         for pl in self._fargate_payloads:
             self._emit_one_fargate(g, pl)
+
+    # ── Phase 3 KSPM/KIEM: clobber-safe K8s cross-plane graph lane ───────────────
+    @staticmethod
+    def _emit_one_kube(g, pl: dict) -> None:
+        """Emit ONE stashed K8s payload's nodes/edges (MERGE-idempotent). Every edge reuses an
+        existing E_PATH kind, so aws_correlate is UNCHANGED. ``KubeAdminCapability`` carries
+        crown_jewel=True so aws_correlate.crown_nodes picks it up (prop-based) as a data terminal
+        with no kind edit. Shared by the EXPOSURE inline path and the VULN#40 replay."""
+        kind = pl.get("kind")
+        if kind == "principal_admin":
+            cap = pl["admin_cap"]
+            g.add_node(cap, "KubeAdminCapability", cluster_arn=pl["cluster_arn"], crown_jewel=True)
+            # AWS principal (already an IAMUser/IAMRole node post-IAMPRIVESC) -> K8s cluster-admin.
+            g.add_edge(pl["principal"], cap, "CAN_PRIVESC_TO",
+                       basis="eks-access-entry", conditioned=bool(pl.get("conditioned")))
+        elif kind == "sa_role":
+            g.add_node(pl["sa_node"], "KubeServiceAccount", cluster_arn=pl["cluster_arn"],
+                       namespace=pl.get("namespace"), name=pl.get("sa_name"))
+            # IRSA / Pod Identity: the IAM role's web-identity/pod-identity trust is definitionally
+            # satisfied from the SA, so conditioned=False (must not cap to the conditioned band).
+            g.add_edge(pl["sa_node"], pl["role_arn"], "CAN_ASSUME",
+                       basis=pl.get("basis", "irsa"), conditioned=False)
+        elif kind == "sa_admin":
+            cap = pl["admin_cap"]
+            g.add_node(cap, "KubeAdminCapability", cluster_arn=pl["cluster_arn"], crown_jewel=True)
+            g.add_node(pl["sa_node"], "KubeServiceAccount", cluster_arn=pl["cluster_arn"],
+                       namespace=pl.get("namespace"), name=pl.get("sa_name"))
+            g.add_edge(pl["sa_node"], cap, "CAN_PRIVESC_TO", basis="k8s-rbac", conditioned=False)
+        elif kind == "pod_sa":
+            pod = pl["pod_node"]
+            g.add_node(pod, "KubePod", cluster_arn=pl["cluster_arn"], namespace=pl.get("namespace"),
+                       name=pl.get("pod_name"), private_ip=pl.get("private_ip"))
+            g.add_node(pl["sa_node"], "KubeServiceAccount", cluster_arn=pl["cluster_arn"],
+                       namespace=pl.get("namespace"), name=pl.get("sa_name"))
+            g.add_edge(pod, pl["sa_node"], "HAS_ROLE", role_type="k8s-sa")
+            for node, nprops, container in pl.get("image_nodes", []):
+                g.add_node(node, "ECRImage", **{k: v for k, v in nprops.items() if v is not None})
+                g.add_edge(pod, node, "RUNS_IMAGE", container=container, scan_source="eks-pod")
+
+    def _replay_kube_edges(self) -> None:
+        """Re-emit ALL stashed K8s cross-plane edges (VULN#40, after IAMPRIVESC#36 rebuilds the
+        graph) so a principal->KubeAdminCapability escalation and an SA->IRSA-role CAN_ASSUME land
+        on the already-built IAM principal/role nodes (with their live CAN_PRIVESC_TO/CAN_READ_DATA).
+        MERGE-idempotent; EXPOSURE#37 may have emitted the exposed subset already."""
+        if not self._kube_payloads:
+            return
+        g = self._ensure_graph()
+        if g is None:
+            return
+        for pl in self._kube_payloads:
+            self._emit_one_kube(g, pl)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 20: AWS SECRETS MANAGER
@@ -8023,6 +8415,27 @@ class AWSLiveScanner:
                         self._ip_to_fargate[(vpc, addr)] = pl["node_id"]
         self._exposed_fargate = set()
 
+        # Phase 3: an EKS pod IP (VPC-CNI) is a SECONDARY private IP on its node's ENI, so the
+        # same (VpcId, ip) join resolves an ALB ip-target to a KubePod — internet -> LB -> pod.
+        # Opportunistic (only when the pod is behind an internet-facing ip-target LB).
+        self._ip_to_kube_pod: Dict[tuple, str] = {}
+        # Key pod IPs by (cluster_vpc, ip) — a pod IP is a VPC-CNI secondary address on its node's
+        # ENI, so it must match ONLY an ENI in the pod's own cluster VPC. Keying by bare IP would
+        # collapse two clusters that reuse a pod CIDR, mis-binding an ALB to the wrong VPC's pod
+        # (the same F3 cross-VPC collision guard the EC2/Fargate maps use).
+        pod_ip_by_key = {(pl.get("cluster_vpc", ""), pl["private_ip"]): pl["pod_node"]
+                         for pl in self._kube_payloads
+                         if pl.get("kind") == "pod_sa" and pl.get("private_ip")}
+        if pod_ip_by_key:
+            for e in enis:
+                vpc = e.get("VpcId", "")
+                for ipo in e.get("PrivateIpAddresses", []):
+                    addr = ipo.get("PrivateIpAddress")
+                    pod_node = pod_ip_by_key.get((vpc, addr))
+                    if pod_node:
+                        self._ip_to_kube_pod[(vpc, addr)] = pod_node
+        self._exposed_kube: set = set()
+
         for eni in enis:
             if eni.get("InterfaceType", "interface") in self._MANAGED_IFACE:
                 continue
@@ -8177,6 +8590,20 @@ class AWSLiveScanner:
                           f"ATTACK PATH (conditioned): Internet -> exposed Fargate task {tid} "
                           f"-> task role {rname} -> admin reachable ONLY via a Condition-guarded "
                           f"privesc/trust — exploitable only if the attacker satisfies it. | {tid}")
+
+        # Phase 3: an internet-facing ALB fronting an EKS pod (ip-target). Emit the WHOLE stashed
+        # K8s subgraph inline (MERGE-idempotent) so internet -> LB -> pod -> SA -> IRSA role ->
+        # admin/crown is graph-complete for DATA/CORRELATE even when VULN is deselected; boost the
+        # exposed pods' image nodes for the reachable_service tag.
+        if self._exposed_kube:
+            self._replay_kube_edges()
+            kube_by_node = {pl["pod_node"]: pl for pl in self._kube_payloads
+                            if pl.get("kind") == "pod_sa"}
+            for pod_node in self._exposed_kube:
+                pl = kube_by_node.get(pod_node)
+                if pl:
+                    self._reachable_workloads |= {n for n, _, _ in pl.get("image_nodes", [])}
+            any_finding = True
 
         # Phase 7 identity fusion: a stale/long-unused admin access key = a pre-auth
         # account-takeover path (draws internet -EXPOSED_TO-> IAMUser -> ...-> admin).
@@ -8394,12 +8821,20 @@ class AWSLiveScanner:
                         # Phase 3: an ip-target that is a Fargate task (awsvpc ENI, no
                         # InstanceId) — resolve via the region-local (vpc,ip) Fargate map.
                         tnode = self._ip_to_fargate.get((tg_vpc, tid))
+                        pnode = self._ip_to_kube_pod.get((tg_vpc, tid))
                         if tnode:
                             g.add_node(tnode, "ECSFargateTask")
                             g.add_edge(node, tnode, "TARGETS",
                                        basis="l7-elbv2-ip-fargate", target_type="ip")
                             self._exposed_fargate.add(tnode)
                             resolved.append(tnode.split("/")[-1])
+                        elif pnode:
+                            # Phase 3: an ip-target that is an EKS pod (VPC-CNI secondary IP).
+                            g.add_node(pnode, "KubePod")
+                            g.add_edge(node, pnode, "TARGETS",
+                                       basis="l7-elbv2-ip-kube", target_type="ip")
+                            self._exposed_kube.add(pnode)
+                            resolved.append(pnode.split(":")[-1])
                 elif ttype == "alb":
                     inner = f"lb/{tid}"
                     if g.node(inner):                           # best-effort NLB->ALB
@@ -8865,6 +9300,7 @@ class AWSLiveScanner:
         self._replay_eol_edges()
         self._replay_runs_image_edges()
         self._replay_fargate_edges()
+        self._replay_kube_edges()
         self._log("Amazon Inspector v2 package vulnerabilities -> HAS_VULN edges "
                   "(EPSS native; KEV via batch_get_finding_details). INFO no-op if disabled.")
         try:
@@ -9028,11 +9464,18 @@ class AWSLiveScanner:
                   "exposure + CAN_READ_DATA edges + flagship ATTACK-02. INFO no-op when "
                   "Macie/Analyzer are disabled.")
         g = self._ensure_graph()
+        # Front-load the clobber-safe stashed edges (Fargate + K8s cross-plane) so the flagship
+        # and the KIEM-04 cross-plane check are graph-complete even when the VULN section (which
+        # also replays them) is deselected. MERGE-idempotent.
+        if g is not None:
+            self._replay_fargate_edges()
+            self._replay_kube_edges()
         crown = self._collect_macie(g)
         self._collect_access_analyzer(g)
         self._build_can_read_data(g, crown)
         self._collect_dspm(g)                       # Phase 7 DSPM crown datastores
         self._correlate_flagship(g)                 # crown_nodes(g) now spans S3 + DSPM
+        self._check_kiem_irsa(g)                     # Phase 3 KIEM-04 (independent of crown)
 
     def _collect_macie(self, g) -> set:
         crown: set = set()
@@ -9241,6 +9684,36 @@ class AWSLiveScanner:
                           f"task {tid} -> exploitable {cve} (container image) -> task role -> "
                           f"crown-jewel data {bucket} reachable only via a Condition-guarded "
                           f"hop; verify.{boost} | {tid}")
+
+    def _check_kiem_irsa(self, g):
+        """KIEM-04 — IRSA / Pod-Identity cross-plane: a Kubernetes ServiceAccount whose assumed
+        AWS role itself reaches AWS admin or crown-jewel data. The K8s->AWS bridge means any pod
+        (or attacker) using that SA inherits the AWS blast radius. Runs in DATA after the graph is
+        built (front-loaded replay), reusing the IAM analysis on the role node. INDEPENDENT of the
+        flagship's crown early-return, so the admin case fires even with no crown datastore."""
+        if g is None:
+            return
+        crown = aws_correlate.crown_nodes(g)
+        aws_admin = self._admin_cap_id()
+        kinds = {"CAN_ASSUME", "CAN_PRIVESC_TO", "CAN_READ_DATA"}
+        for sa in g.nodes("KubeServiceAccount"):
+            for e in g.out_edges(sa["id"], {"CAN_ASSUME"}):
+                role = e["dst"]
+                reach = set(g.reachable(role, kinds, max_hops=7,
+                                        edge_filter=self._edge_unconditioned))
+                hits_admin = aws_admin in reach
+                hits_crown = crown & reach
+                if not (hits_admin or hits_crown):
+                    continue
+                label = "AWS account-admin" if hits_admin else \
+                    f"crown-jewel data {aws_correlate._label(g, sorted(hits_crown)[0])}"
+                sa_label = f"{(sa.get('props') or {}).get('namespace')}/" \
+                           f"{(sa.get('props') or {}).get('name')}"
+                self._add("FAIL", "KIEM-04", "DATA", sa_label,
+                          f"CROSS-PLANE: Kubernetes ServiceAccount {sa_label} assumes AWS role "
+                          f"{role.split('/')[-1]} (IRSA/Pod-Identity) which reaches {label}. Any "
+                          f"pod using this SA — or an attacker who reaches it — inherits that AWS "
+                          f"access. | {sa_label}")
 
     # ── Phase 7 DSPM: crown-jewel datastores (RDS/Redshift/DynamoDB/EFS) w/o Macie ─
     def _collect_dspm(self, g):
@@ -9708,6 +10181,8 @@ class AWSLiveScanner:
             self._replay_runs_image_edges()
         if self.graph is not None and self._fargate_payloads:
             self._replay_fargate_edges()
+        if self.graph is not None and self._kube_payloads:
+            self._replay_kube_edges()
 
     def _regions_for_section(self, section: str) -> List[str]:
         """Regions to run a section in. Single-region by default; with

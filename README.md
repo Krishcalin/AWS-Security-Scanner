@@ -299,7 +299,9 @@ options:
 | **Bedrock** | BDR-01 to 05 | Model logging, guardrails, KMS encryption, VPC endpoint, IAM least privilege |
 | **Bedrock Agents** | AGT-01 to 05 | Agent KMS encryption, execution role, KB security, Lambda security, prompt injection |
 | **Lambda** | LMB-01 to 05 | Public access, VPC config, plaintext secrets in env vars, deprecated runtimes, concurrency |
-| **EKS** | EKS-01 to 07 | Public API endpoint, control plane logging, secrets encryption, version, security groups, worker-node SSH, **EKS-Fargate profile boundary** |
+| **EKS** | EKS-01 to 08 | Public API endpoint, control plane logging, secrets encryption, version, security groups, worker-node SSH, EKS-Fargate profile boundary, **authentication mode** |
+| **KSPM** | KSPM-00 to 07 | **Agentless CIS-EKS (K8s side)** — anonymous RBAC bindings, wildcard/cluster-admin RBAC, default-SA automount, Pod Security Admission, default-deny NetworkPolicy, privileged/host pods (fail-open when the K8s API is unreachable) |
+| **KIEM** | KIEM-01 to 04 | **K8s identity/entitlement** — over-broad AWS→K8s cluster-admin grants (EKS Access Entries), namespace-admin/secret-read, and **IRSA / Pod-Identity cross-plane** (ServiceAccount → AWS role → admin/crown) |
 | **ECS** | ECS-01 to 08, **FARGATE-01/02** | Privileged containers, root user, log drivers, plaintext secrets, writable rootfs, host-namespace/hostPath escapes, dangerous caps; **running Fargate tasks folded into the attack-path graph** + public-task-IP exposure |
 | **Secrets Manager** | SEC-01 to 04 | Rotation enabled, rotation frequency, KMS (CMK vs managed), unused secrets |
 | **WAF** | WAF-01 to 04 | Web ACL presence, logging, rules count, default action |
