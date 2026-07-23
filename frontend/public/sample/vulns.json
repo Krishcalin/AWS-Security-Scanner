@@ -1,0 +1,62 @@
+[
+  {
+    "account": "123456789012", "node_id": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api@sha256:a1b2c3", "node_kind": "ECRImage",
+    "cve": "CVE-2021-44228", "package": "org.apache.logging.log4j:log4j-core", "installed_version": "2.14.1", "fixed_version": "2.17.1",
+    "severity": "CRITICAL", "cvss_base": 10.0, "epss": 0.975, "kev": true, "exploit_available": "YES",
+    "sources": ["ingest:trivy", "ingest:grype"], "suppressed": false,
+    "reachable_from_internet": true, "on_attack_path": true, "reaches_crown": true, "terminal_kinds": ["data", "admin"],
+    "priority_score": 94, "priority_band": "CRITICAL",
+    "driving_path": "internet -> payments-api -> role/payments -> s3/customer-pii", "mapping_status": "resolved",
+    "first_ingested_epoch": 1720000000, "last_seen_epoch": 1720600000, "doc_id": "sha256:doc1"
+  },
+  {
+    "account": "123456789012", "node_id": "arn:aws:ec2:us-east-1:123456789012:instance/i-0edge", "node_kind": "EC2Instance",
+    "cve": "CVE-2024-3094", "package": "xz-utils", "installed_version": "5.6.0", "fixed_version": "5.6.2",
+    "severity": "CRITICAL", "cvss_base": 10.0, "epss": 0.71, "kev": false, "exploit_available": "YES",
+    "sources": ["ingest:trivy"], "suppressed": false,
+    "reachable_from_internet": true, "on_attack_path": true, "reaches_crown": false, "terminal_kinds": ["admin"],
+    "priority_score": 78, "priority_band": "HIGH",
+    "driving_path": "internet -> i-0edge -> role/bastion -> admin", "mapping_status": "resolved",
+    "first_ingested_epoch": 1720100000, "last_seen_epoch": 1720600000, "doc_id": "sha256:doc2"
+  },
+  {
+    "account": "123456789012", "node_id": "arn:aws:ec2:us-east-1:123456789012:instance/i-0offline", "node_kind": "EC2Instance",
+    "cve": "CVE-2023-38545", "package": "curl", "installed_version": "8.1.0", "fixed_version": "8.4.0",
+    "severity": "HIGH", "cvss_base": 8.8, "epss": 0.12, "kev": false, "exploit_available": null,
+    "sources": ["ingest:grype"], "suppressed": false,
+    "reachable_from_internet": false, "on_attack_path": false, "reaches_crown": false, "terminal_kinds": [],
+    "priority_score": 25, "priority_band": "LOW",
+    "driving_path": null, "mapping_status": "resolved",
+    "first_ingested_epoch": 1720200000, "last_seen_epoch": 1720600000, "doc_id": "sha256:doc3"
+  },
+  {
+    "account": "123456789012", "node_id": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api@sha256:a1b2c3", "node_kind": "ECRImage",
+    "cve": "CVE-2022-37434", "package": "zlib", "installed_version": "1.2.11", "fixed_version": "1.2.13",
+    "severity": "CRITICAL", "cvss_base": 9.8, "epss": 0.08, "kev": false, "exploit_available": null,
+    "sources": ["ingest:trivy"], "suppressed": true,
+    "reachable_from_internet": true, "on_attack_path": false, "reaches_crown": false, "terminal_kinds": [],
+    "priority_score": 8, "priority_band": "LOW",
+    "driving_path": null, "mapping_status": "resolved",
+    "first_ingested_epoch": 1720300000, "last_seen_epoch": 1720600000, "doc_id": "sha256:doc4"
+  },
+  {
+    "account": "234567890123", "node_id": "arn:aws:lambda:us-west-2:234567890123:function:auth-service", "node_kind": "LambdaFunction",
+    "cve": "CVE-2024-21626", "package": "runc", "installed_version": "1.1.11", "fixed_version": "1.1.12",
+    "severity": "HIGH", "cvss_base": 8.6, "epss": 0.44, "kev": true, "exploit_available": "YES",
+    "sources": ["ingest:snyk"], "suppressed": false,
+    "reachable_from_internet": true, "on_attack_path": true, "reaches_crown": true, "terminal_kinds": ["data"],
+    "priority_score": 91, "priority_band": "CRITICAL",
+    "driving_path": "internet -> apigw -> auth-service -> dynamodb/sessions", "mapping_status": "resolved",
+    "first_ingested_epoch": 1720400000, "last_seen_epoch": 1720600000, "doc_id": "sha256:doc5"
+  },
+  {
+    "account": "234567890123", "node_id": "ingest:image:sha256:orphan9", "node_kind": "ECRImage",
+    "cve": "CVE-2023-4911", "package": "glibc", "installed_version": "2.34", "fixed_version": "2.35",
+    "severity": "HIGH", "cvss_base": 7.8, "epss": 0.33, "kev": true, "exploit_available": "YES",
+    "sources": ["ingest:trivy"], "suppressed": false,
+    "reachable_from_internet": false, "on_attack_path": false, "reaches_crown": false, "terminal_kinds": [],
+    "priority_score": 45, "priority_band": "MEDIUM",
+    "driving_path": null, "mapping_status": "unmapped",
+    "first_ingested_epoch": 1720500000, "last_seen_epoch": 1720600000, "doc_id": "sha256:doc6"
+  }
+]

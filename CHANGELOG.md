@@ -4,6 +4,60 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.20.0] — 2026
+
+**OverWatch — external vulnerability ingest, ranked by reachability not CVSS (Phase-2 capstone).**
+Upload any SCA scanner's output and OverWatch owns its CVEs against your AWS estate and ranks
+them by *actual* attack-path exploitability.
+
+### Added — `aws_ingest.py` (pure, offline, boto3-free)
+- **Parsers** for **SARIF 2.1.0** (per-tool adapters — Trivy `ruleId==CVE`, Grype
+  `{vulnID}-{artifactName}` suffix-strip, Snyk `SNYK-…` + regex CVE out of `fullDescription`;
+  CodeQL SAST excluded), **CycloneDX 1.5/1.6** (`vulnerabilities[]` findings lane incl. VEX
+  `analysis.state` + ratings-authority selection; components-only → inventory lane), and
+  **SPDX 2.3 / Syft** SBOMs (inventory lane). `parse_purl` is the exact inverse of
+  `aws_sidescan._purl` / `_lang_purl` / `_ECO` / `_pep503`, so an ingested package keys
+  byte-identically against the same OSV feed a native side-scan uses.
+- **Two lanes, one convergence** on `aws_sidescan.EnrichedMatch`: the *findings* lane enriches
+  a doc-named CVE via `enrich_match` (native-parity severity/CVSS on a feed HIT, doc band on a
+  MISS); the *inventory* lane runs purls through `match_vulns` (OverWatch's own matcher decides
+  the CVEs). Either way KEV/EPSS/exploit come **only** from the shared vuln bundle — never
+  inferred from the doc.
+- **Own + dedup + VEX**: `resolve_owner` binds a doc to the graph node it belongs to (explicit
+  ARN → image digest → repo:tag → synthetic *unmapped* fallback; cross-account ARN → 400);
+  `build_cve_index`; `vex_suppressed` (suppress-but-track).
+- **Reachability re-run**: ingested CVEs become `HAS_VULN` edges (`scan_source="ingest:<tool>"`)
+  and `compute_reachability_verdicts` **re-runs** `aws_correlate.enumerate_paths` with the exact
+  native `_check_correlate` predicates — a membership check on stored paths would miss the path a
+  new KEV reveals. An ingested KEV-on-data-path earns the identical `hard_floor_kev_data=90`
+  CRITICAL; an isolated/unreachable CVE collapses to an exploitability-only band. `diff_reachability`
+  yields the newly-reachable delta for the drift digest.
+
+### Added — `SecurityGraph.from_dict` (`aws_graph.py`)
+- Loss-safe inverse of `to_dict` (reserved keys popped; MERGE-idempotent), so the hosted plane
+  rebuilds a graph from stored `graph_full` before the re-run. `aws_graph_neptune.load_graph`
+  now delegates to it.
+
+### Added — persistence, service, API, console
+- `aws_state` **v5**: `ingest_docs` + `ingested_vulns` twin DDL (sqlite + `aws_state_dialect`
+  Postgres), `IF NOT EXISTS` migration (no ALTER), one owned row per `(account, node_id, cve)`
+  with a `sources` set-union, verdict columns written separately so a re-upsert never clobbers a
+  fresh reachability verdict.
+- `PlatformService.ingest_document` / `list_vulns` / `get_vuln` / `refresh_vuln_reachability`
+  / `org_vulns`; injected `vuln_bundle` (fail-open). Routes (RBAC): `POST /accounts/{id}/ingest`
+  (admin), `GET /accounts/{id}/vulns`, `GET /accounts/{id}/vulns/{cve}`,
+  `GET /accounts/{id}/ingest/docs`, `POST /accounts/{id}/vulns/refresh` (admin), `GET /org/vulns`.
+- Reachable survivors surface as two check-level aggregates (`VULN-ING-KEV` / `VULN-ING`) routed
+  through the existing `VULN-*` + on-attack-path connector rules; a newly-reachable KEV rides the
+  drift-digest `newly_on_path` signal (`build_drift_digest` gained `extra_newly_on_path`; the
+  worker refreshes reachability against the fresh graph and feeds the delta).
+- Console **Vulnerabilities** screen (reachability chip as the visual anchor, KEV / on-path /
+  source facets, SARIF/CycloneDX/SPDX upload) + an Overview reachable-CVE roll-up.
+
+### Read-only on scanned targets
+- The ingest path makes **zero** AWS API calls — it works purely off the uploaded document and
+  the account's stored graph.
+
 ## [2.19.0] — 2026
 
 **Detailed finding reports baked into the scanner.** Every scan now emits, for every

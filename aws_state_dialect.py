@@ -266,6 +266,33 @@ POSTGRES_DDL: List[str] = [
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_digest_dedup ON digest_log(connector_id, digest_key)",
     "CREATE INDEX IF NOT EXISTS ix_digest_acct ON digest_log(account)",
     "CREATE INDEX IF NOT EXISTS ix_digest_created ON digest_log(created_at)",
+    # ── external-vuln ingest plane — sqlite twins in aws_state._DDL ───────────────
+    """CREATE TABLE IF NOT EXISTS ingest_docs(
+       doc_id TEXT PRIMARY KEY, account TEXT NOT NULL,
+       source_format TEXT NOT NULL CHECK(source_format IN ('sarif','cyclonedx','spdx')),
+       source_tool TEXT, target_resource TEXT, resolved_node TEXT,
+       finding_count INTEGER NOT NULL DEFAULT 0,
+       status TEXT NOT NULL DEFAULT 'ingested'
+         CHECK(status IN ('ingested','unmapped','rejected')),
+       error TEXT, ingested_epoch BIGINT NOT NULL)""",
+    "CREATE INDEX IF NOT EXISTS ix_ingdoc_acct ON ingest_docs(account, ingested_epoch)",
+    """CREATE TABLE IF NOT EXISTS ingested_vulns(
+       account TEXT NOT NULL, node_id TEXT NOT NULL, cve TEXT NOT NULL,
+       node_kind TEXT, package TEXT, installed_version TEXT, fixed_version TEXT,
+       severity TEXT, cvss_base DOUBLE PRECISION, epss DOUBLE PRECISION,
+       kev INTEGER NOT NULL DEFAULT 0,
+       exploit_available TEXT, sources_json TEXT NOT NULL DEFAULT '[]',
+       suppressed INTEGER NOT NULL DEFAULT 0,
+       reachable_from_internet INTEGER NOT NULL DEFAULT 0,
+       on_attack_path INTEGER NOT NULL DEFAULT 0,
+       reaches_crown INTEGER NOT NULL DEFAULT 0,
+       terminal_kinds_json TEXT NOT NULL DEFAULT '[]',
+       priority_score INTEGER NOT NULL DEFAULT 0, priority_band TEXT,
+       driving_path TEXT, mapping_status TEXT NOT NULL DEFAULT 'resolved',
+       first_ingested_epoch BIGINT NOT NULL, last_seen_epoch BIGINT NOT NULL, doc_id TEXT,
+       PRIMARY KEY(account, node_id, cve))""",
+    "CREATE INDEX IF NOT EXISTS ix_ingv_rank    ON ingested_vulns(account, priority_score)",
+    "CREATE INDEX IF NOT EXISTS ix_ingv_kevpath ON ingested_vulns(account, kev, on_attack_path)",
 ]
 
 # Per-account advisory lock replacing sqlite's whole-DB BEGIN IMMEDIATE (different

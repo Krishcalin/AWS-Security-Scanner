@@ -192,16 +192,10 @@ def to_opencypher_upsert(graph, batch: int = 200) -> List[Tuple[str, dict]]:
 
 def load_graph(d: dict):
     """Reconstruct a SecurityGraph from node-link dict (round-trip inverse of
-    ``to_dict``): ``load_graph(g.to_dict()).to_dict() == g.to_dict()``."""
+    ``to_dict``): ``load_graph(g.to_dict()).to_dict() == g.to_dict()``.
+    Thin alias for :meth:`SecurityGraph.from_dict` (the canonical inverse)."""
     from aws_graph import SecurityGraph
-    g = SecurityGraph()
-    for n in d.get("nodes", []):
-        props = {k: v for k, v in n.items() if k not in ("id", "kind")}
-        g.add_node(n["id"], n.get("kind", "Unknown"), **props)
-    for e in d.get("edges", []):
-        props = {k: v for k, v in e.items() if k not in ("source", "target", "kind")}
-        g.add_edge(e["source"], e["target"], e.get("kind", ""), **props)
-    return g
+    return SecurityGraph.from_dict(d)
 
 
 # ── correlation query templates (DOCUMENTATION / exploration only) ────────────

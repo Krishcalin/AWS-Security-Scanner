@@ -1602,11 +1602,17 @@ def _digest_findings(keys: Sequence[str], catalog_by_check: dict, onpath: set) -
 def build_drift_digest(*, account: str, scan_id: str, scan_epoch: int, drift: dict,
                        trend: list, mttr: dict, catalog_by_check: dict, onpath: set,
                        compliance_delta: Optional[list] = None, window_id: str,
+                       extra_newly_on_path: Sequence[dict] = (),
                        top: int = 10, hub_base: str = "") -> dict:
     """PURE. Assemble the drift digest from already-computed inputs (the classify_and_diff
     drift dict, trend, mttr, the finding catalog, the on-attack-path set). ``counts``
     carry EVERY folded change (lossless len()); only the displayed lists truncate.
-    ``material_change`` is derived from the PERSISTED drift so it survives a restart."""
+    ``material_change`` is derived from the PERSISTED drift so it survives a restart.
+
+    ``extra_newly_on_path`` carries out-of-band on-attack-path signals that are NOT in
+    classify_and_diff's finding lifecycle — the ingest plane's newly-REACHABLE CVEs
+    (each ``{check_id, severity, on_attack_path:True}``). They merge into ``newly`` before
+    truncation (so they can surface in ``newly_on_path``) and force ``material_change``."""
     cur = trend[-1] if trend else {}
     counts = {
         "new": len(drift.get("new", [])), "resolved": len(drift.get("resolved", [])),
@@ -1620,8 +1626,17 @@ def build_drift_digest(*, account: str, scan_id: str, scan_epoch: int, drift: di
         for k in ("crit", "high", "med", "low"):
             sev_delta[k] = int(cur.get(k, 0)) - int(prev.get(k, 0))
     material = (any(counts[k] for k in ("new", "resolved", "reopened", "mutated"))
-                or (posture_delta not in (None, 0, 0.0)) or bool(compliance_delta))
+                or (posture_delta not in (None, 0, 0.0)) or bool(compliance_delta)
+                or bool(extra_newly_on_path))
     newly = _digest_findings(drift.get("new", []), catalog_by_check, onpath)
+    if extra_newly_on_path:
+        extra = [{"check_id": x.get("check_id", ""), "severity": x.get("severity", ""),
+                  "resource": x.get("resource", ""),
+                  "on_attack_path": bool(x.get("on_attack_path", True))}
+                 for x in extra_newly_on_path]
+        newly = sorted(newly + extra,
+                       key=lambda x: (_DIGEST_SEV.get(x.get("severity", ""), 5),
+                                      0 if x.get("on_attack_path") else 1))
     resolved_wins = _digest_findings(drift.get("resolved", []), catalog_by_check, onpath)
     reopened = _digest_findings(drift.get("reopened", []), catalog_by_check, onpath)
     mean_s = mttr.get("mean_seconds")

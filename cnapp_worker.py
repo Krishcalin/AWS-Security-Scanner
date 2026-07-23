@@ -110,6 +110,7 @@ def run_scan_job(svc, job: dict, *, spec: ScanSpec = None) -> dict:
     # 4.5 best-effort: fold this scan into the lifecycle store (drift / trend / MTTR).
     #     After the expensive AWS work; wrapped so a state error never fails a 'done' job.
     drift = None
+    became_reachable: list = []
     scan_epoch = svc.clock()
     if getattr(svc, "state", None) is not None:
         try:
@@ -118,6 +119,14 @@ def run_scan_job(svc, job: dict, *, spec: ScanSpec = None) -> dict:
             raise
         except Exception:                             # noqa: BLE001
             drift = None
+        # 4.6 re-rank ingested CVEs against the FRESH graph_full; capture the
+        #     newly-reachable delta for the drift digest. Best-effort / fail-open.
+        try:
+            became_reachable = svc.refresh_vuln_reachability(account_id).get("became_reachable", [])
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:                             # noqa: BLE001
+            became_reachable = []
 
     # 5. best-effort: fire enabled connectors — the per-finding queue AND (if we have a
     #    drift dict) one drift-digest per scan. A dead/slow receiver or any notify error
@@ -132,7 +141,7 @@ def run_scan_job(svc, job: dict, *, spec: ScanSpec = None) -> dict:
         if drift is not None:
             try:
                 svc.notify_digest(account_id, drift, scan_id=job_id, scan_epoch=scan_epoch,
-                                  prev_payload=prev_payload)
+                                  prev_payload=prev_payload, became_reachable=became_reachable)
             except (KeyboardInterrupt, SystemExit):
                 raise
             except Exception:                         # noqa: BLE001

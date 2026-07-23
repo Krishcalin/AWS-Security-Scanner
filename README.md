@@ -417,6 +417,7 @@ ViewOnlyAccess** (read-only of configuration/IAM — never workload data).
 | `cnapp_api.py` | FastAPI routes + viewer/admin RBAC (fail-closed), guarded import |
 | `cnapp_connectors.py` | **Connector framework** — route findings to Jira / Slack / PagerDuty / Splunk / webhook (pure renderers + injected `http_post` seam + rules engine + idempotent delivery ledger) |
 | `compliance_crosswalk.py` | **Compliance breadth** — sourced NIST 800-53 → 30+ framework crosswalk loader (accuracy-gated, fail-open); `aws_live_scanner.crosswalk_scorecard` derives per-framework coverage |
+| `aws_ingest.py` | **External-vuln ingest** — pure SARIF/CycloneDX/SPDX parsers (per-tool adapters) → own each CVE onto a graph node → enrich from OverWatch's own OSV/EPSS/KEV bundle → re-run reachability so CVEs rank by attack-path exploitability, not CVSS |
 
 **HTTP surface** (all delegate to `PlatformService`; admin routes stay on the private
 hub control plane): `POST /accounts` (onboard → launch URL), `POST /accounts/{id}/validate`,
@@ -466,6 +467,29 @@ over the API); connectors are **admin-only, disabled by default**, and delivery 
 **idempotent** (a re-scan never re-sends an unchanged finding, and a failed send is retried).
 Configured from the console **Settings → Integrations** screen (add/test/enable, per-connector
 routing rules with a dry-run preview, and a deliveries audit log).
+
+**External vulnerability ingest — rank CVEs by reachability, not CVSS.** Upload the
+output of *any* SCA scanner — **SARIF** (Trivy / Grype / Snyk), **CycloneDX** (with a
+`vulnerabilities[]` array or VEX `analysis.state`), or **SPDX / Syft** SBOMs — and OverWatch
+**owns** each CVE against the AWS resource it belongs to, **dedups** it across sources (one
+row per `(account, node_id, cve)`; N reporters = a `sources` set-union), and **enriches** it
+from the **same** OSV / EPSS / KEV bundle a native side-scan uses (so KEV/EPSS/exploit are
+byte-identical, never inferred from the doc). The owned CVE is attached as a `HAS_VULN` edge
+and the attack-path engine is **re-run** — a membership check on the stored paths would
+structurally miss the path a newly-reported KEV reveals — so an ingested KEV on an
+internet-exposed, path-to-crown host earns the identical CRITICAL as a native one, while a
+high-CVSS but **unreachable** CVE ranks as noise. VEX `not_affected` / `false_positive` is
+**suppress-but-track** (owner VEX outranks a scanner's "exploitable"; the row is retained and
+counted, never a silent hole); CodeQL SARIF (SAST, no CVE) is excluded. Reachable survivors
+flow into the existing connectors as two check-level aggregates (`VULN-ING-KEV` / `VULN-ING`)
+and a newly-reachable KEV rides the drift-digest `newly_on_path` signal. Read-only on scanned
+accounts — it works purely off the uploaded doc + the stored graph. Routes: `POST
+/accounts/{id}/ingest` (admin), `GET /accounts/{id}/vulns` (ranked, faceted by KEV / on-path /
+source / band), `GET /accounts/{id}/vulns/{cve}`, `GET /accounts/{id}/ingest/docs`, `POST
+/accounts/{id}/vulns/refresh` (admin), `GET /org/vulns`. Surfaced in the console
+**Vulnerabilities** screen — a reachability-anchored inventory (the reachability chip, not
+CVSS, is the visual weight) with a SARIF/CycloneDX/SPDX upload affordance and an Overview
+roll-up (*N external CVEs · M reachable · K reachable-KEV*).
 
 **Shared Postgres state.** Opening the state store with a `postgresql://` URL runs
 the whole state plane (finding lifecycle/drift/waivers + the account registry) on a
