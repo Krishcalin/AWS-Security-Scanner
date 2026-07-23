@@ -472,6 +472,59 @@ NIST 800-53 AC-3 (crosswalk)"* — traceable, never a bare claim.
   gates the shipped file (every edge's NIST control ∈ the actual 38; no native target;
   sources present; the file's declared universe == `COMPLIANCE_MAP`).
 
+### CNAPP Phase 2 (CTEM) — continuous scheduled scanning + drift digests
+
+Turns the hosted scanner from on-demand into continuous exposure management, and ties
+the connector framework + the finding-lifecycle store together: scans run on a cadence,
+each scan folds into the lifecycle DB (drift / trend / MTTR), and one **drift digest**
+("what changed since last scan") is delivered per scan through the connectors.
+
+- **Scheduler** (`cnapp_validate.scan_interval` + `AccountRegistry.scans_due` +
+  `PlatformService.schedule_due_scans` + `cnapp_worker.scheduler_tick`) — a per-account
+  cadence in the already-present `accounts.scan_schedule` (off / hourly / daily / weekly /
+  `interval:<sec>`; fail-loud on a bad or non-positive grammar). `scans_due` = active +
+  healthy + scheduled accounts whose `last_scan_at + interval` elapsed AND with no
+  queued/running job (the SQL `NOT EXISTS` is the no-double-enqueue guard). A **failing**
+  scheduled scan backs off exponentially (15min→24h over consecutive failures, mirroring
+  `cadence()`), so a broken account never re-scans every tick. next-due is derived (no
+  `next_scan_due` column). `scheduler_tick` = enqueue-due + drain, driven by a cron /
+  `POST /scans/schedule-tick`; deterministic under the injected clock.
+- **Lifecycle wiring** (`PlatformService.record_lifecycle`, called by the worker) — folds
+  each completed scan's results into a shared `aws_state.StateStore` (`record_scan →
+  classify_and_diff → record_posture`), mirroring the CLI `--state` pipeline. Region is
+  pinned to `HOSTED_REGION='all'` (a byte-stable coverage partition for a full multi-region
+  hosted scan — never `payload['region']`, which the engine mutates); `scan_id=job_id`
+  (globally unique). **Fail-open**: `state=None` or any lifecycle error never fails a `done`
+  scan. Coverage-gated resolve works because `serialize_scanner` carries ALL results
+  (PASS included), so a remediated check stays covered and its finding resolves.
+- **Drift digest** (`cnapp_connectors.build_drift_digest` + `render_*_digest` +
+  `dispatch_digest` + `run_digest`, all in the leaf) — a PURE builder (lossless `counts =
+  len(drift lists)`; `newly_on_path` a strict subset of `newly_exposed` with on-path
+  favored in the top-N; `material_change` from the persisted drift; compliance delta). One
+  summary per (account, **window**) — `per_scan` (the scan_id) or `daily` (a UTC day fold).
+  **Idempotent** via a dedicated `digest_log` table (`UNIQUE(connector_id, digest_key)`,
+  claim-then-send) — SEPARATE from the per-finding `notification_log` so `plan`/
+  `resolve_stale` stay digest-unaware. A **failed** digest is retryable (claim returns the
+  existing failed/pending row → at-least-once). Connectors **opt in** per-connector via
+  `config.digest = {enabled, only_on_material_change, min_new, account_globs}` (NOT a rule
+  flag); the material / min_new gates run BEFORE the claim. `dispatch_digest` reuses
+  `request_for` / `interpret_response` / `_resolve_secret` / `_scrub`, so the SSRF guard,
+  byte-stable webhook signing, and secret-scrubbing carry over. Digest is a **sibling path**
+  to per-finding `run_rules` — both fire from the worker's best-effort block, no double-send.
+- **Persistence** — `SCHEMA_VERSION` **3→4** (`digest_log` sqlite + Postgres twins,
+  `IF NOT EXISTS`, no ALTER); `delete_connector` clears `digest_log` first (FK).
+- **API** (admin: `POST /scans/schedule-tick`, `PUT /accounts/{id}/schedule`,
+  `POST /accounts/{id}/digest/preview`; viewer: `GET /accounts/{id}/{trend,mttr,drift}`,
+  `GET /connectors/{id}/digests`, `GET /digests`). **Console** — a "What changed since last
+  scan" + posture-trend sparkline card on Overview (`DriftCard`), a per-account cadence
+  selector on Cloud Accounts, and a "Send drift digests" toggle (+ material / min-new) in
+  the Settings connector editor.
+- **Rigor** — a design judge-panel (3 architectures → scored synthesis) settled the
+  digest-idempotency / connector-selection / scheduler-placement decisions; a read-only
+  adversarial-verify workflow confirmed **6 defects** (failing-scan flapping w/o backoff,
+  a cadence PUT-vs-POST 405, a non-retried failed digest, `interval:0` silent-off,
+  `newly_on_path` subset break) — all fixed + regression-tested. **1237 tests.**
+
 ### CNAPP Phase 7 additions (v2.8.0) — remediation + code-to-cloud ("close the loop")
 
 - **Remediation engine (`aws_remediate.py`, pure)** — `build_plan(...)` REUSES

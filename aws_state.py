@@ -34,7 +34,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-SCHEMA_VERSION = 3   # v3: + connector framework (connectors, connector_rules, notification_log)
+SCHEMA_VERSION = 4   # v4: + drift-digest delivery ledger (digest_log)
 KEY_VERSION = 1
 
 # Caller-injected scan timestamp (one per run). epoch = arithmetic column,
@@ -208,6 +208,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS ix_notify_dedup ON notification_log(connector_
 CREATE INDEX IF NOT EXISTS ix_notify_status ON notification_log(connector_id, status);
 CREATE INDEX IF NOT EXISTS ix_notify_acct ON notification_log(account);
 CREATE INDEX IF NOT EXISTS ix_notify_created ON notification_log(created_at);
+
+-- ── drift-digest delivery ledger (continuous scheduled scanning) ──────────────
+-- One row per (connector, account, window) summary sent — exactly-once via the
+-- UNIQUE index (claim-then-send), SEPARATE from the per-finding notification_log so
+-- its hot queries (plan/resolve_stale) stay digest-unaware. BIGINT twins in POSTGRES_DDL.
+CREATE TABLE IF NOT EXISTS digest_log(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  connector_id TEXT NOT NULL REFERENCES connectors(connector_id),
+  digest_key TEXT NOT NULL, account TEXT NOT NULL, scan_id TEXT NOT NULL, window_id TEXT NOT NULL,
+  new_count INTEGER NOT NULL DEFAULT 0, resolved_count INTEGER NOT NULL DEFAULT 0,
+  reopened_count INTEGER NOT NULL DEFAULT 0, posture_delta REAL, material INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','failed','skipped')),
+  attempts INTEGER NOT NULL DEFAULT 0, http_status INTEGER, error TEXT, external_ref TEXT,
+  created_at INTEGER NOT NULL, sent_at INTEGER);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_digest_dedup ON digest_log(connector_id, digest_key);
+CREATE INDEX IF NOT EXISTS ix_digest_acct ON digest_log(account);
+CREATE INDEX IF NOT EXISTS ix_digest_created ON digest_log(created_at);
 """
 
 

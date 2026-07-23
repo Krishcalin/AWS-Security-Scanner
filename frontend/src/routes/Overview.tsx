@@ -6,6 +6,7 @@ import { useFetch } from '../lib/useFetch'
 import { api } from '../api/client'
 import { Card, GradeDial, Loader, ErrorNote, Empty, SevDot, StackBar } from '../components/ui'
 import { SeverityChip, PathBadges, PathChain, ChokeRow } from '../components/paths'
+import { DriftCard } from '../components/DriftCard'
 import { SEVERITIES, sevColor, scoreColor, gradeColor } from '../lib/format'
 import type { OrgOverview as TOrg, AccountSummary, AttackPath } from '../api/types'
 
@@ -208,6 +209,8 @@ function AccountView({ id }: { id: string }) {
           </div>
         </Card>
       </div>
+
+      <div className="mb-4"><DriftCard account={id} /></div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-4">
         <Card>

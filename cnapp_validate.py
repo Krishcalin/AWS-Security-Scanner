@@ -176,6 +176,33 @@ def cadence(health: ConnectionHealth, consecutive_failures: int = 0) -> int:
     return min(exp, _CADENCE_MAX)
 
 
+# ── scan cadence (continuous scheduled scanning) ──────────────────────────────
+# Distinct from `cadence` (which keys on ConnectionHealth for re-validation): a scan
+# cadence is a static interval an operator sets per account, stored verbatim in the
+# already-present `accounts.scan_schedule` TEXT column.
+_SCAN_CADENCE = {"hourly": 3600, "daily": 86400, "weekly": 604800}
+
+
+def scan_interval(schedule: Optional[str]) -> Optional[int]:
+    """PURE. Seconds between scheduled scans for a ``scan_schedule`` value, or None
+    when disabled. Grammar: ``off``/None/"" = off; ``hourly``/``daily``/``weekly``;
+    ``interval:<seconds>`` = explicit. Fails LOUD on a bad grammar (never a silent
+    no-scan or an accidental every-tick scan)."""
+    if not schedule or schedule == "off":
+        return None
+    if schedule in _SCAN_CADENCE:
+        return _SCAN_CADENCE[schedule]
+    if schedule.startswith("interval:"):
+        try:
+            n = int(schedule.split(":", 1)[1])
+        except (ValueError, IndexError):
+            raise ValueError(f"bad scan_schedule {schedule!r}")
+        if n <= 0:                                   # fail loud, never a silent no-scan
+            raise ValueError(f"scan interval must be positive, got {schedule!r}")
+        return n
+    raise ValueError(f"bad scan_schedule {schedule!r}")
+
+
 def validate_connection(*, expected_account_id: str, role: str, now_epoch: int,
                         assume_role_fn: AssumeRoleFn, client_factory: ClientFactory,
                         external_id: Optional[str] = None, region: str = "us-east-1",
