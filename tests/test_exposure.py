@@ -397,6 +397,50 @@ class TestExposureCollector(unittest.TestCase):
         self.assertEqual(attacks[0].status, "FAIL")
         self.assertEqual(attacks[0].severity, "CRITICAL")
 
+    # ── Layer A: static SG micro-segmentation wiring + graph overlay ──────────
+    def test_microseg_seg01_emitted_with_graph_overlay(self):
+        enis = [_eni("eni-t", "i-t", "sg-telnet")]
+        sgs = [_sg("sg-telnet", [perm("tcp", 23, 23)])]     # world-open Telnet (SEG-01 delta port)
+        res = [{"Instances": [{"InstanceId": "i-t", "VpcId": "vpc-1"}]}]
+        sc = self._run(enis, sgs, res, [])
+        fails = {r.check_id for r in sc.results if r.status == "FAIL"}
+        self.assertIn("SEG-01", fails)          # config-level over-permissive
+        self.assertIn("EXPOSURE-01", fails)     # AND independently reachable (complementary)
+        node = sc.graph.node("sg/sg-telnet")
+        self.assertIsNotNone(node)
+        self.assertEqual(node["kind"], "SecurityGroup")
+        self.assertTrue(any(e["src"] == "eni-t" and e["dst"] == "sg/sg-telnet"
+                            for e in sc.graph.edges("IN_SG")))
+
+    def test_microseg_seg05_chain_edges_are_config_only_and_off_path(self):
+        import aws_correlate
+        app_ing = perm(proto="-1", cidr=None, sgref="sg-world")   # sg-app references sg-world
+        enis = [_eni("eni-a", "i-a", "sg-app"), _eni("eni-w", "i-w", "sg-world")]
+        sgs = [_sg("sg-app", [app_ing]), _sg("sg-world", [perm("tcp", 3389, 3389)])]
+        res = [{"Instances": [{"InstanceId": "i-a", "VpcId": "vpc-1"},
+                              {"InstanceId": "i-w", "VpcId": "vpc-1"}]}]
+        sc = self._run(enis, sgs, res, [])
+        self.assertIn("SEG-05", {r.check_id for r in sc.results if r.status == "FAIL"})
+        wo = sc.graph.edges("WORLD_OPEN")
+        saf = sc.graph.edges("SG_ALLOWS_FROM")
+        self.assertTrue(wo and saf)
+        # every static overlay edge is tagged config-only so CORRELATE never trusts it
+        self.assertTrue(all(e["props"].get("verified") is False and
+                            e["props"].get("basis") == "sg-static" for e in wo + saf))
+        # and none of the SG overlay kinds are traversable attack edges (the low-FP guarantee)
+        for kind in ("WORLD_OPEN", "SG_ALLOWS_FROM", "IN_SG"):
+            self.assertNotIn(kind, aws_correlate.E_PATH)
+
+    def test_microseg_no_finding_on_clean_web_sg(self):
+        # a public ALB on 443 must produce no SEG finding and no SG overlay node
+        enis = [_eni("eni-w", "i-w", "sg-web")]
+        sgs = [_sg("sg-web", [perm("tcp", 443, 443)])]
+        res = [{"Instances": [{"InstanceId": "i-w", "VpcId": "vpc-1"}]}]
+        sc = self._run(enis, sgs, res, [])
+        seg = {r.check_id for r in sc.results if r.check_id.startswith("SEG-")}
+        self.assertEqual(seg, set())
+        self.assertIsNone(sc.graph.node("sg/sg-web"))
+
     def test_exposed_but_readonly_role_no_attack_path(self):
         enis = [_eni("eni-3", "i-3", "sg-open")]
         sgs = [_sg("sg-open", [perm("tcp", 8080, 8080)])]   # non-sensitive port
@@ -417,6 +461,159 @@ class TestExposureCollector(unittest.TestCase):
     def test_no_enis_reports_info(self):
         sc = self._run([], [], [{"Instances": []}], [])
         self.assertTrue([r for r in sc.results if r.status == "INFO"])
+
+
+# ─── Layer A: static SG micro-segmentation (SEG-01..06) — pure, boto3-free ────
+from aws_exposure import (  # noqa: E402
+    microseg_findings, SEG01_SENSITIVE_PORTS, _VPC01_RISKY_PORTS,
+)
+
+
+def _grp(gid, ingress=None, egress=None, name="app", vpc="vpc-1"):
+    # distinct name from the collector's _sg(gid, perms) helper above — no shadowing
+    return {"GroupId": gid, "GroupName": name, "VpcId": vpc,
+            "IpPermissions": ingress or [], "IpPermissionsEgress": egress or []}
+
+
+def _eni_in(*gids, vpc="vpc-1"):
+    return {"NetworkInterfaceId": "eni-x", "VpcId": vpc,
+            "Groups": [{"GroupId": g} for g in gids]}
+
+
+def _sgref(gid, frm=443, to=443, referenced=False):
+    p = perm("tcp", frm, to, cidr=None)
+    p["UserIdGroupPairs"] = [{"ReferencedGroupId": gid} if referenced else {"GroupId": gid}]
+    return p
+
+
+_EGRESS_ALL = {"IpProtocol": "-1", "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+               "Ipv6Ranges": [], "UserIdGroupPairs": [], "PrefixListIds": []}
+
+
+def _fid(findings, cid):
+    return [f for f in findings if f["id"] == cid]
+
+
+def test_seg01_ports_disjoint_from_vpc01():
+    # SEG-01 must never fire on a port VPC-01 already FAILs — the two sets are disjoint.
+    assert set(SEG01_SENSITIVE_PORTS) & _VPC01_RISKY_PORTS == set()
+
+
+def test_seg01_world_open_telnet_flags():
+    f = microseg_findings([_grp("sg-1", ingress=[perm("tcp", 23, 23)])], [_eni_in("sg-1")])
+    s1 = _fid(f, "SEG-01")
+    assert s1 and s1[0]["status"] == "FAIL" and "Telnet" in s1[0]["message"]
+    assert s1[0]["message"].rstrip().endswith("| sg/sg-1")     # graph-node link
+
+
+def test_seg01_web_alb_443_is_not_a_finding():
+    # the load-bearing low-FP case: a public web/ALB SG on 80/443 is expected, not a finding.
+    f = microseg_findings([_grp("sg-1", ingress=[perm("tcp", 443, 443), perm("tcp", 80, 80)])],
+                          [_eni_in("sg-1")])
+    assert _fid(f, "SEG-01") == [] and _fid(f, "SEG-02") == []
+
+
+def test_seg01_excludes_vpc01_port_no_double_fail():
+    # port 22 is VPC-01's job — SEG-01 stays silent so the two never double-FAIL.
+    f = microseg_findings([_grp("sg-1", ingress=[perm("tcp", 22, 22)])], [_eni_in("sg-1")])
+    assert _fid(f, "SEG-01") == []
+
+
+def test_seg01_only_fires_when_attached():
+    # world-open sensitive port on an SG attached to NO eni ⇒ no SEG-01 (SEG-04 candidate instead).
+    f = microseg_findings([_grp("sg-1", ingress=[perm("tcp", 23, 23)])], [_eni_in("sg-other")])
+    assert _fid(f, "SEG-01") == [] and _fid(f, "SEG-04")
+
+
+def test_seg02_wide_range_and_all_traffic():
+    f = microseg_findings([_grp("sg-1", ingress=[perm("tcp", 0, 65535)])], [_eni_in("sg-1")])
+    assert _fid(f, "SEG-02") and _fid(f, "SEG-02")[0]["status"] == "FAIL"
+    assert _fid(f, "SEG-01") == []                              # suppressed under SEG-02
+    f2 = microseg_findings([_grp("sg-2", ingress=[perm("-1")])], [_eni_in("sg-2")])
+    assert _fid(f2, "SEG-02")                                   # '-1' all-traffic caught
+
+
+def test_seg02_narrow_range_not_flagged():
+    f = microseg_findings([_grp("sg-1", ingress=[perm("tcp", 8000, 8050)])], [_eni_in("sg-1")])
+    assert _fid(f, "SEG-02") == []                              # 51 ports < WIDE_SPAN
+
+
+def test_seg03_shadowed_rule():
+    # a specific rule fully covered by an all-ports rule to the SAME cidr (non-world, so no SEG-02).
+    f = microseg_findings([_grp("sg-1", ingress=[perm("tcp", 0, 65535, cidr="10.0.0.0/8"),
+                                                 perm("tcp", 22, 22, cidr="10.0.0.0/8")])],
+                          [_eni_in("sg-1")])
+    assert _fid(f, "SEG-03") and _fid(f, "SEG-02") == []
+
+
+def test_seg03_partial_overlap_not_flagged():
+    # overlapping-but-not-covered ranges must NOT be called redundant (zero-FP guarantee).
+    f = microseg_findings([_grp("sg-1", ingress=[perm("tcp", 100, 200, cidr="10.0.0.0/8"),
+                                                 perm("tcp", 150, 250, cidr="10.0.0.0/8")])],
+                          [_eni_in("sg-1")])
+    assert _fid(f, "SEG-03") == []
+
+
+def test_seg03_mixed_cidr_and_sgref_rule_not_redundant():
+    # adversarial-verify regression: a rule that ALSO grants an sg-reference carries a grant
+    # _perm_grants can't model (matched by group membership, not CIDR — members may sit outside
+    # the covering CIDR, e.g. a peered VPC), so a broader CIDR rule must NOT mark it redundant.
+    mixed = perm("tcp", 443, 443, cidr="10.0.0.0/8")
+    mixed["UserIdGroupPairs"] = [{"ReferencedGroupId": "sg-x"}]
+    f = microseg_findings([_grp("sg-1", ingress=[perm("tcp", 0, 1000, cidr="10.0.0.0/8"), mixed])],
+                          [_eni_in("sg-1")])
+    assert _fid(f, "SEG-03") == []
+
+
+def test_seg04_unused_sg_candidate():
+    f = microseg_findings([_grp("sg-unused", name="orphan"), _grp("sg-used", name="app")],
+                          [_eni_in("sg-used")])
+    s4 = _fid(f, "SEG-04")
+    assert len(s4) == 1 and s4[0]["gid"] == "sg-unused" and s4[0]["status"] == "INFO"
+
+
+def test_seg04_default_sg_never_flagged():
+    f = microseg_findings([_grp("sg-def", name="default")], [_eni_in("sg-other")])
+    assert _fid(f, "SEG-04") == []
+
+
+def test_seg04_peer_referenced_sg_not_unused():
+    # sg-b is referenced (cross-VPC ReferencedGroupId) by sg-a — deleting it breaks the rule.
+    sgs = [_grp("sg-a", ingress=[_sgref("sg-b", referenced=True)], name="a"), _grp("sg-b", name="b")]
+    f = microseg_findings(sgs, [_eni_in("sg-a")])
+    assert _fid(f, "SEG-04") == []
+
+
+def test_seg04_fail_open_when_no_enis():
+    # ENIs unenumerable ⇒ can't tell used from unused ⇒ skip SEG-04 entirely (no phantom flood).
+    assert _fid(microseg_findings([_grp("sg-1", name="orphan")], []), "SEG-04") == []
+
+
+def test_seg05_chain_to_world_open_sg():
+    sgs = [_grp("sg-app", ingress=[_sgref("sg-world", frm=8080, to=8080)], name="app"),
+           _grp("sg-world", ingress=[perm("tcp", 443, 443)], name="edge")]
+    f = microseg_findings(sgs, [_eni_in("sg-app"), _eni_in("sg-world")])
+    s5 = _fid(f, "SEG-05")
+    assert s5 and s5[0]["gid"] == "sg-app" and "sg-world" in s5[0]["message"]
+
+
+def test_seg05_no_chain_when_ref_not_world_open():
+    sgs = [_grp("sg-app", ingress=[_sgref("sg-internal", frm=8080, to=8080)], name="app"),
+           _grp("sg-internal", ingress=[perm("tcp", 443, 443, cidr="10.0.0.0/8")], name="int")]
+    f = microseg_findings(sgs, [_eni_in("sg-app"), _eni_in("sg-internal")])
+    assert _fid(f, "SEG-05") == []                              # referenced SG is not world-open
+
+
+def test_seg06_egress_all_with_sensitive_inbound():
+    f = microseg_findings([_grp("sg-1", ingress=[perm("tcp", 23, 23)], egress=[_EGRESS_ALL])],
+                          [_eni_in("sg-1")])
+    assert _fid(f, "SEG-06") and _fid(f, "SEG-06")[0]["status"] == "WARN"
+
+
+def test_seg06_not_flagged_without_sensitive_inbound():
+    f = microseg_findings([_grp("sg-1", ingress=[perm("tcp", 443, 443)], egress=[_EGRESS_ALL])],
+                          [_eni_in("sg-1")])
+    assert _fid(f, "SEG-06") == []                              # web-only inbound ⇒ not flagged
 
 
 if __name__ == "__main__":

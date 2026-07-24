@@ -306,3 +306,247 @@ def iter_exposed_ports(port_set: Set[Port]):
             if lo <= port <= hi:
                 hits.append((proto, port, name))
     return summary, hits
+
+
+# ─── Layer A: static SG micro-segmentation (config-only, ZERO new grant) ──────
+# Pure detection over the exact SG/ENI dicts the exposure engine already fetched.
+# Distinct lens from compute_exposure's 4-gate oracle: SEG-* flag an OVER-PERMISSIVE
+# SG regardless of whether the host is currently internet-REACHABLE (defence-in-depth
+# / lateral concern), whereas EXPOSURE-01 confirms reachability. The two are
+# complementary, never a double-FAIL on the same port: SEG-01 covers only the
+# sensitive ports VPC-01 does NOT already handle.
+#
+# Ports the scanner's VPC-01 check (aws_live_scanner._check_vpc RISKY_PORTS) already
+# FAILs on. Duplicated here (rather than imported) so this module stays boto3-free
+# and self-contained; tests/test_exposure.py asserts SEG01_SENSITIVE_PORTS excludes
+# every one of them so the two checks can never double-FAIL the same rule.
+_VPC01_RISKY_PORTS = frozenset({22, 3389, 1433, 3306, 5432, 27017, 6379,
+                                9200, 9300, 8080, 445})
+# Expected-public web / ALB ports — 0.0.0.0/0 on these ALONE is normal, never a finding.
+WEB_PORTS = frozenset({80, 443, 8443})
+# A single world-open ingress rule spanning at least this many ports is "overly wide".
+WIDE_SPAN = 100
+# The sensitive ports SEG-01 flags = the sensitive set minus what VPC-01 already covers.
+SEG01_SENSITIVE_PORTS: Dict[int, str] = {p: n for p, n in SENSITIVE_PORTS.items()
+                                         if p not in _VPC01_RISKY_PORTS}
+
+
+def _sg_world_ports(sg: dict) -> Set[Port]:
+    """Union of (proto, lo, hi) an SG opens to the whole internet (v4+v6 ingress)."""
+    ing = sg.get("IpPermissions", [])
+    return sg_public_ports(ing, "ipv4") | sg_public_ports(ing, "ipv6")
+
+
+def _span_hits(port_set: Set[Port], port_map: Dict[int, str]) -> List[Tuple[int, str]]:
+    """Ports from ``port_map`` that fall inside any tcp/udp span in ``port_set``,
+    sorted and de-duplicated as ``(port, name)``."""
+    hits = set()
+    for proto, lo, hi in port_set:
+        if proto not in ("tcp", "udp"):
+            continue
+        for port, name in port_map.items():
+            if lo <= port <= hi:
+                hits.add((port, name))
+    return sorted(hits)
+
+
+def _egress_allows_all(sg: dict) -> bool:
+    """True if the SG has an egress rule allowing ALL protocols to 0.0.0.0/0 — the
+    AWS default on every security group (the seam Layer-B flow evidence tightens)."""
+    for perm in sg.get("IpPermissionsEgress", []):
+        if str(perm.get("IpProtocol")) == "-1" and any(
+                r.get("CidrIp") == "0.0.0.0/0" for r in perm.get("IpRanges", [])):
+            return True
+    return False
+
+
+def _perm_grants(perm: dict) -> List[Tuple[str, str, str, int, int]]:
+    """Atomic ``(family, cidr, proto, lo, hi)`` grants for one ingress permission,
+    expanding ``-1`` to an all-protocol/all-port span. Only comparable IpRanges /
+    Ipv6Ranges are returned; sg-references and prefix-lists are excluded (their
+    coverage can't be compared by CIDR)."""
+    proto = str(perm.get("IpProtocol"))
+    if proto == "-1":
+        pk, lo, hi = "all", 0, 65535
+    elif proto in ("tcp", "6"):
+        pk, lo, hi = "tcp", _int(perm.get("FromPort"), 0), _int(perm.get("ToPort"), 65535)
+    elif proto in ("udp", "17"):
+        pk, lo, hi = "udp", _int(perm.get("FromPort"), 0), _int(perm.get("ToPort"), 65535)
+    elif proto in ("icmp", "1", "icmpv6", "58"):
+        pk, lo, hi = "icmp", _int(perm.get("FromPort"), -1), _int(perm.get("ToPort"), -1)
+    else:
+        return []
+    grants = []
+    for r in perm.get("IpRanges", []):
+        if r.get("CidrIp"):
+            grants.append(("ipv4", r["CidrIp"], pk, lo, hi))
+    for r in perm.get("Ipv6Ranges", []):
+        if r.get("CidrIpv6"):
+            grants.append(("ipv6", r["CidrIpv6"], pk, lo, hi))
+    return grants
+
+
+def _grant_covers(b, a) -> bool:
+    """Does atomic grant ``b`` fully cover ``a``? Same family+CIDR, ``b`` protocol
+    covers ``a`` (``all`` covers any), and ``b``'s port span contains ``a``'s."""
+    fb, cb, pb, lob, hib = b
+    fa, ca, pa, loa, hia = a
+    if fb != fa or cb != ca:
+        return False
+    if pb != "all" and pb != pa:
+        return False
+    return lob <= loa and hia <= hib
+
+
+def _covers_all(b_grants, a_grants) -> bool:
+    """Every atomic grant in ``a_grants`` is covered by some grant in ``b_grants``
+    (and ``a_grants`` is non-empty)."""
+    return bool(a_grants) and all(any(_grant_covers(b, a) for b in b_grants)
+                                  for a in a_grants)
+
+
+def microseg_findings(sgs: Optional[List[dict]],
+                      enis: Optional[List[dict]]) -> List[dict]:
+    """Static SG micro-segmentation findings from raw boto3 ``describe_security_groups``
+    + ``describe_network_interfaces`` shapes. Pure: no AWS, no graph, no side effects.
+    Returns a list of ``{id,status,gid,gname,resource,message,attached,...}`` dicts the
+    scanner maps onto ``_add`` + the graph overlay. All reachability is confirmed
+    separately by the 4-gate ``compute_exposure`` (EXPOSURE-01)."""
+    findings: List[dict] = []
+    sgs = sgs or []
+    enis = enis or []
+
+    eni_attached: Set[str] = set()
+    for e in enis:
+        for grp in e.get("Groups", []):
+            if grp.get("GroupId"):
+                eni_attached.add(grp["GroupId"])
+    # An SG referenced by another SG's rule (UserIdGroupPair, incl. cross-VPC
+    # ReferencedGroupId) is NOT "unused" even if it touches no ENI — deleting it would
+    # break the referencing rule. Include both keys so SEG-04 never mis-flags them.
+    ref_by_rule: Set[str] = set()
+    for sg in sgs:
+        for perm in sg.get("IpPermissions", []) + sg.get("IpPermissionsEgress", []):
+            for pair in perm.get("UserIdGroupPairs", []):
+                for k in ("GroupId", "ReferencedGroupId"):
+                    if pair.get(k):
+                        ref_by_rule.add(pair[k])
+    referenced = eni_attached | ref_by_rule
+
+    world = {sg.get("GroupId"): _sg_world_ports(sg) for sg in sgs}
+
+    for sg in sgs:
+        gid = sg.get("GroupId")
+        gname = sg.get("GroupName", "")
+        res = f"{gid} ({gname})"
+        node = f"sg/{gid}"
+        w = world.get(gid) or set()
+        attached = gid in eni_attached
+
+        # SEG-02 — overly-wide world-open range (attached SGs only). sg_public_ports
+        # has already expanded '-1' into full tcp+udp spans, so all-traffic is caught.
+        wide = sorted((p, lo, hi) for (p, lo, hi) in w
+                      if p in ("tcp", "udp") and (hi - lo + 1) >= WIDE_SPAN)
+        seg02 = attached and bool(wide)
+        if seg02:
+            span_txt = ", ".join(f"{p}/{lo}-{hi}" for p, lo, hi in wide)
+            total = sum(hi - lo + 1 for _, lo, hi in wide)
+            sens = _span_hits(set(wide), SENSITIVE_PORTS)
+            sens_txt = ("; includes sensitive " +
+                        ", ".join(f"{n}({p})" for p, n in sens)) if sens else ""
+            findings.append({
+                "id": "SEG-02", "status": "FAIL", "gid": gid, "gname": gname,
+                "resource": res, "attached": attached,
+                "message": (f"Security group {res} opens an overly-wide port range to "
+                            f"0.0.0.0/0 [{span_txt}] ({total} ports){sens_txt} — narrow to "
+                            f"the specific service ports the workload needs | {node}")})
+
+        # SEG-01 — world-open sensitive (non-web) port. Only the ports VPC-01 does NOT
+        # cover, so the two checks never double-FAIL. Suppressed when SEG-02 already
+        # fired for this SG (the wide-range finding subsumes it). Attached SGs only.
+        if attached and not seg02:
+            hits = _span_hits(w, SEG01_SENSITIVE_PORTS)
+            if hits:
+                svc = ", ".join(f"{n}({p})" for p, n in hits)
+                findings.append({
+                    "id": "SEG-01", "status": "FAIL", "gid": gid, "gname": gname,
+                    "resource": res, "attached": attached,
+                    "message": (f"Security group {res} opens sensitive port(s) {svc} to "
+                                f"0.0.0.0/0 — restrict to trusted CIDRs or front the service "
+                                f"with a load balancer (any live internet reachability is "
+                                f"confirmed separately by EXPOSURE-01) | {node}")})
+
+        # SEG-05 — chains to a world-open SG: an ingress sg-reference to a group that is
+        # itself 0.0.0.0/0-open ⇒ internet → that group's host → here (attached target).
+        if attached:
+            chained = set()
+            for perm in sg.get("IpPermissions", []):
+                for pair in perm.get("UserIdGroupPairs", []):
+                    ref = pair.get("ReferencedGroupId") or pair.get("GroupId")
+                    if ref and ref != gid and world.get(ref):
+                        chained.add(ref)
+            if chained:
+                refs = ", ".join(sorted(chained))
+                findings.append({
+                    "id": "SEG-05", "status": "FAIL", "gid": gid, "gname": gname,
+                    "resource": res, "attached": attached, "chain_refs": sorted(chained),
+                    "message": (f"Security group {res} allows ingress from group(s) {refs} that "
+                                f"are themselves open to 0.0.0.0/0 — an internet-reachable host in "
+                                f"the referenced group can pivot here (transitive exposure) | {node}")})
+
+        # SEG-06 — internet-exposed SG that ALSO allows unrestricted egress ⇒ exfil path.
+        # Tightly gated (attached + sensitive world-open inbound + egress-all) to stay
+        # low-noise; the default all-egress on an isolated SG is not flagged here.
+        if attached and _egress_allows_all(sg) and _span_hits(w, SENSITIVE_PORTS):
+            findings.append({
+                "id": "SEG-06", "status": "WARN", "gid": gid, "gname": gname,
+                "resource": res, "attached": attached,
+                "message": (f"Security group {res} is internet-exposed on a sensitive port AND "
+                            f"allows unrestricted egress (all protocols to 0.0.0.0/0) — a "
+                            f"compromised host can exfiltrate freely; restrict egress to the "
+                            f"required destinations | {node}")})
+
+        # SEG-03 — redundant / shadowed ingress rule (hygiene, INFO). Conservative:
+        # flags a rule only when a SINGLE other rule fully covers it (never a union),
+        # keeping the smallest-index rule on an exact duplicate. No false positives on
+        # partial overlaps.
+        perms_in = sg.get("IpPermissions", [])
+        grants = [_perm_grants(p) for p in perms_in]
+        for i, gi in enumerate(grants):
+            if not gi:
+                continue
+            # A rule that ALSO grants access via sg-references or prefix-lists carries
+            # grants _perm_grants does not model (an sg-ref matches by GROUP MEMBERSHIP,
+            # not CIDR — its members' IPs can sit outside any covering CIDR, e.g. a peered
+            # VPC), so a CIDR-only rule can never be proven to "fully cover" it. Skip the
+            # covered-rule to avoid a false 'redundant, remove it' verdict.
+            if perms_in[i].get("UserIdGroupPairs") or perms_in[i].get("PrefixListIds"):
+                continue
+            for j, gj in enumerate(grants):
+                if j == i or not gj:
+                    continue
+                if _covers_all(gj, gi) and (not _covers_all(gi, gj) or j < i):
+                    findings.append({
+                        "id": "SEG-03", "status": "INFO", "gid": gid, "gname": gname,
+                        "resource": res, "attached": attached,
+                        "message": (f"Security group {res} has a redundant/shadowed ingress rule "
+                                    f"(rule #{i + 1} is fully covered by a broader rule) — remove "
+                                    f"it to simplify the policy | {node}")})
+                    break
+
+    # SEG-04 — unused SG (touches no ENI, referenced by no group, not the default SG).
+    # FAIL-OPEN: if ENIs couldn't be enumerated at all we cannot tell unused from
+    # can't-tell, so skip the check entirely rather than flag every SG.
+    if enis:
+        for sg in sgs:
+            gid = sg.get("GroupId")
+            gname = sg.get("GroupName", "")
+            if gname == "default" or gid in referenced:
+                continue
+            findings.append({
+                "id": "SEG-04", "status": "INFO", "gid": gid, "gname": gname,
+                "resource": f"{gid} ({gname})", "attached": False,
+                "message": (f"Security group {gid} ({gname}) is attached to no ENI and referenced "
+                            f"by no other group — safe-to-delete candidate (verify no launch "
+                            f"template / ASG / cross-region use first) | sg/{gid}")})
+    return findings

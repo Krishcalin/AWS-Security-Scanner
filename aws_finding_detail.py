@@ -950,6 +950,38 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Prevent recurrence with an admission/CI check or an SCP-style guardrail that rejects ECS services/tasks created with assignPublicIp=ENABLED.",
         ],
     },
+    "SEG-01": {
+        "risk": "This security group is attached to a live workload and opens a sensitive service port (a database, cache, admin, or cluster-management port) straight to 0.0.0.0/0. Micro-segmentation exists so that only the hosts that need a service can reach it; a world-open sensitive port erases that boundary for this workload, leaving the service one network hop from the entire internet. Even when a route table, NACL, or missing public IP happens to block reachability today (in which case EXPOSURE-01 will not fire), the over-permissive rule is a latent hole: a later public-subnet move, an added Elastic IP, or an internal pivot immediately turns it into a direct data-plane exposure with no further change to the security group.",
+        "impact": "An attacker who can route to the host reaches the sensitive service directly and attempts credential brute force, exploitation of an unauthenticated data store, or protocol abuse -- turning an over-broad rule into data theft or a foothold.",
+        "steps": [
+            "Confirm the offending rule and port: aws ec2 describe-security-groups --group-ids <SG_ID> --query \"SecurityGroups[].IpPermissions[?contains(to_string(IpRanges),'0.0.0.0/0')]\"",
+            "Revoke the world-open ingress on the sensitive port: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
+            "Re-authorize the port only for the specific CIDRs or source security groups that need it: aws ec2 authorize-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr <TRUSTED_CIDR>",
+            "Where the service must be reachable from outside, front it with an internet-facing ALB/NLB plus a WAF and TLS instead of exposing the port on the workload directly.",
+            "Re-scan to confirm the sensitive port is no longer open to 0.0.0.0/0, and prevent recurrence with an AWS Config rule or SCP that denies world-open ingress on database/admin ports.",
+        ],
+    },
+    "SEG-02": {
+        "risk": "This attached security group opens a very wide range of ports (a large contiguous span, or all protocols and all ports via IpProtocol -1) to 0.0.0.0/0. A wide world-open range is almost never intentional at the workload boundary: it exposes every current AND future service the host runs -- including management agents, debug endpoints, and databases that were never meant to be public -- and it defeats any per-port allowlisting because new listeners are exposed the moment they bind. Because sg_public_ports expands -1 into the full tcp and udp range, an all-traffic rule is caught here even when FromPort/ToPort are absent. The blast radius scales with the span: a single rule can render the host's entire network surface internet-facing.",
+        "impact": "Every port the host now or later listens on is internet-reachable through one rule, so any exposed or newly-added service becomes an entry point -- maximizing the attack surface and the chance that one weak listener leads to compromise.",
+        "steps": [
+            "Identify the wide rule: aws ec2 describe-security-groups --group-ids <SG_ID> --query \"SecurityGroups[].IpPermissions\" and note the -1 protocol or the large FromPort-ToPort span open to 0.0.0.0/0",
+            "Revoke the broad rule: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol -1 --port -1 --cidr 0.0.0.0/0 (or use the exact wide tcp/udp range from the previous step)",
+            "Re-authorize only the specific service ports the workload actually needs, scoped to trusted sources: aws ec2 authorize-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr <TRUSTED_CIDR>",
+            "Confirm only the intended ports remain open and none to 0.0.0.0/0 unless they are the expected public web ports fronted by a load balancer.",
+            "Prevent recurrence with an AWS Config managed rule (for example restricted-common-ports or vpc-sg-open-only-to-authorized-ports) or an SCP that rejects all-ports/all-protocol world-open ingress.",
+        ],
+    },
+    "SEG-05": {
+        "risk": "This attached security group allows ingress from another security group that is itself open to 0.0.0.0/0, creating a transitive path from the internet: an attacker who lands on any host in the world-open group can then reach this workload even though this group has no direct 0.0.0.0/0 rule of its own. Security-group references are a common and legitimate pattern (a web tier allowing an app tier), but they silently inherit the exposure of the referenced group -- so a permissive edge SG turns every group that trusts it into a second-hop target. This chaining is easy to miss in a per-rule review because each group looks reasonable in isolation; only following the reference to the world-open source reveals the internet-to-here path.",
+        "impact": "A compromise of any host in the referenced world-open group extends to this workload with no additional exposure on this group, so one over-permissive edge security group becomes a pivot into every group that references it.",
+        "steps": [
+            "Trace the chain: aws ec2 describe-security-groups --group-ids <WORLD_OPEN_SG> --query \"SecurityGroups[].IpPermissions\" to confirm the referenced group is open to 0.0.0.0/0, and note which port this group trusts it on.",
+            "Fix the exposure at the source by restricting the world-open group: aws ec2 revoke-security-group-ingress --group-id <WORLD_OPEN_SG> --protocol tcp --port <PORT> --cidr 0.0.0.0/0 then re-authorize it scoped to trusted CIDRs.",
+            "If this group should not trust that source at all, replace the SG-to-SG reference with a tighter one: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --source-group <WORLD_OPEN_SG> and aws ec2 authorize-security-group-ingress with the specific group or CIDR that legitimately needs access.",
+            "Re-scan to confirm no internet-to-here chain remains and that the referenced group is no longer world-open.",
+        ],
+    },
     "EFS-01": {
         "risk": "Encryption at rest is disabled on this EFS file system, so every file stored on it -- and its automatic backups -- is written to AWS-managed storage in cleartext. EFS is shared network storage often mounted across many EC2/ECS/Lambda workloads and commonly holds application data, uploads, config, and sometimes secrets or regulated records. Without at-rest encryption there is no KMS key governing that data: anyone who can reach the storage layer or an EFS backup, or who gains broad account access, can recover file contents with no cryptographic barrier, and because EFS encryption at rest can only be set at file-system creation, an unencrypted file system stays exposed until its data is migrated to an encrypted one.",
         "impact": "All files and backups on the file system are recoverable in plaintext if storage or a backup is accessed, producing a data breach and failing PCI-DSS 3.4 / HIPAA 164.312(a)(2)(iv) / SOC2 CC6.1 / NIST SC-28 at-rest-encryption requirements.",

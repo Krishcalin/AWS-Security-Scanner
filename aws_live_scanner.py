@@ -67,6 +67,7 @@ import aws_exposure
 import aws_deepplane
 import aws_correlate
 import aws_kube
+import aws_flowlog
 import aws_effperm
 import aws_state
 import aws_unused
@@ -76,7 +77,7 @@ import aws_winvuln
 import aws_finding_detail
 import aws_graph_neptune
 
-VERSION = "2.22.0"
+VERSION = "2.23.0"
 
 # Light-theme CSS for the HTML report (plain string — real braces, no interpolation, so it
 # concatenates cleanly with the f-string body in save_html).
@@ -361,6 +362,10 @@ CHECK_SEVERITY = {
     "KIEM-01": "HIGH", "KIEM-02": "MEDIUM", "KIEM-03": "MEDIUM", "KIEM-04": "HIGH",
     "KSPM-01": "HIGH", "KSPM-02": "HIGH", "KSPM-03": "CRITICAL", "KSPM-04": "MEDIUM",
     "KSPM-05": "MEDIUM", "KSPM-06": "MEDIUM", "KSPM-07": "HIGH",
+    # Phase 3 Layer-A static SG micro-segmentation (config-only, complements EXPOSURE-01)
+    "SEG-01": "MEDIUM", "SEG-02": "HIGH", "SEG-05": "MEDIUM", "SEG-06": "LOW",
+    # Phase 3 Layer-B VPC Flow-Log observed-traffic overlay (opt-in, WARN/INFO only)
+    "FLOW-01": "LOW", "FLOW-02": "LOW",
     "SEC-03": "MEDIUM", "SEC-04": "MEDIUM",
     "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
     "ELC-04": "MEDIUM", "OSR-03": "MEDIUM",
@@ -623,6 +628,15 @@ COMPLIANCE_MAP = {
     "KSPM-05": {"CIS": "4.2.1", "PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
     "KSPM-06": {"CIS": "4.3.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "KSPM-07": {"CIS": "4.2.1", "PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
+    # Phase 3 Layer-A static SG micro-segmentation — CIS AWS 5.2 + NIST 800-53 (in-universe
+    # controls only: SC-7 boundary protection, CM-7 least functionality — NOT AC-4/SC-7(5))
+    "SEG-01": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SEG-02": {"CIS": "5.2", "PCI-DSS": "1.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SEG-05": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SEG-06": {"PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    # Phase 3 Layer-B observed-flow tightening (SC-7 boundary, CM-7 least functionality)
+    "FLOW-01": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "FLOW-02": {"PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
     "SEC-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SEC-04": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "SEC-05": {"CIS": "1.16", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
@@ -738,6 +752,9 @@ REMEDIATION_MAP = {
     "KSPM-07": "Remove the pod escape primitives (privileged / hostNetwork / hostPID / hostIPC / hostPath / dangerous capabilities). Inspect with `kubectl get pod <POD> -n <NS> -o yaml` (audit the cluster: aws eks describe-cluster --name <CLUSTER>), then edit the workload's securityContext to drop privileged and ALL capabilities (add back only what is required), remove host namespaces and hostPath mounts, and redeploy.",
     "KIEM-04": "Scope the IRSA / EKS Pod Identity role so a ServiceAccount cannot reach AWS admin or crown-jewel data. Identify the binding: aws eks list-pod-identity-associations --cluster-name <CLUSTER> (or read the ServiceAccount annotation eks.amazonaws.com/role-arn), then attach a least-privilege permissions boundary or tighten the role policy: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN> and remove the admin/data-access statements. Also restrict which ServiceAccounts may assume it via the role trust policy's OIDC sub condition.",
     "KIEM-01": "Remove the over-broad AWS->Kubernetes cluster-admin grant. If it is an EKS access entry: aws eks list-associated-access-policies --cluster-name <CLUSTER> --principal-arn <PRINCIPAL_ARN> then aws eks disassociate-access-policy --cluster-name <CLUSTER> --principal-arn <PRINCIPAL_ARN> --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy (and delete the entry if it should not exist: aws eks delete-access-entry --cluster-name <CLUSTER> --principal-arn <PRINCIPAL_ARN>). Re-associate a least-privilege policy (AmazonEKSViewPolicy) scoped to the namespaces the principal actually needs. If the grant is a legacy aws-auth mapRoles entry mapping the ARN to system:masters, remove/scope it.",
+    "SEG-01": "Restrict the security group so the sensitive port is not open to 0.0.0.0/0. Revoke the world-open ingress and re-add it scoped to known CIDRs: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0 then aws ec2 authorize-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr <TRUSTED_CIDR>. Prefer fronting the service with an internet-facing ALB/NLB + WAF rather than exposing the port directly.",
+    "SEG-02": "Replace the overly-wide world-open port range with only the specific ports the workload needs. Revoke the broad rule — aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol -1 --port -1 --cidr 0.0.0.0/0 (or the wide tcp/udp range) — then re-authorize just the required service ports scoped to trusted CIDRs: aws ec2 authorize-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr <TRUSTED_CIDR>.",
+    "SEG-05": "Break the transitive exposure: the referenced security group is itself open to 0.0.0.0/0, so an internet-reachable host in it can pivot to this group. Restrict the world-open group first — aws ec2 revoke-security-group-ingress --group-id <WORLD_OPEN_SG> --protocol tcp --port <PORT> --cidr 0.0.0.0/0 — or replace the SG-to-SG reference here with a tighter source (aws ec2 revoke-security-group-ingress then authorize-security-group-ingress with a specific CIDR) so no chain from the internet exists.",
     "CFN-03": "Associate WAF: aws cloudfront update-distribution --id <DIST_ID> --web-acl-id <WAF_ACL_ARN>",
     "CFN-06": "Restrict each custom origin to TLS 1.2: aws cloudfront update-distribution --id <DIST_ID> --if-match <ETAG> --distribution-config <CONFIG with CustomOriginConfig.OriginSslProtocols.Items=[\"TLSv1.2\"]>",
     "LMB-01": "Remove public access: aws lambda remove-permission --function-name <FUNC> --statement-id <SID>",
@@ -1623,6 +1640,14 @@ class AWSLiveScanner:
         self.side_scan_tags: List[str] = []
         self.side_scan_max = 20                     # hard target ceiling
         self.side_scan_secrets = True
+        # ── Phase 3 Layer B: VPC Flow-Log observed-traffic overlay (--flow-logs) ──
+        # Off by default: reading flow-log CONTENT needs an OPTIONAL, resource-scoped
+        # logs:StartQuery grant NOT in the default role, and Insights bills per GB
+        # scanned. When on, it FAILS OPEN to FLOW-00 (never a phantom PASS). The read
+        # is behind an injected seam (self._flow_read), like the K8s seam above.
+        self.flow_logs = False                      # --flow-logs opt-in
+        self.flow_logs_window_hours = aws_flowlog.WINDOW_HOURS
+        self._flow_read = None                      # test/prod seam: (logs, groups, q, s, e) -> rows|None
         self.vuln_db_path: Optional[str] = None
         self._side_scan_report: Optional[Dict] = None
         self._backend_meta: Optional[Dict] = None
@@ -1686,6 +1711,16 @@ class AWSLiveScanner:
         if self._k8s_get is None:
             self._k8s_get = aws_kube.default_k8s_get
         return self._k8s_get
+
+    @property
+    def flow_read(self):
+        """The read-only VPC-Flow-Log seam ``(logs_client, log_groups, query, start_s,
+        end_s) -> rows | None``. Lazily bound to ``aws_flowlog.default_flow_read`` (the
+        only socket-touching fn: runs a CloudWatch Logs Insights start_query→poll loop).
+        Tests assign ``s._flow_read = fake``. Returns None on ANY failure ⇒ fail open."""
+        if self._flow_read is None:
+            self._flow_read = aws_flowlog.default_flow_read
+        return self._flow_read
 
     def _cluster_ctx(self, c: Dict, cname: str) -> Dict:
         creds = None
@@ -8347,6 +8382,186 @@ class AWSLiveScanner:
         pr = e.get("props", {})
         return not pr.get("conditioned") and not pr.get("has_condition")
 
+    def _check_microseg(self, enis, sgs, g):
+        """Layer A — static SG micro-segmentation (SEG-01..06). Pure analysis over the
+        SG/ENI dicts _check_exposure already fetched: ZERO new API and ZERO new IAM.
+        Overlays a config-only SecurityGroup subgraph tagged ``basis='sg-static',
+        verified=False`` and kept OUT of ``aws_correlate.E_PATH`` (never traversed), so
+        the 4-gate reachability-verified EXPOSED_TO edges — and the attack-path score —
+        are never diluted by mere config-level openness. Returns True if any FAIL/WARN
+        fired. Distinct lens from EXPOSURE-01: SEG-* flag an over-permissive SG even when
+        the host is not internet-reachable; SEG-01 covers only the sensitive ports VPC-01
+        does not, so the two never double-FAIL the same rule."""
+        findings = aws_exposure.microseg_findings(sgs, enis)
+        if not findings:
+            return False
+        sg_by_id = {sg.get("GroupId"): sg for sg in (sgs or [])}
+
+        def _sg_node(gid):
+            sg = sg_by_id.get(gid, {})
+            g.add_node(f"sg/{gid}", "SecurityGroup", group_name=sg.get("GroupName", ""),
+                       vpc_id=sg.get("VpcId", ""), basis="sg-static")
+            return f"sg/{gid}"
+
+        emitted = False
+        flagged = set()
+        for f in findings:
+            self._add(f["status"], f["id"], "EXPOSURE", f["resource"], f["message"])
+            if f["status"] in ("FAIL", "WARN"):
+                emitted = True
+            gid = f.get("gid")
+            if not gid:
+                continue
+            _sg_node(gid)
+            flagged.add(f"sg/{gid}")
+            # SEG-05 transitive chain: internet -> world-open SG -> this SG. Config-only
+            # edges (verified=False) in their OWN kinds, never the reachability EXPOSED_TO.
+            for ref in f.get("chain_refs", []):
+                rn = _sg_node(ref)
+                flagged.add(rn)
+                g.add_edge("internet", rn, "WORLD_OPEN", basis="sg-static", verified=False)
+                g.add_edge(rn, f"sg/{gid}", "SG_ALLOWS_FROM", basis="sg-static", verified=False)
+        # Link only ENIs that ALREADY have a graph node (i.e. are internet-exposed) to
+        # their flagged SGs — never auto-create phantom Unknown ENI nodes for the rest.
+        for e in enis:
+            eid = e.get("NetworkInterfaceId")
+            if not eid or g.node(eid) is None:
+                continue
+            for grp in e.get("Groups", []):
+                sn = f"sg/{grp.get('GroupId')}"
+                if sn in flagged:
+                    g.add_edge(eid, sn, "IN_SG", basis="sg-static", verified=False)
+        return emitted
+
+    def _flow_epoch(self) -> float:
+        """Current epoch SECONDS (seam-free; window bounds don't affect determinism of
+        the injected-fake tests, which ignore start/end)."""
+        return datetime.now(timezone.utc).timestamp()
+
+    def _check_flowlog(self, enis, sg_perms, g):
+        """Layer B — VPC Flow-Log observed-traffic overlay (FLOW-00..03). OPT-IN
+        (--flow-logs) + FAIL-OPEN: any missing prereq ⇒ a single FLOW-00 INFO naming it,
+        never a phantom PASS and never a crash. Reads flow-log CONTENT through the injected
+        Insights seam (self.flow_read), gated by an OPTIONAL resource-scoped logs:StartQuery
+        grant absent from the default role. Annotates the 4-gate EXPOSED_TO edges with
+        observed evidence and adds an ObservedCidr overlay kept OUT of aws_correlate.E_PATH."""
+        if not self.flow_logs:
+            return False
+        try:
+            fls = self._client("ec2").describe_flow_logs().get("FlowLogs", [])
+        except Exception as e:
+            self._add("INFO", "FLOW-00", "EXPOSURE", "flow-logs",
+                      f"VPC Flow-Log overlay unavailable: describe_flow_logs failed ({e})")
+            return False
+
+        readable = [(fl, r) for fl in fls for r in [aws_flowlog.flow_readability(fl)]
+                    if r["attemptable"]]
+        if not readable:
+            reasons = sorted({aws_flowlog.flow_readability(fl)["reason"] for fl in fls
+                              if aws_flowlog.flow_readability(fl)["reason"]})
+            why = "; ".join(reasons) if reasons else ("no flow logs enabled — enable VPC Flow "
+                                                      "Logs to a CloudWatch log group")
+            self._add("INFO", "FLOW-00", "EXPOSURE", "flow-logs",
+                      f"VPC Flow-Log observed-traffic overlay skipped — {why}")
+            return False
+
+        fields = aws_flowlog.parse_log_format(readable[0][0].get("LogFormat"))
+        if not aws_flowlog.required_fields_present(fields):
+            self._add("INFO", "FLOW-00", "EXPOSURE", "flow-logs",
+                      "VPC Flow-Log overlay skipped — custom LogFormat is missing required "
+                      "fields (need srcaddr, dstaddr, dstport, action, interface-id)")
+            return False
+
+        log_groups = sorted({fl.get("LogGroupName") for fl, _ in readable if fl.get("LogGroupName")})
+        has_accept = any(r["has_accept"] for _, r in readable)
+        has_reject = any(r["has_reject"] for _, r in readable)
+        q = aws_flowlog.build_queries(fields)
+        start_s, end_s = aws_flowlog.window_bounds(self._flow_epoch(),
+                                                   hours=self.flow_logs_window_hours)
+        logs = self._client("logs")
+
+        def _read(query):
+            try:
+                return self.flow_read(logs, log_groups, query, start_s, end_s)
+            except Exception:
+                return None
+
+        scope_rows = _read(q["scopedown"]) if has_accept else None
+        accept_rows = _read(q["accept_set"]) if has_accept else None
+        reject_rows = _read(q["reject"]) if has_reject else None
+
+        attempted = []
+        if has_accept:
+            attempted += [scope_rows, accept_rows]
+        if has_reject:
+            attempted += [reject_rows]
+        if attempted and all(not x for x in attempted):     # every attempted read None or []
+            if all(x is None for x in attempted):
+                why = ("Insights query returned no result (logs:StartQuery/GetQueryResults "
+                       "denied, or the query timed out) — grant the optional resource-scoped "
+                       "logs:StartQuery on the flow-log log group to enable this overlay")
+            else:
+                why = (f"no observed flows in the last {self.flow_logs_window_hours}h window "
+                       f"— cannot evidence-tighten the security groups")
+            self._add("INFO", "FLOW-00", "EXPOSURE", "flow-logs",
+                      f"VPC Flow-Log overlay produced no evidence — {why}")
+            return False
+
+        world_open = aws_flowlog.world_open_single_ports(enis, sg_perms)
+        wtxt = f"over the last {self.flow_logs_window_hours}h"
+        emitted = False
+
+        def _exposed_edge(eni):
+            return any(e["dst"] == eni for e in g.out_edges("internet", {"EXPOSED_TO"}))
+
+        # FLOW-01 — evidence-based scope-down of a 0.0.0.0/0 rule
+        for rec in aws_flowlog.recommend_scopedown(scope_rows or [], world_open):
+            emitted = True
+            eni, port = rec["eni"], rec["port"]
+            cidrs = ", ".join(rec["cidrs"])
+            self._add("WARN", "FLOW-01", "EXPOSURE", eni,
+                      f"ENI {eni} allows port {port} from 0.0.0.0/0 but only {rec['flows']} "
+                      f"accepted flow(s) from {len(rec['cidrs'])} source /24(s) were observed "
+                      f"{wtxt} — scope the rule to {cidrs} | {eni}")
+            if g.node(eni) is None:
+                continue
+            if _exposed_edge(eni):
+                g.add_edge("internet", eni, "EXPOSED_TO", observed=True,
+                           observed_src_cidrs=rec["cidrs"],
+                           observed_window_h=self.flow_logs_window_hours)
+            for cidr in rec["cidrs"]:
+                cn = f"cidr:{cidr}"
+                g.add_node(cn, "ObservedCidr", cidr=cidr)
+                g.add_edge(cn, eni, "OBSERVED_FLOW", dstport=port, flows=rec["flows"],
+                           action="ACCEPT", basis="flow-observed",
+                           window_h=self.flow_logs_window_hours)
+
+        # FLOW-02 — SG-allowed world-open port with ZERO accepts on an active ENI
+        zero_by_eni: Dict[str, list] = {}
+        for rec in aws_flowlog.unused_allowed_ports(accept_rows or [], world_open):
+            emitted = True
+            eni, port = rec["eni"], rec["port"]
+            zero_by_eni.setdefault(eni, []).append(port)
+            self._add("WARN", "FLOW-02", "EXPOSURE", eni,
+                      f"ENI {eni} allows port {port} from 0.0.0.0/0 but observed ZERO accepted "
+                      f"flows on it {wtxt} while the ENI was otherwise active — candidate for "
+                      f"removal (confirm over a representative window first) | {eni}")
+        for eni, ports in zero_by_eni.items():
+            if g.node(eni) is not None and _exposed_edge(eni):
+                g.add_edge("internet", eni, "EXPOSED_TO",
+                           observed_zero_flow_ports=sorted(ports),
+                           observed_window_h=self.flow_logs_window_hours)
+
+        # FLOW-03 — top blocked-inbound talkers (recon signal), one summary INFO
+        talkers = aws_flowlog.top_reject_talkers(reject_rows or [], srcfield=q["srcfield"], top=5)
+        if talkers:
+            summ = ", ".join(f"{t['src']} ({t['attempts']} rejects/{t['ports_probed']} ports)"
+                             for t in talkers)
+            self._add("INFO", "FLOW-03", "EXPOSURE", "flow-logs",
+                      f"Top blocked-inbound source(s) {wtxt}: {summ} — high distinct-port "
+                      f"counts indicate active scanning/recon against this account")
+        return emitted
+
     def _check_exposure(self):
         self._section_header("EXPOSURE")
         self._log("Effective internet reachability (public IP AND igw route AND SG "
@@ -8498,6 +8713,17 @@ class AWSLiveScanner:
                     self._add("FAIL", "EXPOSURE-02", "EXPOSURE", res,
                               f"Internet-reachable on {family} [{summary}] "
                               f"(public IP: {ipk}) | {res}")
+
+        # Layer A — static SG micro-segmentation (SEG-01..06): config-only, no new grant,
+        # runs on the already-fetched SG/ENI data + overlays a verified=False SG subgraph.
+        if self._check_microseg(enis, sgs, g):
+            any_finding = True
+
+        # Layer B — VPC Flow-Log observed-traffic overlay (FLOW-00..03): OPT-IN (--flow-logs),
+        # fail-open, reads flow-log content via the injected Insights seam + annotates the
+        # 4-gate EXPOSED_TO edges with observed evidence (no new traversable attack edges).
+        if self._check_flowlog(enis, sg_perms, g):
+            any_finding = True
 
         # Phase 7 — L7 reachability: internet-facing ALB/NLB/classic-ELB/CloudFront/API-GW
         # -> LoadBalancer/front node + TARGETS edges. Runs HERE (after IAMPRIVESC's graph
@@ -10953,6 +11179,7 @@ def _apply_phase6_config(sc, args) -> None:
     sc.side_scan_max = max(1, min(args.side_scan_max, 500))
     sc.side_scan_secrets = args.side_scan_secrets
     sc.vuln_db_path = args.vuln_db
+    sc.flow_logs = getattr(args, "flow_logs", False)
 
 
 def _export_graph_neptune(scanner, args) -> None:
@@ -11249,6 +11476,14 @@ examples:
     parser.add_argument(
         "--no-side-scan-secrets", dest="side_scan_secrets", action="store_false",
         help="Skip the on-disk secret scan during side-scan (CVEs only)",
+    )
+    parser.add_argument(
+        "--flow-logs", dest="flow_logs", action="store_true",
+        help="Enable the VPC Flow-Log observed-traffic overlay (FLOW-01/02/03): "
+             "evidence-based security-group scope-down, unused-port, and reject-talker "
+             "analysis. Off by default — needs an OPTIONAL resource-scoped logs:StartQuery "
+             "grant (not in the default role) plus CloudWatch-Logs-delivered flow logs, and "
+             "CloudWatch Logs Insights bills per GB scanned. Fails open to a FLOW-00 note.",
     )
     parser.add_argument(
         "--vuln-db", dest="vuln_db", metavar="FILE",

@@ -4,6 +4,68 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.23.0] — 2026
+
+**VPC Flow-Log network graph + SG/NACL micro-segmentation (Phase-3 · agentless coverage).**
+A two-layer network-segmentation slice: an always-on, config-only static analysis of security
+groups, plus an opt-in observed-traffic overlay that reads VPC Flow Logs to make evidence-based
+tightening recommendations. `aws_correlate.py` is unchanged — the SG and observed-flow overlays
+stay OUT of the traversable attack-path edge set, preserving the 4-gate reachability low-FP
+guarantee.
+
+### Added — Layer A: static SG micro-segmentation (`SEG-01..06`, always-on, ZERO new grant)
+- Pure detection in `aws_exposure.py` (`microseg_findings`) over the SG/ENI dicts `_check_exposure`
+  already fetches — no new API, no new IAM. A **distinct lens** from the 4-gate `compute_exposure`
+  oracle: it flags an over-permissive SG even when the host is not internet-reachable, and covers
+  only the sensitive ports **VPC-01 does not**, so the two never double-FAIL the same rule.
+  - **SEG-01** world-open sensitive/non-web port on an attached SG (web-allowlist: 80/443/8443 to
+    0.0.0.0/0 is not a finding); **SEG-02** overly-wide world-open range (`≥100` ports or `-1`
+    all-traffic); **SEG-03** redundant/shadowed ingress rule (conservative single-rule cover, no
+    FP on partial overlap); **SEG-04** unused SG (no ENI, no rule reference — fail-open when ENIs
+    can't be enumerated); **SEG-05** SG-chaining to a world-open SG (transitive internet path);
+    **SEG-06** internet-exposed SG that also allows unrestricted egress (exfil path).
+- Graph overlay: config-only `SecurityGroup` nodes + `IN_SG` / `WORLD_OPEN` / `SG_ALLOWS_FROM`
+  edges tagged `basis='sg-static', verified=False` and kept OUT of `aws_correlate.E_PATH` (never
+  traversed) so config-level openness is never mistaken for reachability-verified exposure. The
+  `SecurityGroup` node kind routes to `aws_remediate`'s `sg_scope_ingress` fix.
+
+### Added — Layer B: VPC Flow-Log observed-traffic overlay (`FLOW-00..03`, opt-in `--flow-logs`)
+- New boto3-free module `aws_flowlog.py`: the flow-log readability gate, `LogFormat` parser +
+  required-field check, server-side CloudWatch Logs Insights query builders (`parse @message` →
+  `stats … by`, prefers `pkt-srcaddr` for the true origin behind NAT/EKS), the world-open-port
+  join, and the three deciders. The single socket-touching function `default_flow_read`
+  (`start_query` → poll `get_query_results` → flattened rows) is the **injected seam**
+  (`self._flow_read`), mirroring the KSPM K8s seam; tests replace it with canned Insights rows.
+  - **FLOW-01** evidence-based scope-down (a 0.0.0.0/0 rule whose accepts collapse to a few /24s
+    → "scope to these prefixes"); **FLOW-02** allowed-but-unused world-open port on an active ENI
+    (removal candidate, WARN only, window stated); **FLOW-03** top blocked-inbound reject/recon
+    talkers; **FLOW-00** fail-open INFO naming the exact missing prereq (flow logs off /
+    S3-or-Firehose destination / custom LogFormat missing fields / `logs:StartQuery` denied /
+    query timeout / empty window) — never a phantom PASS.
+- Graph overlay: `ObservedCidr` nodes + `OBSERVED_FLOW` edges, and **annotation** of the existing
+  4-gate `internet -EXPOSED_TO-> eni` edges with `observed` / `observed_src_cidrs` /
+  `observed_zero_flow_ports` — evidence markers on the verified edges, never a parallel/traversable
+  path (also kept out of `E_PATH`). Emitted inline in `_check_exposure` (post-clobber; no stash/replay).
+- **Access model:** reading flow-log CONTENT is a NEW, OPTIONAL, resource-scoped grant
+  (`logs:StartQuery` + `logs:GetQueryResults`) absent from both `SecurityAudit` and `ViewOnlyAccess`
+  — it crosses the read-only-of-CONFIG line by action class, so it is opt-in, default-OFF, and
+  windowed/server-side-aggregated to bound the per-GB-scanned Insights cost. The default scanner
+  role is unchanged; a commented `CnappFlowLogInsights` opt-in block is added to
+  `deploy/cnapp-scanner-role.yaml`. The S3-delivered path (needs `s3:GetObject`) is deliberately
+  not supported. New `--flow-logs` CLI flag.
+
+### Compliance / metadata
+- `SEG-01/02/05` land in all four maps (`CHECK_SEVERITY`, `COMPLIANCE_MAP`, `REMEDIATION_MAP`,
+  `aws_finding_detail.FINDING_DETAIL`); `SEG-06` and `FLOW-01/02` carry compliance (WARN). Every
+  new NIST mapping uses an **in-universe** control (SC-7 / CM-7 / SI-4) — the frozen 38-control
+  crosswalk universe is untouched.
+
+### Tests
+- `tests/test_exposure.py` — SEG-01..06 FP/FN catalog (incl. the web-ALB-is-not-a-finding case,
+  VPC-01 dedup, partial-overlap-not-redundant, fail-open) + scanner-wiring & graph-overlay tests.
+- `tests/test_phase3_flowlog.py` — `aws_flowlog` pure core, `default_flow_read` (fake logs client,
+  timeout→stop_query), and `_check_flowlog` FLOW-00..03 + graph-annotation + full fail-open matrix.
+
 ## [2.22.0] — 2026
 
 **Agentless KSPM + KIEM — CIS-EKS + Kubernetes RBAC via the read-only Kubernetes API, folded
