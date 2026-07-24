@@ -13,7 +13,7 @@ FastAPI/pydantic are optional deploy-time deps. Importing this module without th
 raises a clear error rather than breaking test collection of the pure backend.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Union
 # NOTE: deliberately NO `from __future__ import annotations` here — with PEP 563
 # the route annotations become strings and FastAPI's get_type_hints cannot resolve
 # the request models defined inside create_app(), which silently demotes the body
@@ -103,6 +103,10 @@ def create_app(service, *, current_role=lambda: ""):
 
     class CopilotReq(BaseModel):
         question: str = Field(min_length=1, max_length=2000)
+
+    class DetectionReq(BaseModel):
+        events: Union[dict, List[dict]]              # one raw detection or a batch
+        source: str = Field(min_length=1)            # guardduty | securityhub | cloudtrail
 
     # ── onboarding / validation (admin, private control plane) ────────────────
     @app.post("/accounts", status_code=201, dependencies=[Depends(require("admin"))])
@@ -261,6 +265,41 @@ def create_app(service, *, current_role=lambda: ""):
     def org_vulns(min_band: Optional[str] = None, kev: Optional[bool] = None,
                   on_path: Optional[bool] = None, limit: int = 2000):
         return service.org_vulns(min_band=min_band, kev=kev, on_path=on_path, limit=limit)
+
+    # ── CDR-lite: streaming detection ingest + reachability-ranked incidents ────
+    @app.post("/accounts/{account_id}/detections", dependencies=[Depends(require("admin"))])
+    def detections_ingest(account_id: str, body: DetectionReq):
+        try:
+            return service.ingest_detection(account_id, events=body.events, source=body.source)
+        except ValueError as e:                     # unknown source / cross-account ARN
+            raise HTTPException(status_code=400, detail=str(e))
+        except RuntimeError as e:                   # detection ingest requires a state store
+            raise HTTPException(status_code=503, detail=str(e))
+
+    @app.get("/accounts/{account_id}/detections", dependencies=[Depends(require("viewer"))])
+    def detections_list(account_id: str, source: Optional[str] = None,
+                        incidents_only: bool = False, limit: int = 2000):
+        return service.list_detections(account_id, source=source,
+                                       incidents_only=incidents_only, limit=limit)
+
+    @app.get("/accounts/{account_id}/incidents", dependencies=[Depends(require("viewer"))])
+    def incidents_list(account_id: str, limit: int = 200):
+        return service.list_incidents(account_id, limit=limit)
+
+    @app.post("/accounts/{account_id}/detections/refresh",
+              dependencies=[Depends(require("admin"))])
+    def detections_refresh(account_id: str):
+        return service.refresh_detection_escalation(account_id)
+
+    @app.get("/org/incidents", dependencies=[Depends(require("viewer"))])
+    def org_incidents(limit: int = 200):
+        return service.org_incidents(limit=limit)
+
+    # ── cloud-forensics timeline (viewer; read-only CloudTrail, correlated) ─────
+    @app.get("/accounts/{account_id}/forensics/timeline",
+             dependencies=[Depends(require("viewer"))])
+    def forensics_timeline(account_id: str, resource: str, limit: int = 200):
+        return service.forensics_timeline(account_id, resource, limit=limit)
 
     # ── compliance breadth (viewer; reference data + derived scorecards) ───────
     @app.get("/compliance/frameworks", dependencies=[Depends(require("viewer"))])

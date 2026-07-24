@@ -70,6 +70,7 @@ import aws_kube
 import aws_flowlog
 import aws_secrets
 import aws_leastpriv
+import aws_aispm
 import aws_effperm
 import aws_state
 import aws_unused
@@ -79,7 +80,7 @@ import aws_winvuln
 import aws_finding_detail
 import aws_graph_neptune
 
-VERSION = "2.25.0"
+VERSION = "2.26.0"
 
 # Light-theme CSS for the HTML report (plain string — real braces, no interpolation, so it
 # concatenates cleanly with the f-string body in save_html).
@@ -319,6 +320,8 @@ CHECK_SEVERITY = {
     "ACM-04": "HIGH", "ACM-05": "MEDIUM",
     "SM-01": "HIGH", "SM-02": "MEDIUM", "SM-03": "MEDIUM", "SM-04": "MEDIUM",
     "SM-05": "HIGH", "SM-06": "MEDIUM", "SM-07": "MEDIUM",
+    # AI-SPM pillar: execution-role blast radius + network isolation + fused AI attack path
+    "AISPM-01": "HIGH", "AISPM-02": "HIGH", "AISPM-03": "MEDIUM", "AIPATH-01": "CRITICAL",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
     "COG-05": "HIGH", "COG-06": "CRITICAL",
     "AGW2-01": "MEDIUM", "AGW2-02": "HIGH", "AGW2-03": "LOW",
@@ -546,6 +549,11 @@ COMPLIANCE_MAP = {
     "SM-05": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "SM-06": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SM-07": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    # AI-SPM pillar (NIST reused from the frozen 38-control universe: AC-6/AC-3/SC-7)
+    "AISPM-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "AISPM-02": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "AISPM-03": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "AIPATH-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     # Cognito
     "COG-01": {"CIS": "1.5", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
     "COG-02": {"PCI-DSS": "8.3.6", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "IA-5(1)"},
@@ -834,6 +842,10 @@ REMEDIATION_MAP = {
     "SM-05": "Restrict Studio egress to the VPC (deploy interface VPC endpoints first, else apps lose connectivity): aws sagemaker update-domain --domain-id <DOMAIN_ID> --app-network-access-type VpcOnly",
     "SM-06": "KMS key is immutable on an existing domain — recreate with a CMK: aws sagemaker create-domain --domain-name <NAME> --auth-mode IAM --vpc-id <VPC> --subnet-ids <SUBNET_IDS> --kms-key-id <KMS_KEY_ARN> --default-user-settings file://user-settings.json",
     "SM-07": "KmsKeyId is immutable on an endpoint-config — create a new config with a CMK then repoint the endpoint: aws sagemaker create-endpoint-config --endpoint-config-name <NEW_CFG> --kms-key-id <KMS_KEY_ARN> --production-variants file://variants.json ; aws sagemaker update-endpoint --endpoint-name <EP> --endpoint-config-name <NEW_CFG>",
+    "AISPM-01": "Scope the AI execution role to least privilege — drop admin/privesc grants (iam:PassRole/*, *:*): aws iam put-role-policy --role-name <AI_EXEC_ROLE> --policy-name aispm-least-priv --policy-document file://scoped.json",
+    "AISPM-02": "Restrict the AI execution role's data reach to only the buckets/tables the model needs (remove wildcard s3:GetObject/* grants): aws iam put-role-policy --role-name <AI_EXEC_ROLE> --policy-name aispm-data-scope --policy-document file://data-scope.json",
+    "AISPM-03": "Isolate the AI resource on a private VPC subnet and disable direct internet egress: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --subnet-id <SUBNET> ; for a Studio domain: aws sagemaker update-domain --domain-id <DOMAIN_ID> --app-network-access-type VpcOnly",
+    "AIPATH-01": "Break the fused AI attack path — isolate the resource and scope its role: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --direct-internet-access Disabled ; then remove the execution role's crown-data/privesc grants (see AISPM-01/AISPM-02)",
     "COG-01": "Require MFA: aws cognito-idp set-user-pool-mfa-config --user-pool-id <POOL_ID> --mfa-configuration ON --software-token-mfa-configuration Enabled=true",
     "COG-02": "Strengthen password policy: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --policies PasswordPolicy='{MinimumLength=12,RequireUppercase=true,RequireLowercase=true,RequireNumbers=true,RequireSymbols=true}'",
     "COG-03": "Enable threat protection: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --user-pool-add-ons AdvancedSecurityMode=ENFORCED",
@@ -1703,6 +1715,11 @@ class AWSLiveScanner:
         self._identity_fusion_done = False          # IDENTITY-01 is global (IAM); run once
         self._l7_read_error = False                 # any L7 describe denied -> suppress phantom PASS
         self._l7_lb_dns: Dict[str, str] = {}        # DNS->LB node id, ACCUMULATED across regions
+        # AI-SPM: AI resources (SageMaker notebooks/domains, Bedrock agents) stashed pre-clobber
+        # in BEDROCK_AGENTS#16 / SAGEMAKER#33 (name, execution role ARN, normalized network flags,
+        # data_bearing) and fused onto the graph in DATA#42 (_collect_aispm) — post-clobber, where
+        # principals + CAN_READ_DATA edges are complete. No AWS re-fetch, no aws_correlate change.
+        self._aispm_resources: List[dict] = []
 
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
@@ -5074,6 +5091,15 @@ class AWSLiveScanner:
 
             # AGT-02 — IAM execution role least privilege
             role_arn = detail.get("agentResourceRoleArn", "")
+            # AI-SPM stash — agent execution-role blast radius (no VPC surface -> not net-checkable)
+            self._aispm_resources.append({
+                "kind": "BedrockAgent", "name": aname,
+                "arn": detail.get("agentArn"),
+                "role_arn": role_arn or None,
+                "network_checkable": False,
+                "network": {},
+                "data_bearing": False,
+            })
             if not role_arn:
                 self._add("FAIL", "AGT-02", "BEDROCK_AGENTS", aname,
                           f"No execution role found for agent '{aname}'")
@@ -7443,6 +7469,20 @@ class AWSLiveScanner:
                 self._add("FAIL", "SM-04", "SAGEMAKER", name,
                           f"Not attached to a VPC subnet | {name}")
 
+            # AI-SPM stash (fused post-clobber in DATA#42) — role blast radius + egress
+            self._aispm_resources.append({
+                "kind": "SageMakerNotebook", "name": name,
+                "arn": detail.get("NotebookInstanceArn"),
+                "role_arn": detail.get("RoleArn"),
+                "network_checkable": True,
+                "network": {
+                    "direct_internet": detail.get("DirectInternetAccess", "Enabled") == "Enabled",
+                    "in_vpc": bool(detail.get("SubnetId")),
+                    "public_egress": False,
+                },
+                "data_bearing": False,
+            })
+
         # SM-05/06 Studio domains + SM-07 endpoint configs (run independently of notebooks)
         self._check_sagemaker_domains(sm)
         self._check_sagemaker_endpoint_configs(sm)
@@ -7490,6 +7530,21 @@ class AWSLiveScanner:
                 self._add("FAIL", "SM-06", "SAGEMAKER", dname,
                           f"Studio home-EFS uses the AWS-owned key (no CMK) — home dirs hold "
                           f"notebooks/source/cached credentials | {dname}")
+
+            # AI-SPM stash — Studio domain is a data-bearing crown (home-EFS holds source/creds)
+            net_type = detail.get("AppNetworkAccessType", "PublicInternetOnly")
+            self._aispm_resources.append({
+                "kind": "SageMakerDomain", "name": dname,
+                "arn": detail.get("DomainArn"),
+                "role_arn": (detail.get("DefaultUserSettings") or {}).get("ExecutionRole"),
+                "network_checkable": True,
+                "network": {
+                    "direct_internet": False,
+                    "in_vpc": net_type != "PublicInternetOnly",
+                    "public_egress": net_type == "PublicInternetOnly",
+                },
+                "data_bearing": True,
+            })
 
     def _check_sagemaker_endpoint_configs(self, sm):
         """SM-07 — inference endpoint-config storage CMK. Inline-paginate own try/except.
@@ -9718,6 +9773,7 @@ class AWSLiveScanner:
         self._collect_secrets_dspm(g)               # Slice 1 AWS-resident secrets
         self._correlate_flagship(g)                 # crown_nodes(g) now spans S3 + DSPM
         self._check_kiem_irsa(g)                     # Phase 3 KIEM-04 (independent of crown)
+        self._collect_aispm(g)                       # AI-SPM: fuse AI execution-role blast radius
 
     def _collect_macie(self, g) -> set:
         crown: set = set()
@@ -9977,6 +10033,95 @@ class AWSLiveScanner:
         self._dspm_fsx(g, roles)
         self._dspm_timestream(g, roles)
         self._dspm_opensearch(g, roles)
+
+    # ── AI-SPM: fuse AI execution-role blast radius onto the graph (post-clobber) ──
+    def _collect_aispm(self, g):
+        """AI-SPM pillar. For each AI resource stashed pre-clobber (SageMaker
+        notebooks/Studio domains, Bedrock agents), emit the resource node + a
+        HAS_ROLE edge to its execution role, then classify that role's blast
+        radius: AISPM-01 (privilege-escalation capable), AISPM-02 (reaches a crown
+        datastore — a graph query over the CAN_READ_DATA edges the DSPM/Macie passes
+        already added earlier in DATA), AISPM-03 (no network isolation), and the
+        fused AIPATH-01 (a network-exposed AI resource whose role can escalate or
+        read crown data — the AI analogue of the flagship toxic path). Runs LAST in
+        DATA#42 (post-clobber) so principals + CAN_READ_DATA edges are complete and
+        it cannot perturb the flagship/KIEM crown sets; reuses existing edge kinds +
+        prop-based crown_nodes -> NO aws_correlate change. Fail-open: an
+        unresolvable principal fetch or per-resource error -> AISPM-00 INFO, never a
+        phantom PASS."""
+        if g is None or not self._aispm_resources:
+            return
+        try:
+            principals = {(p.get("arn") or "").lower(): p
+                          for p in self._get_iam_principals()}
+        except Exception:
+            principals = None
+        if principals is None:
+            self._add("INFO", "AISPM-00", "DATA", "aispm",
+                      "Could not enumerate IAM principals — AI execution-role posture "
+                      "left unevaluated (no phantom pass)")
+            principals = {}
+        for res in self._aispm_resources:
+            try:
+                self._aispm_emit(g, res, principals)
+            except Exception as e:
+                self._add("INFO", "AISPM-00", "DATA", res.get("name", "ai"),
+                          f"AI-SPM evaluation error for {res.get('name')}: {e}")
+
+    def _aispm_emit(self, g, res, principals):
+        """Emit one AI resource's node + HAS_ROLE anchor + AISPM findings. Static
+        w.r.t. AWS (operates only on the stashed dict + cached principals + graph)."""
+        name = res.get("name", "ai")
+        kind = res.get("kind", "AIResource")
+        role_arn = res.get("role_arn")
+        node_id = res.get("arn") or f"aispm:{kind}:{name}"
+        exposed = aws_aispm.ai_network_exposed(res) if res.get("network_checkable") else False
+        g.add_node(node_id, kind, name=name, ai_resource=True, network_exposed=exposed)
+        if aws_aispm.is_ai_crown(res):
+            # a data-bearing AI asset (Studio home-EFS) is itself a crown terminal
+            g.add_node(node_id, kind, DataStore=True, crown_jewel=True, sensitivity="ai-data")
+
+        # AISPM-03 — network isolation (SageMaker resources only; agents have no VPC surface)
+        if res.get("network_checkable"):
+            if exposed:
+                self._add("FAIL", "AISPM-03", "DATA", name,
+                          f"AI resource {name} ({kind}) has no network isolation — direct "
+                          f"internet egress bypasses VPC egress controls | {name}")
+            else:
+                self._add("PASS", "AISPM-03", "DATA", name,
+                          f"AI resource {name} is network-isolated (VPC-only) | {name}")
+
+        # HAS_ROLE anchor + execution-role blast-radius classification
+        privesc = crown = None
+        if role_arn:
+            g.add_edge(node_id, role_arn, "HAS_ROLE", basis="ai-execution-role")
+            prin = principals.get(role_arn.lower())
+            if prin is None:
+                self._add("INFO", "AISPM-00", "DATA", name,
+                          f"AI execution role {role_arn.split('/')[-1]} not enumerable — role "
+                          f"posture for {name} left unevaluated | {name}")
+            else:
+                privesc = aws_aispm.role_privesc_capable(prin.get("statements", []))
+                crown = aws_aispm.role_reaches_crown(g, role_arn)
+                rolename = role_arn.split("/")[-1]
+                if privesc:
+                    self._add("FAIL", "AISPM-01", "DATA", name,
+                              f"AI execution role {rolename} for {name} is privilege-escalation "
+                              f"capable: {privesc} — compromise of the model/agent inherits it "
+                              f"| {name}")
+                if crown:
+                    self._add("FAIL", "AISPM-02", "DATA", name,
+                              f"AI execution role {rolename} for {name} can read crown-jewel data "
+                              f"{crown} (CAN_READ_DATA) — the model has a standing line to "
+                              f"sensitive data | {name}")
+
+        # AIPATH-01 — fused: network-exposed AI resource whose role escalates or reads crown
+        if exposed and (privesc or crown):
+            leg = "escalate privilege" if privesc else f"read crown data {crown}"
+            self._add("FAIL", "AIPATH-01", "DATA", name,
+                      f"FUSED AI ATTACK PATH: network-exposed {kind} {name} -> execution role "
+                      f"can {leg}. Compromise or prompt-injection yields powerful credentials "
+                      f"plus an open egress channel. | {name}")
 
     def _dspm_emit(self, g, arn, kind, name, cj, public, encrypted, roles, read_actions,
                    read_probe=None):

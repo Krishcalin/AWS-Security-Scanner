@@ -4,6 +4,65 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.26.0] — 2026
+
+**Slice 3: AI-SPM pillar + CDR-lite streaming detection ingest + cloud-forensics timeline.**
+Three defense-in-depth capabilities, each built on the existing attack-path graph with
+**`aws_correlate.py` byte-unchanged** (proven by a test): they reuse the prop-based `crown_nodes`,
+the `HAS_ROLE` / `CAN_READ_DATA` / `THREAT_ON` edge kinds, and the ingest reachability stack —
+never a new special-case. All new NIST tags stay inside the frozen 38-control universe
+(`AC-6`/`AC-3`/`SC-7`/`SI-4`), and every new read stays inside the read-only-of-config contract.
+
+### Added — AI-SPM pillar (`aws_aispm.py`, pure)
+- Turns the scattered Bedrock/SageMaker config checks into a coherent posture on the *blast radius
+  of the identity an AI resource runs as*: `role_privesc_capable` (execution role can escalate),
+  `role_reaches_crown` (a graph query over the `CAN_READ_DATA` edges the DSPM/Macie passes emit),
+  `ai_network_exposed`, `is_ai_crown`.
+- `_collect_aispm` runs **last in the DATA section (post-clobber)** off resources stashed pre-clobber
+  in the SageMaker/Bedrock-agent sections: emits `AISPM-01` (privesc-capable role, HIGH/AC-6),
+  `AISPM-02` (role reaches crown data, HIGH/AC-3), `AISPM-03` (no network isolation, MEDIUM/SC-7),
+  and the fused **`AIPATH-01`** (CRITICAL/AC-6+SC-28 — a network-exposed AI resource whose role can
+  escalate or read crown data). Emits a `HAS_ROLE` anchor so the correlate engine treats a
+  compromised model/agent as a real hop; marks data-bearing Studio domains as crown terminals.
+  Fail-open `AISPM-00` INFO when principals can't be enumerated (never a phantom PASS). No new AWS
+  calls (reuses cached IAM principals + already-fetched describe payloads).
+
+### Added — CDR-lite streaming detection ingest (`aws_cdr.py`, pure)
+- A hosted, fail-open plane that folds live detection events onto the account's stored
+  `graph_full` as `THREAT_ON` annotations and ranks each by **actual attack-path reachability**.
+  Three normalizers — `normalize_guardduty` (reuses `map_guardduty_finding`; binds AccessKey
+  detections to the real IAM principal), `normalize_asff` (Security Hub; skips
+  ARCHIVED/SUPPRESSED/RESOLVED/[SAMPLE]), `normalize_cloudtrail_anomaly` (root-usage /
+  security-tooling-tamper / credential-creation / denied — lighting the reserved THREAT-02
+  semantics). `compute_detection_verdicts` re-runs `enumerate_paths` reusing
+  `aws_ingest._ingest_predicates`, so a detection ON an internet→crown/admin path or directly on a
+  crown store escalates to an **incident** — a detection on an isolated node never does (honest;
+  no phantom escalation), and it collapses honestly when there is no scan yet.
+- `cnapp_service.ingest_detection` / `list_detections` / `list_incidents` / `org_incidents` /
+  `refresh_detection_escalation`; synthetic `THREAT-ING`/`THREAT-ING-KEV` catalog entries so
+  incidents route through the existing on-attack-path connector rules. `cnapp_api`:
+  `POST /accounts/{id}/detections` (admin), `GET …/detections`, `GET …/incidents`,
+  `POST …/detections/refresh`, `GET /org/incidents`. New `cdr_detections` store
+  (`SCHEMA_VERSION 5→6`, additive, sqlite + Postgres twins; dedup by id, preserves `first_seen`;
+  cross-account ARN → 400).
+
+### Added — cloud-forensics timeline (`aws_forensics.py`, pure)
+- `build_timeline` reconstructs who-did-what-when around a resource from read-only CloudTrail
+  management events and correlates it with the graph / findings / live CDR detections, flagging
+  per-event anomalies with the same signals the CDR plane uses. Injected `trail_reader` seam
+  (default `default_trail_lookup`, the only socket touch — `cloudtrail:LookupEvents`, mgmt-events
+  only). `cnapp_service.forensics_timeline` + `GET /accounts/{id}/forensics/timeline` (viewer).
+  INFO-only: `FORENSIC-00` is a fail-open marker (seam absent/denied → name the prereq, never a
+  phantom clean timeline) and stays out of every scanner metadata map.
+
+### Verified
+- Read-only adversarial-verification pass over the whole slice fixed **2 confirmed defects**
+  (both with regression tests): a GuardDuty AccessKey detection could false-join to a non-principal
+  IAM node (instance-profile/policy/group) and fabricate a phantom incident — now bound to genuine
+  principals only; and `refresh_detection_escalation` dropped `node_key`, so an initially-unmapped
+  GuardDuty detection could never be re-mapped once a later scan graphed its resource — `node_key`
+  is now persisted and restored.
+
 ## [2.25.0] — 2026
 
 **Slice 2: grounded-RAG security copilot (scoped v1).** A copilot that answers natural-language

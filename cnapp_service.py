@@ -25,6 +25,8 @@ from typing import Callable, Dict, List, Optional, Protocol
 
 import aws_copilot
 import aws_ingest
+import aws_cdr
+import aws_forensics
 import aws_sidescan
 import aws_state
 import cnapp_connectors as cc
@@ -135,12 +137,18 @@ class PlatformService:
                  connector_id_gen: Callable[[], str] = lambda: "conn-" + secrets.token_hex(6),
                  crosswalk=None, state=None, vuln_bundle=None,
                  copilot_llm: Optional[Callable] = None,
+                 trail_reader: Optional[Callable] = None,
                  clock: Callable[[], int] = None):
         import time
         # Optional grounded-copilot LLM seam (system, question, context) -> str. None (default)
         # -> the offline EXTRACTIVE answerer (no network, no hallucination). Inject a Claude/
         # Bedrock caller to get fluent answers; the context is always the retrieved scan corpus.
         self._copilot_llm = copilot_llm
+        # Optional cloud-forensics seam (account_id, resource_arn, start, end, limit) -> list of
+        # CloudTrail event dicts | None. None (default) -> the timeline is dormant (FORENSIC-00),
+        # never a phantom clean timeline. A deployment wires aws_forensics.default_trail_lookup
+        # behind its injected client_factory (read-only cloudtrail:LookupEvents, mgmt events only).
+        self._trail_reader = trail_reader
         self.registry = registry
         self.results = results
         self.hub_role_arn = hub_role_arn
@@ -597,6 +605,154 @@ class PlatformService:
         out.sort(key=lambda r: -(r.get("priority_score") or 0))
         return out
 
+    # ── CDR-lite: streaming detection ingest (GuardDuty / ASFF / CloudTrail) ─────
+    _CDR_NORMALIZERS = {"guardduty": aws_cdr.normalize_guardduty,
+                        "securityhub": aws_cdr.normalize_asff,
+                        "cloudtrail": aws_cdr.normalize_cloudtrail_anomaly}
+
+    def ingest_detection(self, account_id: str, *, events, source: str) -> dict:
+        """Fold live detection events onto the account's stored ``graph_full`` as
+        THREAT_ON annotations and rank each by ACTUAL attack-path reachability. A
+        detection ON an internet→crown/admin path or directly on a crown store is
+        escalated to an incident. PUSH-only and read-only on the scanned account
+        (works off the uploaded events + stored graph). ``source`` picks the
+        normalizer. A malformed event is noted, never crashes. Raises ValueError on
+        a cross-account detection ARN (→ 400)."""
+        state = self._require_state()
+        now = self.clock()
+        norm = self._CDR_NORMALIZERS.get(source)
+        if norm is None:
+            raise ValueError(f"unknown detection source {source!r}")
+        raw = events if isinstance(events, list) else [events]
+        detections, notes = [], []
+        for ev in raw:
+            try:
+                d = norm(ev)
+            except Exception as e:                       # malformed row -> note, never crash
+                notes.append(f"skipped malformed {source} event: {e}")
+                continue
+            if d is not None:
+                detections.append(d)
+        graph_dict = self.get_graph(account_id)
+        # cross-account ARN -> ValueError -> 400 (one account can't fold onto another's node)
+        verdicts, incidents, _ = aws_cdr.compute_detection_verdicts(
+            graph_dict, detections, account=account_id)
+        with state._be.transaction():
+            for v in verdicts.values():
+                state.upsert_cdr_detection(account_id, v, now)
+        return {"accepted": len(raw), "normalized": len(detections),
+                "mapped": sum(1 for v in verdicts.values()
+                              if v["mapping_status"] == "resolved"),
+                "incident_count": len(incidents), "incidents": incidents[:20],
+                "notes": notes, "top": state.list_cdr_detections(account_id, limit=10)}
+
+    def list_detections(self, account_id: str, **filters) -> List[dict]:
+        # Reads fail OPEN: no state store yet = nothing streamed (empty), never a 500.
+        return [] if self.state is None else self.state.list_cdr_detections(account_id, **filters)
+
+    def list_incidents(self, account_id: str, limit: int = 200) -> List[dict]:
+        return ([] if self.state is None
+                else self.state.list_cdr_detections(account_id, incidents_only=True, limit=limit))
+
+    def org_incidents(self, limit: int = 200) -> List[dict]:
+        """Org-wide ranked incidents, each row account-tagged (portfolio SOC view)."""
+        if self.state is None:
+            return []
+        out: List[dict] = []
+        for a in self.registry.list_accounts(onboarding_status="active"):
+            for r in self.state.list_cdr_detections(a["account_id"], incidents_only=True,
+                                                     limit=limit):
+                r["account"] = a["account_id"]
+                out.append(r)
+        out.sort(key=lambda r: -(r.get("priority_score") or 0))
+        return out[:limit]
+
+    def refresh_detection_escalation(self, account_id: str) -> dict:
+        """Re-run detection reachability against the latest ``graph_full`` (after a
+        native scan lands a fresh graph) — re-escalates / de-escalates stored
+        detections without re-POSTing events. Fail-open on no state / no detections."""
+        if self.state is None:
+            return {"reevaluated": 0}
+        state = self.state
+        rows = state.list_cdr_detections(account_id, limit=100000)
+        if not rows:
+            return {"reevaluated": 0}
+        dets = [aws_cdr.NormalizedDetection(
+                    id=r["detection_id"], source=r["source"], type=r.get("type") or "",
+                    title=r.get("title") or "", severity=r.get("severity") or 0.0,
+                    band=r.get("band") or "Unknown", node_kind=r.get("node_kind"),
+                    node_key=r.get("node_key"),      # restored so unmapped GuardDuty/EC2/IAM
+                    resource_arn=(r["node_id"]       # detections can re-map once the graph grows
+                                  if str(r.get("node_id") or "").startswith("arn:") else None))
+                for r in rows]
+        graph_dict = self.get_graph(account_id)
+        verdicts, incidents, _ = aws_cdr.compute_detection_verdicts(
+            graph_dict, dets, account=account_id)
+        now = self.clock()
+        with state._be.transaction():
+            for v in verdicts.values():
+                state.upsert_cdr_detection(account_id, v, now)
+        return {"reevaluated": len(verdicts), "incident_count": len(incidents)}
+
+    def _detection_finding_entries(self, account_id: str) -> List[dict]:
+        """Two synthetic finding_catalog entries from the account's escalated CDR
+        incidents — ``THREAT-ING-KEV`` (CRITICAL) / ``THREAT-ING`` (HIGH) — so live
+        detections route through the existing on_attack_path connector rules + the
+        Findings UI. Check-level (per-detection detail rides ``affected``); the
+        ``NIST 800-53`` compliance key is intentionally OUTSIDE COMPLIANCE_MAP, so it
+        is exempt from the frozen-universe test (like the vuln-ingest entries)."""
+        if self.state is None:
+            return []
+        incidents = self.state.list_cdr_detections(account_id, incidents_only=True, limit=5000)
+        if not incidents:
+            return []
+        crit = [r for r in incidents if (r.get("priority_band") or "").upper() == "CRITICAL"]
+        rest = [r for r in incidents if (r.get("priority_band") or "").upper() != "CRITICAL"]
+        buckets = (("THREAT-ING-KEV", "CRITICAL", crit,
+                    "on a critical internet→crown attack path"),
+                   ("THREAT-ING", "HIGH", rest, "on an attack path or a crown datastore"))
+        out: List[dict] = []
+        for check_id, band, rows, blurb in buckets:
+            if not rows:
+                continue
+            out.append({
+                "check_id": check_id, "section": "Threats", "severity": band,
+                "status": "FAIL", "compliance": {"NIST 800-53": "SI-4"},
+                "remediation_cmd": ("Triage the live detection, contain the affected resource, "
+                                    "and rotate any credentials it held; re-run the scan to "
+                                    "confirm the path is severed."),
+                "risk": (f"{len(rows)} live detection(s) {blurb} — active adversary signal fused "
+                         f"onto the attack-path graph, demanding triage now."),
+                "impact": "A live detection on a reachable, crown-bound resource is an in-progress "
+                          "incident, not a hypothetical misconfiguration.",
+                "steps": [f"Open /accounts/{account_id}/incidents (ranked by reachability).",
+                          "Contain the affected resource and rotate its credentials.",
+                          "Re-scan to confirm the attack path is severed."],
+                "affected": [f"{r['source']}:{str(r.get('node_id') or '').split('/')[-1]}"
+                             for r in rows][:200],
+                "count": len(rows), "distinct": len(rows),
+            })
+        return out
+
+    # ── cloud-forensics timeline (read-only CloudTrail, correlated) ─────────────
+    def forensics_timeline(self, account_id: str, resource_arn: str, *,
+                           start=None, end=None, limit: int = 200) -> dict:
+        """Reconstruct the who-did-what-when timeline around ``resource_arn`` from
+        read-only CloudTrail management events and correlate it with the account's
+        attack-path graph, findings, and live CDR detections. Fail-open: no seam
+        wired / seam error → a FORENSIC-00 'unavailable' result (never a phantom
+        clean timeline). Read-only of config + management-event lookup only."""
+        events = None
+        if self._trail_reader is not None:
+            try:
+                events = self._trail_reader(account_id, resource_arn, start, end, limit)
+            except Exception:
+                events = None
+        return aws_forensics.build_timeline(
+            events, resource_arn=resource_arn, graph_dict=self.get_graph(account_id),
+            catalog=self.get_finding_catalog(account_id),
+            detections=self.list_detections(account_id))
+
     # ── connector framework (Phase-2 workflow plane) ────────────────────────────
     def _require_connectors(self):
         if self.connectors is None:
@@ -704,6 +860,9 @@ class PlatformService:
         # (VULN-ING-KEV / VULN-ING) so they route through the existing VULN-* +
         # on_attack_path rules — SEPARATE check_ids so ingested/native never mix.
         for e in self._ingested_finding_entries(account_id):
+            findings.append(cc.to_finding(e, account_id, True))
+        # CDR-lite: escalated live detections ride the same on_attack_path rule engine
+        for e in self._detection_finding_entries(account_id):
             findings.append(cc.to_finding(e, account_id, True))
         coverage = {(account_id, r.get("check_id")) for r in p.get("results", [])
                     if r.get("check_id")}
