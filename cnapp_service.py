@@ -53,6 +53,7 @@ class ScanSpec:
 
 
 DEFAULT_SPEC = ScanSpec()
+DEFAULT_WORKSPACE = "ws-default"      # the tenant every pre-multitenancy account is bound to
 
 
 class ResultStore(Protocol):
@@ -135,7 +136,7 @@ class PlatformService:
                  job_id_gen: Callable[[], str] = lambda: "job-" + secrets.token_hex(8),
                  connectors=None, http_post: Optional[Callable] = None, hub_base: str = "",
                  connector_id_gen: Callable[[], str] = lambda: "conn-" + secrets.token_hex(6),
-                 crosswalk=None, state=None, vuln_bundle=None,
+                 crosswalk=None, state=None, vuln_bundle=None, workspaces=None, metering=None,
                  copilot_llm: Optional[Callable] = None,
                  trail_reader: Optional[Callable] = None,
                  clock: Callable[[], int] = None):
@@ -168,6 +169,8 @@ class PlatformService:
         self.connector_id_gen = connector_id_gen
         self._crosswalk = crosswalk             # None -> lazy bundled compliance_crosswalk
         self.state = state                      # an aws_state.StateStore (or None) — lifecycle/drift/trend
+        self.workspaces = workspaces            # a cnapp_workspace.WorkspaceStore (or None -> single-tenant)
+        self.metering = metering                # a cnapp_metering.MeteringStore (or None -> no metering)
         # ── external-vuln ingest plane (Phase-2 capstone) ─────────────────────
         # The SAME {records/osv, epss, kev, exploits} bundle the native side-scan
         # uses, so an ingested CVE gets byte-identical KEV/EPSS. Fail-open: None →
@@ -190,23 +193,32 @@ class PlatformService:
 
     # ── onboarding ────────────────────────────────────────────────────────────
     def init_onboarding(self, account_id: str, *, region: str = "us-east-1",
-                        method: str = "single", alias: str = "") -> dict:
+                        method: str = "single", alias: str = "",
+                        workspace_id: Optional[str] = None) -> dict:
         """Mint the ExternalId (stored only as a secret ref), register the account
-        as 'pending', and return the CloudFormation launch URL + CLI.
+        as 'pending', bind it to the caller's workspace, and return the CloudFormation
+        launch URL + CLI.
 
         IDEMPOTENT: re-onboarding an account that already has an ExternalId REUSES
         it (never rotates) — rotating would invalidate the already-deployed CFN
         trust and silently break a live connection. Only a dedicated rotate flow
-        should mint a new ExternalId."""
+        should mint a new ExternalId. The upsert + workspace binding are atomic; a
+        second tenant onboarding the same real AWS account raises ValueError (the API
+        maps it to 409) — one account belongs to exactly one workspace."""
         now = self.clock()
+        ws = workspace_id or DEFAULT_WORKSPACE
         existing = self.registry.get_account(account_id)
         if existing and existing.get("external_id_ref"):
             ref = existing["external_id_ref"]
             external_id = cnapp_onboarding.resolve_external_id(
                 ref, secret_reader=self.secret_reader, region=region) or ""
             # refresh only non-secret config; preserve lifecycle + the ExternalId
-            self.registry.upsert_account(account_id, now_epoch=now, alias=(alias or None),
-                                         onboarding_method=method, enabled_regions=[region])
+            with self.registry._be.transaction():
+                self.registry.upsert_account(account_id, now_epoch=now, alias=(alias or None),
+                                             onboarding_method=method, enabled_regions=[region])
+                self.registry.bind_account(account_id, ws, now)
+            self._meter("account.onboarded", event_key=account_id, account_id=account_id,
+                        workspace_id=ws, meta={"method": method})
             return {"account_id": account_id, "role_name": cnapp_onboarding.ROLE_NAME,
                     "external_id_ref": ref, "reused": True,
                     "cfn_launch_url": cnapp_onboarding.build_launch_url(
@@ -216,10 +228,14 @@ class PlatformService:
         init = cnapp_onboarding.init_onboarding(
             account_id, region, id_gen=self.id_gen, secret_writer=self.secret_writer,
             hub_role_arn=self.hub_role_arn, cfn_template_url=self.cfn_template_url)
-        self.registry.upsert_account(
-            account_id, now_epoch=now, alias=alias, onboarding_method=method,
-            role_arn=self._role_arn(account_id), external_id_ref=init.external_id_ref,
-            enabled_regions=[region])
+        with self.registry._be.transaction():
+            self.registry.upsert_account(
+                account_id, now_epoch=now, alias=alias, onboarding_method=method,
+                role_arn=self._role_arn(account_id), external_id_ref=init.external_id_ref,
+                enabled_regions=[region])
+            self.registry.bind_account(account_id, ws, now)
+        self._meter("account.onboarded", event_key=account_id, account_id=account_id,
+                    workspace_id=ws, meta={"method": method})
         return {"account_id": account_id, "role_name": init.role_name,
                 "external_id_ref": init.external_id_ref, "reused": False,
                 "cfn_launch_url": init.cfn_launch_url, "cli": init.cli}
@@ -250,9 +266,29 @@ class PlatformService:
         return result.to_dict()
 
     # ── inventory ─────────────────────────────────────────────────────────────
-    def list_accounts(self, *, onboarding_status=None, health=None) -> List[dict]:
+    def _scoped_ws(self, workspace_id: Optional[str]) -> Optional[str]:
+        """Workspace filtering only engages when a WorkspaceStore is wired (multi-tenant).
+        Single-tenant deployments (and every pre-tenancy test) pass no store ⇒ the filter is
+        dropped ⇒ global, byte-identical behavior."""
+        return workspace_id if self.workspaces is not None else None
+
+    def account_in_scope(self, account_id: str, *, workspace_id: Optional[str] = None,
+                         is_superadmin: bool = False) -> bool:
+        """Tenant-isolation gate: may a caller scoped to ``workspace_id`` touch this
+        account? A platform superadmin, an unscoped/single-tenant call (``workspace_id``
+        None, or no WorkspaceStore wired), always may. Otherwise the account's bound
+        workspace must equal the caller's — a legacy/unbound account counts as
+        ``ws-default``. The API maps a False here to a 404 (existence-hiding)."""
+        if is_superadmin or workspace_id is None or self.workspaces is None:
+            return True
+        acct_ws = self.workspaces.workspace_of_account(account_id) or DEFAULT_WORKSPACE
+        return acct_ws == workspace_id
+
+    def list_accounts(self, *, onboarding_status=None, health=None,
+                      workspace_id: Optional[str] = None) -> List[dict]:
         rows = [_mask_account(a) for a in
-                self.registry.list_accounts(onboarding_status=onboarding_status, health=health)]
+                self.registry.list_accounts(onboarding_status=onboarding_status, health=health,
+                                            workspace_id=self._scoped_ws(workspace_id))]
         # Enrich each row with the latest scan's posture (the registry holds only
         # lifecycle/health metadata). The console's accounts list shows a posture
         # column, drawn from the SAME source get_account_summary/org_overview use;
@@ -269,15 +305,22 @@ class PlatformService:
 
     # ── scanning ──────────────────────────────────────────────────────────────
     def trigger_scan(self, account_ids: Optional[List[str]] = None, *, all: bool = False,
-                     spec: ScanSpec = DEFAULT_SPEC) -> List[str]:
+                     spec: ScanSpec = DEFAULT_SPEC, workspace_id: Optional[str] = None,
+                     is_superadmin: bool = False) -> List[str]:
         """Enqueue scan jobs for ACTIVE accounts only. Returns the new job ids.
-        (The worker drains the queue; this never blocks on a scan.)"""
+        (The worker drains the queue; this never blocks on a scan.) Tenant-scoped: an
+        ``all`` sweep covers only the caller's workspace; explicit ids outside the
+        caller's workspace are silently skipped (never scan another tenant's account)."""
         if all:
             targets = [a["account_id"] for a in
-                       self.registry.list_accounts(onboarding_status="active")]
+                       self.registry.list_accounts(onboarding_status="active",
+                                                   workspace_id=self._scoped_ws(workspace_id))]
         else:
             targets = []
             for aid in (account_ids or []):
+                if not self.account_in_scope(aid, workspace_id=workspace_id,
+                                             is_superadmin=is_superadmin):
+                    continue
                 a = self.registry.get_account(aid)
                 if a and a.get("onboarding_status") == "active":
                     targets.append(aid)
@@ -307,14 +350,16 @@ class PlatformService:
                                      scan_schedule=(schedule or "off"))
         return _mask_account(self.registry.get_account(account_id))
 
-    def schedule_due_scans(self) -> List[str]:
+    def schedule_due_scans(self, *, workspace_id: Optional[str] = None) -> List[str]:
         """Enqueue a scan for every active account whose cadence has elapsed and which
         has no queued/running job. Returns the new job ids. The whole read+enqueue is
-        one transaction so a concurrent tick can't double-enqueue (single-process)."""
+        one transaction so a concurrent tick can't double-enqueue (single-process).
+        ``workspace_id`` scopes the sweep to one tenant (None => every tenant — the
+        platform cron); the filter only engages when a WorkspaceStore is wired."""
         now = self.clock()
         job_ids: List[str] = []
         with self.registry._be.transaction():
-            for a in self.registry.scans_due(now):
+            for a in self.registry.scans_due(now, workspace_id=self._scoped_ws(workspace_id)):
                 jid = self.job_id_gen()
                 self.registry.record_scan_job(a["account_id"], jid, "queued", now_epoch=now)
                 job_ids.append(jid)
@@ -400,10 +445,11 @@ class PlatformService:
                                           chokes=p.get("choke_points", []))
         return aws_copilot.answer(question, corpus, llm=self._copilot_llm)
 
-    def org_copilot_answer(self, question: str) -> dict:
-        """Copilot grounded in the merged corpus across ACTIVE accounts (portfolio view)."""
+    def org_copilot_answer(self, question: str, *, workspace_id: Optional[str] = None) -> dict:
+        """Copilot grounded in the merged corpus across ACTIVE accounts (portfolio view).
+        Scoped to ``workspace_id`` (a tenant); None => every workspace (superadmin/single-tenant)."""
         findings, paths, chokes = [], [], []
-        for a in self.registry.list_accounts(onboarding_status="active"):
+        for a in self.registry.list_accounts(onboarding_status="active", workspace_id=self._scoped_ws(workspace_id)):
             p = self.results.get_latest(a["account_id"])
             if not p:
                 continue
@@ -435,20 +481,20 @@ class PlatformService:
             "choke_points": p.get("choke_points", [])[:10],
         }
 
-    def org_overview(self) -> dict:
+    def org_overview(self, *, workspace_id: Optional[str] = None) -> dict:
         """Roll every active account's latest scan into an org posture summary.
         (Metadata aggregation across per-account results; cross-account graph-union
         correlation is a separate follow-on — see docs.)"""
         payloads = [self.results.get_latest(a["account_id"])
-                    for a in self.registry.list_accounts(onboarding_status="active")]
+                    for a in self.registry.list_accounts(onboarding_status="active", workspace_id=self._scoped_ws(workspace_id))]
         return aggregate_overview([p for p in payloads if p])
 
-    def org_findings(self) -> List[dict]:
+    def org_findings(self, *, workspace_id: Optional[str] = None) -> List[dict]:
         """Flat, severity-ranked finding_catalog across all active accounts, each
         entry tagged with its account — the org-wide Findings queue."""
         order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "": 4}
         out: List[dict] = []
-        for a in self.registry.list_accounts(onboarding_status="active"):
+        for a in self.registry.list_accounts(onboarding_status="active", workspace_id=self._scoped_ws(workspace_id)):
             p = self.results.get_latest(a["account_id"]) or {}
             for e in p.get("finding_catalog", []):
                 tagged = dict(e)
@@ -593,12 +639,12 @@ class PlatformService:
             became, gone = self._recompute_account_verdicts(account_id, graph_dict)
         return {"became_reachable": became, "became_unreachable": gone}
 
-    def org_vulns(self, **filters) -> List[dict]:
+    def org_vulns(self, *, workspace_id: Optional[str] = None, **filters) -> List[dict]:
         """Org-wide ranked owned inventory, each row account-tagged."""
         if self.state is None:
             return []
         out: List[dict] = []
-        for a in self.registry.list_accounts(onboarding_status="active"):
+        for a in self.registry.list_accounts(onboarding_status="active", workspace_id=self._scoped_ws(workspace_id)):
             for r in self.state.list_ingested_vulns(a["account_id"], **filters):
                 r["account"] = a["account_id"]
                 out.append(r)
@@ -654,12 +700,12 @@ class PlatformService:
         return ([] if self.state is None
                 else self.state.list_cdr_detections(account_id, incidents_only=True, limit=limit))
 
-    def org_incidents(self, limit: int = 200) -> List[dict]:
+    def org_incidents(self, limit: int = 200, *, workspace_id: Optional[str] = None) -> List[dict]:
         """Org-wide ranked incidents, each row account-tagged (portfolio SOC view)."""
         if self.state is None:
             return []
         out: List[dict] = []
-        for a in self.registry.list_accounts(onboarding_status="active"):
+        for a in self.registry.list_accounts(onboarding_status="active", workspace_id=self._scoped_ws(workspace_id)):
             for r in self.state.list_cdr_detections(a["account_id"], incidents_only=True,
                                                      limit=limit):
                 r["account"] = a["account_id"]
@@ -733,6 +779,97 @@ class PlatformService:
                 "count": len(rows), "distinct": len(rows),
             })
         return out
+
+    # ── multi-tenancy control plane (Phase-4 Slice-1) ───────────────────────────
+    def _require_workspaces(self):
+        if self.workspaces is None:
+            raise RuntimeError("workspace management requires a WorkspaceStore; none configured")
+        return self.workspaces
+
+    def create_workspace(self, workspace_id: str, *, name: str = "", slug: Optional[str] = None,
+                         plan: Optional[str] = None) -> dict:
+        return self._require_workspaces().create_workspace(
+            workspace_id, name=name, slug=slug, plan=plan, now_epoch=self.clock())
+
+    def list_workspaces(self) -> List[dict]:
+        return [] if self.workspaces is None else self.workspaces.list_workspaces()
+
+    def get_workspace(self, workspace_id: str) -> Optional[dict]:
+        return None if self.workspaces is None else self.workspaces.get_workspace(workspace_id)
+
+    def update_workspace(self, workspace_id: str, **fields) -> dict:
+        return self._require_workspaces().update_workspace(
+            workspace_id, now_epoch=self.clock(), **fields)
+
+    def delete_workspace(self, workspace_id: str) -> None:
+        self._require_workspaces().delete_workspace(workspace_id)
+
+    def list_members(self, workspace_id: str) -> List[dict]:
+        return [] if self.workspaces is None else self.workspaces.list_members(workspace_id)
+
+    def add_member(self, workspace_id: str, principal: str, *, role: str = "viewer",
+                   added_by: str = "") -> dict:
+        return self._require_workspaces().add_member(
+            workspace_id, principal, role=role, added_by=added_by, now_epoch=self.clock())
+
+    def remove_member(self, workspace_id: str, principal: str) -> None:
+        self._require_workspaces().remove_member(workspace_id, principal)
+
+    def list_platform_admins(self) -> List[str]:
+        return [] if self.workspaces is None else self.workspaces.list_platform_admins()
+
+    def add_platform_admin(self, principal: str) -> None:
+        self._require_workspaces().add_platform_admin(principal, now_epoch=self.clock())
+
+    def remove_platform_admin(self, principal: str) -> None:
+        self._require_workspaces().remove_platform_admin(principal)
+
+    # ── usage metering (billable = accounts under management) ───────────────────
+    def _meter(self, metric: str, *, event_key: str, account_id: Optional[str] = None,
+               workspace_id: Optional[str] = None, quantity: int = 1,
+               meta: Optional[dict] = None) -> None:
+        """Record one usage event, fail-open + no-op when no MeteringStore is wired.
+        Resolves the billing workspace from the account when not supplied."""
+        if self.metering is None:
+            return
+        ws = workspace_id
+        if ws is None and account_id and self.workspaces is not None:
+            ws = self.workspaces.workspace_of_account(account_id)
+        self.metering.record(ws or DEFAULT_WORKSPACE, metric, event_key=event_key,
+                             now_epoch=self.clock(), account_id=account_id,
+                             quantity=quantity, meta=meta)
+
+    def meter_scan_completed(self, account_id: str, job_id: str, *, findings: int = 0,
+                             resources: int = 0) -> None:
+        """Metering hook the worker calls after a 'done' scan (fail-open): the billable
+        ``account.active`` gauge (this account was under management this period) plus a
+        ``scan.completed`` observability event."""
+        if self.metering is None:
+            return
+        period = aws_state.make_scan_ts(self.clock()).iso[:7]
+        self._meter("scan.completed", event_key=job_id, account_id=account_id,
+                    meta={"findings": findings, "resources": resources})
+        self._meter("account.active", event_key=f"{account_id}:{period}", account_id=account_id)
+
+    def usage_summary(self, workspace_id: str, *, period: Optional[str] = None) -> List[dict]:
+        return [] if self.metering is None else self.metering.usage_summary(
+            workspace_id, period=period)
+
+    def usage_history(self, workspace_id: str, *, from_period=None, to_period=None) -> List[dict]:
+        return [] if self.metering is None else self.metering.usage_history(
+            workspace_id, from_period=from_period, to_period=to_period)
+
+    def usage_rollup_all(self, *, period: Optional[str] = None) -> List[dict]:
+        return [] if self.metering is None else self.metering.usage_rollup_all(period=period)
+
+    def reconcile_usage(self) -> dict:
+        """Re-derive billable events from durable tables (revenue integrity under
+        fail-open). No-op when metering/workspaces aren't wired."""
+        if self.metering is None:
+            return {"reconciled": False}
+        import cnapp_metering
+        return cnapp_metering.reconcile(self.metering, self.registry, self.workspaces,
+                                        now_epoch=self.clock())
 
     # ── cloud-forensics timeline (read-only CloudTrail, correlated) ─────────────
     def forensics_timeline(self, account_id: str, resource_arn: str, *,
@@ -1050,13 +1187,14 @@ class PlatformService:
                 "crosswalk_version": digest, "generated_from": "NIST-800-53-Rev5",
                 "min_confidence": min_confidence}
 
-    def org_compliance(self, *, min_confidence: Optional[str] = None) -> dict:
+    def org_compliance(self, *, min_confidence: Optional[str] = None,
+                       workspace_id: Optional[str] = None) -> dict:
         """Portfolio roll-up of native + derived scorecards across active accounts
         (a SUM of controls, mirroring the console's existing org merge — read org
         numbers as portfolio totals, not a dedup)."""
         merged_native: Dict[str, dict] = {}
         merged_derived: Dict[str, dict] = {}
-        for a in self.registry.list_accounts(onboarding_status="active"):
+        for a in self.registry.list_accounts(onboarding_status="active", workspace_id=self._scoped_ws(workspace_id)):
             comp = self.get_account_compliance(a["account_id"], min_confidence=min_confidence)
             if not comp:
                 continue

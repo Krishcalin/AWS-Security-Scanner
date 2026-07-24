@@ -12,7 +12,7 @@ remediation, and code-to-cloud mapping. It ships as the live scanner + its
 gold `#f5b53d`, critical red `#ff3b5c`. Python module names stay `aws_*`/`cnapp_*` —
 no code rename.) The repo also includes a separate pre-deploy IaC static scanner.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **OverWatch — Live CNAPP** (`aws_live_scanner.py` v2.26.0) -- live AWS account audit via boto3 (**296 severity-mapped checks across 44 sections**, **222 actionable checks each with a full risk/impact/step-by-step remediation write-up**, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure + L7 reachability engine**, **deep-plane ingestion + flagship attack paths**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing + least-privilege policy generation**, **agentless side-scan CWPP** (Linux OS-pkg + language-dep + container-image + Lambda + managed-engine-EOL + Windows-via-SSM), **agentless KSPM/KIEM** (CIS-EKS + K8s RBAC + IRSA cross-plane) + **Fargate task fusion** + **VPC Flow-Log micro-segmentation**, **tag-based DSPM** (12 datastore kinds) + **AWS-resident secrets posture**, **AI-SPM** (AI execution-role blast radius fused into the graph), **CDR-lite streaming detection ingest → reachability-ranked incidents** + **cloud-forensics timeline**, a **grounded-RAG copilot** (answers only from the scan's own corpus), **external-vuln ingest** (SARIF/CycloneDX/SPDX → reachability re-rank), **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**, **hosted multi-account onboarding + live Postgres backend**). The full 8-phase vuln/misconfig detection roadmap (`docs/OVERWATCH_VULN_ROADMAP.md`) is COMPLETE; per-release history is in `CHANGELOG.md`.
+- **OverWatch — Live CNAPP** (`aws_live_scanner.py` v2.26.0) -- live AWS account audit via boto3 (**296 severity-mapped checks across 44 sections**, **222 actionable checks each with a full risk/impact/step-by-step remediation write-up**, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure + L7 reachability engine**, **deep-plane ingestion + flagship attack paths**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing + least-privilege policy generation**, **agentless side-scan CWPP** (Linux OS-pkg + language-dep + container-image + Lambda + managed-engine-EOL + Windows-via-SSM), **agentless KSPM/KIEM** (CIS-EKS + K8s RBAC + IRSA cross-plane) + **Fargate task fusion** + **VPC Flow-Log micro-segmentation**, **tag-based DSPM** (12 datastore kinds) + **AWS-resident secrets posture**, **AI-SPM** (AI execution-role blast radius fused into the graph), **CDR-lite streaming detection ingest → reachability-ranked incidents** + **cloud-forensics timeline**, a **grounded-RAG copilot** (answers only from the scan's own corpus), **external-vuln ingest** (SARIF/CycloneDX/SPDX → reachability re-rank), **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**, **hosted multi-account onboarding + live Postgres backend**, **multi-tenancy / workspaces + workspace-scoped RBAC + usage metering (MSSP)**). The full 8-phase vuln/misconfig detection roadmap (`docs/OVERWATCH_VULN_ROADMAP.md`) is COMPLETE; per-release history is in `CHANGELOG.md`. (Note: `aws_live_scanner.VERSION` tracks the whole platform, incl. hosted-backend releases; the scanner engine itself is unchanged by the multi-tenancy slice.)
 - **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
 - **Exposure Oracle** (`aws_exposure.py`) -- pure, dependency-free internet-reachability core (SG ∩ stateless NACL ∩ IGW route ∩ public-IP)
 - **Deep-Plane Core** (`aws_deepplane.py`) -- pure Inspector/Macie/GuardDuty/Access-Analyzer parsers + the CAN_READ_DATA object-probe matcher
@@ -341,10 +341,20 @@ no boto3/psycopg/FastAPI in the pure path).
   builds the assumed session, **fail-closed pre-validate**, runs the engine **trapping
   `sys.exit(2)`** (but NOT `KeyboardInterrupt`), persists results, stamps `last_scan_at`
   only on success.
-- **`cnapp_api.py`** — thin FastAPI routers; `require(min_role)` RBAC that **fails closed**
+- **`cnapp_api.py`** — thin FastAPI routers; **workspace-scoped** RBAC that **fails closed**
   (default hook denies, never grants admin); guarded import so the backend runs without
   FastAPI. `OnboardReq.account_id` is pattern-constrained (422, not 500). `create_hosted_app`
   wraps the API for hosting: routes under `/api`, the SPA at `/` (history fallback).
+- **`cnapp_workspace.py` + `cnapp_metering.py` (Phase-4 Slice-1, multi-tenancy/MSSP)** —
+  `WorkspaceStore` (workspaces / members / platform-admins CRUD + the account↔workspace binding
+  the isolation gate reads) and a fail-open `MeteringStore` (append-only, exactly-once usage ledger;
+  billable = accounts under management). RBAC becomes a `Principal` (subject + `{workspace_id:role}`
+  + superadmin) from an injected `current_principal` (IdP claims) or the legacy-role shim; the target
+  workspace comes from an `X-Workspace-Id` header; `account_gate` isolates every account-scoped route
+  (cross-tenant ⇒ 404). A `ws-default` workspace holds every account of a single-tenant hub, so the
+  console + the legacy hook are byte-identical. `SCHEMA_VERSION` 6→7 (workspaces/members/binding/
+  platform_admins/usage_events; seeded + backfilled in `cnapp_backend.backend_for`). Connector + CDR
+  tenant-scoping is a documented follow-up (connectors stay global for now).
 - **`deploy/`** — `cnapp-scanner-role.yaml` (single-account, SecurityAudit+ViewOnlyAccess,
   ExternalId trust, side-scan writes opt-in), `cnapp-stackset.md` (org service-managed
   StackSet auto-enroll), `cnapp-hub-role.yaml` (assume scoped to the role NAME + org).

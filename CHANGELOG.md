@@ -4,6 +4,58 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.27.0] — 2026
+
+**Phase-4 Slice-1: multi-tenancy / workspaces + workspace-scoped RBAC + usage metering (the MSSP play).**
+One hub now serves many tenant *workspaces*, each isolated and metered — without breaking the
+single-tenant deployment or any of the ~1623 pre-tenancy tests. `aws_live_scanner.py` (the scanner
+engine) is unchanged; this is entirely in the hosted control plane.
+
+### Added — data model (`SCHEMA_VERSION 6→7`, additive, sqlite + Postgres twins)
+- `workspaces` (tenant orgs), `workspace_members` (principal→role directory), `workspace_accounts`
+  (account→workspace binding; `account_id` PK ⇒ exactly one workspace per account),
+  `platform_admins` (MSSP operators), and an append-only `usage_events` metering ledger
+  (exactly-once via `UNIQUE(workspace_id, metric, event_key)`). A `ws-default` workspace is seeded
+  and **every pre-existing account backfilled into it** at `cnapp_backend.backend_for`, so a
+  single-tenant hub and the whole test suite behave identically.
+
+### Added — workspace-scoped RBAC (`cnapp_api.py`)
+- A frozen `Principal` (subject + `{workspace_id: role}` memberships + a platform-superadmin flag)
+  from an injected `current_principal` hook (IdP/JWT claims in production), with a back-compat shim
+  that maps the legacy `current_role` string onto the default workspace. The target workspace comes
+  from an `X-Workspace-Id` header (member/superadmin only), and `require(min_role)` evaluates the
+  role IN that workspace. New `require_superadmin`, `account_gate` (role + tenant isolation → **404**
+  existence-hiding on a cross-tenant account), and `ws_admin_gate`/`ws_member_gate`. Fail-closed
+  preserved (unset hook / non-member ⇒ deny).
+
+### Added — tenant isolation + control plane (`cnapp_service.py`, `cnapp_workspace.py`)
+- Every account-scoped route enforces `account_in_scope`; `list_accounts`/`org_*`/`trigger_scan`/
+  `schedule_due_scans` are workspace-scoped (single-tenant / no-store ⇒ global, byte-identical);
+  onboarding binds the account into the caller's workspace in the same txn (a cross-tenant re-onboard
+  ⇒ **409**); a superadmin with no workspace selected gets an **all-workspaces** combined view.
+  `WorkspaceStore` CRUD + `POST/GET/PUT/DELETE /workspaces`, member management, and
+  `/admin/platform-admins`.
+
+### Added — usage metering (`cnapp_metering.py`, billable = accounts under management)
+- Fail-open `MeteringStore` (a metering error can never break a scan/onboard/ingest) recording an
+  `account.active` monthly gauge (one per account per billing period, emitted at scan-complete +
+  re-derivable by an idempotent `reconcile`), plus `account.onboarded` / `scan.completed` for
+  observability. Per-workspace `GET /workspaces/{ws}/usage` and a superadmin cross-workspace
+  `GET /admin/usage` + `POST /admin/usage/reconcile`.
+
+### Verified
+- Read-only adversarial verification fixed **5 confirmed defects** (all with regression tests): two
+  cross-tenant leaks on routes where the account isn't a path param — `GET /scans/{job_id}` (a scan
+  job carries `account_id`) and `POST /connectors/rules/preview` (account in the body) now isolate to
+  404; `POST /scans/schedule-tick` was a single-tenant admin driving the *global* scheduler → now
+  scoped to the caller's workspace; and two control-plane 500s (duplicate workspace slug → 409;
+  member-add to a missing workspace → 404).
+
+### Deferred (documented, next companion slice)
+- **Connector + CDR/ingest tenant-scoping.** Connectors remain global (one `UNIQUE(name)` namespace +
+  shared outbound secrets); a fast follow-up will add `workspace_id` to connectors + notification
+  isolation. Until then a workspace admin can see/rotate another workspace's connector config.
+
 ## [2.26.0] — 2026
 
 **Slice 3: AI-SPM pillar + CDR-lite streaming detection ingest + cloud-forensics timeline.**

@@ -436,7 +436,9 @@ ViewOnlyAccess** (read-only of configuration/IAM — never workload data).
 | `cnapp_registry.py` | `AccountRegistry` (accounts / scan_jobs / connection_health) over the dual-dialect state store |
 | `cnapp_service.py` | `PlatformService` facade + `serialize_scanner` + org rollup |
 | `cnapp_worker.py` | Async scan-job execution (traps engine exit, pre-validates creds, TOCTOU re-check) |
-| `cnapp_api.py` | FastAPI routes + viewer/admin RBAC (fail-closed), guarded import |
+| `cnapp_api.py` | FastAPI routes + **workspace-scoped** RBAC (fail-closed; `Principal` from an injected IdP-claims hook or the legacy-role shim; `account_gate` tenant isolation → 404), guarded import |
+| `cnapp_workspace.py` | **Multi-tenancy (MSSP)** — `WorkspaceStore`: workspaces / members / platform-admins CRUD + the account↔workspace binding read helpers the isolation gate uses |
+| `cnapp_metering.py` | **Usage metering** — fail-open `MeteringStore` (append-only, exactly-once ledger); billable = *accounts under management* (`account.active` monthly gauge) + idempotent `reconcile` |
 | `cnapp_connectors.py` | **Connector framework** — route findings to Jira / Slack / PagerDuty / Splunk / webhook (pure renderers + injected `http_post` seam + rules engine + idempotent delivery ledger) |
 | `compliance_crosswalk.py` | **Compliance breadth** — sourced NIST 800-53 → 30+ framework crosswalk loader (accuracy-gated, fail-open); `aws_live_scanner.crosswalk_scorecard` derives per-framework coverage |
 | `aws_ingest.py` | **External-vuln ingest** — pure SARIF/CycloneDX/SPDX parsers (per-tool adapters) → own each CVE onto a graph node → enrich from OverWatch's own OSV/EPSS/KEV bundle → re-run reachability so CVEs rank by attack-path exploitability, not CVSS |
@@ -457,7 +459,19 @@ hub control plane): `POST /accounts` (onboard → launch URL), `POST /accounts/{
 **connectors** — `POST/GET /connectors`, `PUT/DELETE /connectors/{id}`,
 `POST /connectors/{id}/{enable,rotate-secret,test}`, `.../rules` CRUD,
 `POST /connectors/rules/preview` (dry-run), `POST /accounts/{id}/notify`,
-`GET /connectors/{id}/deliveries`, `GET /notifications`.
+`GET /connectors/{id}/deliveries`, `GET /notifications`;
+**multi-tenancy** — `POST/GET /workspaces`, `GET/PUT/DELETE /workspaces/{ws}`,
+`GET/POST /workspaces/{ws}/members`, `DELETE /workspaces/{ws}/members/{principal}`,
+`GET/POST/DELETE /admin/platform-admins`, `GET /workspaces/{ws}/usage`,
+`GET /admin/usage`, `POST /admin/usage/reconcile`.
+
+**Multi-tenancy (MSSP).** One hub serves many tenant **workspaces**, each isolated (a principal in
+workspace A can never read/write/scan/meter workspace B — a cross-tenant object returns 404) and
+metered (billable = accounts under management). RBAC is workspace-scoped: an injected
+`current_principal` hook maps an authenticated caller (IdP/JWT claims) to `{workspace_id: role}`
+memberships + an optional platform-superadmin; the target workspace travels in an `X-Workspace-Id`
+header. A **default workspace** holds every account of a single-tenant deployment, so the console
+and the legacy single-role auth hook keep working unchanged.
 
 **Continuous scanning + drift digests (CTEM).** Set a per-account scan **cadence** (hourly /
 daily / weekly / custom) and OverWatch scans on a schedule — a `scheduler_tick` enqueues due

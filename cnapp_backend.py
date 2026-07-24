@@ -269,6 +269,31 @@ class PostgresBackend(Backend):
             self.raw.commit()
 
 
+def _seed_default_workspace(be: Backend) -> None:
+    """Idempotently ensure the ``ws-default`` workspace exists and every pre-existing
+    account is bound to it — the v6->v7 backfill. This is DML (not DDL), so it lives
+    here at the single connect chokepoint rather than in ``migrate()`` (which only runs
+    DDL + a version stamp). Runs on every open (cheap; ``ON CONFLICT DO NOTHING``),
+    independent of the version gate, on both engines. Seeding must NEVER make
+    ``backend_for`` fail to open, so it fails open."""
+    try:
+        with be.transaction():
+            be.execute(
+                "INSERT INTO workspaces(workspace_id,name,slug,status,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?) ON CONFLICT (workspace_id) DO NOTHING",
+                ("ws-default", "Default", "ws-default", "active", 0, 0))
+            be.execute(
+                # WHERE 1=1 disambiguates the ON CONFLICT upsert clause from a join ON
+                # clause for the sqlite parser on an INSERT..SELECT (valid on PG too).
+                "INSERT INTO workspace_accounts(account_id, workspace_id, created_at) "
+                "SELECT account_id, 'ws-default', 0 FROM accounts WHERE 1=1 "
+                "ON CONFLICT (account_id) DO NOTHING")
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        pass
+
+
 def backend_for(url: str, *, check_same_thread: bool = True) -> Backend:
     """Connect + migrate the right backend for a state URL. Postgres failures
     (driver or server) surface as `StateBackendUnavailable`; sqlite keeps the
@@ -277,6 +302,7 @@ def backend_for(url: str, *, check_same_thread: bool = True) -> Backend:
     if scheme == "postgres":
         be = PostgresBackend.connect(url)
         be.migrate()
+        _seed_default_workspace(be)
         return be
     # ON CONFLICT upserts (record_scan/coverage/usage + the whole registry) need
     # SQLite >= 3.24 (2018). Fail LOUD + pre-flight here rather than with an opaque
@@ -297,4 +323,5 @@ def backend_for(url: str, *, check_same_thread: bool = True) -> Backend:
             os.chmod(dsn, 0o600)
         except Exception:
             pass
+    _seed_default_workspace(be)
     return be

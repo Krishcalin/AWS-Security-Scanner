@@ -150,6 +150,16 @@ def run_scan_job(svc, job: dict, *, spec: ScanSpec = None) -> dict:
     end = svc.clock()
     svc.registry.record_scan_job(account_id, job_id, "done", now_epoch=end,
                                  finished_at=end, findings_count=findings)
+    # 6. best-effort: meter the completed scan (billable account.active gauge). Wrapped +
+    #    swallowed like the connector block — metering must NEVER fail a completed job.
+    if getattr(svc, "metering", None) is not None:
+        try:
+            resources = len((payload.get("graph_full") or {}).get("nodes", []))
+            svc.meter_scan_completed(account_id, job_id, findings=findings, resources=resources)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:                             # noqa: BLE001
+            pass
     return svc.registry.get_scan_job(job_id)
 
 
