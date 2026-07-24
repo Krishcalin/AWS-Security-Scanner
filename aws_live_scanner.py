@@ -79,7 +79,7 @@ import aws_winvuln
 import aws_finding_detail
 import aws_graph_neptune
 
-VERSION = "2.24.0"
+VERSION = "2.25.0"
 
 # Light-theme CSS for the HTML report (plain string — real braces, no interpolation, so it
 # concatenates cleanly with the f-string body in save_html).

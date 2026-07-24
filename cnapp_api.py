@@ -101,6 +101,9 @@ def create_app(service, *, current_role=lambda: ""):
         source_tool: Optional[str] = None            # override the sniffed producer
         target_resource: Optional[str] = None        # explicit owner (EC2/Lambda ARN / image ref)
 
+    class CopilotReq(BaseModel):
+        question: str = Field(min_length=1, max_length=2000)
+
     # ── onboarding / validation (admin, private control plane) ────────────────
     @app.post("/accounts", status_code=201, dependencies=[Depends(require("admin"))])
     def onboard(body: OnboardReq):
@@ -202,6 +205,18 @@ def create_app(service, *, current_role=lambda: ""):
     @app.get("/org/findings", dependencies=[Depends(require("viewer"))])
     def org_findings():
         return service.org_findings()
+
+    # ── grounded copilot (viewer; answers only from the account's own scan) ────
+    @app.post("/accounts/{account_id}/copilot", dependencies=[Depends(require("viewer"))])
+    def copilot(account_id: str, body: CopilotReq):
+        a = service.copilot_answer(account_id, body.question)
+        if a is None:
+            raise HTTPException(status_code=404, detail="no scan results for account")
+        return a
+
+    @app.post("/org/copilot", dependencies=[Depends(require("viewer"))])
+    def org_copilot(body: CopilotReq):
+        return service.org_copilot_answer(body.question)
 
     # ── external-vuln ingest + reachability-ranked inventory ──────────────────
     @app.post("/accounts/{account_id}/ingest", dependencies=[Depends(require("admin"))])

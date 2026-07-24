@@ -4,6 +4,86 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.25.0] — 2026
+
+**Slice 2: grounded-RAG security copilot (scoped v1).** A copilot that answers natural-language
+questions using ONLY this account's own scan output — the `finding_catalog`, ranked attack
+`paths`, and choke points (the "remediation" is the per-finding steps + choke-point hints). No
+external knowledge, no hallucination.
+
+### Added — `aws_copilot.py` (pure, boto3-free, offline-first)
+- `build_corpus(findings, paths, chokes)` turns the scan into retrievable documents; a
+  self-contained **BM25** retriever (no embeddings, no network, deterministic); `detect_intent`
+  routes top-risks / attack-paths / choke-points / how-to-fix questions to structured answers,
+  else falls back to retrieval.
+- `answer(question, corpus, llm=None)` — the default is an **EXTRACTIVE** synthesizer that composes
+  the reply purely from retrieved corpus fields, so it cannot state a fact that is not in the scan.
+  It **ABSTAINS** (rather than inventing) when a question shares no term with the scan corpus, and
+  every answer carries **citations** that are always corpus ids (check IDs / path ids / choke node
+  ids). An optional **injected LLM seam** (`(system, question, context) -> str`) gets ONLY the
+  retrieved corpus as context plus a system prompt forbidding outside knowledge; an LLM error falls
+  back to the grounded extractive answer (never fails the query).
+
+### Added — hosted wiring
+- `cnapp_service.copilot_answer(account_id, question)` / `org_copilot_answer(question)` build the
+  corpus from the latest scan(s) and answer; the LLM seam is the optional `copilot_llm` constructor
+  arg (default `None` → offline extractive). `cnapp_api` routes `POST /accounts/{id}/copilot` and
+  `POST /org/copilot` (viewer RBAC; `CopilotReq{question}` is length-validated). The default scanner
+  role and the engine are unchanged; the React console can call these directly (chat UI is a
+  frontend follow-up).
+
+## [2.24.0] — 2026
+
+**Slice 1: DSPM surfaces + AWS-resident secrets + least-privilege policy generation.** Three
+data/identity-security sub-features built on the existing DSPM crown-jewel, CIEM, and secrets
+engines. `aws_correlate.py` is unchanged except a single 1-line data edit (adding
+`OpenSearchDomain` to `CROWN_DATASTORE_KINDS`); every crown node is picked up by the prop-based
+`crown_nodes`, and all new graph emission is post-clobber in the DATA section.
+
+### Added — DSPM datastore surfaces
+- Crown-jewel data classification now spans **DocumentDB, Neptune, MemoryDB, FSx, Kinesis Data
+  Streams, Timestream, and OpenSearch** in addition to S3/RDS/Redshift/DynamoDB/EFS. DocDB and
+  Neptune are split out of `describe_db_clusters` by `Engine` (zero new API); the rest are
+  fail-open collectors (denied describe → a DSPM-01 INFO naming the store, never a phantom PASS).
+  Extends `aws_deepplane.DSPM_READ_ACTIONS` with the new kinds (precise `es`/`kinesis`/`timestream`
+  read actions; empty sets for DocDB/MemoryDB/FSx where auth is out-of-band → node emitted, no
+  `CAN_READ_DATA` edge).
+- **DSPM-03** (MEDIUM, AC-3) — a crown datastore with a public/cross-account **resource policy**
+  (OpenSearch `AccessPolicies`), reusing `classify_resource_policy_stmt`; fine-grained-access-control
+  domains are downgraded to WARN/paths-to-verify. (DSPM-04 backup-coverage and DSPM-05 CMK-vs-managed
+  deferred — cross-cutting / FP-prone.)
+
+### Added — AWS-resident secrets (new `aws_secrets.py`, pure)
+- SSM Parameter Store posture: **SECRET-01** (HIGH, SC-28) plaintext `String` parameter with a
+  credential-shaped name; **SECRET-02** (LOW, SC-12(1)) SecureString on the AWS-managed key not a CMK.
+  Metadata-only (`describe_parameters`) — never a value read (`ssm:GetParameter`/`GetSecretValue`
+  deliberately not used).
+- A crown **`Secret`** graph node (Secrets Manager secrets + SSM SecureStrings) + a `CAN_READ_DATA`
+  reader edge for every role whose identity policy can read it (reuses `role_can_read_store` with the
+  new `SECRET_READ_ACTIONS`), so **internet → workload → role → Secret** surfaces as an attack path
+  via the existing flagship; **SECRET-05** (HIGH, AC-6) is the reader finding. Only materialized when
+  ≥1 role can read it (no graph clutter). **SECRET-00** is the fail-open INFO. (SECRET-03 staleness /
+  SECRET-04 config-reference scans deferred — the latter overlaps existing LMB-03/ECS-04/EC2-07.)
+
+### Added — least-privilege policy generation (new `aws_leastpriv.py`, pure) + CIEM-02
+- `rightsize_policy` / `recommendation`: given a principal's GRANTED actions (GAAD) and USED
+  services/actions (IAM service-last-accessed), emit a right-sized IAM policy document that drops
+  never-used services and narrows `svc:*` wildcards to the used action set where action-level usage
+  is known. Deterministic, offline, and honest: empty usage or an incomplete SLAD job → not
+  recommended (**never a deny-all**); the window is stated and it is never auto-applied.
+- **CIEM-02** (WARN) wires it into `--ciem` for the principals CIEM-01 already flags (bounding the
+  extra ACTION_LEVEL SLAD cost); the generated policy + delta ride the `least_privilege` report
+  side-channel. **CIEM-00** is the fail-open INFO. CIEM-02 is deliberately kept OUT of `COMPLIANCE_MAP`
+  (a WARN counts as failing its mapped control, which would flip AC-6 for every over-permissioned
+  principal). Uses only already-held grants (ACTION_LEVEL SLAD = same permission as SERVICE_LEVEL);
+  the Access Analyzer `StartPolicyGeneration` live path is deferred.
+
+### Compliance / tests
+- Every new NIST mapping uses an **in-universe** control (SC-28/SC-12(1)/AC-3/AC-6) with the full
+  framework tuple copied verbatim from an existing entry — the frozen 38-control crosswalk universe
+  is byte-unchanged. New tests: `test_dspm_surfaces`, `test_secrets`, `test_secrets_collector`,
+  `test_leastpriv`, `test_leastpriv_wiring`, and additions to `test_phase7_dspm`.
+
 ## [2.23.0] — 2026
 
 **VPC Flow-Log network graph + SG/NACL micro-segmentation (Phase-3 · agentless coverage).**
