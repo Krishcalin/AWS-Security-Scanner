@@ -168,6 +168,7 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 - **267 security checks** across 44 audit sections (204 actionable, each with a detailed remediation write-up)
 - **Effective internet-exposure engine** (CNAPP Phase 2) -- computes *true* reachability (`aws_exposure.py`): a workload is flagged internet-exposed only when a public IP/EIP/IPv6 **and** an active IGW route **and** open security-group ingress **and** a permissive stateless NACL (inbound + ephemeral return) all line up — killing the "SG allows 0.0.0.0/0" false positive. sg-references, NAT routes, private subnets and blocked-return NACLs are correctly *not* exposed
 - **First attack path** -- `ATTACK-01` chains it end-to-end: `Internet → exposed EC2 → instance-profile role → privilege escalation to admin` (CRITICAL)
+- **Network micro-segmentation** (Phase-3) -- **Layer A** (`SEG-01..06`, always-on, config-only, zero new grant) flags over-permissive security groups (world-open sensitive ports, wide ranges, unused SGs, SG-chains to a world-open group, unrestricted egress) as a distinct lens from the 4-gate reachability oracle — a config-level SG hole is caught even when the host is not currently reachable. **Layer B** (`FLOW-01..03`, opt-in `--flow-logs`) reads VPC Flow-Log *observed traffic* via CloudWatch Logs Insights to recommend evidence-based scope-downs ("only these /24s ever connected"), flag allowed-but-never-used ports, and surface top reject/recon talkers — annotating the graph's `EXPOSED_TO` edges with observed evidence (kept **out** of the traversable attack-path set so the low-FP reachability guarantee is preserved), and failing open to a `FLOW-00` note when the optional resource-scoped `logs:StartQuery` grant is absent
 - **Deep-plane ingestion** (CNAPP Phase 3, buy-not-build) -- BUYS signal from AWS-native services as graph edges: **Amazon Inspector** CVEs with EPSS + CISA-KEV (`HAS_VULN`), **Macie** crown-jewel S3 classification, **IAM Access Analyzer** authoritative external access, **GuardDuty** live detections (`THREAT_ON`). Every collector degrades to a graceful no-op when its service is disabled -- never a false positive
 - **Flagship attack path** -- `ATTACK-02` (CRITICAL): `Internet → exposed EC2 → exploitable/KEV CVE → over-privileged role → crown-jewel S3 data` -- the full toxic combination, condition-aware, escalated when a live GuardDuty threat sits on the chain
 - **Attack-path correlation & choke points** (CNAPP Phase 4) -- collapses the whole graph into a *ranked handful* of scored, explainable attack paths (gated-multiplicative scoring: any missing factor collapses the path, killing the "high-CVSS but unexposed" false positive), then computes **choke points**: `CHOKEPOINT-01` names the single node whose fix severs the most paths to the most crown jewels. Ranked `attack_paths` + `choke_points` in the JSON report
@@ -236,6 +237,11 @@ python aws_live_scanner.py --accounts 111122223333,444455556666 --assume-role Au
 # Show only what changed since the last scan
 python aws_live_scanner.py --json today.json --baseline yesterday.json
 
+# Network micro-segmentation: Layer-A SG analysis (SEG-01..06) runs automatically inside
+# EXPOSURE; add the opt-in Layer-B VPC Flow-Log overlay (FLOW-01..03) for evidence-based
+# scope-down. Needs the optional resource-scoped logs:StartQuery grant; fails open otherwise.
+python aws_live_scanner.py --sections EXPOSURE --flow-logs
+
 # Verbose mode
 python aws_live_scanner.py --verbose
 ```
@@ -268,6 +274,9 @@ options:
   --output-dir DIR      Directory for evidence artefact files
   --sections SECTIONS   Run only the named sections (single comma-separated value)
   --all-regions         Sweep every enabled region for regional sections
+  --flow-logs           Enable the opt-in VPC Flow-Log observed-traffic overlay
+                        (FLOW-01/02/03) in EXPOSURE — needs an optional resource-scoped
+                        logs:StartQuery grant; bills per GB scanned; fails open to FLOW-00
   --compliance          Print the per-framework compliance scorecard
   --graph FILE          Write the identity security graph to FILE (graph.json)
   --org                 Scan every ACTIVE account in the AWS Organization (needs --assume-role)
@@ -284,7 +293,8 @@ options:
 |---------|-----------|-------------|
 | **IAM** | IAM-01/02, IAM-04/05/06/10 | Root MFA + access keys, console users without MFA, password policy, stale access keys, IAM Access Analyzer |
 | **S3** | S3-01, S3-03, S3-05 | Account-level Block Public Access, per-bucket public access + ACLs + encryption |
-| **VPC** | VPC-01, VPC-03 | Security groups with risky ports open to 0.0.0.0/0, VPC Flow Logs |
+| **VPC** | VPC-01, VPC-03 to 06 | Security groups with risky ports open to 0.0.0.0/0, VPC Flow Logs, NACL admin-port exposure, cross-account peering |
+| **Network Micro-Seg** | **SEG-01 to 06** (Layer A), **FLOW-01 to 03** (Layer B, opt-in) | **Static SG micro-segmentation** (config-only, zero new grant) — world-open sensitive/non-web ports, overly-wide ranges, redundant/shadowed rules, unused SGs, SG-chaining to a world-open group, unrestricted-egress exfil paths; **observed-traffic overlay** (`--flow-logs`) — evidence-based SG scope-down, allowed-but-unused port removal, reject-talker recon signals from VPC Flow Logs via CloudWatch Logs Insights (fail-open when the optional `logs:StartQuery` grant is absent) |
 | **Logging** | LOG-01/03/04/05 | CloudTrail multi-region + validation, AWS Config, GuardDuty, Security Hub |
 | **KMS** | ENC-03 | KMS customer-managed key rotation |
 | **EC2** | EC2-04/05/06 | IMDSv2, public IP, EBS volume encryption |

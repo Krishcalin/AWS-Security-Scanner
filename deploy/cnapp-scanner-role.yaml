@@ -109,6 +109,35 @@ Resources:
   #           Resource: 'arn:aws:ec2:*:*:snapshot/*'
   #           Condition: { StringEquals: { 'aws:ResourceTag/cnapp:sidescan': 'true' } }
 
+  # ── OPT-IN ONLY (disabled by default) ──────────────────────────────────────
+  # Agentless VPC Flow-Log observed-traffic overlay (--flow-logs → FLOW-01/02/03): evidence-
+  # based SG scope-down, unused-port, and reject-talker analysis. It reads flow-log CONTENT
+  # via CloudWatch Logs Insights. Neither SecurityAudit nor ViewOnlyAccess grants a log-
+  # CONTENT read (only logs:Describe*/GetLogDelivery), and this crosses the read-only-of-
+  # CONFIG line by ACTION CLASS — the same class ReadOnlyAccess's s3:GetObject is deliberately
+  # excluded to avoid (see note above). So it is opt-in, least-privilege, and resource-scoped
+  # to the specific flow-log log-group(s). CloudWatch Logs Insights bills per GB SCANNED;
+  # OverWatch bounds cost with a short, server-side-aggregated window and FAILS OPEN to a
+  # FLOW-00 note when the grant is absent (Layer-A SG micro-segmentation, SEG-01..06, is
+  # always on and needs NONE of this). Reading the flow-log CONFIG (ec2:DescribeFlowLogs) is
+  # already granted. To enable, attach CnappFlowLogInsights, scoping the StartQuery Resource
+  # to the log-group ARN(s) from `aws ec2 describe-flow-logs` (LogGroupName):
+  #
+  #   - PolicyName: CnappFlowLogInsights
+  #     PolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Effect: Allow
+  #           Action: [ logs:StartQuery ]
+  #           Resource: 'arn:aws:logs:*:<ACCOUNT_ID>:log-group:<FLOW_LOG_LOG_GROUP>:*'
+  #         - Effect: Allow    # GetQueryResults/StopQuery authorize on the queryId, not a
+  #           Action: [ logs:GetQueryResults, logs:StopQuery ]   # log-group ARN, so Resource
+  #           Resource: '*'    # is '*' — they only read a query THIS role started.
+  #
+  # The S3-delivered flow-log path (s3:GetObject + gunzip/parquet) is deliberately NOT
+  # supported — it needs the exact s3:GetObject the role excludes. Use a CloudWatch Logs
+  # flow-log destination for the overlay, or leave Layer B off.
+
 Outputs:
   RoleArn:
     Description: Paste this into the CNAPP hub tenant registry.
