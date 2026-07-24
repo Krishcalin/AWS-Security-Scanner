@@ -105,7 +105,10 @@ class CheckResult:
     remediation: Optional[str] = None
 
     def to_dict(self) -> dict:
-        return {"name": self.name, "status": self.status, "detail": self.detail,
+        # `ok` is an additive convenience for the console's per-check pass/fail list
+        # (OnboardWizard reads check.ok); `status` stays authoritative for ok|fail|skip.
+        return {"name": self.name, "status": self.status, "ok": self.status == "ok",
+                "detail": self.detail,
                 "error_code": self.error_code, "remediation": self.remediation}
 
 
