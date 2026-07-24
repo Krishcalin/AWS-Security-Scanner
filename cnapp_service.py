@@ -23,6 +23,7 @@ from collections import namedtuple
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol
 
+import aws_copilot
 import aws_ingest
 import aws_sidescan
 import aws_state
@@ -133,8 +134,13 @@ class PlatformService:
                  connectors=None, http_post: Optional[Callable] = None, hub_base: str = "",
                  connector_id_gen: Callable[[], str] = lambda: "conn-" + secrets.token_hex(6),
                  crosswalk=None, state=None, vuln_bundle=None,
+                 copilot_llm: Optional[Callable] = None,
                  clock: Callable[[], int] = None):
         import time
+        # Optional grounded-copilot LLM seam (system, question, context) -> str. None (default)
+        # -> the offline EXTRACTIVE answerer (no network, no hallucination). Inject a Claude/
+        # Bedrock caller to get fluent answers; the context is always the retrieved scan corpus.
+        self._copilot_llm = copilot_llm
         self.registry = registry
         self.results = results
         self.hub_role_arn = hub_role_arn
@@ -372,6 +378,32 @@ class PlatformService:
         step-by-step remediation / compliance / affected resources) for an account's
         latest scan — the data source for the Findings workspace + detail panel."""
         return list((self.results.get_latest(account_id) or {}).get("finding_catalog", []))
+
+    # ── grounded copilot (Slice 2) ────────────────────────────────────────────
+    def copilot_answer(self, account_id: str, question: str) -> Optional[dict]:
+        """Answer a natural-language question grounded STRICTLY in this account's latest
+        scan (finding_catalog + attack_paths + choke_points). None if the account has no
+        scan. Offline-safe (extractive) unless a copilot LLM seam was injected."""
+        p = self.results.get_latest(account_id)
+        if not p:
+            return None
+        corpus = aws_copilot.build_corpus(findings=p.get("finding_catalog", []),
+                                          paths=p.get("attack_paths", []),
+                                          chokes=p.get("choke_points", []))
+        return aws_copilot.answer(question, corpus, llm=self._copilot_llm)
+
+    def org_copilot_answer(self, question: str) -> dict:
+        """Copilot grounded in the merged corpus across ACTIVE accounts (portfolio view)."""
+        findings, paths, chokes = [], [], []
+        for a in self.registry.list_accounts(onboarding_status="active"):
+            p = self.results.get_latest(a["account_id"])
+            if not p:
+                continue
+            findings += p.get("finding_catalog", [])
+            paths += p.get("attack_paths", [])
+            chokes += p.get("choke_points", [])
+        corpus = aws_copilot.build_corpus(findings=findings, paths=paths, chokes=chokes)
+        return aws_copilot.answer(question, corpus, llm=self._copilot_llm)
 
     def get_account_summary(self, account_id: str) -> Optional[dict]:
         """Dashboard-shaped slice of an account's latest scan — posture + compliance

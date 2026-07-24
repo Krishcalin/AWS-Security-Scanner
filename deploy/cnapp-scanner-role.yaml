@@ -138,6 +138,30 @@ Resources:
   # supported — it needs the exact s3:GetObject the role excludes. Use a CloudWatch Logs
   # flow-log destination for the overlay, or leave Layer B off.
 
+  # ── OPTIONAL: expanded DSPM datastore surfaces ──────────────────────────────
+  # The DSPM crown-jewel classifier (DSPM-01/02/03) covers S3/RDS/Aurora/DocumentDB/Neptune/
+  # Redshift/DynamoDB/EFS/OpenSearch using describe/list APIs already in SecurityAudit. Four
+  # additional stores (Kinesis, MemoryDB, FSx, Timestream) use describes that may not be in the
+  # base managed policies; grant them read-only if you want those stores classified (all are
+  # metadata-only — NO data-plane / GetRecords / GetItem). Absent → a DSPM-01 INFO naming the
+  # store, never a false all-clear.
+  #
+  #   - PolicyName: CnappDspmSurfaces
+  #     PolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Effect: Allow
+  #           Action: [ kinesis:ListStreams, kinesis:DescribeStreamSummary, kinesis:ListTagsForStream,
+  #                     memorydb:DescribeClusters, memorydb:ListTags,
+  #                     fsx:DescribeFileSystems,
+  #                     timestream:ListDatabases, timestream:ListTables, timestream:ListTagsForResource ]
+  #           Resource: '*'      # all read-only list/describe; no secret/data read
+  #
+  # Least-privilege policy generation (CIEM-02) and AWS-resident-secrets posture (SECRET-*) need
+  # NO new grant: SLAD (iam:GenerateServiceLastAccessedDetails/GetServiceLastAccessedDetails) is
+  # already granted above, and secrets use ssm:DescribeParameters (SecurityAudit) + secretsmanager
+  # List/Describe only — never ssm:GetParameter / secretsmanager:GetSecretValue (the value reads).
+
 Outputs:
   RoleArn:
     Description: Paste this into the CNAPP hub tenant registry.
