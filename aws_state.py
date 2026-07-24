@@ -35,7 +35,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-SCHEMA_VERSION = 5   # v5: + external-vuln ingest (ingest_docs, ingested_vulns)
+SCHEMA_VERSION = 6   # v6: + CDR-lite detection ingest (cdr_detections)
 KEY_VERSION = 1
 
 # Caller-injected scan timestamp (one per run). epoch = arithmetic column,
@@ -259,6 +259,30 @@ CREATE TABLE IF NOT EXISTS ingested_vulns(
   PRIMARY KEY(account, node_id, cve));
 CREATE INDEX IF NOT EXISTS ix_ingv_rank    ON ingested_vulns(account, priority_score);
 CREATE INDEX IF NOT EXISTS ix_ingv_kevpath ON ingested_vulns(account, kev, on_attack_path);
+
+-- ── CDR-lite detection ingest (GuardDuty / Security Hub ASFF / CloudTrail anomaly) ──
+-- Durable, dedup-by-id store of live detection events folded onto the account's stored
+-- graph_full as THREAT_ON annotations, ranked by ACTUAL attack-path reachability. A
+-- detection ON an internet→crown/admin path or directly on a crown store is an
+-- incident. Read-only on scanned targets. One row per (account, detection_id);
+-- re-streaming preserves first_seen (MIN). BIGINT twins in POSTGRES_DDL.
+CREATE TABLE IF NOT EXISTS cdr_detections(
+  account TEXT NOT NULL, detection_id TEXT NOT NULL,
+  source TEXT NOT NULL, type TEXT, title TEXT,
+  node_id TEXT, node_kind TEXT, node_key TEXT,
+  mapping_status TEXT NOT NULL DEFAULT 'resolved',
+  severity REAL, band TEXT,
+  on_attack_path INTEGER NOT NULL DEFAULT 0,
+  reaches_crown INTEGER NOT NULL DEFAULT 0,
+  hits_crown INTEGER NOT NULL DEFAULT 0,
+  reachable_from_internet INTEGER NOT NULL DEFAULT 0,
+  incident INTEGER NOT NULL DEFAULT 0,
+  priority_score INTEGER NOT NULL DEFAULT 0, priority_band TEXT,
+  driving_path TEXT, archived INTEGER NOT NULL DEFAULT 0,
+  first_seen_epoch INTEGER NOT NULL, last_seen_epoch INTEGER NOT NULL,
+  PRIMARY KEY(account, detection_id));
+CREATE INDEX IF NOT EXISTS ix_cdr_rank     ON cdr_detections(account, priority_score);
+CREATE INDEX IF NOT EXISTS ix_cdr_incident ON cdr_detections(account, incident);
 """
 
 
@@ -776,6 +800,56 @@ class StateStore:
         for f in ("kev", "suppressed", "reachable_from_internet",
                   "on_attack_path", "reaches_crown"):
             r[f] = bool(r.get(f))
+        return r
+
+    # ── CDR-lite detection ingest (v6) ────────────────────────────────────────
+    _CDR_COLS = ["account", "detection_id", "source", "type", "title", "node_id",
+                 "node_kind", "node_key", "mapping_status", "severity", "band",
+                 "on_attack_path", "reaches_crown", "hits_crown", "reachable_from_internet",
+                 "incident", "priority_score", "priority_band", "driving_path", "archived",
+                 "first_seen_epoch", "last_seen_epoch"]
+
+    def upsert_cdr_detection(self, account: str, v: Dict, epoch: int) -> None:
+        """Upsert one detection verdict (PK = account + detection_id). Re-streaming
+        the same detection bumps ``last_seen`` and preserves ``first_seen`` (MIN),
+        so a re-stream is an idempotent refresh, never a duplicate."""
+        did = v["id"]
+        first = int(epoch)
+        existing = self._be.query_one(
+            "SELECT first_seen_epoch FROM cdr_detections WHERE account=? AND detection_id=?",
+            (account, did))
+        if existing and dict(existing).get("first_seen_epoch") is not None:
+            first = min(first, int(dict(existing)["first_seen_epoch"]))
+        self._be.upsert(
+            "cdr_detections", self._CDR_COLS, ["account", "detection_id"],
+            self._CDR_COLS[2:],
+            (account, did, v.get("source"), v.get("type"), v.get("title"),
+             v.get("node_id"), v.get("node_kind"), v.get("node_key"),
+             v.get("mapping_status", "resolved"), v.get("severity"), v.get("band"),
+             int(bool(v.get("on_attack_path"))), int(bool(v.get("reaches_crown"))),
+             int(bool(v.get("hits_crown_node"))), int(bool(v.get("reachable_from_internet"))),
+             int(bool(v.get("incident"))), int(v.get("priority_score") or 0),
+             v.get("priority_band"), v.get("driving_path"), int(bool(v.get("archived"))),
+             first, int(epoch)))
+
+    def list_cdr_detections(self, account: str, *, incidents_only: bool = False,
+                            source: Optional[str] = None, limit: int = 2000) -> List[Dict]:
+        sql = ["SELECT * FROM cdr_detections WHERE account=?"]
+        params: List = [account]
+        if incidents_only:
+            sql.append("AND incident=1")
+        if source:
+            sql.append("AND source=?"); params.append(source)
+        sql.append("ORDER BY priority_score DESC, detection_id LIMIT ?")
+        params.append(int(limit))
+        return [self._cdr_row(dict(r)) for r in self._be.query_all(" ".join(sql), tuple(params))]
+
+    @staticmethod
+    def _cdr_row(r: Dict) -> Dict:
+        for f in ("on_attack_path", "reaches_crown", "hits_crown",
+                  "reachable_from_internet", "incident", "archived"):
+            if f in r:
+                r[f] = bool(r.get(f))
         return r
 
 

@@ -161,6 +161,26 @@ Resources:
   # NO new grant: SLAD (iam:GenerateServiceLastAccessedDetails/GetServiceLastAccessedDetails) is
   # already granted above, and secrets use ssm:DescribeParameters (SecurityAudit) + secretsmanager
   # List/Describe only — never ssm:GetParameter / secretsmanager:GetSecretValue (the value reads).
+  #
+  # ── AI-SPM + CDR-lite + cloud-forensics (v2.26) — NO new grant by default ────
+  # AI-SPM (AISPM-01..03 + AIPATH-01) reads bedrock/bedrock-agent/sagemaker list/describe/get (all
+  # in SecurityAudit) and reuses the cached IAM principals — zero new API. CDR-lite is a PUSH plane:
+  # the operator streams GuardDuty/Security Hub/CloudTrail detection events to POST /detections and
+  # OverWatch makes ZERO AWS calls to fold them (it works off the uploaded events + the stored
+  # graph). The cloud-forensics timeline uses cloudtrail:LookupEvents (management events ONLY — never
+  # a data/secret read), which SecurityAudit already grants; absent/denied → a FORENSIC-00 fail-open
+  # note, never a phantom clean timeline. If a deployment tightens the role below SecurityAudit, add
+  # a read-only opt-in mirroring the blocks above:
+  #
+  #   - PolicyName: CnappCdrForensicsRead
+  #     PolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Effect: Allow
+  #           Action: [ cloudtrail:LookupEvents, securityhub:GetFindings,
+  #                     guardduty:ListDetectors, guardduty:GetDetector, guardduty:ListFindings,
+  #                     guardduty:GetFindings ]
+  #           Resource: '*'      # all read-only mgmt-plane lookups; no data/secret-value read
 
 Outputs:
   RoleArn:

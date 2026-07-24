@@ -43,7 +43,7 @@ def test_migration_creates_ingest_tables():
     assert s._be.raw.execute("PRAGMA user_version").fetchone()[0] == aws_state.SCHEMA_VERSION
 
 
-def test_v4_db_migrates_to_v5():
+def test_v4_db_migrates_to_current():
     conn = sqlite3.connect(":memory:")
     conn.execute("PRAGMA user_version=4")                 # pretend an old v4 DB
     s = StateStore(conn)
@@ -51,8 +51,8 @@ def test_v4_db_migrates_to_v5():
     s._migrate()                                          # the real open()/backend_for path
     tbls = {r[0] for r in s._be.query_all(
         "SELECT name FROM sqlite_master WHERE type='table'")}
-    assert "ingested_vulns" in tbls
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert "ingested_vulns" in tbls and "cdr_detections" in tbls    # v5 + v6 tables
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == aws_state.SCHEMA_VERSION
 
 
 # ── docs ledger ──────────────────────────────────────────────────────────────

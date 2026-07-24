@@ -293,6 +293,23 @@ POSTGRES_DDL: List[str] = [
        PRIMARY KEY(account, node_id, cve))""",
     "CREATE INDEX IF NOT EXISTS ix_ingv_rank    ON ingested_vulns(account, priority_score)",
     "CREATE INDEX IF NOT EXISTS ix_ingv_kevpath ON ingested_vulns(account, kev, on_attack_path)",
+    """CREATE TABLE IF NOT EXISTS cdr_detections(
+       account TEXT NOT NULL, detection_id TEXT NOT NULL,
+       source TEXT NOT NULL, type TEXT, title TEXT,
+       node_id TEXT, node_kind TEXT, node_key TEXT,
+       mapping_status TEXT NOT NULL DEFAULT 'resolved',
+       severity DOUBLE PRECISION, band TEXT,
+       on_attack_path INTEGER NOT NULL DEFAULT 0,
+       reaches_crown INTEGER NOT NULL DEFAULT 0,
+       hits_crown INTEGER NOT NULL DEFAULT 0,
+       reachable_from_internet INTEGER NOT NULL DEFAULT 0,
+       incident INTEGER NOT NULL DEFAULT 0,
+       priority_score INTEGER NOT NULL DEFAULT 0, priority_band TEXT,
+       driving_path TEXT, archived INTEGER NOT NULL DEFAULT 0,
+       first_seen_epoch BIGINT NOT NULL, last_seen_epoch BIGINT NOT NULL,
+       PRIMARY KEY(account, detection_id))""",
+    "CREATE INDEX IF NOT EXISTS ix_cdr_rank     ON cdr_detections(account, priority_score)",
+    "CREATE INDEX IF NOT EXISTS ix_cdr_incident ON cdr_detections(account, incident)",
 ]
 
 # Per-account advisory lock replacing sqlite's whole-DB BEGIN IMMEDIATE (different

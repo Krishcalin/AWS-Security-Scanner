@@ -433,11 +433,20 @@ ViewOnlyAccess** (read-only of configuration/IAM — never workload data).
 | `cnapp_connectors.py` | **Connector framework** — route findings to Jira / Slack / PagerDuty / Splunk / webhook (pure renderers + injected `http_post` seam + rules engine + idempotent delivery ledger) |
 | `compliance_crosswalk.py` | **Compliance breadth** — sourced NIST 800-53 → 30+ framework crosswalk loader (accuracy-gated, fail-open); `aws_live_scanner.crosswalk_scorecard` derives per-framework coverage |
 | `aws_ingest.py` | **External-vuln ingest** — pure SARIF/CycloneDX/SPDX parsers (per-tool adapters) → own each CVE onto a graph node → enrich from OverWatch's own OSV/EPSS/KEV bundle → re-run reachability so CVEs rank by attack-path exploitability, not CVSS |
+| `aws_copilot.py` | **Grounded-RAG copilot** — self-contained BM25 retrieval over the account's own scan (findings / paths / choke points); extractive-by-default (abstains rather than hallucinating), optional injected LLM seam |
+| `aws_aispm.py` | **AI-SPM pillar** — pure classifiers for the blast radius of an AI resource's execution role (privesc-capable / reaches-crown-data / no-network-isolation) fused onto the graph post-clobber; emits `AISPM-01..03` + the flagship `AIPATH-01` |
+| `aws_cdr.py` | **CDR-lite** — normalize GuardDuty / Security Hub ASFF / CloudTrail-anomaly detections, fold onto the stored graph as `THREAT_ON`, re-run reachability so a detection on an internet→crown/admin path escalates to a ranked **incident** (reuses `aws_ingest` predicates; no `aws_correlate` change) |
+| `aws_forensics.py` | **Cloud-forensics timeline** — reconstruct who-did-what-when around a resource from read-only CloudTrail management events, correlated with graph / findings / detections; fail-open `FORENSIC-00` behind an injected seam |
 
 **HTTP surface** (all delegate to `PlatformService`; admin routes stay on the private
 hub control plane): `POST /accounts` (onboard → launch URL), `POST /accounts/{id}/validate`,
 `GET /accounts`, `POST /scans`, `GET /scans/{job_id}`,
 `GET /accounts/{id}/summary|issues|findings|paths|graph`, `GET /org/overview`, `GET /org/findings`;
+**copilot** — `POST /accounts/{id}/copilot`, `POST /org/copilot`;
+**ingest** — `POST /accounts/{id}/ingest`, `GET /accounts/{id}/vulns[/{cve}]`, `GET /org/vulns`;
+**CDR** — `POST /accounts/{id}/detections`, `GET /accounts/{id}/{detections,incidents}`,
+`POST /accounts/{id}/detections/refresh`, `GET /org/incidents`;
+**forensics** — `GET /accounts/{id}/forensics/timeline`;
 **connectors** — `POST/GET /connectors`, `PUT/DELETE /connectors/{id}`,
 `POST /connectors/{id}/{enable,rotate-secret,test}`, `.../rules` CRUD,
 `POST /connectors/rules/preview` (dry-run), `POST /accounts/{id}/notify`,
