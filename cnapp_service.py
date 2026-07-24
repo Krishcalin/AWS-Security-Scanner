@@ -237,8 +237,17 @@ class PlatformService:
 
     # ── inventory ─────────────────────────────────────────────────────────────
     def list_accounts(self, *, onboarding_status=None, health=None) -> List[dict]:
-        return [_mask_account(a) for a in
+        rows = [_mask_account(a) for a in
                 self.registry.list_accounts(onboarding_status=onboarding_status, health=health)]
+        # Enrich each row with the latest scan's posture (the registry holds only
+        # lifecycle/health metadata). The console's accounts list shows a posture
+        # column, drawn from the SAME source get_account_summary/org_overview use;
+        # None until the account has a first scan.
+        for row in rows:
+            p = self.results.get_latest(row.get("account_id"))
+            row["posture_score"] = p.get("posture_score") if p else None
+            row["posture_grade"] = p.get("posture_grade") if p else None
+        return rows
 
     def get_account(self, account_id: str) -> Optional[dict]:
         a = self.registry.get_account(account_id)
