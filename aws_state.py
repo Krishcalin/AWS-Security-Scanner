@@ -35,7 +35,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-SCHEMA_VERSION = 6   # v6: + CDR-lite detection ingest (cdr_detections)
+SCHEMA_VERSION = 7   # v7: + multi-tenancy (workspaces/members/binding/platform_admins/usage_events)
 KEY_VERSION = 1
 
 # Caller-injected scan timestamp (one per run). epoch = arithmetic column,
@@ -283,6 +283,59 @@ CREATE TABLE IF NOT EXISTS cdr_detections(
   PRIMARY KEY(account, detection_id));
 CREATE INDEX IF NOT EXISTS ix_cdr_rank     ON cdr_detections(account, priority_score);
 CREATE INDEX IF NOT EXISTS ix_cdr_incident ON cdr_detections(account, incident);
+
+-- ── multi-tenancy plane (Phase-4 Slice-1): workspaces + membership + binding ──
+-- A workspace is a tenant org (the MSSP unit of isolation). Every account is bound to
+-- exactly one workspace via workspace_accounts (account_id PK). workspace_members is a
+-- directory of who belongs to a workspace (the injected current_principal hook is the
+-- request-time RBAC authority — IdP claims — but this table backs member management +
+-- a DB fallback). platform_admins are platform (MSSP) operators who transcend tenants.
+-- A ws-default workspace is seeded in backend_for and every pre-existing account
+-- backfilled into it (single-tenant deployments keep working unchanged). BIGINT twins
+-- in POSTGRES_DDL.
+CREATE TABLE IF NOT EXISTS workspaces(
+  workspace_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL DEFAULT '',
+  slug TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','archived')),
+  plan TEXT,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_ws_slug ON workspaces(slug);
+
+CREATE TABLE IF NOT EXISTS workspace_members(
+  workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id),
+  principal TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'viewer' CHECK(role IN ('viewer','admin')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','invited','disabled')),
+  added_by TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  PRIMARY KEY(workspace_id, principal));
+CREATE INDEX IF NOT EXISTS ix_wsmem_principal ON workspace_members(principal);
+
+CREATE TABLE IF NOT EXISTS workspace_accounts(
+  account_id TEXT PRIMARY KEY REFERENCES accounts(account_id),
+  workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id),
+  created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_wsacct_ws ON workspace_accounts(workspace_id);
+
+CREATE TABLE IF NOT EXISTS platform_admins(
+  principal TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
+
+-- ── usage metering ledger (append-only, exactly-once via UNIQUE) ──────────────
+-- Billable dimension = accounts under management (account.active gauge, one row per
+-- account per billing period); account.onboarded + scan.completed recorded for
+-- observability. `period` = 'YYYY-MM' (stored, so GROUP BY is pure ANSI). Fail-open:
+-- a metering write never breaks a scan/onboard/ingest; dropped rows self-heal via the
+-- idempotent reconcile job. BIGINT twins in POSTGRES_DDL.
+CREATE TABLE IF NOT EXISTS usage_events(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  workspace_id TEXT NOT NULL, account_id TEXT,
+  metric TEXT NOT NULL, event_key TEXT NOT NULL,
+  quantity INTEGER NOT NULL DEFAULT 1,
+  period TEXT NOT NULL, event_epoch INTEGER NOT NULL, event_iso TEXT NOT NULL,
+  meta_json TEXT NOT NULL DEFAULT '{}');
+CREATE UNIQUE INDEX IF NOT EXISTS ix_usage_dedup  ON usage_events(workspace_id, metric, event_key);
+CREATE INDEX        IF NOT EXISTS ix_usage_rollup ON usage_events(workspace_id, period, metric);
+CREATE INDEX        IF NOT EXISTS ix_usage_epoch  ON usage_events(workspace_id, event_epoch);
 """
 
 

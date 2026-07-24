@@ -147,17 +147,38 @@ class AccountRegistry:
         return _account_row(self._one("SELECT * FROM accounts WHERE account_id=?",
                                       (account_id,)))
 
+    def bind_account(self, account_id: str, workspace_id: str, now_epoch: int) -> None:
+        """Bind an account to a workspace (workspace_accounts; account_id PK => exactly
+        one workspace per account). A re-bind to a DIFFERENT workspace is refused — an
+        account must never be silently moved across tenants (the isolation invariant);
+        re-binding to the SAME workspace is an idempotent no-op. Callers wrap this in the
+        same txn as upsert_account so onboarding is atomic."""
+        existing = self._one("SELECT workspace_id FROM workspace_accounts WHERE account_id=?",
+                             (account_id,))
+        if existing:
+            cur = dict(existing)["workspace_id"]
+            if cur != workspace_id:
+                raise ValueError(f"account {account_id} already bound to workspace {cur}")
+            return
+        self._write("INSERT INTO workspace_accounts(account_id, workspace_id, created_at) "
+                    "VALUES(?,?,?)", (account_id, workspace_id, int(now_epoch)))
+
     def list_accounts(self, *, onboarding_status: Optional[str] = None,
-                      health: Optional[str] = None) -> List[Dict]:
-        sql = "SELECT * FROM accounts"
+                      health: Optional[str] = None,
+                      workspace_id: Optional[str] = None) -> List[Dict]:
+        sql = "SELECT * FROM accounts a"
         clauses, params = [], []
         if onboarding_status:
-            clauses.append("onboarding_status=?"); params.append(onboarding_status)
+            clauses.append("a.onboarding_status=?"); params.append(onboarding_status)
         if health:
-            clauses.append("health=?"); params.append(health)
+            clauses.append("a.health=?"); params.append(health)
+        if workspace_id is not None:        # tenant filter (None => global, unit-test compatible)
+            clauses.append("EXISTS (SELECT 1 FROM workspace_accounts wa "
+                           "WHERE wa.account_id=a.account_id AND wa.workspace_id=?)")
+            params.append(workspace_id)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY account_id"
+        sql += " ORDER BY a.account_id"
         return [_account_row(r) for r in self._all(sql, params)]
 
     def set_onboarding_status(self, account_id: str, status: str, now_epoch: int) -> None:
@@ -217,20 +238,25 @@ class AccountRegistry:
             "SELECT * FROM connection_health WHERE next_due_epoch<=? ORDER BY next_due_epoch",
             (int(now_epoch),))]
 
-    def scans_due(self, now_epoch: int) -> List[Dict]:
+    def scans_due(self, now_epoch: int, *, workspace_id: Optional[str] = None) -> List[Dict]:
         """Active, healthily-connected accounts with a scan cadence whose interval has
         elapsed since ``last_scan_at`` — and which have NO queued/running job (the SQL
         NOT EXISTS is the no-double-enqueue guard). next-due is DERIVED from
         ``last_scan_at + interval`` (a pure function of a static interval), so no
         ``next_scan_due`` column / ALTER on the hot accounts table is needed. A
         never-scanned scheduled account is due now."""
+        ws_clause = ("  AND EXISTS (SELECT 1 FROM workspace_accounts wa "
+                     "WHERE wa.account_id=a.account_id AND wa.workspace_id=?) "
+                     if workspace_id is not None else "")
         rows = self._all(
             "SELECT * FROM accounts a "
             "WHERE a.onboarding_status='active' AND a.health!='unauthorized' "
             "  AND a.scan_schedule IS NOT NULL AND a.scan_schedule NOT IN ('','off') "
             "  AND NOT EXISTS (SELECT 1 FROM scan_jobs j WHERE j.account_id=a.account_id "
             "                  AND j.status IN ('queued','running')) "
-            "ORDER BY (a.last_scan_at IS NULL), a.last_scan_at, a.account_id")
+            + ws_clause +
+            "ORDER BY (a.last_scan_at IS NULL), a.last_scan_at, a.account_id",
+            ([workspace_id] if workspace_id is not None else ()))
         out = []
         for r in rows:
             try:
