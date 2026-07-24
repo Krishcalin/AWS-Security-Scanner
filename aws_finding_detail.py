@@ -794,6 +794,39 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Prevent recurrence: enforce Config rules rds-instance-public-access-check and redshift-cluster-public-access-check, and add an SCP denying modify operations that set PubliclyAccessible=true.",
         ],
     },
+    "DSPM-03": {
+        "risk": "This check FAILs when a crown-jewel datastore tagged as holding sensitive data has a RESOURCE policy that grants access to the internet or to an external AWS account -- for OpenSearch, the domain's AccessPolicies document contains an Allow with a wildcard Principal (or a NotPrincipal), or an external-account principal, that is not pinned to your own account by an aws:PrincipalOrgID / aws:SourceAccount condition. Unlike a public network endpoint (DSPM-02), a permissive resource policy hands data-plane access to anyone the policy names regardless of network path, so a misconfigured policy on a domain holding regulated data is a direct read/exfiltration grant. Fine-grained access control (FGAC), when enabled, can still gate the request at the identity layer, so an FGAC-covered domain is reported as a lower-confidence, paths-to-verify finding rather than a hard public exposure.",
+        "impact": "A sensitive datastore's own resource policy authorizes public or cross-account principals to read it, so data can be exfiltrated by anyone the policy names -- no network breach or credential theft required -- failing least-privilege and data-access-control obligations.",
+        "steps": [
+            "Inspect the resource policy: aws opensearch describe-domain --domain-name <DOMAIN> --query 'DomainStatus.AccessPolicies' and identify the statement whose Principal is '*' (or an external 12-digit account) without an org/account-scoping Condition.",
+            "Author a scoped policy that removes the wildcard/external grant (or gates it with a Condition such as aws:PrincipalOrgID or aws:SourceAccount pinned to your own account/org) and save it as scoped-policy.json.",
+            "Apply it: aws opensearch update-domain-config --domain-name <DOMAIN> --access-policies file://scoped-policy.json",
+            "Enable fine-grained access control so data-plane requests are authorized per-identity: aws opensearch update-domain-config --domain-name <DOMAIN> --advanced-security-options Enabled=true,InternalUserDatabaseEnabled=false",
+            "Re-scan to confirm the datastore no longer grants public/cross-account access, and prefer VPC-scoped domains so the endpoint is not internet-routable in the first place.",
+        ],
+    },
+    "SECRET-01": {
+        "risk": "This check FAILs when an SSM Parameter Store parameter with a credential-shaped name (password, api_key, token, secret, ...) is stored as a plaintext String/StringList instead of an encrypted SecureString. A String parameter's value is stored and returned in cleartext, so anyone with the broad ssm:GetParameter permission -- which many roles hold via a wildcard -- reads the raw credential with no KMS decrypt and no separate authorization step. Plaintext secrets in configuration stores are a leading cause of lateral movement: one over-permissioned role or one leaked read grant turns a config parameter into working credentials for a database, third-party API, or another AWS account.",
+        "impact": "The credential is readable in cleartext by any principal with ssm:GetParameter, so a single over-broad read grant or compromised role yields working credentials -- enabling data access, lateral movement, or third-party account takeover.",
+        "steps": [
+            "Confirm the parameter type (never print the value): aws ssm describe-parameters --parameter-filters Key=Name,Values=<NAME> --query 'Parameters[0].Type' -- expect String/StringList.",
+            "Recreate it as an encrypted SecureString backed by a customer CMK, supplying the value out-of-band: aws ssm put-parameter --name <NAME> --type SecureString --key-id <CMK_ARN> --value <VALUE> --overwrite",
+            "Rotate the exposed credential at its source (database user, API provider, IAM key), since the plaintext value must be treated as compromised.",
+            "Scope read access: replace ssm:GetParameter on '*' in role policies with the specific parameter ARN, and prefer AWS Secrets Manager with automatic rotation for database/API credentials.",
+            "Verify: aws ssm describe-parameters --parameter-filters Key=Name,Values=<NAME> --query 'Parameters[0].[Type,KeyId]' now returns SecureString and your CMK.",
+        ],
+    },
+    "SECRET-05": {
+        "risk": "This check FAILs when an IAM role's identity policy allows it to read a secret's value (secretsmanager:GetSecretValue or ssm:GetParameter) on a broad resource, so the secret becomes a data terminal reachable through that role. Combined with an internet-exposed workload that can assume or is bound to the role, this forms an internet -> workload -> role -> secret attack path: an attacker who compromises the exposed workload inherits the role and reads the credential, then pivots wherever that credential leads. Because the grant is identity-policy-based and often uses a wildcard resource, the same role frequently reads every secret in the account -- turning one foothold into account-wide credential theft.",
+        "impact": "An exposed or compromised workload holding this role can read the secret's value and reuse those credentials to reach databases, third-party services, or other accounts -- converting a single workload compromise into broad credential theft and lateral movement.",
+        "steps": [
+            "Identify the grant: review the role's policies for secretsmanager:GetSecretValue / ssm:GetParameter on '*' or a broad ARN (aws iam list-role-policies / list-attached-role-policies then get the policy documents).",
+            "Scope it to only the specific secret ARNs the role legitimately needs, removing the wildcard resource.",
+            "Bound the role so it cannot exceed that scope: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>",
+            "Add a resource policy on the secret that allows only the intended principals: aws secretsmanager put-resource-policy --secret-id <ARN> --resource-policy file://policy.json --block-public-policy",
+            "Restrict who/what can assume the role (trust policy) so an internet-exposed workload is not silently able to reach the credential, and re-scan to confirm the path is severed.",
+        ],
+    },
     "EBS-01": {
         "risk": "This check FAILs when account-level EBS encryption-by-default is OFF in the region, so newly created volumes and snapshots are unencrypted unless each caller opts in. Relying on per-request opt-in inevitably leaves gaps: a forgotten flag, a copied AMI, or an automation script produces cleartext block storage. Any actor who obtains a snapshot, an EBS direct-API read, or the underlying storage then recovers the full filesystem -- including secrets, databases, and credentials -- without needing to decrypt anything.",
         "impact": "New volumes and snapshots are created unencrypted by default, so a leaked snapshot or storage-layer compromise yields fully readable disk contents and fails encryption-at-rest compliance.",

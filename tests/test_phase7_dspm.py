@@ -144,6 +144,16 @@ def _dspm_scanner(roles=None):
     s._clients["redshift:us-east-1"] = _empty("Clusters")
     s._clients["dynamodb:us-east-1"] = _empty("TableNames")
     s._clients["efs:us-east-1"] = _empty("FileSystems")
+    # Slice 1: expanded DSPM surfaces — empty by default so _collect_dspm no-ops them
+    s._clients["kinesis:us-east-1"] = _empty("StreamNames")
+    s._clients["fsx:us-east-1"] = _empty("FileSystems")
+    s._clients["timestream-write:us-east-1"] = _empty("Databases")
+    _md = MagicMock()
+    _md.describe_clusters.return_value = {"Clusters": []}
+    s._clients["memorydb:us-east-1"] = _md
+    _os = MagicMock()
+    _os.list_domain_names.return_value = {"DomainNames": []}
+    s._clients["opensearch:us-east-1"] = _os
     return s, g
 
 
@@ -255,3 +265,224 @@ def test_dspm_denied_describe_is_info_not_phantom():
     s._clients["rds:us-east-1"] = rds
     s._collect_dspm(g)
     assert "INFO" in _status(s, "DSPM-01")            # never a phantom all-clear
+
+
+# ── Slice 1: expanded DSPM datastore surfaces ────────────────────────────────
+def _rds_clusters(clusters):
+    c = MagicMock()
+    c.get_paginator.side_effect = lambda op: _pager(
+        "DBInstances" if "instances" in op else "DBClusters",
+        [] if "instances" in op else clusters)
+    return c
+
+
+def test_dspm_docdb_engine_branch_distinct_kind():
+    s, g = _dspm_scanner()
+    arn = f"arn:aws:rds:us-east-1:{ACCT}:cluster:docdb-1"
+    s._clients["rds:us-east-1"] = _rds_clusters([{
+        "DBClusterArn": arn, "DBClusterIdentifier": "docdb-1", "Engine": "docdb",
+        "StorageEncrypted": True, "TagList": [_tag("DataClassification", "PHI")]}])
+    s._collect_dspm(g)
+    assert g.node(arn)["kind"] == "DocDBCluster"       # NOT RDSCluster
+    assert g.node(arn)["props"]["crown_jewel"]
+
+
+def test_dspm_neptune_engine_branch_distinct_kind():
+    s, g = _dspm_scanner()
+    arn = f"arn:aws:rds:us-east-1:{ACCT}:cluster:neptune-1"
+    s._clients["rds:us-east-1"] = _rds_clusters([{
+        "DBClusterArn": arn, "DBClusterIdentifier": "neptune-1", "Engine": "neptune",
+        "StorageEncrypted": True, "TagList": [_tag("Sensitivity", "restricted")]}])
+    s._collect_dspm(g)
+    assert g.node(arn)["kind"] == "NeptuneCluster"
+
+
+def test_dspm_ordinary_aurora_cluster_stays_rdscluster():
+    s, g = _dspm_scanner()
+    arn = f"arn:aws:rds:us-east-1:{ACCT}:cluster:aurora-1"
+    s._clients["rds:us-east-1"] = _rds_clusters([{
+        "DBClusterArn": arn, "DBClusterIdentifier": "aurora-1", "Engine": "aurora-postgresql",
+        "StorageEncrypted": True, "TagList": [_tag("PII", "true")]}])
+    s._collect_dspm(g)
+    assert g.node(arn)["kind"] == "RDSCluster"
+
+
+def test_dspm_kinesis_crown_with_reader_edge():
+    s, g = _dspm_scanner([_role("reader", [_stmt(
+        "Allow", {"kinesis:getrecords"},
+        {f"arn:aws:kinesis:us-east-1:{ACCT}:stream/events".lower()})])])
+    kin = MagicMock()
+    kin.get_paginator.return_value = _pager("StreamNames", ["events"])
+    kin.list_tags_for_stream.return_value = {"Tags": [_tag("DataClassification", "PCI")]}
+    kin.describe_stream_summary.return_value = {"StreamDescriptionSummary": {
+        "StreamARN": f"arn:aws:kinesis:us-east-1:{ACCT}:stream/events", "EncryptionType": "KMS"}}
+    s._clients["kinesis:us-east-1"] = kin
+    s._collect_dspm(g)
+    arn = f"arn:aws:kinesis:us-east-1:{ACCT}:stream/events"
+    assert g.node(arn)["kind"] == "KinesisStream" and g.node(arn)["props"]["crown_jewel"]
+    assert any(e["kind"] == "CAN_READ_DATA" and e["dst"] == arn for e in g.out_edges(f"arn:aws:iam::{ACCT}:role/reader"))
+
+
+def test_dspm_memorydb_crown_no_reader_edge_even_for_admin():
+    admin = _role("admin", [_stmt("Allow", {"*"}, {"*"})])
+    s, g = _dspm_scanner([admin])
+    arn = f"arn:aws:memorydb:us-east-1:{ACCT}:cluster/cache1"
+    md = MagicMock()
+    md.describe_clusters.return_value = {"Clusters": [{"ARN": arn, "Name": "cache1", "KmsKeyId": "k"}]}
+    md.list_tags.return_value = {"TagList": [_tag("crownjewel", "yes")]}
+    s._clients["memorydb:us-east-1"] = md
+    s._collect_dspm(g)
+    assert g.node(arn)["kind"] == "MemoryDBCluster" and g.node(arn)["props"]["crown_jewel"]
+    # empty read-action set => NO CAN_READ_DATA edge, even for a full-admin role
+    assert not any(e["kind"] == "CAN_READ_DATA" for e in g.out_edges(f"arn:aws:iam::{ACCT}:role/admin"))
+
+
+def test_dspm_fsx_crown_node():
+    s, g = _dspm_scanner()
+    arn = f"arn:aws:fsx:us-east-1:{ACCT}:file-system/fs-1"
+    fsx = MagicMock()
+    fsx.get_paginator.return_value = _pager("FileSystems", [{
+        "FileSystemId": "fs-1", "ResourceARN": arn, "KmsKeyId": "k",
+        "Tags": [_tag("Compliance", "HIPAA")]}])
+    s._clients["fsx:us-east-1"] = fsx
+    s._collect_dspm(g)
+    assert g.node(arn)["kind"] == "FSxFileSystem" and g.node(arn)["props"]["crown_jewel"]
+
+
+def test_dspm_timestream_crown_with_reader():
+    tbl = f"arn:aws:timestream:us-east-1:{ACCT}:database/db/table/metrics"
+    s, g = _dspm_scanner([_role("ts-reader", [_stmt("Allow", {"timestream:select"}, {tbl.lower()})])])
+    ts = MagicMock()
+
+    def get_pag(op):
+        p = MagicMock()
+        if "databases" in op:
+            p.paginate.return_value = [{"Databases": [{"DatabaseName": "db"}]}]
+        else:
+            p.paginate.return_value = [{"Tables": [{"TableName": "metrics", "Arn": tbl}]}]
+        return p
+    ts.get_paginator.side_effect = get_pag
+    ts.list_tags_for_resource.return_value = {"Tags": [_tag("DataClassification", "confidential")]}
+    s._clients["timestream-write:us-east-1"] = ts
+    s._collect_dspm(g)
+    assert g.node(tbl)["kind"] == "TimestreamTable"
+    assert any(e["kind"] == "CAN_READ_DATA" for e in g.out_edges(f"arn:aws:iam::{ACCT}:role/ts-reader"))
+
+
+def test_dspm_kinesis_denied_is_info_not_phantom():
+    s, g = _dspm_scanner()
+    kin = MagicMock()
+    kin.get_paginator.side_effect = RuntimeError("AccessDenied: kinesis:ListStreams")
+    s._clients["kinesis:us-east-1"] = kin
+    s._collect_dspm(g)
+    assert "INFO" in _status(s, "DSPM-01")
+
+
+# ── Slice 1 · Batch 3: OpenSearch + DSPM-03 (public resource policy) ─────────
+def _opensearch(name, status):
+    c = MagicMock()
+    c.list_domain_names.return_value = {"DomainNames": [{"DomainName": name}]}
+    c.describe_domain.return_value = {"DomainStatus": status}
+    c.list_tags.return_value = {"TagList": status.pop("_tags", [])}
+    return c
+
+
+OS_ARN = f"arn:aws:es:us-east-1:{ACCT}:domain/prod-search"
+
+
+def test_dspm_opensearch_public_crown():
+    s, g = _dspm_scanner()
+    s._clients["opensearch:us-east-1"] = _opensearch("prod-search", {
+        "ARN": OS_ARN, "Endpoint": "search-prod.es.amazonaws.com",
+        "EncryptionAtRestOptions": {"Enabled": True},
+        "_tags": [_tag("DataClassification", "PII")]})
+    s._collect_dspm(g)
+    assert g.node(OS_ARN)["kind"] == "OpenSearchDomain" and g.node(OS_ARN)["props"]["crown_jewel"]
+    assert "FAIL" in _status(s, "DSPM-02")             # public endpoint, no VPCOptions
+
+
+def test_dspm_opensearch_vpc_not_public():
+    s, g = _dspm_scanner()
+    s._clients["opensearch:us-east-1"] = _opensearch("prod-search", {
+        "ARN": OS_ARN, "Endpoint": "vpc-prod.es.amazonaws.com",
+        "VPCOptions": {"VPCId": "vpc-1"},
+        "_tags": [_tag("Sensitivity", "restricted")]})
+    s._collect_dspm(g)
+    assert g.node(OS_ARN)["props"]["crown_jewel"]
+    assert "FAIL" not in _status(s, "DSPM-02")         # VPC-scoped => not public
+
+
+def test_dspm03_public_access_policy_fail():
+    s, g = _dspm_scanner()
+    pol = '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"es:ESHttpGet","Resource":"*"}]}'
+    s._clients["opensearch:us-east-1"] = _opensearch("prod-search", {
+        "ARN": OS_ARN, "VPCOptions": {"VPCId": "vpc-1"}, "AccessPolicies": pol,
+        "_tags": [_tag("PII", "true")]})
+    s._collect_dspm(g)
+    assert "FAIL" in _status(s, "DSPM-03")
+
+
+def test_dspm03_fgac_downgrades_to_warn():
+    s, g = _dspm_scanner()
+    pol = '{"Statement":[{"Effect":"Allow","Principal":"*","Action":"es:*","Resource":"*"}]}'
+    s._clients["opensearch:us-east-1"] = _opensearch("prod-search", {
+        "ARN": OS_ARN, "VPCOptions": {"VPCId": "vpc-1"}, "AccessPolicies": pol,
+        "AdvancedSecurityOptions": {"Enabled": True},
+        "_tags": [_tag("PII", "true")]})
+    s._collect_dspm(g)
+    assert "WARN" in _status(s, "DSPM-03") and "FAIL" not in _status(s, "DSPM-03")
+
+
+def test_dspm03_own_account_policy_no_finding():
+    s, g = _dspm_scanner()
+    pol = ('{"Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::%s:root"},'
+           '"Action":"es:ESHttpGet","Resource":"*"}]}') % ACCT
+    s._clients["opensearch:us-east-1"] = _opensearch("prod-search", {
+        "ARN": OS_ARN, "VPCOptions": {"VPCId": "vpc-1"}, "AccessPolicies": pol,
+        "_tags": [_tag("PII", "true")]})
+    s._collect_dspm(g)
+    assert not _status(s, "DSPM-03")                   # own-account principal => not exposed
+
+
+def test_opensearchdomain_in_crown_kinds():
+    import aws_correlate
+    assert "OpenSearchDomain" in aws_correlate.CROWN_DATASTORE_KINDS
+
+
+# ── Slice 1 adversarial-verify regressions ───────────────────────────────────
+def test_dspm_memorydb_bounded_no_hang_and_info():
+    # empty-page-carrying-a-token must NOT hang and MUST emit a truncation INFO (no phantom PASS)
+    s, g = _dspm_scanner()
+    md = MagicMock()
+    md.describe_clusters.return_value = {"Clusters": [], "NextToken": "STUCK"}   # always a token
+    s._clients["memorydb:us-east-1"] = md
+    s._collect_dspm(g)                                   # terminates (bounded 50 pages)
+    assert md.describe_clusters.call_count <= 51
+    assert "INFO" in _status(s, "DSPM-01")
+
+
+def test_dspm_opensearch_reader_edge_via_path_grant():
+    dom = f"arn:aws:es:us-east-1:{ACCT}:domain/prod-search"
+    reader = _role("es-reader", [_stmt("Allow", {"es:eshttpget"}, {f"{dom}/*".lower()})])
+    s, g = _dspm_scanner([reader])
+    s._clients["opensearch:us-east-1"] = _opensearch("prod-search", {
+        "ARN": dom, "VPCOptions": {"VPCId": "vpc-1"}, "_tags": [_tag("PII", "true")]})
+    s._collect_dspm(g)
+    # es:ESHttpGet on domain/prod-search/* now correctly yields a reader edge (was an FN)
+    assert any(e["kind"] == "CAN_READ_DATA" and e["dst"] == dom
+               for e in g.out_edges(f"arn:aws:iam::{ACCT}:role/es-reader"))
+
+
+def test_dspm_docdb_member_instance_skipped():
+    s, g = _dspm_scanner([_role("r", [_stmt("Allow", {"rds-db:connect"}, {"*"})])])
+    inst = f"arn:aws:rds:us-east-1:{ACCT}:db:docdb-inst"
+    c = MagicMock()
+    c.get_paginator.side_effect = lambda op: _pager(
+        "DBInstances" if "instances" in op else "DBClusters",
+        [{"DBInstanceArn": inst, "DBInstanceIdentifier": "docdb-inst", "Engine": "docdb",
+          "StorageEncrypted": True, "TagList": [_tag("PII", "true")]}] if "instances" in op else [])
+    s._clients["rds:us-east-1"] = c
+    s._collect_dspm(g)
+    # a DocDB MEMBER instance from describe_db_instances is not mis-kinded RDSInstance
+    assert g.node(inst) is None
+    assert not any(e["kind"] == "CAN_READ_DATA" for e in g.out_edges(f"arn:aws:iam::{ACCT}:role/r"))

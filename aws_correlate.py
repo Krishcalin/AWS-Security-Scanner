@@ -45,6 +45,11 @@ E_PATH = frozenset({
 CROWN_DATASTORE_KINDS = frozenset({
     "S3Bucket", "RDSInstance", "RDSCluster",
     "RedshiftCluster", "DynamoDBTable", "EFSFileSystem",
+    # Slice 1: OpenSearch is the one expanded DSPM store that can be a public first-hop
+    # terminal, so it needs the is_direct_public_crown scoring bump. VPC-only stores
+    # (DocDB/Neptune/MemoryDB/FSx/Kinesis/Timestream) are picked up as crowns purely by
+    # the crown_jewel node prop and need no entry here.
+    "OpenSearchDomain",
 })
 # workload node kinds that can carry their own HAS_VULN exploit signal
 _EXPLOIT_KINDS = frozenset({"EC2Instance", "ECRImage", "LambdaFunction"})

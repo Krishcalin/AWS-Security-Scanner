@@ -217,6 +217,27 @@ DSPM_READ_ACTIONS = {
                               "rds-data:batchexecutestatement", "rds-data:executesql"}),
     "rdscluster": frozenset({"rds-db:connect", "rds-data:executestatement",
                              "rds-data:batchexecutestatement", "rds-data:executesql"}),
+    # ── Slice 1: expanded DSPM datastore surfaces ────────────────────────────
+    # es:ESHttp* authorizes on the domain's HTTP PATH sub-resource (arn:...:domain/<name>/*),
+    # NOT the bare domain ARN — so the collector probes a path sub-resource (see
+    # _dspm_opensearch read_probe), otherwise the AWS-documented `domain/<name>/*` reader
+    # grant is a false negative. (kinesis/timestream below DO authorize on the bare ARN.)
+    "opensearchdomain": frozenset({"es:eshttpget", "es:eshttphead", "es:eshttppost"}),
+    # PRECISE — a real IAM data action whose resource is the store's own (bare) ARN:
+    "kinesisstream": frozenset({"kinesis:getrecords", "kinesis:getsharditerator",
+                                "kinesis:subscribetoshard"}),
+    "timestreamtable": frozenset({"timestream:select"}),
+    # COARSE (neptune-db:* actions authorize on a dbuser resource, not the cluster ARN,
+    # so only *-or-service-wildcard grants match the cluster probe — a conservative FN,
+    # same class as the RDS/Redshift credential actions above):
+    "neptunecluster": frozenset({"neptune-db:connect", "neptune-db:readdataviaquery",
+                                 "neptune-db:getquerystatus"}),
+    # NO IAM data action (Mongo user auth / Redis ACL / NFS+SMB posix auth are all
+    # out-of-band) → empty set → role_can_read_store returns None → the crown node is
+    # emitted but carries NO CAN_READ_DATA edge (documented false-negative):
+    "docdbcluster": frozenset(),
+    "memorydbcluster": frozenset(),
+    "fsxfilesystem": frozenset(),
 }
 
 

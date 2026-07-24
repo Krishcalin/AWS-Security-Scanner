@@ -68,6 +68,8 @@ import aws_deepplane
 import aws_correlate
 import aws_kube
 import aws_flowlog
+import aws_secrets
+import aws_leastpriv
 import aws_effperm
 import aws_state
 import aws_unused
@@ -77,7 +79,7 @@ import aws_winvuln
 import aws_finding_detail
 import aws_graph_neptune
 
-VERSION = "2.23.0"
+VERSION = "2.24.0"
 
 # Light-theme CSS for the HTML report (plain string — real braces, no interpolation, so it
 # concatenates cleanly with the f-string body in save_html).
@@ -335,7 +337,9 @@ CHECK_SEVERITY = {
     # workload) + identity fusion (stale admin key = pre-auth account takeover)
     "EXPOSURE-03": "MEDIUM", "IDENTITY-01": "HIGH",
     # Phase 7: DSPM crown-jewel datastores (RDS/Redshift/DynamoDB/EFS) w/o Macie
-    "DSPM-01": "MEDIUM", "DSPM-02": "HIGH",
+    "DSPM-01": "MEDIUM", "DSPM-02": "HIGH", "DSPM-03": "MEDIUM",
+    # Slice 1 — AWS-resident secrets
+    "SECRET-01": "HIGH", "SECRET-02": "LOW", "SECRET-05": "HIGH",
     # Phase 3: deep-plane ingestion (vuln / data / threat) + flagship attack path
     "VULN-01": "HIGH", "VULN-02": "CRITICAL", "VULN-03": "HIGH",
     "VULN-04": "HIGH",
@@ -571,6 +575,13 @@ COMPLIANCE_MAP = {
     # DSPM-02 network-exposure keys (NOT CIS 2.1.1 — that is the S3-only BPA control)
     "DSPM-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "DSPM-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    # DSPM-03 (crown store with a public/cross-account RESOURCE policy) — AC-3 tuple copied
+    # verbatim from S3-10 to keep every framework universe byte-identical (frozen NIST gate).
+    "DSPM-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    # Slice 1 secrets — tuples copied verbatim from DSPM-01(SC-28)/SEC-01(SC-12(1))/EXTACCESS-03(AC-6)
+    "SECRET-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "SECRET-02": {"PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12(1)"},
+    "SECRET-05": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "EXTACCESS-01": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "AC-3"},
     "EXTACCESS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "EXTACCESS-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
@@ -877,6 +888,9 @@ REMEDIATION_MAP = {
     "DATA-03": "Enable default encryption on the crown-jewel bucket: aws s3api put-bucket-encryption --bucket <BUCKET> --server-side-encryption-configuration '{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\"}}]}'",
     "DSPM-01": "Confirm this datastore is authorized to hold the tagged sensitive data class and enforce encryption-at-rest with a CMK + least-privilege reads. DynamoDB: aws dynamodb update-table --table-name <NAME> --sse-specification Enabled=true,SSEType=KMS ; RDS: restore an encrypted snapshot copy; scope reader roles: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <ARN> .",
     "DSPM-02": "Remove public network reachability from the crown-jewel datastore and place it in private subnets. RDS: aws rds modify-db-instance --db-instance-identifier <ID> --no-publicly-accessible --apply-immediately ; Redshift: aws redshift modify-cluster --cluster-identifier <ID> --no-publicly-accessible ; then deny 0.0.0.0/0 in its security group and scope its reader roles.",
+    "DSPM-03": "Remove the public/cross-account grant from the crown datastore's resource policy so only known principals can reach it. OpenSearch: aws opensearch update-domain-config --domain-name <DOMAIN> --access-policies file://scoped-policy.json (drop the '\"Principal\": \"*\"' / external-account statement, or gate it with an aws:PrincipalOrgID / aws:SourceAccount condition), and enable fine-grained access control. Re-scan to confirm the datastore no longer has a public resource policy.",
+    "SECRET-01": "Move the plaintext credential out of an SSM String parameter into an encrypted SecureString backed by a customer CMK, then delete the plaintext copy. Recreate it: aws ssm put-parameter --name <NAME> --type SecureString --key-id <CMK_ARN> --value <VALUE> --overwrite (supply the value out-of-band; never commit it), and rotate the exposed credential since a String value was readable by anyone with ssm:GetParameter. Prefer AWS Secrets Manager with rotation for database/API credentials.",
+    "SECRET-05": "Scope the role so it cannot read this secret unless it must. Tighten the identity policy to a specific secret ARN instead of secretsmanager:GetSecretValue / ssm:GetParameter on '*', and bound the role: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>. Also restrict who can assume the role, and put a resource policy on the secret (aws secretsmanager put-resource-policy) that allows only the intended principals — so an internet-exposed workload that assumes this role cannot reach the credential.",
     "EXTACCESS-01": "Remove the public bucket policy / ACL grant (Access Analyzer confirmed public): aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "EXTACCESS-02": "Scope the bucket policy to remove the cross-account principal (or add an aws:PrincipalOrgID condition): aws s3api put-bucket-policy --bucket <BUCKET> --policy <SCOPED_POLICY_JSON>",
     "EXTACCESS-03": "Scope the role's S3 permissions to specific buckets/prefixes instead of s3:GetObject on '*' or 'bucket/*', and bound the role: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN> (identity-policy only — also verify the bucket policy / SCP).",
@@ -1634,6 +1648,7 @@ class AWSLiveScanner:
         self._downgraded_edges: List[Dict] = []     # edges downgraded to conditioned
         self._state_report: Optional[Dict] = None   # lifecycle/drift/trend/mttr (if --state)
         self._unused_report: Optional[List] = None  # CIEM right-sizing signals
+        self._least_priv_report: Optional[List] = None  # CIEM-02 generated least-priv policies
         # ── Phase 6: agentless side-scan + persistence/export metadata ───────
         self.side_scan = False                      # --side-scan opt-in
         self.side_scan_targets = "exposed"          # exposed | all | tagged
@@ -9700,6 +9715,7 @@ class AWSLiveScanner:
         self._collect_access_analyzer(g)
         self._build_can_read_data(g, crown)
         self._collect_dspm(g)                       # Phase 7 DSPM crown datastores
+        self._collect_secrets_dspm(g)               # Slice 1 AWS-resident secrets
         self._correlate_flagship(g)                 # crown_nodes(g) now spans S3 + DSPM
         self._check_kiem_irsa(g)                     # Phase 3 KIEM-04 (independent of crown)
 
@@ -9952,14 +9968,23 @@ class AWSLiveScanner:
             roles = [p for p in self._get_iam_principals() if p["type"] == "role"]
         except Exception:
             roles = []
-        self._dspm_rds(g, roles)
+        self._dspm_rds(g, roles)              # + DocDB/Neptune via the Engine branch
         self._dspm_redshift(g, roles)
         self._dspm_dynamodb(g, roles)
         self._dspm_efs(g, roles)
+        self._dspm_kinesis(g, roles)
+        self._dspm_memorydb(g, roles)
+        self._dspm_fsx(g, roles)
+        self._dspm_timestream(g, roles)
+        self._dspm_opensearch(g, roles)
 
-    def _dspm_emit(self, g, arn, kind, name, cj, public, encrypted, roles, read_actions):
+    def _dspm_emit(self, g, arn, kind, name, cj, public, encrypted, roles, read_actions,
+                   read_probe=None):
         """Add the crown DataStore node + DSPM-01 (+DSPM-02 if public) + CAN_READ_DATA
-        edges for every role whose identity policy can read it (coarse for RDS/Redshift)."""
+        edges for every role whose identity policy can read it (coarse for RDS/Redshift).
+        ``read_probe`` overrides the ARN used to test reader grants — needed for OpenSearch,
+        whose ``es:ESHttp*`` actions authorize on the ``domain/<name>/*`` HTTP path
+        sub-resource, not the bare domain ARN (the node id stays the bare ARN)."""
         if not arn:
             return
         g.add_node(arn, kind, name=name, DataStore=True, crown_jewel=True,
@@ -9971,8 +9996,9 @@ class AWSLiveScanner:
         if public:
             self._add("FAIL", "DSPM-02", "DATA", name,
                       f"Crown-jewel {kind} {name} is publicly reachable | {name}")
+        probe = read_probe or arn
         for p in roles:
-            r = aws_deepplane.role_can_read_store(p["statements"], arn, read_actions)
+            r = aws_deepplane.role_can_read_store(p["statements"], probe, read_actions)
             if r is None:
                 continue
             g.add_edge(p["arn"], arn, "CAN_READ_DATA", basis="identity-policy",
@@ -9999,13 +10025,30 @@ class AWSLiveScanner:
                           f"Could not enumerate {kind} in {self.region}: {e}")
                 continue
             for db in rows:
+                # describe_db_instances also surfaces DocDB/Neptune MEMBER instances (they
+                # share the RDS control plane); they are represented by their cluster crown
+                # node — skip them here so they aren't mis-kinded RDSInstance and given a
+                # spurious rds-db:connect CAN_READ_DATA edge.
+                if op == "describe_db_instances" and \
+                        (db.get("Engine") or "").lower() in ("docdb", "neptune"):
+                    continue
                 cj = aws_deepplane.is_crown_jewel_by_tags(db.get("TagList"))
                 if not cj:
                     continue
+                # describe_db_clusters ALSO returns DocumentDB and Neptune clusters
+                # (Engine docdb/neptune) — give them their own crown kind rather than
+                # mis-labelling them RDSCluster (and pick the right read-action set).
+                row_kind = kind
+                if op == "describe_db_clusters":
+                    eng = (db.get("Engine") or "").lower()
+                    if eng == "docdb":
+                        row_kind = "DocDBCluster"
+                    elif eng == "neptune":
+                        row_kind = "NeptuneCluster"
                 arn = db.get(arn_f) or db.get(id_f, "")
-                self._dspm_emit(g, arn, kind, db.get(id_f, arn), cj,
+                self._dspm_emit(g, arn, row_kind, db.get(id_f, arn), cj,
                                 bool(db.get("PubliclyAccessible")), bool(db.get(enc_f)),
-                                roles, aws_deepplane.DSPM_READ_ACTIONS[kind.lower()])
+                                roles, aws_deepplane.DSPM_READ_ACTIONS[row_kind.lower()])
 
     def _dspm_redshift(self, g, roles):
         try:
@@ -10077,6 +10120,279 @@ class AWSLiveScanner:
             self._dspm_emit(g, arn, "EFSFileSystem", name, cj, False,
                             bool(fs.get("Encrypted")), roles,
                             aws_deepplane.DSPM_READ_ACTIONS["efsfilesystem"])
+
+    # ── Slice 1: expanded DSPM datastore surfaces (VPC-only crown stores) ────────
+    # Each collector mirrors _dspm_efs: its own try/except -> INFO no-op (never a phantom
+    # all-clear on a denied describe), per-resource tag read guarded, public=False (these
+    # stores are VPC-only — no internet EXPOSED_TO first hop, so aws_correlate is untouched).
+    # NOTE: kinesis/memorydb/fsx/timestream describes are NOT in the base scanner today —
+    # they need SecurityAudit coverage or the optional opt-in grant; on denial they degrade
+    # to a DSPM-01 INFO naming the store, never a false all-clear.
+    def _dspm_kinesis(self, g, roles):
+        try:
+            kin = self._client("kinesis")
+            names: List[str] = []
+            for page in kin.get_paginator("list_streams").paginate():
+                names += page.get("StreamNames", [])
+        except Exception as e:
+            self._add("INFO", "DSPM-01", "DATA", "kinesis",
+                      f"Could not enumerate Kinesis streams in {self.region}: {e}")
+            return
+        if len(names) > 300:
+            self._add("INFO", "DSPM-01", "DATA", "kinesis",
+                      f"Kinesis DSPM classified only the first 300 of {len(names)} streams in "
+                      f"{self.region}; {len(names) - 300} not inspected for crown-jewel tags")
+        for name in names[:300]:
+            try:
+                tags = kin.list_tags_for_stream(StreamName=name).get("Tags", [])
+            except Exception:
+                continue
+            cj = aws_deepplane.is_crown_jewel_by_tags(tags)
+            if not cj:
+                continue
+            try:
+                summ = kin.describe_stream_summary(StreamName=name).get(
+                    "StreamDescriptionSummary", {})
+            except Exception:
+                summ = {}
+            arn = summ.get("StreamARN") or \
+                f"arn:aws:kinesis:{self.region}:{self.account}:stream/{name}"
+            enc = summ.get("EncryptionType", "NONE") not in ("NONE", None, "")
+            self._dspm_emit(g, arn, "KinesisStream", name, cj, False, enc, roles,
+                            aws_deepplane.DSPM_READ_ACTIONS["kinesisstream"])
+
+    def _dspm_memorydb(self, g, roles):
+        try:
+            mdb = self._client("memorydb")
+            clusters: List[Dict] = []
+            tok = None
+            truncated = True
+            for _ in range(50):                          # BOUND pages: a misbehaving paginator
+                resp = mdb.describe_clusters(**({"NextToken": tok} if tok else {}))
+                clusters += resp.get("Clusters", [])
+                tok = resp.get("NextToken")
+                if not isinstance(tok, str) or not tok:  # (incl. empty-page-with-token → still bounded)
+                    truncated = False
+                    break
+        except Exception as e:
+            self._add("INFO", "DSPM-01", "DATA", "memorydb",
+                      f"Could not enumerate MemoryDB clusters in {self.region}: {e}")
+            return
+        if truncated:                                    # visibility, never a silent all-clear
+            self._add("INFO", "DSPM-01", "DATA", "memorydb",
+                      f"MemoryDB DSPM stopped after 50 pages in {self.region}; remaining clusters "
+                      f"not inspected for crown-jewel tags (rerun scoped)")
+        for c in clusters:
+            arn = c.get("ARN", "")
+            try:
+                tags = mdb.list_tags(ResourceArn=arn).get("TagList", []) if arn else []
+            except Exception:
+                tags = []
+            cj = aws_deepplane.is_crown_jewel_by_tags(tags)
+            if not cj:
+                continue
+            self._dspm_emit(g, arn, "MemoryDBCluster", c.get("Name", arn), cj, False,
+                            bool(c.get("KmsKeyId")), roles,
+                            aws_deepplane.DSPM_READ_ACTIONS["memorydbcluster"])
+
+    def _dspm_fsx(self, g, roles):
+        try:
+            fsx = self._client("fsx")
+            systems: List[Dict] = []
+            for page in fsx.get_paginator("describe_file_systems").paginate():
+                systems += page.get("FileSystems", [])
+        except Exception as e:
+            self._add("INFO", "DSPM-01", "DATA", "fsx",
+                      f"Could not enumerate FSx file systems in {self.region}: {e}")
+            return
+        for fs in systems:
+            cj = aws_deepplane.is_crown_jewel_by_tags(fs.get("Tags"))
+            if not cj:
+                continue
+            arn = fs.get("ResourceARN", "")
+            self._dspm_emit(g, arn, "FSxFileSystem", fs.get("FileSystemId", arn), cj, False,
+                            bool(fs.get("KmsKeyId")), roles,
+                            aws_deepplane.DSPM_READ_ACTIONS["fsxfilesystem"])
+
+    def _dspm_timestream(self, g, roles):
+        try:
+            ts = self._client("timestream-write")
+            dbs: List[Dict] = []
+            for page in ts.get_paginator("list_databases").paginate():
+                dbs += page.get("Databases", [])
+        except Exception as e:
+            self._add("INFO", "DSPM-01", "DATA", "timestream",
+                      f"Could not enumerate Timestream databases in {self.region}: {e}")
+            return
+        for db in dbs:
+            dbname = db.get("DatabaseName", "")
+            try:
+                tables: List[Dict] = []
+                for page in ts.get_paginator("list_tables").paginate(DatabaseName=dbname):
+                    tables += page.get("Tables", [])
+            except Exception:
+                continue
+            for t in tables:
+                arn = t.get("Arn", "")
+                try:
+                    tags = ts.list_tags_for_resource(ResourceARN=arn).get("Tags", []) if arn else []
+                except Exception:
+                    tags = []
+                cj = aws_deepplane.is_crown_jewel_by_tags(tags)
+                if not cj:
+                    continue
+                # Timestream is always KMS-encrypted at rest.
+                self._dspm_emit(g, arn, "TimestreamTable", t.get("TableName", arn), cj,
+                                False, True, roles,
+                                aws_deepplane.DSPM_READ_ACTIONS["timestreamtable"])
+
+    def _dspm_opensearch(self, g, roles):
+        """OpenSearch/Elasticsearch domains — a crown store that CAN have a public endpoint
+        (first-hop internet terminal) AND a resource policy (AccessPolicies -> DSPM-03)."""
+        try:
+            osc = self._client("opensearch")
+            names = [d.get("DomainName") for d in
+                     osc.list_domain_names().get("DomainNames", []) if d.get("DomainName")]
+        except Exception as e:
+            self._add("INFO", "DSPM-01", "DATA", "opensearch",
+                      f"Could not enumerate OpenSearch domains in {self.region}: {e}")
+            return
+        for name in names:
+            try:
+                st = osc.describe_domain(DomainName=name).get("DomainStatus", {})
+            except Exception:
+                continue
+            arn = st.get("ARN", "")
+            try:
+                tags = osc.list_tags(ARN=arn).get("TagList", []) if arn else []
+            except Exception:
+                tags = []
+            cj = aws_deepplane.is_crown_jewel_by_tags(tags)
+            if not cj:
+                continue
+            # public = has an endpoint AND is NOT VPC-scoped (a VPC domain has VPCOptions.VPCId)
+            public = bool(st.get("Endpoint") or st.get("Endpoints")) \
+                and not (st.get("VPCOptions") or {}).get("VPCId")
+            encrypted = bool((st.get("EncryptionAtRestOptions") or {}).get("Enabled"))
+            # es:ESHttp* authorizes on the HTTP path (domain/<name>/*), so probe a path
+            # sub-resource — a bare-domain grant does NOT authorize an OpenSearch data read.
+            self._dspm_emit(g, arn, "OpenSearchDomain", name, cj, public, encrypted, roles,
+                            aws_deepplane.DSPM_READ_ACTIONS["opensearchdomain"],
+                            read_probe=f"{arn.rstrip('/')}/_search")
+            fgac = bool((st.get("AdvancedSecurityOptions") or {}).get("Enabled"))
+            self._dspm_resource_policy(g, arn, "OpenSearchDomain", name,
+                                       st.get("AccessPolicies"), fgac)
+
+    def _dspm_resource_policy(self, g, arn, kind, name, policy_json, fgac_covered):
+        """DSPM-03 — flag a crown datastore whose RESOURCE policy grants public / cross-account
+        access (config-only, reuses classify_resource_policy_stmt). A public/public_conditioned
+        grant is FAIL; cross-account/org is WARN. If fine-grained access control (FGAC) is on it
+        may still gate at the identity layer -> downgrade to WARN, paths-to-verify."""
+        if not policy_json:
+            return
+        try:
+            doc = json.loads(policy_json) if isinstance(policy_json, str) else policy_json
+            stmts = doc.get("Statement", [])
+            if isinstance(stmts, dict):
+                stmts = [stmts]
+        except Exception:
+            return
+        rank = {"public": 4, "public_conditioned": 3, "cross_account": 2, "org": 1}
+        worst = None
+        for stmt in stmts:
+            c = classify_resource_policy_stmt(stmt, self.account)
+            if c and (worst is None or rank.get(c["kind"], 0) > rank.get(worst["kind"], 0)):
+                worst = c
+        if not worst:
+            return
+        public_like = worst["kind"] in ("public", "public_conditioned")
+        status = "FAIL" if (public_like and not fgac_covered) else "WARN"
+        who = ("the internet" if public_like else
+               ("accounts " + ",".join(worst.get("external_accounts") or [])
+                if worst.get("external_accounts") else
+                ("org " + worst["org_id"] if worst.get("org_id") else "an external principal")))
+        note = " [FGAC enabled — may gate at the identity layer, paths-to-verify]" if fgac_covered else ""
+        self._add(status, "DSPM-03", "DATA", name,
+                  f"Crown-jewel {kind} {name} has a resource policy that grants access to "
+                  f"{who}{note} | {name}")
+
+    # ── Slice 1: AWS-resident secrets (posture + reader attack path) ─────────────
+    # Emitted in DATA (post-clobber, no stash). Metadata-only: SSM describe_parameters +
+    # Secrets Manager list_secrets — NEVER a value read (no ssm:GetParameter/GetSecretValue).
+    def _collect_secrets_dspm(self, g):
+        try:
+            roles = [p for p in self._get_iam_principals() if p["type"] == "role"]
+        except Exception:
+            roles = []
+        self._secrets_ssm(g, roles)
+        self._secrets_manager_graph(g, roles)
+
+    def _secrets_ssm(self, g, roles):
+        try:
+            ssm = self._client("ssm")
+            params: List[Dict] = []
+            for page in ssm.get_paginator("describe_parameters").paginate():
+                params += page.get("Parameters", [])
+        except Exception as e:
+            self._add("INFO", "SECRET-00", "DATA", "ssm",
+                      f"Could not enumerate SSM parameters in {self.region}: {e}")
+            return
+        for p in params:
+            c = aws_secrets.classify_ssm_parameter(p)
+            name = p.get("Name", "")
+            arn = p.get("ARN") or (
+                f"arn:aws:ssm:{self.region}:{self.account}:parameter"
+                f"{name if name.startswith('/') else '/' + name}")
+            if c["plaintext"] and c["name_secret"]:
+                self._add("FAIL", "SECRET-01", "DATA", name,
+                          f"SSM parameter {name} is a plaintext String holding a "
+                          f"credential-shaped value — use SecureString + a customer CMK | {name}")
+                self._secret_node(g, arn, f"ssm:{name}", roles)
+            elif not c["plaintext"]:                 # SecureString → still a secret to graph
+                if c["kms"] == "managed":
+                    self._add("WARN", "SECRET-02", "DATA", name,
+                              f"SSM SecureString {name} is encrypted with the AWS-managed "
+                              f"key, not a customer CMK | {name}")
+                self._secret_node(g, arn, f"ssm:{name}", roles)
+
+    def _secrets_manager_graph(self, g, roles):
+        try:
+            sm = self._client("secretsmanager")
+            secrets: List[Dict] = []
+            for page in sm.get_paginator("list_secrets").paginate():
+                secrets += page.get("SecretList", [])
+        except Exception as e:
+            self._add("INFO", "SECRET-00", "DATA", "secretsmanager",
+                      f"Could not enumerate Secrets Manager secrets in {self.region}: {e}")
+            return
+        for s in secrets:
+            arn = s.get("ARN", "")
+            self._secret_node(g, arn, f"secret:{s.get('Name', arn)}", roles)
+
+    def _secret_node(self, g, arn, label, roles):
+        """Emit a crown Secret node + CAN_READ_DATA edge (+ SECRET-05) for every role whose
+        identity policy can read the secret value. Only materializes the node when >=1 role
+        can read it, so the graph carries reachable-if-role-reachable targets, not clutter.
+        Being crown_jewel=True, aws_correlate.crown_nodes picks it up as a data terminal, so
+        an internet -> workload -> role -> Secret path surfaces via the existing flagship."""
+        if not arn:
+            return
+        readers = []
+        for p in roles:
+            r = aws_deepplane.role_can_read_store(p["statements"], arn,
+                                                  aws_secrets.SECRET_READ_ACTIONS)
+            if r is not None:
+                readers.append((p, r))
+        if not readers:
+            return
+        g.add_node(arn, "Secret", name=label, DataStore=True, crown_jewel=True, secret=True)
+        for p, r in readers:
+            g.add_edge(p["arn"], arn, "CAN_READ_DATA", basis="identity-policy",
+                       confidence="paths-to-verify", conditioned=r["conditioned"])
+            self._add("WARN" if r["conditioned"] else "FAIL", "SECRET-05", "DATA",
+                      f"role:{p['name']}",
+                      f"Role {p['name']} can read {label} (identity policy, paths-to-verify)"
+                      f"{' [conditioned]' if r['conditioned'] else ''} | {p['name']}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 40: ATTACK-PATH CORRELATION & CHOKE POINTS (Phase 4)
@@ -10568,6 +10884,8 @@ class AWSLiveScanner:
             data.update(self._state_report)
         if self._unused_report is not None:
             data["unused_access"] = self._unused_report
+        if self._least_priv_report is not None:
+            data["least_privilege"] = self._least_priv_report
         # Phase 6: side-scan / backend / graph-export blocks — present only when
         # their feature ran, so existing JSON consumers are unaffected.
         if self._side_scan_report:
@@ -11114,6 +11432,7 @@ def _run_ciem(scanner, args, scan_epoch: int, store=None) -> None:
         aa = None
     analyzer_arn = aws_unused.find_unused_access_analyzer(aa)
     signals, factor_by_arn, report = [], {}, []
+    least_priv, lp_denied = [], 0            # CIEM-02 generated policies (flagged principals only)
     fresh_after = scan_epoch - 24 * 3600     # 24h usage-cache TTL
     for p in principals:
         arn = p.get("arn")
@@ -11145,7 +11464,33 @@ def _run_ciem(scanner, args, scan_epoch: int, store=None) -> None:
             scanner._add("WARN", rs["check_id"], "IAMPRIVESC",
                          rs["resource"], rs["message"])
             report.append(sig.to_dict())
+            # CIEM-02 — generate a least-privilege policy for this flagged principal only
+            # (bounds the extra ACTION_LEVEL SLAD cost to the principals worth right-sizing).
+            lp = _least_priv_recommendation(iam, p, scan_epoch)
+            if lp is None:
+                lp_denied += 1
+            elif lp.get("recommended"):
+                d = lp["delta"]
+                least_priv.append({"principal": arn, "name": p.get("name"),
+                                   "policy": lp["policy"], "delta": d,
+                                   "window_days": lp["window_days"], "note": lp["note"]})
+                if d.get("admin_narrowed") and not d["removed_services"]:
+                    what = (f"narrow full-admin '*' to the "
+                            f"{len(d.get('admin_narrowed_to') or [])} service(s) actually used")
+                else:
+                    what = (f"drop {len(d['removed_services'])} unused service(s) "
+                            f"({d['surface_reduction_pct']}% service-surface reduction)")
+                scanner._add("WARN", "CIEM-02", "IAMPRIVESC", p.get("name", arn),
+                             f"Right-size {p.get('name', arn)}: {what} — a generated "
+                             f"least-privilege policy is attached; review over a longer window "
+                             f"before applying (never auto-applied) | {arn}")
     scanner._unused_report = report
+    scanner._least_priv_report = least_priv or None
+    if not least_priv and lp_denied:
+        scanner._add("INFO", "CIEM-00", "IAMPRIVESC", "least-privilege",
+                     "Least-privilege generation unavailable — iam:GenerateServiceLastAccessed"
+                     "Details/GetServiceLastAccessedDetails denied or the job did not complete "
+                     "for the flagged principal(s); no policy generated (never a deny-all).")
     overlay = aws_unused.downrank_overlay(scanner.attack_paths, factor_by_arn)
     if overlay:
         scanner._state_report = scanner._state_report or {}
@@ -11154,6 +11499,42 @@ def _run_ciem(scanner, args, scan_epoch: int, store=None) -> None:
         print(f"{BLUE}[*]{RESET} CIEM: {len(report)} right-sizing finding(s); "
               f"{len(overlay)} attack path(s) traverse a dormant principal "
               f"(exploit-likelihood down-ranked, still reported).")
+
+
+def _least_priv_recommendation(iam, p, scan_epoch, sleep=None):
+    """Run ONE ACTION_LEVEL service-last-accessed job for a principal and hand its usage
+    to aws_leastpriv.recommendation. Returns None on denial/missing-job/exception (→ CIEM-00),
+    or a recommendation dict (which itself may be recommended=False, never a deny-all). The
+    SLAD grant (iam:GenerateServiceLastAccessedDetails / GetServiceLastAccessedDetails) is
+    already held; ACTION_LEVEL is the same permission as the SERVICE_LEVEL job CIEM-01 uses."""
+    import time as _t
+    sleep = sleep or _t.sleep
+    stmts = p.get("statements") or []
+    arn = p.get("arn")
+    if not stmts or iam is None or not arn:
+        return None
+    try:
+        jid = iam.generate_service_last_accessed_details(
+            Arn=arn, Granularity="ACTION_LEVEL").get("JobId")
+        if not jid:
+            return None
+        services = None
+        for _ in range(8):                               # bounded poll
+            resp = iam.get_service_last_accessed_details(JobId=jid)
+            status = resp.get("JobStatus")
+            if status == "COMPLETED":
+                services = resp.get("ServicesLastAccessed", [])
+                break
+            if status == "FAILED":
+                return None                              # job failed → unavailable → CIEM-00
+            sleep(0.5)
+        if services is None:                             # still in progress after the cap
+            return None                                  # incomplete → unavailable → CIEM-00
+    except Exception:
+        return None
+    used = aws_leastpriv.parse_slad_usage(services, scan_epoch)
+    uacts = aws_leastpriv.parse_action_usage(services, scan_epoch)
+    return aws_leastpriv.recommendation(stmts, used, uacts)
 
 
 def _backend_meta_for(args, scheme: str, available: bool, reason: Optional[str] = None):
