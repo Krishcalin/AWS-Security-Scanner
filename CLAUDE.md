@@ -4,7 +4,7 @@
 
 **OverWatch** is the product/brand name for the CNAPP built here: a full AWS
 **Cloud-Native Application Protection Platform** (CSPM + CIEM + agentless CWPP +
-DSPM + CDR-lite) whose north star is AWS-deep **toxic-combination attack paths**
+DSPM + **AI-SPM** + CDR) whose north star is AWS-deep **toxic-combination attack paths**
 over a unified security graph, with multi-account onboarding, choke-point
 remediation, and code-to-cloud mapping. It ships as the live scanner + its
 `aws_*` / `cnapp_*` engine modules + a hosted platform backend. (Brand assets:
@@ -12,7 +12,7 @@ remediation, and code-to-cloud mapping. It ships as the live scanner + its
 gold `#f5b53d`, critical red `#ff3b5c`. Python module names stay `aws_*`/`cnapp_*` —
 no code rename.) The repo also includes a separate pre-deploy IaC static scanner.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **OverWatch — Live CNAPP** (`aws_live_scanner.py` v2.19.0) -- live AWS account audit via boto3 (**267 severity-mapped checks across 44 sections**, **204 actionable checks each with a full risk/impact/step-by-step remediation write-up**, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure + L7 reachability engine**, **deep-plane ingestion + flagship attack paths**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing**, **agentless side-scan CWPP** (Linux OS-pkg + language-dep + container-image + Lambda + managed-engine-EOL + Windows-via-SSM), **tag-based DSPM**, **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**, **hosted multi-account onboarding + live Postgres backend**). The full 8-phase vuln/misconfig detection roadmap (`docs/OVERWATCH_VULN_ROADMAP.md`) is COMPLETE; per-release history is in `CHANGELOG.md`.
+- **OverWatch — Live CNAPP** (`aws_live_scanner.py` v2.26.0) -- live AWS account audit via boto3 (**296 severity-mapped checks across 44 sections**, **222 actionable checks each with a full risk/impact/step-by-step remediation write-up**, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure + L7 reachability engine**, **deep-plane ingestion + flagship attack paths**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing + least-privilege policy generation**, **agentless side-scan CWPP** (Linux OS-pkg + language-dep + container-image + Lambda + managed-engine-EOL + Windows-via-SSM), **agentless KSPM/KIEM** (CIS-EKS + K8s RBAC + IRSA cross-plane) + **Fargate task fusion** + **VPC Flow-Log micro-segmentation**, **tag-based DSPM** (12 datastore kinds) + **AWS-resident secrets posture**, **AI-SPM** (AI execution-role blast radius fused into the graph), **CDR-lite streaming detection ingest → reachability-ranked incidents** + **cloud-forensics timeline**, a **grounded-RAG copilot** (answers only from the scan's own corpus), **external-vuln ingest** (SARIF/CycloneDX/SPDX → reachability re-rank), **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**, **hosted multi-account onboarding + live Postgres backend**). The full 8-phase vuln/misconfig detection roadmap (`docs/OVERWATCH_VULN_ROADMAP.md`) is COMPLETE; per-release history is in `CHANGELOG.md`.
 - **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
 - **Exposure Oracle** (`aws_exposure.py`) -- pure, dependency-free internet-reachability core (SG ∩ stateless NACL ∩ IGW route ∩ public-IP)
 - **Deep-Plane Core** (`aws_deepplane.py`) -- pure Inspector/Macie/GuardDuty/Access-Analyzer parsers + the CAN_READ_DATA object-probe matcher
@@ -24,9 +24,18 @@ no code rename.) The repo also includes a separate pre-deploy IaC static scanner
 - **Persistence Backends** (`aws_state_dialect.py` + `aws_graph_neptune.py` + `aws_graph_neptune_loader.py`) -- pure Postgres DDL/upsert/dialect generators + Neptune Gremlin-CSV / openCypher graph export + live bulk-load/openCypher runners
 - **Remediation Engine** (`aws_remediate.py`) -- pure prioritized fix plan (reuses `aws_correlate.minimal_cut`/`ChokePoint`) + remediation-as-code (Terraform/CFN/CLI) + runbook/JSON/issue/PR exports; read-only, never applies
 - **Code-to-Cloud** (`aws_codetocloud.py`) -- pure IaC index (Terraform block extractor + CFN parse) + tiered T1–T5 matcher mapping a live finding to its source IaC resource
-- **Finding Detail** (`aws_finding_detail.py`) -- pure offline data module: `FINDING_DETAIL={check_id:{risk, impact, steps[...]}}` for all 204 actionable check IDs (100% of `REMEDIATION_MAP`); the detailed risk / business-impact / step-by-step remediation the JSON (`finding_catalog`) and HTML (per-finding cards) reports render. Falls back to the one-line `REMEDIATION_MAP` CLI for any uncatalogued check
+- **Finding Detail** (`aws_finding_detail.py`) -- pure offline data module: `FINDING_DETAIL={check_id:{risk, impact, steps[...]}}` for all 222 actionable check IDs (100% of `REMEDIATION_MAP`); the detailed risk / business-impact / step-by-step remediation the JSON (`finding_catalog`) and HTML (per-finding cards) reports render. Falls back to the one-line `REMEDIATION_MAP` CLI for any uncatalogued check
 - **Managed-Engine EOL / Windows Vuln** (`aws_engine_eol.py` + `aws_winvuln.py`) -- pure offline signals: managed-service end-of-life (honest `EOL-*` date facts, not speculative CVEs) and agentless Windows OS-vuln via `ssm:DescribeInstancePatches` real MSRC `CVEIds` (+ synthetic `WINEOL-*`)
 - **Container/Lambda Side-Scan** (`aws_sidescan_image.py` + `aws_sidescan_lambda.py`) -- pure `DictExtractor` subclasses: OCI/Docker layer overlay + Lambda artifact merge → the Phase-3 OSV/SBOM pipeline verbatim (Inspector-independent image/Lambda CVEs)
+- **Agentless KSPM/KIEM** (`aws_kube.py`) -- pure CIS-EKS + K8s RBAC analysis over an injected read-only Kubernetes-API seam; cross-plane ServiceAccount → AWS-role (IRSA/Pod-Identity) paths. Fail-open when the cluster API is unreachable
+- **VPC Flow-Log overlay** (`aws_flowlog.py`) -- pure observed-traffic analysis behind an injected CloudWatch-Logs-Insights seam: evidence-based SG scope-down / unused-port / reject-talker (opt-in `--flow-logs`, fail-open)
+- **AWS-resident secrets** (`aws_secrets.py`) -- pure SSM / Secrets-Manager posture classifiers (plaintext-looks-secret, managed-key-vs-CMK, reference-suffix deny). Metadata only — never a `GetParameter` / `GetSecretValue`
+- **Least-privilege generation** (`aws_leastpriv.py`) -- pure GRANTED-minus-USED right-sizing from SLAD: drops unused services, narrows wildcards, PRESERVES source Denies (never broader than source), never a deny-all
+- **External-vuln ingest** (`aws_ingest.py`) -- pure SARIF/CycloneDX/SPDX parsers → own each CVE onto a graph node → enrich from OverWatch's own OSV/EPSS/KEV bundle → re-run reachability so CVEs rank by attack-path exploitability, not CVSS
+- **Grounded-RAG copilot** (`aws_copilot.py`) -- pure self-contained BM25 retrieval over the account's own scan (findings / paths / choke points); extractive-by-default (composes only from corpus fields, ABSTAINS rather than hallucinating), optional injected LLM seam gets ONLY the retrieved corpus
+- **AI-SPM** (`aws_aispm.py`) -- pure classifiers for the blast radius of an AI resource's execution role (`role_privesc_capable` / `role_reaches_crown` [a graph query over the `CAN_READ_DATA` edges DSPM emits] / `ai_network_exposed` / `is_ai_crown`); fused onto the graph POST-clobber in the DATA section → `AISPM-01..03` + the flagship `AIPATH-01`, with `aws_correlate.py` byte-unchanged
+- **CDR-lite** (`aws_cdr.py`) -- pure normalizers for GuardDuty / Security Hub ASFF / CloudTrail-anomaly detections; fold onto the stored graph as `THREAT_ON`, re-run reachability reusing `aws_ingest._ingest_predicates` so a detection on an internet→crown/admin path or a crown store escalates to a ranked **incident** (isolated detection never does; honest collapse with no scan)
+- **Cloud-forensics timeline** (`aws_forensics.py`) -- pure `build_timeline` correlating read-only CloudTrail management events with the graph / findings / detections + per-event anomaly flags; behind an injected `trail_reader` seam, `FORENSIC-00` fail-open (never a phantom clean timeline)
 - **Web Console** (`frontend/`) -- React 19 + Vite + TS + Tailwind v4 SPA over the hub API (Phase 1): Overview / Attack Paths (interactive React Flow graph) / Findings / Cloud Accounts + onboarding wizard. Runs on engine-shaped sample fixtures (zero AWS) or the live hub
 
 ## Repository Structure
@@ -34,10 +43,10 @@ no code rename.) The repo also includes a separate pre-deploy IaC static scanner
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.19.0 (boto3, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem, sidescan, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM)
+├── aws_live_scanner.py      # Live audit scanner v2.26.0 (boto3, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem+least-priv, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, AI-SPM)
 ├── aws_remediate.py         # Remediation engine — prioritized plan (reuses minimal_cut/ChokePoint) + remediation-as-code + exports, pure
 ├── aws_codetocloud.py       # Code-to-cloud — IaC index (TF block extractor + CFN parse) + tiered T1–T5 matcher, pure
-├── aws_finding_detail.py    # Finding detail — risk/impact/step-by-step remediation for all 204 actionable checks, pure offline data (GENERATED)
+├── aws_finding_detail.py    # Finding detail — risk/impact/step-by-step remediation for all 222 actionable checks, pure offline data (GENERATED)
 ├── aws_engine_eol.py        # Managed-service EOL — honest EOL-* date signals for RDS/Aurora/ElastiCache/OpenSearch/Redshift, pure
 ├── aws_winvuln.py           # Windows OS-vuln — SSM DescribeInstancePatches real MSRC CVEs + WINEOL-* lifecycle, pure
 ├── aws_sidescan_lambda.py   # Lambda artifact side-scan — zip/layer merge → OSV pipeline (DictExtractor subclass), pure
@@ -54,6 +63,17 @@ AWS-Security-Scanner/
 ├── aws_sidescan_ebs.py      # EBS Direct-API block plane — plan/delta/checksum/sparse-reassembly/cleanup, pure (live I/O deferred)
 ├── aws_state_dialect.py     # Postgres/SQLite dialect — DDL/upsert/parse_state_url/row-shim, pure
 ├── aws_graph_neptune.py     # Neptune export — Gremlin bulk-CSV + openCypher MERGE + round-trip loader, pure
+├── aws_kube.py              # Agentless KSPM/KIEM — CIS-EKS + K8s RBAC via injected read-only K8s API, IRSA cross-plane, pure
+├── aws_flowlog.py           # VPC Flow-Log overlay — observed-traffic SG scope-down/unused-port/reject-talker (opt-in), pure
+├── aws_secrets.py           # AWS-resident secrets — SSM/Secrets-Manager posture classifiers (metadata only), pure
+├── aws_leastpriv.py         # Least-privilege generation — GRANTED-minus-USED right-sizing from SLAD (preserves Denies), pure
+├── aws_ingest.py            # External-vuln ingest — SARIF/CycloneDX/SPDX parsers → own onto graph → reachability re-rank, pure
+├── aws_copilot.py           # Grounded-RAG copilot — self-contained BM25 over the scan's own corpus, extractive/abstains, pure
+├── aws_aispm.py             # AI-SPM — AI execution-role blast-radius classifiers (privesc/reaches-crown/no-net-iso), pure
+├── aws_cdr.py               # CDR-lite — normalize GuardDuty/ASFF/CloudTrail detections → THREAT_ON → reachability-ranked incidents, pure
+├── aws_forensics.py         # Cloud-forensics timeline — read-only CloudTrail events correlated w/ graph/findings/detections, pure
+├── cnapp_connectors.py      # Connector framework — route findings to Jira/Slack/PagerDuty/Splunk/webhook (rules engine + delivery ledger), pure
+├── compliance_crosswalk.py  # Compliance breadth — NIST 800-53 → 30+ framework crosswalk loader (accuracy-gated), pure
 ├── tests/
 │   ├── test_live_scanner.py # 69 unit tests (mock boto3)
 │   ├── test_cnapp_phase1.py # 32 unit tests (graph, chains, trust, org fan-out, compliance rollup)
@@ -121,7 +141,7 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.19.0)
+## Live Audit Scanner (`aws_live_scanner.py` v2.26.0)
 
 - **Type**: Live AWS account audit via boto3 (a full CNAPP)
 - **Lines**: ~10,600
@@ -585,9 +605,40 @@ closes the Linux-only CWPP false-clean). Every phase followed the same rigor:
 scoping-research workflow → committed batches → read-only adversarial-verify → fix
 with regression tests → `--no-ff` merge.
 
+### Post-roadmap capability slices (agentless track + data-security + AI)
+
+After the 8-phase roadmap, coverage was extended by independent slices, each on the
+same rigor loop (scoping workflow → batches → read-only adversarial-verify → fix →
+`--no-ff` merge). All hold one invariant: **`aws_correlate.py` stays byte-unchanged**
+(new edge kinds stay out of `E_PATH`; crown pickup is prop-based) and every new NIST
+tag stays inside the frozen 38-control crosswalk universe.
+
+- **Agentless-coverage track** — Fargate image side-scan (v2.21.0); **KSPM/KIEM**
+  (`aws_kube.py`, v2.22.0) CIS-EKS + K8s RBAC over a read-only Kubernetes-API seam +
+  cross-plane pod→AWS-role paths; **VPC Flow-Log micro-segmentation** (`aws_flowlog.py`,
+  v2.23.0) — Layer A always-on static SG micro-seg (`SEG-01..06`) + Layer B opt-in
+  observed-traffic overlay (`FLOW-00..03`, `--flow-logs`, behind a CloudWatch-Logs-Insights
+  seam, needs an opt-in `logs:StartQuery` grant, fail-open).
+- **Slice 1 — DSPM surfaces + AWS-resident secrets + least-privilege generation**
+  (v2.24.0): `aws_deepplane.DSPM_READ_ACTIONS` +7 crown kinds (DocDB/Neptune/Kinesis/
+  MemoryDB/FSx/Timestream/OpenSearch) + `DSPM-03` public resource-policy; `aws_secrets.py`
+  + `SECRET-00/01/02/05` (crown `Secret` node + internet→role→secret reader path,
+  metadata only); `aws_leastpriv.py` + `CIEM-02` (GRANTED-minus-USED right-sizing, preserves
+  Denies, never deny-all).
+- **Slice 2 — grounded-RAG copilot** (v2.25.0): `aws_copilot.py` + hosted
+  `POST /accounts/{id}/copilot` / `/org/copilot`. Answers ONLY from the scan's own corpus;
+  extractive-by-default, ABSTAINS on off-topic questions, cites only resolvable corpus ids.
+- **Slice 3 — AI-SPM + CDR-lite streaming ingest + cloud-forensics timeline** (v2.26.0):
+  `aws_aispm.py` (`AISPM-01/02/03` + fused `AIPATH-01`, emitted post-clobber in DATA);
+  `aws_cdr.py` + `cdr_detections` store (`SCHEMA_VERSION 5→6`) + hosted
+  `POST /accounts/{id}/detections` / `GET …/incidents` / `/org/incidents` (a detection on
+  an internet→crown/admin path escalates to a ranked incident, reusing
+  `aws_ingest._ingest_predicates`); `aws_forensics.py` + `GET …/forensics/timeline`
+  (`FORENSIC-00` fail-open, read-only CloudTrail `LookupEvents`, management events only).
+
 ### Detailed finding reports (`aws_finding_detail.py`, v2.19.0)
 
-Every scan emits, for each of the 204 actionable checks, a full write-up — the
+Every scan emits, for each of the 222 actionable checks, a full write-up — the
 **risk** (what it is / how it's exploited / why it matters), the **business impact**,
 and **step-by-step remediation** with real AWS CLI — not just a one-line command.
 
@@ -649,11 +700,12 @@ diff_findings(current, baseline_results) -> {new, resolved}
 
 - **CHECK_MAP**: Dict mapping 44 section names -> bound check methods
 - **44 sections**: IAM, S3, VPC, LOGGING, CLOUDWATCH, KMS, EC2, AMI, ECR, BACKUP, RDS, GLACIER, SNS, SQS, CLOUDFRONT, ROUTE53, BEDROCK, BEDROCK_AGENTS, LAMBDA, EKS, ECS, SECRETS, WAF, ELASTICACHE, OPENSEARCH, DYNAMODB, STEPFUNCTIONS, APIGATEWAY, ELB, EBS, REDSHIFT, EFS, ACM, SAGEMAKER, COGNITO, APIGATEWAYV2, IAMPRIVESC, EXPOSURE, COGNITO_IDENTITY, WINVULN, VULN, THREAT, DATA, CORRELATE
-- **Three lockstep maps** (a check_id lands in all three when actionable): `CHECK_SEVERITY` (267 entries), `COMPLIANCE_MAP` (250), `REMEDIATION_MAP` (204). The 204 `REMEDIATION_MAP` keys are the actionable (FAIL-able) checks — each also has a full `aws_finding_detail.FINDING_DETAIL` write-up (100% coverage)
+- **Three lockstep maps** (a check_id lands in all three when actionable): `CHECK_SEVERITY` (296 entries), `COMPLIANCE_MAP` (278), `REMEDIATION_MAP` (222). The 222 `REMEDIATION_MAP` keys are the actionable (FAIL-able) checks — each also has a full `aws_finding_detail.FINDING_DETAIL` write-up (100% coverage). COMPLIANCE_MAP NIST values stay inside a FROZEN 38-control universe (`compliance/crosswalk.json`), asserted by `tests/test_compliance_crosswalk.py`
 - **Risk scoring**: Score = 100 - (CRIT×15 + HIGH×5 + MED×2 + LOW×0.5), Grade A-F
 
 ### Check ID Prefixes
-IAM-XX, S3-XX, VPC-XX, LOG-XX, ENC-XX, EC2-XX, CNT-XX, BCK-XX, RDS-XX, GLC-XX, SNS-XX, SQS-XX, CFN-XX, R53-XX, BDR-XX, AGT-XX, LMB-XX, EKS-XX, ECS-XX, SEC-XX, WAF-XX, ELC-XX, OSR-XX, DDB-XX, SFN-XX, APIGW-XX, ELB-XX, EBS-XX, RS-XX, EFS-XX, ACM-XX, SM-XX, COG-XX, AGW2-XX, IAMPE-XX
+Per-resource: IAM-XX, S3-XX, VPC-XX, LOG-XX, ENC-XX, EC2-XX, AMI-XX, CNT-XX, BCK-XX, RDS-XX, AUR-XX, GLC-XX, SNS-XX, SQS-XX, CFN-XX, R53-XX, BDR-XX, AGT-XX, LMB-XX, EKS-XX, ECS-XX, SEC-XX, WAF-XX, ELC-XX, OSR-XX, DDB-XX, SFN-XX, APIGW-XX, ELB-XX, CLB-XX, EBS-XX, RS-XX/RSS-XX, EFS-XX, ACM-XX, SM-XX, COG-XX, AGW2-XX, SSM-XX, LT-XX, ASG-XX, CW-XX, IAMPE-XX.
+Graph-fusion / capability: EXPOSURE-XX, EXTACCESS-XX, IDENTITY-XX, ATTACK-01/02, PATHS-XX, DSPM-XX, SECRET-XX, CIEM-XX, **AISPM-XX / AIPATH-01** (AI-SPM), THREAT-01/02 + **CDR-lite THREAT-ING** (hosted), **FORENSIC-00** (hosted), SEG-XX / FLOW-XX (micro-seg), KSPM-XX / KIEM-XX (K8s), FARGATE-XX, VULN-XX / WINVULN-XX / CWPP-XX / EOL-\* / WINEOL-\*.
 
 ### IAM Privilege-Escalation Engine (`IAMPRIVESC` section, `IAMPE-XX`)
 

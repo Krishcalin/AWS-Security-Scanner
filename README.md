@@ -11,11 +11,11 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"/>
   <img src="https://img.shields.io/badge/license-GPL--3.0-orange?style=flat-square" alt="GPL-3.0 License"/>
-  <img src="https://img.shields.io/badge/OverWatch-CNAPP%20v2.19.0-38bdf8?style=flat-square" alt="OverWatch CNAPP v2.19.0"/>
-  <img src="https://img.shields.io/badge/pillars-CSPM%20%7C%20CIEM%20%7C%20CWPP%20%7C%20DSPM%20%7C%20CDR-6366f1?style=flat-square" alt="CNAPP pillars"/>
+  <img src="https://img.shields.io/badge/OverWatch-CNAPP%20v2.26.0-38bdf8?style=flat-square" alt="OverWatch CNAPP v2.26.0"/>
+  <img src="https://img.shields.io/badge/pillars-CSPM%20%7C%20CIEM%20%7C%20CWPP%20%7C%20DSPM%20%7C%20AI--SPM%20%7C%20CDR-6366f1?style=flat-square" alt="CNAPP pillars"/>
   <img src="https://img.shields.io/badge/compliance-CIS%20%7C%20PCI--DSS%20%7C%20HIPAA%20%7C%20SOC2%20%7C%20NIST-purple?style=flat-square" alt="5 Compliance Frameworks"/>
-  <img src="https://img.shields.io/badge/checks-200%2B-red?style=flat-square" alt="200+ Checks"/>
-  <img src="https://img.shields.io/badge/tests-571%20passing-brightgreen?style=flat-square" alt="571 Tests"/>
+  <img src="https://img.shields.io/badge/checks-296%20severity--mapped-red?style=flat-square" alt="296 severity-mapped checks"/>
+  <img src="https://img.shields.io/badge/tests-1623%20passing-brightgreen?style=flat-square" alt="1623 Tests"/>
 </p>
 
 ---
@@ -23,16 +23,20 @@
 ## Overview
 
 **OverWatch** is the product name for the CNAPP: a full Cloud-Native Application Protection Platform for AWS
-(CSPM + CIEM + agentless CWPP + DSPM + CDR-lite) built around a unified security graph and toxic-combination
-**attack-path** correlation, with multi-account onboarding, choke-point remediation, and code-to-cloud mapping.
-It ships as the live scanner (`aws_live_scanner.py`) + its `aws_*` / `cnapp_*` engine modules, and a hosted
-platform backend (see [OverWatch — Hosted CNAPP Platform](#overwatch--hosted-cnapp-platform-multi-account-agentless)).
+(CSPM + CIEM + agentless CWPP + DSPM + **AI-SPM** + CDR) built around a unified security graph and
+toxic-combination **attack-path** correlation, with multi-account onboarding, choke-point remediation, and
+code-to-cloud mapping. Beyond posture it adds an **AI-SPM pillar** (the blast radius of an AI resource's
+execution role, fused into the graph), **CDR-lite streaming detection ingest** (GuardDuty / Security Hub /
+CloudTrail-anomaly events → ranked incidents), a **cloud-forensics timeline**, and a **grounded-RAG copilot**
+that answers only from an account's own scan. It ships as the live scanner (`aws_live_scanner.py`) + its
+`aws_*` / `cnapp_*` engine modules, and a hosted platform backend
+(see [OverWatch — Hosted CNAPP Platform](#overwatch--hosted-cnapp-platform-multi-account-agentless)).
 
 This repository contains **two complementary AWS security scanners**:
 
 | Scanner | File | Type | Input | Checks |
 |---------|------|------|-------|--------|
-| **OverWatch** (Live CNAPP) | `aws_live_scanner.py` | Live AWS API audit + security graph + attack-path CNAPP | Running AWS account (multi-account via AssumeRole) | 267 across 44 sections |
+| **OverWatch** (Live CNAPP) | `aws_live_scanner.py` | Live AWS API audit + security graph + attack-path CNAPP | Running AWS account (multi-account via AssumeRole) | 296 severity-mapped across 44 sections |
 | **IaC Security Scanner** | `aws_offline_scanner.py` | Static analysis | CloudFormation + Terraform files | 100+ (60+ TF regex + 42 CF structural) |
 
 Use **OverWatch** to audit a running AWS estate — CIS/compliance posture, effective-permissions CIEM, agentless
@@ -165,7 +169,7 @@ options:
 The live scanner connects to a running AWS account via **boto3**, performing **read-only** security checks aligned to multiple compliance frameworks. It produces colour-coded terminal output with PASS/FAIL/WARN verdicts, posture scoring, JSON/HTML reports, and saves evidence artefacts to a timestamped output directory.
 
 - **Read-only by design** -- never modifies AWS resources
-- **267 security checks** across 44 audit sections (204 actionable, each with a detailed remediation write-up)
+- **296 severity-mapped checks** across 44 audit sections (222 actionable, each with a detailed remediation write-up)
 - **Effective internet-exposure engine** (CNAPP Phase 2) -- computes *true* reachability (`aws_exposure.py`): a workload is flagged internet-exposed only when a public IP/EIP/IPv6 **and** an active IGW route **and** open security-group ingress **and** a permissive stateless NACL (inbound + ephemeral return) all line up — killing the "SG allows 0.0.0.0/0" false positive. sg-references, NAT routes, private subnets and blocked-return NACLs are correctly *not* exposed
 - **First attack path** -- `ATTACK-01` chains it end-to-end: `Internet → exposed EC2 → instance-profile role → privilege escalation to admin` (CRITICAL)
 - **Network micro-segmentation** (Phase-3) -- **Layer A** (`SEG-01..06`, always-on, config-only, zero new grant) flags over-permissive security groups (world-open sensitive ports, wide ranges, unused SGs, SG-chains to a world-open group, unrestricted egress) as a distinct lens from the 4-gate reachability oracle — a config-level SG hole is caught even when the host is not currently reachable. **Layer B** (`FLOW-01..03`, opt-in `--flow-logs`) reads VPC Flow-Log *observed traffic* via CloudWatch Logs Insights to recommend evidence-based scope-downs ("only these /24s ever connected"), flag allowed-but-never-used ports, and surface top reject/recon talkers — annotating the graph's `EXPOSED_TO` edges with observed evidence (kept **out** of the traversable attack-path set so the low-FP reachability guarantee is preserved), and failing open to a `FLOW-00` note when the optional resource-scoped `logs:StartQuery` grant is absent
@@ -206,7 +210,7 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 ### Quick Start (Live Scanner)
 
 ```bash
-# Run full audit (all 44 sections, 267 checks)
+# Run full audit (all 44 sections, 296 severity-mapped checks)
 python aws_live_scanner.py
 
 # Target a specific region
@@ -290,7 +294,7 @@ options:
   --version             Show scanner version
 ```
 
-### Security Checks Coverage (267 checks across 44 sections)
+### Security Checks Coverage (296 severity-mapped checks across 44 sections)
 
 | Section | Check IDs | Description |
 |---------|-----------|-------------|
@@ -328,10 +332,13 @@ options:
 | **Redshift** | RS-01 to 05 | Encryption at rest, public access, audit logging, enhanced VPC routing, default admin username |
 | **EFS** | EFS-01 to 03 | Encryption at rest, in-transit TLS policy, automatic backups |
 | **Certificate Manager** | ACM-01 to 03 | Certificate expiry, key algorithm strength, unused certificates |
-| **SageMaker** | SM-01 to 04 | Notebook direct internet access, root access, KMS volume encryption, VPC deployment |
+| **SageMaker** | SM-01 to 07 | Notebook direct internet access, root access, KMS volume encryption, VPC deployment; Studio-domain public egress + home-EFS CMK; endpoint-config storage CMK |
 | **Cognito** | COG-01 to 04 | User-pool MFA enforcement, password policy strength, advanced security (threat protection), deletion protection |
 | **API Gateway v2** | AGW2-01 to 03 | HTTP API stage access logging, route authorization, default throttling |
 | **IAM Privilege Escalation** | IAMPE-01 to 20 | Resource-aware escalation-path analysis across all principals (findings scoped account-wide vs resource-scoped): policy-version/attach/inline-policy abuse, login-profile & access-key hijack, trust-policy edits, PassRole→(EC2/Lambda/Glue/CFN/SageMaker), UpdateFunctionCode, SSM, sts:AssumeRole-on-\*, full-admin |
+| **DSPM (crown-jewel data)** | DSPM-01/02/03 | **Tag-based data classification** (no Macie needed) for RDS/Aurora/DocDB/Neptune/Redshift/DynamoDB/EFS/OpenSearch/Kinesis/MemoryDB/FSx/Timestream — crown-jewel + public reachability + `CAN_READ_DATA` reader edges; public resource-policy exposure |
+| **AWS-resident secrets** | SECRET-01/02/05 | Plaintext SSM `String` params that look secret, `SecureString` managed-key-vs-CMK, and a crown `Secret` node + the internet→role→secret reader path (metadata only — never a `GetSecretValue`) |
+| **AI-SPM** | AISPM-01/02/03, AIPATH-01 | **Blast radius of an AI resource's execution role** — privilege-escalation-capable (AC-6), reaches crown data (AC-3), no network isolation (SC-7), and the fused **AIPATH-01** (a network-exposed SageMaker/Bedrock resource whose role can escalate or read crown data) |
 
 ### Compliance Framework Mapping
 
@@ -568,7 +575,7 @@ cd frontend && npm install && npm run dev     # http://localhost:5173  (sample d
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC Security Scanner (CloudFormation + Terraform, no credentials)
-├── aws_live_scanner.py      # Live Audit Scanner v2.19.0 (44 sections, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem, sidescan, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM)
+├── aws_live_scanner.py      # Live Audit Scanner v2.26.0 (44 sections, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem, sidescan, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, least-priv, AI-SPM)
 ├── aws_remediate.py         # Remediation engine — prioritized plan + remediation-as-code + exports, pure (read-only)
 ├── aws_codetocloud.py       # Code-to-cloud — IaC index + tiered T1–T5 matcher (TF/CFN → finding source), pure
 ├── aws_graph_neptune_loader.py # Neptune live loader — bulk-load/openCypher runners (mock-tested), pure builders
@@ -583,7 +590,16 @@ AWS-Security-Scanner/
 ├── aws_sidescan_ebs.py      # EBS Direct-API block plane — plan/delta/checksum/sparse/cleanup (stdlib; live I/O deferred)
 ├── aws_state_dialect.py     # Postgres/SQLite dialect — DDL/upsert/parse_state_url/row-shim (stdlib)
 ├── aws_graph_neptune.py     # Neptune export — Gremlin bulk-CSV + openCypher MERGE + round-trip (stdlib)
-├── cnapp_onboarding.py · cnapp_validate.py · cnapp_registry.py · cnapp_service.py · cnapp_worker.py · cnapp_api.py · cnapp_backend.py  # Hosted platform backend
+├── aws_kube.py              # Agentless KSPM/KIEM — CIS-EKS + K8s RBAC via read-only K8s API, cross-plane pod→AWS-role (stdlib)
+├── aws_flowlog.py           # VPC Flow-Log overlay — observed-traffic SG scope-down/unused-port/reject-talker, opt-in (stdlib)
+├── aws_secrets.py           # AWS-resident secrets — SSM/Secrets-Manager posture classifiers (metadata only, pure)
+├── aws_leastpriv.py         # Least-privilege policy generation — GRANTED-minus-USED right-sizing from SLAD, pure
+├── aws_ingest.py            # External-vuln ingest — SARIF/CycloneDX/SPDX parsers → own onto graph → reachability re-rank, pure
+├── aws_copilot.py           # Grounded-RAG copilot — self-contained BM25 over the scan's own corpus, extractive/abstains, pure
+├── aws_aispm.py             # AI-SPM — AI execution-role blast-radius classifiers (privesc/reaches-crown/no-net-iso), pure
+├── aws_cdr.py               # CDR-lite — normalize GuardDuty/ASFF/CloudTrail detections → THREAT_ON → reachability-ranked incidents, pure
+├── aws_forensics.py         # Cloud-forensics timeline — read-only CloudTrail events correlated with graph/findings/detections, pure
+├── cnapp_onboarding.py · cnapp_validate.py · cnapp_registry.py · cnapp_service.py · cnapp_worker.py · cnapp_api.py · cnapp_backend.py · cnapp_connectors.py  # Hosted platform backend
 ├── frontend/                # OverWatch web console — React 19 + Vite + TS + Tailwind SPA (Overview / Attack Paths / Findings / Cloud Accounts + onboarding wizard)
 ├── deploy/                  # CloudFormation scanner-role + Org StackSet + hub-role templates
 ├── tests/
