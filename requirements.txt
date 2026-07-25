@@ -1,0 +1,17 @@
+# OverWatch — HOSTED HUB runtime (scanner core + FastAPI control plane).
+# Fully pinned for reproducible, air-gapped installs. SQLite is stdlib; Postgres is
+# optional (psycopg) — a single-node hub can run on the sqlite file backend with no
+# psycopg. uvicorn is the minimal build (pure-Python h11, NO uvloop/httptools binary
+# extras) so the wheelhouse stays arch-portable and egress-clean.
+#
+# Regenerate the offline wheelhouse on a CONNECTED host:
+#   scripts/build_offline_bundle.sh          # pip download (arch-pinned) + hashes
+# then install air-gapped:  pip install --no-index --find-links=wheelhouse -r requirements.txt
+boto3==1.40.51
+botocore==1.40.51
+fastapi==0.138.0
+starlette==1.3.1
+pydantic==2.12.5
+uvicorn==0.49.0
+psycopg[binary]==3.3.4
+psycopg-pool==3.3.1

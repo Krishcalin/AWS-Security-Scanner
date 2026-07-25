@@ -1,0 +1,24 @@
+# Build-context excludes for the hub image. NOTE: frontend/dist is DELIBERATELY NOT
+# excluded — the prebuilt SPA must be in the context (it is git-ignored but present in the
+# working tree / offline bundle). Docker uses THIS file, not .gitignore.
+.git
+.gitignore
+.github
+__pycache__
+*.pyc
+.pytest_cache
+.vscode
+tests
+docs
+reports
+evidence
+scratchpad
+*.md
+frontend/node_modules
+frontend/src
+frontend/public
+frontend/index.html
+frontend/*.json
+frontend/*.ts
+frontend/*.js
+# keep: *.py, requirements*.txt, wheelhouse/, compliance/, frontend/dist/, deploy/

@@ -1,0 +1,91 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  OverWatch hub — the buyer-launched deployment for the AWS Marketplace container product.
+  Runs the hub container on a private-subnet EC2 instance with the CnappHubInstanceProfile,
+  a KMS-encrypted state volume, and an egress-restricted security group. Deploy
+  cnapp-hub-role.yaml FIRST (it creates CnappHubRole + CnappHubInstanceProfile), then this.
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: The OverWatch hub container image URI (from your Marketplace subscription / ECR).
+  HubInstanceProfileArn:
+    Type: String
+    Description: CnappHubInstanceProfile ARN from cnapp-hub-role.yaml.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PrivateSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: A PRIVATE subnet reachable only via VPC endpoints (no public internet for air-gap).
+  InstanceType:
+    Type: String
+    Default: t3.medium
+  DbUrl:
+    Type: String
+    Default: sqlite:////data/overwatch.db
+    Description: State backend. Use an in-VPC postgres://… URL for HA.
+
+Resources:
+  HubSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: OverWatch hub — inbound 8080 from the VPC only; egress to AWS endpoints.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 10.0.0.0/8          # tighten to your admin/ALB CIDR
+      Tags:
+        - { Key: 'cnapp:managed', Value: 'true' }
+
+  HubStateVolumeKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: OverWatch hub state volume encryption.
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root' }
+            Action: 'kms:*'
+            Resource: '*'
+
+  HubInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref PrivateSubnetId
+      SecurityGroupIds: [ !Ref HubSecurityGroup ]
+      IamInstanceProfile: !Ref HubInstanceProfileArn
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { Encrypted: true, KmsKeyId: !Ref HubStateVolumeKey, VolumeSize: 30 }
+      # IMDSv2 required (no v1 fallback)
+      MetadataOptions: { HttpTokens: required, HttpEndpoint: enabled }
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          # Assumes a container runtime (docker) is present (or use an ECS-optimised AMI /
+          # Bottlerocket + an ECS service in a production deployment).
+          docker run -d --name overwatch-hub --restart unless-stopped \
+            -p 8080:8080 -v /data:/data \
+            -e CNAPP_DB_URL='${DbUrl}' \
+            -e CNAPP_HUB_ROLE_ARN='arn:aws:iam::${AWS::AccountId}:role/CnappHubRole' \
+            -e OVERWATCH_AIRGAP=1 \
+            '${ImageUri}'
+      Tags:
+        - { Key: Name, Value: OverWatch-Hub }
+        - { Key: 'cnapp:managed', Value: 'true' }
+
+Outputs:
+  HubEndpoint:
+    Description: The hub API/console endpoint (wire real auth before exposing — ships fail-closed).
+    Value: !Sub 'http://${HubInstance.PrivateIp}:8080'
+
+# Notes:
+#  * WIRE AUTH FIRST — the image ships fail-closed (every route 403) until current_principal
+#    (IdP/JWT) and a Secrets-Manager/SSM secret resolver are injected. Do NOT expose without.
+#  * Air-gap: provision VPC interface endpoints for the AWS services in docs/AIRGAP_RUNBOOK.md;
+#    add marketplacemetering ONLY for the metered SKU (the contract SKU needs none).
+#  * Onboard spokes with deploy/cnapp-scanner-role.yaml (CFN) or deploy/terraform/scanner-role (TF).

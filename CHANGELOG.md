@@ -4,6 +4,52 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.28.0] — 2026
+
+**Phase-4 Slice-2: air-gapped / zero-telemetry packaging + a Terraform onboarding module + an
+AWS Marketplace listing.** Packages OverWatch for offline / air-gapped deployment and adds a
+second onboarding path (Terraform) and a distribution path (Marketplace). No scanner-engine
+change; `aws_live_scanner.py`'s logic is untouched.
+
+### Added — zero-telemetry proof + air-gapped packaging
+- **`NETWORK.md`** — the complete egress inventory. OverWatch makes ZERO telemetry / analytics /
+  phone-home / update-check calls; every egress is either an AWS API (boto3) or an
+  operator-configured, opt-in, injected seam pointed at the operator's own resources. Enforced by
+  **`tests/test_zero_telemetry.py`** — a tripwire that fails the moment a telemetry SDK, a network
+  primitive outside the two allowlisted files, a hardcoded foreign host, a shell-out, or a loosened
+  SSRF/TLS guard is introduced (recursive AST scan of every shipped module).
+- **Offline packaging** — pinned `requirements.txt` / `requirements-core.txt` / `requirements-dev.txt`;
+  a multi-stage non-root **`Dockerfile`** that installs from a wheelhouse with `--no-index` (zero
+  build-time internet); **`scripts/build_offline_bundle.sh`** (wheelhouse + prebuilt SPA + image →
+  one transfer tarball); a new fail-closed ASGI launcher **`cnapp_server.py`**
+  (`uvicorn cnapp_server:create_app_from_env --factory`); and **`docs/AIRGAP_RUNBOOK.md`** (AWS via
+  VPC endpoints, vuln bundle from disk, no public egress).
+
+### Added — Terraform onboarding module (`deploy/terraform/scanner-role/`)
+- An IaC alternative to the CloudFormation Launch-Stack flow that produces a role **byte-equivalent
+  in effect** to `deploy/cnapp-scanner-role.yaml` (the read-only `CnappScannerRole` under your
+  per-tenant ExternalId; `SecurityAudit` + `ViewOnlyAccess`, never `ReadOnlyAccess`; the same inline
+  extras; every write/data grant an opt-in toggle; the EKS KSPM access-entry). A structural parity
+  test (`tests/test_terraform_parity.py`) asserts the TF and CFN stay in lock-step action-for-action.
+
+### Added — AWS Marketplace listing (`deploy/marketplace/`)
+- A self-hosted **container product** (the buyer runs the hub in their own account — air-gappable,
+  zero-telemetry): listing metadata, a buyer deploy template, and pricing tied to the Slice-1 metering
+  (**accounts under management**) — a metered `MeterUsage` SKU plus a contract SKU for air-gapped
+  buyers with no metering egress. Optional opt-in emitter `cnapp_marketplace_metering.py`
+  (boto3-injected, offline-tested).
+
+### Verified
+- Read-only adversarial verification fixed **9 confirmed defects** (all with regression tests) —
+  most were holes in the new guard/parity tests themselves: a **critical** dependency conflict
+  (`boto3==1.40.51` requires `botocore<1.41.0`, so the `botocore==1.43.51` pin broke the whole
+  offline build — corrected to `1.40.51`); the zero-telemetry tripwire only scanned root-level
+  modules and missed the `from urllib import request` form, `subprocess`/shell-out egress, and
+  sub-package code (now recursive + AST-hardened); the Terraform parity test never compared the four
+  opt-in blocks or the EKS access entry, and used loose substring matching (now exact-set); the TF
+  provider floor was below the EKS access-entry resources (`>= 5.33.0`); and `meter_hourly`'s
+  documented duplicate no-op wasn't actually handled.
+
 ## [2.27.0] — 2026
 
 **Phase-4 Slice-1: multi-tenancy / workspaces + workspace-scoped RBAC + usage metering (the MSSP play).**
