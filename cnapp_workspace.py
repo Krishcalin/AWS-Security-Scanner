@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-_ROLES = ("viewer", "admin")
+_ROLES = ("viewer", "ingest", "admin")   # ingest = below-admin CI/CD machine tier
 _WS_STATUS = ("active", "suspended", "archived")
 _MEMBER_STATUS = ("active", "invited", "disabled")
 

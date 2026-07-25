@@ -35,7 +35,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-SCHEMA_VERSION = 7   # v7: + multi-tenancy (workspaces/members/binding/platform_admins/usage_events)
+SCHEMA_VERSION = 8   # v8: + supply-chain ingest (sbom_snapshots/components/snapshot_cves/vex_statements)
 KEY_VERSION = 1
 
 # Caller-injected scan timestamp (one per run). epoch = arithmetic column,
@@ -336,6 +336,40 @@ CREATE TABLE IF NOT EXISTS usage_events(
 CREATE UNIQUE INDEX IF NOT EXISTS ix_usage_dedup  ON usage_events(workspace_id, metric, event_key);
 CREATE INDEX        IF NOT EXISTS ix_usage_rollup ON usage_events(workspace_id, period, metric);
 CREATE INDEX        IF NOT EXISTS ix_usage_epoch  ON usage_events(workspace_id, event_epoch);
+
+-- ── supply-chain ingest (Phase 4 Slice 4). Built purely from uploaded SBOM/VEX docs;
+-- zero AWS calls, zero new IAM grant. Managed by StateStore (sbom_*/vex_* helpers).
+-- A snapshot is a durable, diffable component set of one subject over time; its CVE set
+-- is captured immutably so a diff never touches the mutable ingested_vulns merge. BIGINT
+-- twins in aws_state_dialect.POSTGRES_DDL.
+CREATE TABLE IF NOT EXISTS sbom_snapshots(
+  snapshot_id TEXT PRIMARY KEY,               -- = doc_content_id (idempotent, time-ordered)
+  account TEXT NOT NULL, node_id TEXT NOT NULL, subject_key TEXT NOT NULL,
+  source_format TEXT NOT NULL, source_tool TEXT,
+  component_count INTEGER NOT NULL DEFAULT 0, ingested_epoch INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_sbom_subject ON sbom_snapshots(account, subject_key, ingested_epoch);
+
+CREATE TABLE IF NOT EXISTS sbom_components(
+  snapshot_id TEXT NOT NULL REFERENCES sbom_snapshots(snapshot_id) ON DELETE CASCADE,
+  purl_identity TEXT NOT NULL,                -- purl minus version, canonicalized; or name@ecosystem
+  name TEXT, version TEXT, ecosystem TEXT, origin TEXT, purl TEXT,
+  license_raw TEXT, license_spdx TEXT, license_category TEXT,
+  PRIMARY KEY(snapshot_id, purl_identity));
+CREATE INDEX IF NOT EXISTS ix_sbomc_lic ON sbom_components(snapshot_id, license_category);
+
+CREATE TABLE IF NOT EXISTS sbom_snapshot_cves(   -- immutable per-snapshot CVE set -> correct diff
+  snapshot_id TEXT NOT NULL REFERENCES sbom_snapshots(snapshot_id) ON DELETE CASCADE,
+  cve TEXT NOT NULL, purl_identity TEXT NOT NULL DEFAULT '*', fixed_version TEXT,
+  PRIMARY KEY(snapshot_id, cve, purl_identity));
+
+CREATE TABLE IF NOT EXISTS vex_statements(       -- durable, bidirectional, subcomponent-scoped
+  account TEXT NOT NULL, node_id TEXT NOT NULL, cve TEXT NOT NULL,
+  purl_identity TEXT NOT NULL DEFAULT '*',       -- '*' = product-wide
+  status TEXT NOT NULL CHECK(status IN ('not_affected','affected','fixed','under_investigation')),
+  justification TEXT, vex_format TEXT NOT NULL CHECK(vex_format IN ('openvex','csaf','cyclonedx')),
+  doc_id TEXT NOT NULL, first_seen_epoch INTEGER NOT NULL, last_seen_epoch INTEGER NOT NULL,
+  PRIMARY KEY(account, node_id, cve, purl_identity));
+CREATE INDEX IF NOT EXISTS ix_vex_lookup ON vex_statements(account, node_id, cve);
 """
 
 
@@ -800,6 +834,13 @@ class StateStore:
              int(v.get("priority_score") or 0), v.get("priority_band"),
              v.get("driving_path"), account, node_id, cve))
 
+    def set_ingested_suppressed(self, account: str, node_id: str, cve: str, suppressed: bool) -> None:
+        """Flip the VEX ``suppressed`` flag on an owned (account,node,cve) row — a suppressed
+        row emits no HAS_VULN edge on the next verdict re-run, so it gets an empty path."""
+        self._be.execute(
+            "UPDATE ingested_vulns SET suppressed=? WHERE account=? AND node_id=? AND cve=?",
+            (int(bool(suppressed)), account, node_id, cve))
+
     def account_ingested_rows(self, account: str) -> List[Dict]:
         """Every owned row for an account (unfiltered) — the verdict recompute
         reads these to rebuild reachability against the latest graph."""
@@ -854,6 +895,135 @@ class StateStore:
                   "on_attack_path", "reaches_crown"):
             r[f] = bool(r.get(f))
         return r
+
+    # ── supply-chain: SBOM snapshots + components + immutable CVE set + VEX (v8) ──
+    _SBOM_SNAP_COLS = ["snapshot_id", "account", "node_id", "subject_key",
+                       "source_format", "source_tool", "component_count", "ingested_epoch"]
+    _SBOM_COMP_COLS = ["snapshot_id", "purl_identity", "name", "version", "ecosystem",
+                       "origin", "purl", "license_raw", "license_spdx", "license_category"]
+    _VEX_COLS = ["account", "node_id", "cve", "purl_identity", "status", "justification",
+                 "vex_format", "doc_id", "first_seen_epoch", "last_seen_epoch"]
+
+    def record_sbom_snapshot(self, row: Dict) -> None:
+        """Idempotent by snapshot_id (= doc_content_id): re-uploading the same SBOM is a
+        no-op refresh. Caller writes components + CVE set in the same transaction."""
+        self._be.upsert(
+            "sbom_snapshots", self._SBOM_SNAP_COLS, ["snapshot_id"], self._SBOM_SNAP_COLS[1:],
+            (row["snapshot_id"], row["account"], row["node_id"], row["subject_key"],
+             row.get("source_format", ""), row.get("source_tool"),
+             int(row.get("component_count", 0)), int(row["ingested_epoch"])))
+
+    def insert_sbom_components(self, snapshot_id: str, components: Iterable[Dict]) -> None:
+        seq = [(snapshot_id, c["purl_identity"], c.get("name"), c.get("version"),
+                c.get("ecosystem"), c.get("origin"), c.get("purl"),
+                c.get("license_raw"), c.get("license_spdx"), c.get("license_category"))
+               for c in components]
+        if seq:
+            self._be.upsert_many("sbom_components", self._SBOM_COMP_COLS,
+                                 ["snapshot_id", "purl_identity"], self._SBOM_COMP_COLS[2:], seq)
+
+    def insert_snapshot_cves(self, snapshot_id: str, cves: Iterable[Dict]) -> None:
+        seq = [(snapshot_id, c["cve"], c.get("purl_identity", "*"), c.get("fixed_version"))
+               for c in cves]
+        if seq:
+            self._be.upsert_many("sbom_snapshot_cves",
+                                 ["snapshot_id", "cve", "purl_identity", "fixed_version"],
+                                 ["snapshot_id", "cve", "purl_identity"], ["fixed_version"], seq)
+
+    def list_sbom_subjects(self, account: str) -> List[Dict]:
+        """Diffable subjects: subject_key + snapshot count + latest epoch (newest first)."""
+        rows = self._be.query_all(
+            "SELECT subject_key, COUNT(*) AS snapshots, MAX(ingested_epoch) AS latest_epoch "
+            "FROM sbom_snapshots WHERE account=? GROUP BY subject_key "
+            "ORDER BY latest_epoch DESC", (account,))
+        return [dict(r) for r in rows]
+
+    def list_sbom_snapshots(self, account: str, subject_key: Optional[str] = None,
+                            limit: int = 200) -> List[Dict]:
+        sql = "SELECT * FROM sbom_snapshots WHERE account=?"
+        params: List = [account]
+        if subject_key:
+            sql += " AND subject_key=?"; params.append(subject_key)
+        sql += " ORDER BY ingested_epoch DESC LIMIT ?"; params.append(int(limit))
+        return [dict(r) for r in self._be.query_all(sql, tuple(params))]
+
+    def get_sbom_snapshot(self, snapshot_id: str) -> Optional[Dict]:
+        r = self._be.query_one("SELECT * FROM sbom_snapshots WHERE snapshot_id=?", (snapshot_id,))
+        return dict(r) if r else None
+
+    def get_snapshot_components(self, snapshot_id: str) -> List[Dict]:
+        return [dict(r) for r in self._be.query_all(
+            "SELECT * FROM sbom_components WHERE snapshot_id=? ORDER BY name, purl_identity",
+            (snapshot_id,))]
+
+    def get_snapshot_cves(self, snapshot_id: str) -> List[Dict]:
+        return [dict(r) for r in self._be.query_all(
+            "SELECT * FROM sbom_snapshot_cves WHERE snapshot_id=?", (snapshot_id,))]
+
+    def list_components(self, account: str, snapshot_id: Optional[str] = None,
+                        license_category: Optional[str] = None, limit: int = 5000) -> List[Dict]:
+        """Components for one snapshot, or (default) the LATEST snapshot of every subject.
+        Both branches are account-scoped (a snapshot from another tenant returns nothing)."""
+        if snapshot_id:
+            # JOIN + account predicate so a cross-account snapshot id reads nothing.
+            sql = ["SELECT c.* FROM sbom_components c JOIN sbom_snapshots s "
+                   "ON c.snapshot_id=s.snapshot_id WHERE c.snapshot_id=? AND s.account=?"]
+            params: List = [snapshot_id, account]
+        else:
+            # exactly ONE latest snapshot per subject — tie-break on snapshot_id so two
+            # snapshots sharing a (second-resolution) epoch never merge into a union.
+            sql = ["SELECT c.* FROM sbom_components c JOIN sbom_snapshots s "
+                   "ON c.snapshot_id=s.snapshot_id WHERE s.account=? AND s.snapshot_id=("
+                   "  SELECT s2.snapshot_id FROM sbom_snapshots s2 "
+                   "  WHERE s2.account=s.account AND s2.subject_key=s.subject_key "
+                   "  ORDER BY s2.ingested_epoch DESC, s2.snapshot_id DESC LIMIT 1)"]
+            params = [account]
+        if license_category:
+            sql.append("AND c.license_category=?"); params.append(license_category)
+        sql.append("ORDER BY c.license_category, c.name LIMIT ?"); params.append(int(limit))
+        return [dict(r) for r in self._be.query_all(" ".join(sql), tuple(params))]
+
+    def upsert_vex_statement(self, row: Dict) -> None:
+        """Durable VEX ledger. PK (account,node_id,cve,purl_identity); '*'=product-wide.
+        Re-ingest bumps last_seen, preserves first_seen (MIN)."""
+        acct, node, cve = row["account"], row["node_id"], row["cve"]
+        pid = row.get("purl_identity") or "*"
+        last = int(row["last_seen_epoch"])
+        first = last
+        existing = self._be.query_one(
+            "SELECT first_seen_epoch FROM vex_statements "
+            "WHERE account=? AND node_id=? AND cve=? AND purl_identity=?", (acct, node, cve, pid))
+        if existing and dict(existing).get("first_seen_epoch") is not None:
+            first = min(first, int(dict(existing)["first_seen_epoch"]))
+        self._be.upsert(
+            "vex_statements", self._VEX_COLS, ["account", "node_id", "cve", "purl_identity"],
+            self._VEX_COLS[4:],
+            (acct, node, cve, pid, row["status"], row.get("justification"),
+             row.get("vex_format", "openvex"), row.get("doc_id", ""), first, last))
+
+    def vex_lookup(self, account: str, node_id: str, cve: str,
+                   purl_identity: Optional[str] = None) -> Optional[Dict]:
+        """The governing VEX statement for a (node,cve[,purl]): an exact purl match wins
+        over a product-wide '*' statement. Returns None if unstated. (The caller decides
+        suppression — only 'not_affected'/'fixed' suppress.)"""
+        rows = [dict(r) for r in self._be.query_all(
+            "SELECT * FROM vex_statements WHERE account=? AND node_id=? AND cve=? "
+            "AND purl_identity IN (?, '*')", (account, node_id, cve, purl_identity or "*"))]
+        if not rows:
+            return None
+        exact = [r for r in rows if purl_identity and r["purl_identity"] == purl_identity]
+        return (exact or rows)[0]
+
+    def list_vex_statements(self, account: str, node_id: Optional[str] = None,
+                            cve: Optional[str] = None) -> List[Dict]:
+        sql = ["SELECT * FROM vex_statements WHERE account=?"]
+        params: List = [account]
+        if node_id:
+            sql.append("AND node_id=?"); params.append(node_id)
+        if cve:
+            sql.append("AND cve=?"); params.append(cve)
+        sql.append("ORDER BY cve")
+        return [dict(r) for r in self._be.query_all(" ".join(sql), tuple(params))]
 
     # ── CDR-lite detection ingest (v6) ────────────────────────────────────────
     _CDR_COLS = ["account", "detection_id", "source", "type", "title", "node_id",

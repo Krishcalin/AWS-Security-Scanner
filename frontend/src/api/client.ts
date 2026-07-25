@@ -9,6 +9,7 @@ import type {
   CrosswalkData, CrosswalkEdge, AccountCompliance, ComplianceFrameworkMeta,
   TrendRow, DriftDigest, DigestDelivery,
   IngestedVuln, IngestDoc, IngestResult,
+  SbomSubject, SbomSnapshot, SbomComponent, SbomDiffData, LicenseFinding, VexStatementRow,
 } from './types'
 import { deriveCrosswalk } from '../lib/crosswalk'
 
@@ -390,11 +391,55 @@ const vulnApi = {
   },
 }
 
+// ── supply chain (SBOM diff · license · VEX) ──────────────────────────────────
+const sbomApi = {
+  sbomSubjects: async (id: string): Promise<SbomSubject[]> => {
+    if (!SAMPLE) return get<SbomSubject[]>(`${API_BASE}/accounts/${id}/sbom/subjects`)
+    return get<SbomSubject[]>('/sample/sbom_subjects.json').catch(() => [])
+  },
+  sbomSnapshots: async (id: string, subject?: string): Promise<SbomSnapshot[]> => {
+    if (!SAMPLE) return get<SbomSnapshot[]>(`${API_BASE}/accounts/${id}/sbom/snapshots${subject ? `?subject=${encodeURIComponent(subject)}` : ''}`)
+    const all = await get<SbomSnapshot[]>('/sample/sbom_snapshots.json').catch(() => [])
+    return subject ? all.filter((s) => s.subject_key === subject) : all
+  },
+  sbomDiff: async (id: string, opts: { from?: string; to?: string; subject?: string } = {}): Promise<SbomDiffData | null> => {
+    if (!SAMPLE) {
+      const q = new URLSearchParams()
+      if (opts.from) q.set('from', opts.from)
+      if (opts.to) q.set('to', opts.to)
+      if (opts.subject) q.set('subject', opts.subject)
+      const r = await fetch(`${API_BASE}/accounts/${id}/sbom/diff${q.toString() ? `?${q}` : ''}`, { headers: { Accept: 'application/json' } })
+      return r.ok ? ((await r.json()) as SbomDiffData) : null
+    }
+    return get<SbomDiffData>('/sample/sbom_diff.json').catch(() => null)
+  },
+  components: async (id: string, opts: { snapshot?: string; license?: string } = {}): Promise<SbomComponent[]> => {
+    if (!SAMPLE) {
+      const q = new URLSearchParams()
+      if (opts.snapshot) q.set('snapshot', opts.snapshot)
+      if (opts.license) q.set('license', opts.license)
+      return get<SbomComponent[]>(`${API_BASE}/accounts/${id}/components${q.toString() ? `?${q}` : ''}`)
+    }
+    let rows = await get<SbomComponent[]>('/sample/components.json').catch(() => [])
+    if (opts.license) rows = rows.filter((c) => c.license_category === opts.license)
+    return rows
+  },
+  licenseFindings: async (id: string): Promise<LicenseFinding[]> => {
+    if (!SAMPLE) return get<LicenseFinding[]>(`${API_BASE}/accounts/${id}/license-findings`)
+    return get<LicenseFinding[]>('/sample/license_findings.json').catch(() => [])
+  },
+  vexStatements: async (id: string): Promise<VexStatementRow[]> => {
+    if (!SAMPLE) return get<VexStatementRow[]>(`${API_BASE}/accounts/${id}/vex`)
+    return get<VexStatementRow[]>('/sample/vex.json').catch(() => [])
+  },
+}
+
 export const api = {
   ...connectorApi,
   ...complianceApi,
   ...schedulingApi,
   ...vulnApi,
+  ...sbomApi,
   orgOverview: () => get<OrgOverview>(endpoint('/org/overview', 'org_overview.json')),
   listAccounts: () => get<Account[]>(endpoint('/accounts', 'accounts.json')),
   accountSummary: (id: string) =>

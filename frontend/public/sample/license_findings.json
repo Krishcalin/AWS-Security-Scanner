@@ -1,0 +1,5 @@
+[
+  {"purl_identity": "pkg:npm/some-tool", "name": "some-tool", "version": "2.0.0", "purl": "pkg:npm/some-tool@2.0.0", "license_spdx": "AGPL-3.0-only", "license_category": "network_copyleft", "verdict": "deny", "check_id": "LIC-DENY", "severity": "HIGH", "compliance": {"NIST 800-53": "CM-7"}},
+  {"purl_identity": "pkg:npm/gpl-widget", "name": "gpl-widget", "version": "1.2.0", "purl": "pkg:npm/gpl-widget@1.2.0", "license_spdx": "GPL-3.0-only", "license_category": "strong_copyleft", "verdict": "review", "check_id": "LIC-REVIEW", "severity": "MEDIUM", "compliance": {"NIST 800-53": "CM-8"}},
+  {"purl_identity": "pkg:pypi/mystery", "name": "mystery", "version": "0.1.0", "purl": "pkg:pypi/mystery@0.1.0", "license_spdx": "UNKNOWN", "license_category": "unknown", "verdict": "review", "check_id": "LIC-REVIEW", "severity": "MEDIUM", "compliance": {"NIST 800-53": "CM-8"}}
+]

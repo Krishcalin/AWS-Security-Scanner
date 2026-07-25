@@ -38,6 +38,7 @@ from aws_sidescan import (
     Package, EnrichedMatch, _ECO, _pep503, _lang_pkg, _OSV_ECO, prefer_cve, _band,
     _cvss3_base_from_vector, enrich_match, emit_node_vuln_edges,
 )
+from aws_vex import VexStatement, parse_vex, sniff_vex
 
 # ── identity dataclasses ─────────────────────────────────────────────────────
 
@@ -91,16 +92,78 @@ class VulnInventory:
     doc_id: str
 
 
+@dataclass(frozen=True)
+class Component:
+    """One SBOM component for the durable snapshot (superset of ``packages`` — keeps
+    purl-less rows the match lane drops). Carries the RAW license string; normalization
+    to an SPDX id + category happens on persistence (via ``aws_license``)."""
+    name: str
+    version: str
+    purl: Optional[str]
+    purl_identity: str                      # purl minus version, canonicalized; or name@ecosystem
+    ecosystem: str
+    origin: str
+    license_raw: Optional[str]
+
+
 @dataclass
 class ParsedDoc:
     """The pure output of a parser: exactly one lane is populated."""
-    lane: str                               # "findings" | "inventory"
+    lane: str                               # "findings" | "inventory" | "vex"
     findings: List[IngestedFinding] = field(default_factory=list)
     packages: List[Package] = field(default_factory=list)
+    components: List[Component] = field(default_factory=list)   # full SBOM set (inventory lane)
+    vex_statements: List[VexStatement] = field(default_factory=list)   # vex lane
     subject_locator: Optional[str] = None   # image ref / bom subject
     source_tool: str = ""
-    source_format: str = ""                 # sarif | cyclonedx | spdx
+    source_format: str = ""                 # sarif | cyclonedx | spdx | openvex | csaf
     notes: List[str] = field(default_factory=list)
+
+
+# ── purl-identity + subject-key (SBOM diff axes) ──────────────────────────────
+def canonical_purl_identity(purl: str) -> str:
+    """A version-independent, canonical purl key: drop ``@version``, lowercase the
+    ``type``, sort qualifiers, keep the subpath — so two builds of the same component
+    (or qualifier/order jitter) map to ONE identity and never spawn spurious diffs."""
+    body = (purl or "").strip()
+    if not body.lower().startswith("pkg:"):
+        return body
+    subpath = ""
+    if "#" in body:
+        body, subpath = body.split("#", 1)
+    quals = ""
+    if "?" in body:
+        body, quals = body.split("?", 1)
+    if "@" in body:
+        body = body.rsplit("@", 1)[0]                    # drop version (only '@' is the version sep)
+    rest = body[4:]                                      # after 'pkg:'
+    typ, _, tail = rest.partition("/")
+    body = "pkg:" + typ.lower() + ("/" + tail if tail else "")
+    if quals:
+        quals = "&".join(sorted(q for q in quals.split("&") if q))
+    return body + (("?" + quals) if quals else "") + (("#" + subpath) if subpath else "")
+
+
+def purl_identity(purl: Optional[str], name: str = "", ecosystem: str = "") -> str:
+    """Stable component identity for diffing. A purl-less component (common OS pkg /
+    name-only SPDX) gets a synthetic ``name@ecosystem`` — never an empty key."""
+    if purl:
+        return canonical_purl_identity(purl)
+    return f"{name}@{ecosystem}" if ecosystem else (name or "unknown")
+
+
+def subject_key(node_id: str, node_kind: str = "") -> str:
+    """The diff axis: for a container image, strip ``:tag``/``@digest`` down to the
+    repository so the SAME image over time is one diffable subject; else node identity."""
+    nid = node_id or ""
+    if node_kind == "ECRImage" or ".dkr.ecr." in nid:
+        base = nid.split("@", 1)[0]                       # drop @digest
+        slash = base.rfind("/")
+        head, tail = (base[:slash + 1], base[slash + 1:]) if slash >= 0 else ("", base)
+        if ":" in tail:
+            tail = tail.split(":", 1)[0]                  # drop :tag (registry :port stays in head)
+        return head + tail
+    return nid
 
 
 # ── shared regexes / helpers ─────────────────────────────────────────────────
@@ -143,6 +206,10 @@ def doc_content_id(content) -> str:
 def sniff_format(doc: dict) -> Optional[str]:
     if not isinstance(doc, dict):
         return None
+    # VEX first — an OpenVEX/CSAF doc must not be mis-laned into the CVE pipeline.
+    vex_fmt = sniff_vex(doc)
+    if vex_fmt:
+        return vex_fmt                                    # "openvex" | "csaf"
     if doc.get("bomFormat") == "CycloneDX":
         return "cyclonedx"
     if "spdxVersion" in doc:
@@ -162,7 +229,12 @@ def parse_document(doc: dict, doc_id: str = "") -> ParsedDoc:
         return parse_cyclonedx(doc, doc_id)
     if fmt == "spdx":
         return parse_spdx(doc, doc_id)
-    raise ValueError("unrecognized document: expected SARIF 2.1.0, CycloneDX, or SPDX")
+    if fmt in ("openvex", "csaf"):
+        _fmt, stmts = parse_vex(doc)
+        return ParsedDoc(lane="vex", vex_statements=stmts, source_format=fmt,
+                         source_tool=fmt, subject_locator=None)
+    raise ValueError("unrecognized document: expected SARIF 2.1.0, CycloneDX, SPDX, "
+                     "OpenVEX, or CSAF-VEX")
 
 
 # ── purl -> Package (inverse of _purl / _lang_purl) ──────────────────────────
@@ -504,6 +576,65 @@ def _cdx_component_fields(comp: dict) -> Tuple[str, str, Optional[str]]:
     return name, version, purl
 
 
+def _cdx_license(comp: dict) -> Optional[str]:
+    """The raw license string of a CycloneDX component: an SPDX expression, an id, or
+    a name — from ``licenses[]`` and ``evidence.licenses`` (1.5+). Multiple concrete
+    licenses join as an AND expression (the strictest reading; normalization decides)."""
+    ids: List[str] = []
+    sources = list(comp.get("licenses") or [])
+    sources += list((comp.get("evidence") or {}).get("licenses") or [])
+    for lic in sources:
+        if not isinstance(lic, dict):
+            continue
+        if lic.get("expression"):
+            ids.append(str(lic["expression"]))
+            continue
+        node = lic.get("license") or {}
+        val = node.get("id") or node.get("name")
+        if val:
+            ids.append(str(val))
+    ids = [i for i in dict.fromkeys(ids) if i]           # de-dup, order-preserving
+    if not ids:
+        return None
+    if len(ids) == 1:
+        return ids[0]
+    # AND-join, but PARENTHESIZE any arm that is itself a compound expression, so SPDX
+    # precedence (AND binds tighter than OR) can't flip "MIT OR Apache-2.0" AND "GPL" into
+    # a most-permissive read that silently drops the mandatory GPL obligation.
+    return " AND ".join(f"({i})" if (" OR " in i or " AND " in i) else i for i in ids)
+
+
+def _component_of(name: str, version: str, purl: Optional[str], license_raw: Optional[str]) -> Component:
+    pkg = parse_purl(purl) if purl else None
+    eco = pkg.ecosystem if pkg else ""
+    origin = pkg.origin if pkg else ""
+    return Component(name=name, version=version, purl=purl,
+                     purl_identity=purl_identity(purl, name, eco),
+                     ecosystem=eco, origin=origin, license_raw=license_raw)
+
+
+def _cdx_walk(components):
+    """Yield EVERY component dict (top-level + nested), regardless of bom-ref — the full
+    SBOM set for the snapshot. (``_cdx_index`` is bom-ref-keyed and drops ref-less rows.)"""
+    for c in components or []:
+        if isinstance(c, dict):
+            yield c
+            yield from _cdx_walk(c.get("components"))
+
+
+def _cdx_components(components_iter) -> List[Component]:
+    """The FULL CycloneDX component set (superset of ``packages`` — keeps purl-less rows)."""
+    out: List[Component] = []
+    for c in components_iter:
+        if not isinstance(c, dict):
+            continue
+        name, version, purl = _cdx_component_fields(c)
+        if not name and not purl:
+            continue
+        out.append(_component_of(name, version, purl, _cdx_license(c)))
+    return out
+
+
 def _cdx_vuln(v: dict, idx: Dict[str, dict], doc_id: str, tool: str,
               notes: List[str]) -> List[IngestedFinding]:
     vid = v.get("id") or ""
@@ -570,9 +701,10 @@ def parse_cyclonedx(doc: dict, doc_id: str = "") -> ParsedDoc:
                 notes.append(f"cyclonedx: skipped malformed vulnerability: {e}")
         return ParsedDoc(lane="findings", findings=findings, subject_locator=subject,
                          source_tool=tool, source_format="cyclonedx", notes=notes)
-    packages = _components_to_packages(idx.values(), notes)
-    return ParsedDoc(lane="inventory", packages=packages, subject_locator=subject,
-                     source_tool=tool, source_format="cyclonedx", notes=notes)
+    packages = _components_to_packages(idx.values(), notes)          # match lane — UNCHANGED
+    components = _cdx_components(_cdx_walk(components))               # full set incl. ref-less rows
+    return ParsedDoc(lane="inventory", packages=packages, components=components,
+                     subject_locator=subject, source_tool=tool, source_format="cyclonedx", notes=notes)
 
 
 # ── SPDX 2.3 (INVENTORY lane only — SPDX has no native vuln) ─────────────────
@@ -591,6 +723,31 @@ def _spdx_tool(creators) -> str:
             tool = s.split(":", 1)[1].strip().lower()
             return tool.split("-")[0] or tool
     return "spdx"
+
+
+def _spdx_license(p: dict) -> Optional[str]:
+    """Prefer licenseConcluded over licenseDeclared; NOASSERTION/NONE → None."""
+    for key in ("licenseConcluded", "licenseDeclared"):
+        v = p.get(key)
+        if v and str(v) not in ("NOASSERTION", "NONE", ""):
+            return str(v)
+    return None
+
+
+def _spdx_components(doc: dict, described: set) -> List[Component]:
+    """The FULL SPDX package set (superset of the match lane — keeps purl-less rows)."""
+    out: List[Component] = []
+    for p in doc.get("packages") or []:
+        if not isinstance(p, dict) or p.get("SPDXID") in described:
+            continue
+        name = p.get("name") or ""
+        purl = _spdx_purl(p)
+        ver = p.get("versionInfo")
+        version = "" if (not ver or ver == "NOASSERTION") else str(ver)
+        if not name and not purl:
+            continue
+        out.append(_component_of(name, version, purl, _spdx_license(p)))
+    return out
 
 
 def _spdx_subject(doc: dict) -> Optional[str]:
@@ -640,8 +797,9 @@ def parse_spdx(doc: dict, doc_id: str = "") -> ParsedDoc:
             notes.append(f"spdx: low-fidelity-match (no ?distro=) for {purl!r}")
         packages.append(pkg)
     subject = _spdx_subject(doc)
-    return ParsedDoc(lane="inventory", packages=packages, subject_locator=subject,
-                     source_tool=tool, source_format="spdx", notes=notes)
+    components = _spdx_components(doc, described)                     # full snapshot set (+ license)
+    return ParsedDoc(lane="inventory", packages=packages, components=components,
+                     subject_locator=subject, source_tool=tool, source_format="spdx", notes=notes)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

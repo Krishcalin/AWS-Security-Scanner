@@ -5,6 +5,7 @@ import { Overview } from './routes/Overview'
 import { AttackPaths } from './routes/AttackPaths'
 import { Findings } from './routes/Findings'
 import { Vulnerabilities } from './routes/Vulnerabilities'
+import { SupplyChain } from './routes/SupplyChain'
 import { CloudAccounts } from './routes/CloudAccounts'
 import { Inventory } from './routes/Inventory'
 import { Identity } from './routes/Identity'
@@ -31,6 +32,7 @@ export default function App() {
               <Route path="/attack-paths" element={<AttackPaths />} />
               <Route path="/findings" element={<Findings />} />
               <Route path="/vulnerabilities" element={<Vulnerabilities />} />
+            <Route path="/supply-chain" element={<SupplyChain />} />
               <Route path="/inventory" element={<Inventory />} />
               <Route path="/identity" element={<Identity />} />
               <Route path="/compliance" element={<Compliance />} />

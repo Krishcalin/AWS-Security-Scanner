@@ -400,3 +400,83 @@ export interface IngestResult {
   newly_reachable_kev: { cve: string; node_id: string; kev: boolean }[]
   top: IngestedVuln[]
 }
+
+// ── supply chain (SBOM diff · license · VEX) ──────────────────────────────────
+export interface SbomSubject {
+  subject_key: string
+  snapshots: number
+  latest_epoch: number
+}
+
+export interface SbomSnapshot {
+  snapshot_id: string
+  account: string
+  node_id: string
+  subject_key: string
+  source_format: string
+  source_tool: string | null
+  component_count: number
+  ingested_epoch: number
+}
+
+export interface SbomComponent {
+  snapshot_id: string
+  purl_identity: string
+  name: string | null
+  version: string | null
+  ecosystem: string | null
+  origin: string | null
+  purl: string | null
+  license_raw: string | null
+  license_spdx: string | null
+  license_category: string | null
+}
+
+export interface ComponentDelta {
+  purl_identity: string
+  name: string
+  change: 'added' | 'removed' | 'version_changed' | 'license_changed'
+  from_version: string | null
+  to_version: string | null
+  from_license: string | null
+  to_license: string | null
+}
+
+export interface SbomDiffData {
+  account: string
+  subject_key: string
+  from_snapshot: string
+  to_snapshot: string
+  from_epoch: number
+  to_epoch: number
+  added: ComponentDelta[]
+  removed: ComponentDelta[]
+  changed: ComponentDelta[]
+  cve_delta: { new: string[]; fixed: string[] }
+}
+
+export interface LicenseFinding {
+  purl_identity: string
+  name: string
+  version: string | null
+  purl: string | null
+  license_spdx: string
+  license_category: string
+  verdict: 'deny' | 'review'
+  check_id: 'LIC-DENY' | 'LIC-REVIEW'
+  severity: string
+  compliance: Record<string, string>
+}
+
+export interface VexStatementRow {
+  account: string
+  node_id: string
+  cve: string
+  purl_identity: string
+  status: 'not_affected' | 'affected' | 'fixed' | 'under_investigation'
+  justification: string | null
+  vex_format: string
+  doc_id: string
+  first_seen_epoch: number
+  last_seen_epoch: number
+}

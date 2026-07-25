@@ -1,0 +1,4 @@
+[
+  {"account": "123456789012", "node_id": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api:build-42@sha256:b42", "cve": "CVE-2021-45046", "purl_identity": "pkg:maven/org.apache.logging.log4j/log4j-core", "status": "not_affected", "justification": "vulnerable_code_not_in_execute_path", "vex_format": "openvex", "doc_id": "vex-log4j", "first_seen_epoch": 1706400000, "last_seen_epoch": 1706400000},
+  {"account": "123456789012", "node_id": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api:build-42@sha256:b42", "cve": "CVE-2022-22965", "purl_identity": "*", "status": "under_investigation", "justification": null, "vex_format": "csaf", "doc_id": "vex-spring", "first_seen_epoch": 1706400000, "last_seen_epoch": 1706400000}
+]

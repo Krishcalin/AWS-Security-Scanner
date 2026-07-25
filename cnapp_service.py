@@ -27,8 +27,11 @@ import aws_copilot
 import aws_ingest
 import aws_cdr
 import aws_forensics
+import aws_license
+import aws_sbom_diff
 import aws_sidescan
 import aws_state
+import aws_vex
 import cnapp_connectors as cc
 import cnapp_onboarding
 import cnapp_validate
@@ -577,11 +580,14 @@ class PlatformService:
         now = self.clock()
         parsed = aws_ingest.parse_document(doc)                 # ValueError → 400
         doc_id = aws_ingest.doc_content_id(doc)
-        bundle = self._vuln_bundle()
-        epss, kev, exploits = bundle["epss"], bundle["kev"], bundle["exploits"]
 
         graph_dict = self.get_graph(account_id)
         g = aws_ingest.SecurityGraph.from_dict(graph_dict or {})
+        if parsed.lane == "vex":                                # a standalone VEX doc
+            return self._ingest_vex(account_id, parsed, doc_id, target_resource, g, graph_dict, now)
+
+        bundle = self._vuln_bundle()
+        epss, kev, exploits = bundle["epss"], bundle["kev"], bundle["exploits"]
         node_id, node_kind, mapping_status = aws_ingest.resolve_owner(
             g, account_id, target_resource, parsed.subject_locator)
 
@@ -598,11 +604,24 @@ class PlatformService:
 
         tool = source_tool or parsed.source_tool
         with state._be.transaction():
+            # an embedded CycloneDX analysis.state=not_affected is recorded into the SAME
+            # durable ledger as standalone VEX, so suppression has ONE source of truth and a
+            # later standalone doc can't order-dependently clobber it.
+            if parsed.lane == "findings":
+                for f in parsed.findings:
+                    if aws_ingest.vex_suppressed(f.vex_state):
+                        state.upsert_vex_statement({
+                            "account": account_id, "node_id": node_id, "cve": f.cve,
+                            "purl_identity": "*", "status": "not_affected",
+                            "justification": f.vex_state, "vex_format": "cyclonedx",
+                            "doc_id": doc_id, "last_seen_epoch": now})
             state.upsert_ingest_doc(
                 account_id, doc_id, parsed.source_format, tool, target_resource,
                 node_id, len(owned),
                 "unmapped" if mapping_status == "unmapped" else "ingested", None, now)
             for m, suppressed in owned:
+                # a durable VEX that arrived BEFORE this scan suppresses the new row too
+                suppressed = suppressed or self._vex_suppresses(account_id, node_id, m.cve)
                 state.upsert_ingested_vuln({
                     "account": account_id, "node_id": node_id, "cve": m.cve,
                     "node_kind": node_kind, "package": m.package,
@@ -612,6 +631,9 @@ class PlatformService:
                     "sources": [f"ingest:{tool}"], "suppressed": suppressed,
                     "mapping_status": mapping_status, "last_seen_epoch": now,
                     "doc_id": doc_id})
+            if parsed.lane == "inventory":                      # an SBOM → durable snapshot
+                self._persist_sbom_snapshot(state, account_id, node_id, node_kind,
+                                            parsed, owned, doc_id, tool, now)
             became, _ = self._recompute_account_verdicts(account_id, graph_dict)
 
         return {"doc_id": doc_id, "resolved_node": node_id, "node_kind": node_kind,
@@ -619,6 +641,172 @@ class PlatformService:
                 "finding_count": len(owned), "notes": parsed.notes,
                 "newly_reachable_kev": [x for x in became if x.get("kev")],
                 "top": state.list_ingested_vulns(account_id, limit=10)}
+
+    # ── supply chain: SBOM snapshot persistence + license verdicts (Phase 4 S4) ──
+    @property
+    def license_policy(self) -> dict:
+        """The license policy (allow/review/deny by category). Defaults to the strict
+        shipped policy; an operator may override via ``service._license_policy`` (from
+        settings.yaml). Verdicts are computed ON READ so a change needs no re-ingest."""
+        return getattr(self, "_license_policy", None) or aws_license.DEFAULT_POLICY
+
+    def _persist_sbom_snapshot(self, state, account_id: str, node_id: str, node_kind: str,
+                               parsed, owned, doc_id: str, tool: str, now: int) -> None:
+        """Persist an inventory-lane SBOM as a durable, diffable snapshot: header + FULL
+        component set (with normalized license) + this scan's immutable CVE set. Called
+        inside the ingest transaction; read-only (derived from the uploaded doc only)."""
+        policy = self.license_policy
+        # dedup by purl_identity (the storage PK) so component_count matches the rows that
+        # persist (two versions of one package share a version-stripped identity).
+        comps: dict = {}
+        for c in parsed.components:
+            if c.purl_identity in comps:
+                continue
+            a = aws_license.assess(c.license_raw, policy)
+            comps[c.purl_identity] = {"purl_identity": c.purl_identity, "name": c.name, "version": c.version,
+                                      "ecosystem": c.ecosystem, "origin": c.origin, "purl": c.purl,
+                                      "license_raw": c.license_raw, "license_spdx": a["spdx_id"],
+                                      "license_category": a["category"]}
+        comp_list = list(comps.values())
+        # attribute each matched CVE to a component identity (name+version → name → '*')
+        by_nv = {(c.name, c.version): c.purl_identity for c in parsed.components}
+        by_name: dict = {}
+        for c in parsed.components:
+            by_name.setdefault(c.name, c.purl_identity)
+        cves, seen = [], set()
+        for m, _sup in owned:
+            pid = by_nv.get((m.package, m.installed_version)) or by_name.get(m.package) or "*"
+            if (m.cve, pid) in seen:
+                continue
+            seen.add((m.cve, pid))
+            cves.append({"cve": m.cve, "purl_identity": pid, "fixed_version": m.fixed_version})
+        # account-scope the snapshot identity so two tenants uploading the same SBOM content
+        # never collide on the content-hash primary key.
+        snap_id = f"{account_id}:{doc_id}"
+        state.record_sbom_snapshot({
+            "snapshot_id": snap_id, "account": account_id, "node_id": node_id,
+            "subject_key": aws_ingest.subject_key(node_id, node_kind),
+            "source_format": parsed.source_format, "source_tool": tool,
+            "component_count": len(comp_list), "ingested_epoch": now})
+        state.insert_sbom_components(snap_id, comp_list)
+        state.insert_snapshot_cves(snap_id, cves)
+
+    def list_license_findings(self, account_id: str) -> List[dict]:
+        """Read-time license verdicts over the account's LATEST SBOM components: every
+        deny/review row per the (overridable) policy. Fail-open (no state / no SBOM = [])."""
+        if self.state is None:
+            return []
+        policy = self.license_policy
+        out = []
+        for c in self.state.list_components(account_id):
+            cat = c.get("license_category") or "unknown"
+            spdx = c.get("license_spdx") or "UNKNOWN"
+            verdict = aws_license.evaluate_license(spdx, cat, policy)
+            if verdict == "allow":
+                continue
+            deny = verdict == "deny"
+            out.append({
+                "purl_identity": c.get("purl_identity"), "name": c.get("name"),
+                "version": c.get("version"), "purl": c.get("purl"), "license_spdx": spdx,
+                "license_category": cat, "verdict": verdict,
+                "check_id": "LIC-DENY" if deny else "LIC-REVIEW",
+                "severity": "HIGH" if deny else "MEDIUM",
+                # display-only chips (NOT the crosswalk scorecard) — in the frozen 38-control
+                # universe: CM-7 (least functionality / unauthorized software) for a deny,
+                # CM-8 (component inventory) for a review.
+                "compliance": {"NIST 800-53": "CM-7" if deny else "CM-8"},
+            })
+        return out
+
+    # ── supply chain: SBOM subjects / snapshots / diff / components (read) ───────
+    def list_sbom_subjects(self, account_id: str) -> List[dict]:
+        return [] if self.state is None else self.state.list_sbom_subjects(account_id)
+
+    def list_sbom_snapshots(self, account_id: str, subject: Optional[str] = None) -> List[dict]:
+        return [] if self.state is None else self.state.list_sbom_snapshots(account_id, subject_key=subject)
+
+    def list_sbom_components(self, account_id: str, snapshot: Optional[str] = None,
+                            license: Optional[str] = None) -> List[dict]:
+        return ([] if self.state is None
+                else self.state.list_components(account_id, snapshot_id=snapshot, license_category=license))
+
+    def sbom_diff(self, account_id: str, from_id: Optional[str] = None,
+                  to_id: Optional[str] = None, subject: Optional[str] = None) -> Optional[dict]:
+        """Diff two SBOM snapshots (A=from/older, B=to/newer). Explicit ids win; else the
+        latest two of ``subject`` (or of the account's most-recent subject). Account-scoped:
+        a snapshot id from another account never diffs (→ None → 404). Fail-open: < 2
+        snapshots → None."""
+        if self.state is None:
+            return None
+        if not (from_id and to_id):
+            if not subject:
+                recent = self.state.list_sbom_snapshots(account_id, limit=1)
+                if not recent:
+                    return None
+                subject = recent[0]["subject_key"]
+            snaps = self.state.list_sbom_snapshots(account_id, subject_key=subject)
+            if len(snaps) < 2:
+                return None
+            to_id = to_id or snaps[0]["snapshot_id"]        # newest-first
+            from_id = from_id or snaps[1]["snapshot_id"]
+        a = self.state.get_sbom_snapshot(from_id)
+        b = self.state.get_sbom_snapshot(to_id)
+        if not a or not b or a["account"] != account_id or b["account"] != account_id:
+            return None                                     # cross-account / missing → isolate
+        d = aws_sbom_diff.diff_snapshots(
+            self.state.get_snapshot_components(from_id), self.state.get_snapshot_cves(from_id),
+            self.state.get_snapshot_components(to_id), self.state.get_snapshot_cves(to_id),
+            account=account_id, subject_key=b.get("subject_key", ""),
+            from_snapshot=from_id, to_snapshot=to_id,
+            from_epoch=a.get("ingested_epoch", 0), to_epoch=b.get("ingested_epoch", 0))
+        return aws_sbom_diff.to_dict(d)
+
+    # ── standalone VEX (OpenVEX / CSAF) — durable, bidirectional suppression ─────
+    def _vex_for(self, account_id: str, node_id: str, cve: str) -> Optional[dict]:
+        """The governing VEX statement for an owned (node, cve) row. ingested_vulns is keyed
+        (account,node,cve) with NO purl dimension, so ONLY a PRODUCT-WIDE ('*') statement
+        auto-suppresses — a subcomponent-scoped statement is recorded + shown but never
+        over-suppresses an unrelated finding on the same node. Among product-wide statements,
+        a suppressing one (not_affected/fixed) wins, so the verdict is order-independent."""
+        stmts = [s for s in self.state.list_vex_statements(account_id, node_id, cve)
+                 if s.get("purl_identity") == "*"]
+        supp = [s for s in stmts if s["status"] in aws_vex.SUPPRESSING]
+        return supp[0] if supp else (stmts[0] if stmts else None)
+
+    def _vex_suppresses(self, account_id: str, node_id: str, cve: str) -> bool:
+        gov = self._vex_for(account_id, node_id, cve)
+        return bool(gov and gov["status"] in aws_vex.SUPPRESSING)
+
+    def _ingest_vex(self, account_id: str, parsed, doc_id: str,
+                    target_resource: Optional[str], g, graph_dict, now: int) -> dict:
+        """Own a standalone VEX doc: resolve each statement's product to an owned node,
+        persist the durable statement, then RE-APPLY suppression to any already-ingested
+        (node, cve) rows and re-run reachability. Read-only on the scanned account."""
+        state = self._require_state()
+        affected = set()
+        with state._be.transaction():
+            for st in parsed.vex_statements:
+                node_id, _kind, _ms = aws_ingest.resolve_owner(
+                    g, account_id, target_resource, st.product)
+                pid = aws_ingest.purl_identity(st.purl) if st.purl else "*"
+                state.upsert_vex_statement({
+                    "account": account_id, "node_id": node_id, "cve": st.cve,
+                    "purl_identity": pid, "status": st.status, "justification": st.justification,
+                    "vex_format": parsed.source_format, "doc_id": doc_id, "last_seen_epoch": now})
+                affected.add((node_id, st.cve))
+            suppressed = 0
+            for node_id, cve in affected:
+                supp = self._vex_suppresses(account_id, node_id, cve)
+                state.set_ingested_suppressed(account_id, node_id, cve, supp)   # bidirectional
+                suppressed += int(supp)
+            self._recompute_account_verdicts(account_id, graph_dict)
+        return {"doc_id": doc_id, "resolved_node": None, "node_kind": "vex",
+                "mapping_status": "resolved", "lane": "vex", "finding_count": len(parsed.vex_statements),
+                "vex_applied": len(parsed.vex_statements), "vex_suppressed": suppressed,
+                "notes": parsed.notes, "newly_reachable_kev": [], "top": []}
+
+    def list_vex_statements(self, account_id: str) -> List[dict]:
+        return [] if self.state is None else self.state.list_vex_statements(account_id)
 
     def list_vulns(self, account_id: str, **filters) -> List[dict]:
         # Reads fail OPEN: no state store yet = nothing ingested (empty), never a 500.
