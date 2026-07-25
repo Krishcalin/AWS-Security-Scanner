@@ -1,6 +1,6 @@
 # OverWatch — DEV/TEST deps (kept OUT of the runtime image). Pinned.
 -r requirements.txt
-pytest==9.0.2
+pytest==9.0.3
 pyyaml==6.0.3
 # python-hcl2 is OPTIONAL — tests/test_terraform_parity.py uses it if present
 # (pytest.importorskip) and falls back to a structural regex check otherwise.
