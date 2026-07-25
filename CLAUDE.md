@@ -43,7 +43,7 @@ no code rename.) The repo also includes a separate pre-deploy IaC static scanner
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.26.0 (boto3, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem+least-priv, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, AI-SPM)
+├── aws_live_scanner.py      # Live audit scanner v2.30.0 (boto3, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem+least-priv, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, AI-SPM, CDR, forensics, copilot, vuln-ingest, supply-chain)
 ├── aws_remediate.py         # Remediation engine — prioritized plan (reuses minimal_cut/ChokePoint) + remediation-as-code + exports, pure
 ├── aws_codetocloud.py       # Code-to-cloud — IaC index (TF block extractor + CFN parse) + tiered T1–T5 matcher, pure
 ├── aws_finding_detail.py    # Finding detail — risk/impact/step-by-step remediation for all 222 actionable checks, pure offline data (GENERATED)
@@ -141,11 +141,11 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.26.0)
+## Live Audit Scanner (`aws_live_scanner.py` v2.30.0)
 
 - **Type**: Live AWS account audit via boto3 (a full CNAPP)
-- **Lines**: ~10,600
-- **Dependencies**: `boto3` (required); bundled stdlib engine modules `aws_graph.py`, `aws_exposure.py`, `aws_deepplane.py`, `aws_correlate.py`, `aws_effperm.py`, `aws_state.py`, `aws_unused.py`, `aws_sidescan*.py`, `aws_state_dialect.py`, `aws_graph_neptune*.py`, `aws_remediate.py`, `aws_codetocloud.py`, `aws_engine_eol.py`, `aws_winvuln.py`, `aws_finding_detail.py`; Python 3.10+
+- **Lines**: ~12,300
+- **Dependencies**: `boto3` (required); bundled stdlib engine modules `aws_graph.py`, `aws_exposure.py`, `aws_deepplane.py`, `aws_correlate.py`, `aws_effperm.py`, `aws_state.py`, `aws_unused.py`, `aws_sidescan*.py`, `aws_state_dialect.py`, `aws_graph_neptune*.py`, `aws_remediate.py`, `aws_codetocloud.py`, `aws_engine_eol.py`, `aws_winvuln.py`, `aws_finding_detail.py`, `aws_kube.py`, `aws_flowlog.py`, `aws_secrets.py`, `aws_leastpriv.py`, `aws_ingest.py`, `aws_copilot.py`, `aws_aispm.py`, `aws_cdr.py`, `aws_forensics.py`, `aws_license.py`, `aws_vex.py`, `aws_sbom_diff.py`; Python 3.10+
 - **IAM permissions**: `SecurityAudit` AWS-managed policy (read-only) covers the deep-plane reads (Inspector2/Macie/GuardDuty/Access Analyzer) and the effective-permissions reads (`iam:GetAccountAuthorizationDetails` for boundaries, `organizations:Describe*/List*` for SCPs — all degrade gracefully); multi-account adds `sts:AssumeRole` into a read-only role per target account, and `organizations:ListAccounts` for `--org`. `--ciem` additionally uses `iam:GenerateServiceLastAccessedDetails` and `access-analyzer:ListFindingsV2`
 - **Compliance**: CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
 
@@ -646,6 +646,58 @@ tag stays inside the frozen 38-control crosswalk universe.
   `aws_ingest._ingest_predicates`); `aws_forensics.py` + `GET …/forensics/timeline`
   (`FORENSIC-00` fail-open, read-only CloudTrail `LookupEvents`, management events only).
 
+### CNAPP Phase 4 — enterprise-readiness slices (AccuKnox-competitive, v2.27–v2.30)
+
+Four hosted/packaging/console slices off the AccuKnox-competitive roadmap. All hold the
+standing invariants: `aws_correlate.py` byte-frozen (sha256-pinned by
+`test_correlate_frozen.py`), every new NIST tag inside the frozen 38-control crosswalk
+universe, and **read-only / zero new scanned-account contact**. Each ran the full rigor loop
+(scoping workflow → batched build → read-only adversarial-verify → fix + regression tests →
+`--no-ff` merge). `aws_live_scanner.VERSION` tracks the platform, so these bumps move it even
+though the scanner engine is untouched.
+
+- **Slice 1 — multi-tenancy / workspaces + workspace-scoped RBAC + usage metering (MSSP)**
+  (v2.27.0) — one hub serves many isolated, metered tenant workspaces. Data model +
+  `cnapp_workspace.py`/`cnapp_metering.py` are detailed in the Phase-8 section above
+  (`SCHEMA_VERSION 6→7`); 5 adversarial defects fixed (two cross-tenant leaks on
+  non-path-param routes, a global-scheduler scope break, two control-plane 500s).
+- **Slice 2 — air-gapped / zero-telemetry packaging + Terraform onboarding + Marketplace**
+  (v2.28.0) — `NETWORK.md` (full egress inventory: ZERO telemetry/phone-home) enforced by
+  `tests/test_zero_telemetry.py` (a recursive-AST tripwire on every shipped module); offline
+  packaging (pinned `requirements*.txt`, a `--no-index` multi-stage `Dockerfile`,
+  `scripts/build_offline_bundle.sh`, the fail-closed `cnapp_server.py` ASGI launcher,
+  `docs/AIRGAP_RUNBOOK.md`); a `deploy/terraform/scanner-role/` module kept action-for-action
+  equivalent to the CFN by `tests/test_terraform_parity.py`; and a self-hosted `deploy/marketplace/`
+  container listing priced on accounts-under-management. 9 adversarial defects fixed (incl. a
+  **critical** botocore pin conflict that broke the offline build, and gaps in the guard/parity
+  tests themselves).
+- **Slice 3 — interactive product tour + shareable deep links** (v2.29.0, frontend-only) —
+  the URL is now the single source of truth for scope (`?scope=`) and every open panel, via a
+  shared `lib/deeplink.ts` `useDeepLinkPanel` hook + collision-free `pathId` / lossless `vulnKey`
+  codecs that resolve against the *unfiltered* catalog. A portalled product tour (`lib/tour/` +
+  `components/tour/`) replays **5 canned scenarios over the live console** (navigating, setting
+  scope, spotlighting real `data-tour` anchors via `MutationObserver`, opening real panels),
+  hybrid auto-advance + take-the-wheel. First JS test harness (**Vitest**): deep-link codec tests
+  + a fixture-drift scenario guardrail. 8 adversarial defects fixed (pathId collision, keyboard
+  hijack while typing, off-path deep-link no-op, org-scope upload target, …).
+- **Slice 4 — supply-chain ingest: SBOM snapshot/diff + license policy + standalone VEX + a
+  CI/CD image-scan Action** (v2.30.0) — the external-vuln ingest plane becomes a durable,
+  diffable supply-chain timeline. `aws_sbom_diff.py` (pure) diffs two account-scoped snapshots
+  of one subject (added / removed / version- / license-changed + CVE delta); `aws_license.py`
+  (pure) normalizes each component license to an SPDX id + category and evaluates a
+  config-overridable policy **on read** (`LIC-DENY → CM-7`, `LIC-REVIEW → CM-8`); `aws_vex.py`
+  (pure) parses **OpenVEX + CSAF-VEX** into a subcomponent-scoped `vex_statements` ledger with
+  **bidirectional** suppress-but-track (a pre-scan statement suppresses a later row too).
+  `SCHEMA_VERSION 7→8` (`sbom_snapshots`/`sbom_components`/`sbom_snapshot_cves`/`vex_statements`).
+  A below-admin **`ingest`** RBAC tier (viewer < ingest < admin) lets a CI token POST `/ingest`
+  but not onboard/scan; a shell-only `.github/actions/overwatch-image-scan/` (Trivy → CycloneDX →
+  hub) ships the CI path. New viewer routes `GET /accounts/{id}/sbom/{subjects,snapshots,diff}`,
+  `/components`, `/license-findings`, `/vex`; a **Supply Chain** console screen. 11 adversarial
+  defects fixed (HIGH purl-blind VEX over-suppression → product-wide-only; cross-account snapshot
+  collision → `f"{account}:{doc_id}"`; epoch-tie merge; license AND-join precedence; …). *(ECR
+  registry enumeration + opt-in layer-pull — the only piece needing a new IAM grant — is a
+  fast-follow Slice-5.)*
+
 ### Detailed finding reports (`aws_finding_detail.py`, v2.19.0)
 
 Every scan emits, for each of the 222 actionable checks, a full write-up — the
@@ -800,7 +852,7 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 1128 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 1766 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:

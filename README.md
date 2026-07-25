@@ -15,8 +15,48 @@
   <img src="https://img.shields.io/badge/pillars-CSPM%20%7C%20CIEM%20%7C%20CWPP%20%7C%20DSPM%20%7C%20AI--SPM%20%7C%20CDR-6366f1?style=flat-square" alt="CNAPP pillars"/>
   <img src="https://img.shields.io/badge/compliance-CIS%20%7C%20PCI--DSS%20%7C%20HIPAA%20%7C%20SOC2%20%7C%20NIST-purple?style=flat-square" alt="5 Compliance Frameworks"/>
   <img src="https://img.shields.io/badge/checks-296%20severity--mapped-red?style=flat-square" alt="296 severity-mapped checks"/>
-  <img src="https://img.shields.io/badge/tests-1623%20passing-brightgreen?style=flat-square" alt="1623 Tests"/>
+  <img src="https://img.shields.io/badge/tests-1766%20passing-brightgreen?style=flat-square" alt="1766 Tests"/>
 </p>
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [IaC Security Scanner (`aws_offline_scanner.py`)](#iac-security-scanner-aws_offline_scannerpy)
+  - [What It Does](#what-it-does)
+  - [Quick Start (IaC Scanner)](#quick-start-iac-scanner)
+  - [CLI Reference (IaC Scanner)](#cli-reference-iac-scanner)
+  - [Terraform SAST Rules (60+ Rules)](#terraform-sast-rules-60-rules)
+  - [CloudFormation Structural Checks (42 Resource Types)](#cloudformation-structural-checks-42-resource-types)
+- [Live Audit Scanner (`aws_live_scanner.py`)](#live-audit-scanner-aws_live_scannerpy)
+  - [What It Does](#what-it-does-1)
+  - [Prerequisites (Live Scanner)](#prerequisites-live-scanner)
+  - [Quick Start (Live Scanner)](#quick-start-live-scanner)
+  - [CLI Reference (Live Scanner)](#cli-reference-live-scanner)
+  - [Security Checks Coverage (296 severity-mapped checks across 44 sections)](#security-checks-coverage-296-severity-mapped-checks-across-44-sections)
+  - [Compliance Framework Mapping](#compliance-framework-mapping)
+  - [Risk Scoring](#risk-scoring)
+  - [CI/CD & AWS Security Hub Integration](#cicd--aws-security-hub-integration)
+- [OverWatch — Hosted CNAPP Platform (multi-account, agentless)](#overwatch--hosted-cnapp-platform-multi-account-agentless)
+  - [Architecture: hub-and-spoke](#architecture-hub-and-spoke)
+  - [Onboarding](#onboarding)
+  - [Air-gapped, zero-telemetry packaging](#air-gapped-zero-telemetry-packaging)
+  - [Backend modules](#backend-modules)
+  - [HTTP API surface](#http-api-surface)
+  - [Multi-tenancy (MSSP)](#multi-tenancy-mssp)
+  - [Continuous scanning and drift digests (CTEM)](#continuous-scanning-and-drift-digests-ctem)
+  - [Compliance breadth: 30+ frameworks](#compliance-breadth-30-frameworks)
+  - [Connectors](#connectors)
+  - [External vulnerability ingest](#external-vulnerability-ingest)
+  - [Supply-chain ingest: SBOM diff, license, VEX](#supply-chain-ingest-sbom-diff-license-vex)
+  - [Shared Postgres state](#shared-postgres-state)
+  - [Web console](#web-console)
+- [When to Use Which Scanner](#when-to-use-which-scanner)
+- [Project Structure](#project-structure)
+- [Requirements](#requirements)
+- [Disclaimer](#disclaimer)
+- [License](#license)
 
 ---
 
@@ -413,14 +453,18 @@ Beyond the CLI, OverWatch ships a **self-hosted platform backend** for onboardin
 continuously scanning many AWS accounts — the Wiz/Orca model, agentless and with no
 access keys.
 
-**Architecture — hub & spoke.** One **hub** (an EC2 instance running the FastAPI
+### Architecture: hub-and-spoke
+
+One **hub** (an EC2 instance running the FastAPI
 service + worker + Postgres/SQLite state, in a dedicated security account) reaches
 every onboarded **spoke** account by assuming a **read-only cross-account role**
 (`CnappScannerRole`) that trusts only the hub role under a per-account `sts:ExternalId`
 (confused-deputy guard). Region/AZ are irrelevant to the API scan — control-plane
 endpoints are reachable from anywhere; the hub's own AZ never constrains coverage.
 
-**Onboarding.** Deploy the single-account CloudFormation stack
+### Onboarding
+
+Deploy the single-account CloudFormation stack
 ([`deploy/cnapp-scanner-role.yaml`](deploy/cnapp-scanner-role.yaml)) via a one-click
 Launch-Stack URL, apply the equivalent **Terraform module**
 ([`deploy/terraform/scanner-role/`](deploy/terraform/scanner-role/) — a structural test keeps it
@@ -429,7 +473,9 @@ byte-equivalent to the CFN), or connect an entire **AWS Organization** with a se
 current and future member accounts. The role attaches only **SecurityAudit +
 ViewOnlyAccess** (read-only of configuration/IAM — never workload data).
 
-**Air-gapped / zero-telemetry.** OverWatch makes **zero** telemetry / phone-home / update-check
+### Air-gapped, zero-telemetry packaging
+
+OverWatch makes **zero** telemetry / phone-home / update-check
 calls — every egress is an AWS API or an operator-configured opt-in seam (see
 [`NETWORK.md`](NETWORK.md), enforced by `tests/test_zero_telemetry.py`). It packages for **fully
 offline** deployment: a multi-stage [`Dockerfile`](Dockerfile) that installs from a pre-downloaded
@@ -439,7 +485,9 @@ endpoints, vuln bundle from disk). Listed on **AWS Marketplace** as a self-hoste
 ([`deploy/marketplace/`](deploy/marketplace/)), priced on *accounts under management* (metered) with
 a contract SKU for air-gapped buyers.
 
-**Backend modules** (pure, dependency-injected, offline-testable):
+### Backend modules
+
+Pure, dependency-injected, offline-testable:
 
 | Module | Role |
 |--------|------|
@@ -459,8 +507,10 @@ a contract SKU for air-gapped buyers.
 | `aws_cdr.py` | **CDR-lite** — normalize GuardDuty / Security Hub ASFF / CloudTrail-anomaly detections, fold onto the stored graph as `THREAT_ON`, re-run reachability so a detection on an internet→crown/admin path escalates to a ranked **incident** (reuses `aws_ingest` predicates; no `aws_correlate` change) |
 | `aws_forensics.py` | **Cloud-forensics timeline** — reconstruct who-did-what-when around a resource from read-only CloudTrail management events, correlated with graph / findings / detections; fail-open `FORENSIC-00` behind an injected seam |
 
-**HTTP surface** (all delegate to `PlatformService`; admin routes stay on the private
-hub control plane): `POST /accounts` (onboard → launch URL), `POST /accounts/{id}/validate`,
+### HTTP API surface
+
+All routes delegate to `PlatformService`; admin routes stay on the private
+hub control plane. `POST /accounts` (onboard → launch URL), `POST /accounts/{id}/validate`,
 `GET /accounts`, `POST /scans`, `GET /scans/{job_id}`,
 `GET /accounts/{id}/summary|issues|findings|paths|graph`, `GET /org/overview`, `GET /org/findings`;
 **copilot** — `POST /accounts/{id}/copilot`, `POST /org/copilot`;
@@ -468,6 +518,8 @@ hub control plane): `POST /accounts` (onboard → launch URL), `POST /accounts/{
 **CDR** — `POST /accounts/{id}/detections`, `GET /accounts/{id}/{detections,incidents}`,
 `POST /accounts/{id}/detections/refresh`, `GET /org/incidents`;
 **forensics** — `GET /accounts/{id}/forensics/timeline`;
+**supply-chain** — `GET /accounts/{id}/sbom/{subjects,snapshots,diff}`,
+`GET /accounts/{id}/components`, `GET /accounts/{id}/license-findings`, `GET /accounts/{id}/vex`;
 **connectors** — `POST/GET /connectors`, `PUT/DELETE /connectors/{id}`,
 `POST /connectors/{id}/{enable,rotate-secret,test}`, `.../rules` CRUD,
 `POST /connectors/rules/preview` (dry-run), `POST /accounts/{id}/notify`,
@@ -477,7 +529,9 @@ hub control plane): `POST /accounts` (onboard → launch URL), `POST /accounts/{
 `GET/POST/DELETE /admin/platform-admins`, `GET /workspaces/{ws}/usage`,
 `GET /admin/usage`, `POST /admin/usage/reconcile`.
 
-**Multi-tenancy (MSSP).** One hub serves many tenant **workspaces**, each isolated (a principal in
+### Multi-tenancy (MSSP)
+
+One hub serves many tenant **workspaces**, each isolated (a principal in
 workspace A can never read/write/scan/meter workspace B — a cross-tenant object returns 404) and
 metered (billable = accounts under management). RBAC is workspace-scoped: an injected
 `current_principal` hook maps an authenticated caller (IdP/JWT claims) to `{workspace_id: role}`
@@ -485,7 +539,9 @@ memberships + an optional platform-superadmin; the target workspace travels in a
 header. A **default workspace** holds every account of a single-tenant deployment, so the console
 and the legacy single-role auth hook keep working unchanged.
 
-**Continuous scanning + drift digests (CTEM).** Set a per-account scan **cadence** (hourly /
+### Continuous scanning and drift digests (CTEM)
+
+Set a per-account scan **cadence** (hourly /
 daily / weekly / custom) and OverWatch scans on a schedule — a `scheduler_tick` enqueues due
 accounts (a failing scan backs off exponentially, never flapping) and drains the queue. Each
 scan folds into the finding-lifecycle store (**drift / trend / MTTR**), and one **drift digest**
@@ -498,7 +554,9 @@ selector, and a digest toggle per connector. Routes: `POST /scans/schedule-tick`
 `PUT /accounts/{id}/schedule`, `GET /accounts/{id}/{trend,mttr,drift}`, `GET /digests`,
 `POST /accounts/{id}/digest/preview`.
 
-**Compliance breadth — 30+ frameworks from one verifiable spine.** Every check is tagged
+### Compliance breadth: 30+ frameworks
+
+Every check is tagged
 with a **NIST 800-53 Rev 5** control, so instead of hand-tagging every check against every
 regime, OverWatch cross-walks its 38 in-use NIST controls to **34 more frameworks** (ISO
 27001:2022, FedRAMP, NIST 800-171 / CMMC, NIST CSF 2.0, PCI-DSS 4.0, SWIFT, DORA, HIPAA,
@@ -514,7 +572,9 @@ frameworks keep their per-check tags and are byte-identical; derived data is **i
 Surfaced in the console **Compliance** screen (directly-tested vs crosswalk-derived, family +
 confidence filters, per-control provenance, source links).
 
-**Connectors — notify your own tools (agentless, read-only on targets).** OverWatch can
+### Connectors
+
+Notify your own tools (agentless, read-only on targets). OverWatch can
 route findings to the **operator's own** Jira Cloud, Slack, PagerDuty (Events v2), Splunk
 HEC, or a signed generic webhook, under a rules engine (severity floor / section / check
 glob / account glob / on-attack-path / framework). It makes **no** AWS call against a
@@ -525,7 +585,9 @@ over the API); connectors are **admin-only, disabled by default**, and delivery 
 Configured from the console **Settings → Integrations** screen (add/test/enable, per-connector
 routing rules with a dry-run preview, and a deliveries audit log).
 
-**External vulnerability ingest — rank CVEs by reachability, not CVSS.** Upload the
+### External vulnerability ingest
+
+Rank CVEs by reachability, not CVSS. Upload the
 output of *any* SCA scanner — **SARIF** (Trivy / Grype / Snyk), **CycloneDX** (with a
 `vulnerabilities[]` array or VEX `analysis.state`), or **SPDX / Syft** SBOMs — and OverWatch
 **owns** each CVE against the AWS resource it belongs to, **dedups** it across sources (one
@@ -548,21 +610,62 @@ source / band), `GET /accounts/{id}/vulns/{cve}`, `GET /accounts/{id}/ingest/doc
 CVSS, is the visual weight) with a SARIF/CycloneDX/SPDX upload affordance and an Overview
 roll-up (*N external CVEs · M reachable · K reachable-KEV*).
 
-**Shared Postgres state.** Opening the state store with a `postgresql://` URL runs
+### Supply-chain ingest: SBOM diff, license, VEX
+
+The same ingest seam also **owns the software bill of materials** itself, not just the
+CVEs inside it. Each uploaded **CycloneDX / SPDX / Syft** SBOM is persisted as an
+**account-scoped snapshot** (`aws_ingest.py` walks the doc — including bom-ref-less and
+nested components — and mints a canonical `purl` identity per component), so OverWatch can
+answer three supply-chain questions no single scan can:
+
+- **SBOM diff over time** (`aws_sbom_diff.py`) — compare two snapshots of the *same subject*
+  (image / repo) and get **added / removed / changed** components, where "changed" surfaces
+  both **version** and **license** transitions. Snapshots are keyed `f"{account}:{doc_id}"`
+  so two accounts pushing the same image never collide, and a tie on ingest epoch breaks
+  deterministically (newest `snapshot_id` wins).
+- **License policy** (`aws_license.py`) — every component's declared license is **normalized
+  to an SPDX id**, bucketed into a **category** (permissive / weak-copyleft / strong-copyleft /
+  network-copyleft / proprietary / unknown), and run against a policy (deny / warn / allow)
+  whose compound `AND`-expressions are parenthesized so a mixed `(MIT AND GPL-3.0)` clause
+  can't be silently mis-judged. Surfaced as **license findings** per account.
+- **VEX** (`aws_vex.py`) — ingest **OpenVEX** and **CSAF-VEX** documents; a vendor
+  `not_affected` / `fixed` statement is applied **product-wide only** (never purl-blindly, so
+  one component's VEX can't over-suppress an unrelated CVE), recorded to a `vex_statements`
+  ledger, and folded into the same suppress-but-track path as inline CycloneDX VEX.
+
+State lives in four new tables (`sbom_snapshots`, `sbom_components`, `sbom_snapshot_cves`,
+`vex_statements`; `SCHEMA_VERSION` 8, dual sqlite/Postgres). Because CI/CD pipelines push
+SBOMs with a **machine token**, ingest gets its **own RBAC tier** below admin
+(`viewer < ingest < admin`): a pipeline can `POST /accounts/{id}/ingest` but can't read another
+tenant's graph or touch connectors. A **shell-only GitHub Action**
+([`.github/actions/overwatch-image-scan/`](.github/actions/overwatch-image-scan/)) builds an
+image SBOM and pushes it in one CI step. Read routes (viewer):
+`GET /accounts/{id}/sbom/{subjects,snapshots,diff}`, `GET /accounts/{id}/components`,
+`GET /accounts/{id}/license-findings`, `GET /accounts/{id}/vex`. Surfaced in the console
+**Supply Chain** screen (snapshot picker + diff, component inventory with license chips,
+license-policy findings, VEX ledger).
+
+### Shared Postgres state
+
+Opening the state store with a `postgresql://` URL runs
 the whole state plane (finding lifecycle/drift/waivers + the account registry) on a
 real Postgres via psycopg3 — the shared store for the hub. Both stores route through
 one `Backend` abstraction (`cnapp_backend.py`); the sqlite path is byte-identical and
 a missing driver / unreachable server fails loudly rather than falling back to a
 local file.
 
-**Web console (`frontend/`).** A **React 19 + Vite + TypeScript + Tailwind** SPA over
-the hub API — the operator surface, styled to match the exported HTML report. Five
-screens over one design system: **Overview** (posture dashboard, org ↔ account scope),
+### Web console
+
+A **React 19 + Vite + TypeScript + Tailwind** SPA over
+the hub API — the operator surface, styled to match the exported HTML report. Twelve
+screens over one design system, led by **Overview** (posture dashboard, org ↔ account scope),
 **Attack Paths** (ranked toxic-combination worklist + an interactive graph explorer
 showing each path's gated-multiplicative score breakdown), **Findings** (unified
 deduped queue with source sub-tabs + a risk → business-impact → step-by-step
 remediation detail panel), and **Cloud Accounts** with a keyless 5-step **onboarding
-wizard** (server-minted ExternalId + CloudFormation / Org StackSet). Every view is a
+wizard** (server-minted ExternalId + CloudFormation / Org StackSet) — plus
+**Vulnerabilities**, **Supply Chain**, **Inventory**, **Identity**, **Compliance**,
+**Remediation**, **Reports**, and **Settings → Integrations**. Every view is a
 **shareable deep link** — scope and each open panel live in the URL, so a pasted
 `/attack-paths?scope=…&path=…` reopens exactly what you were looking at — and an
 **interactive product tour** replays five canned scenarios *over the live console*
@@ -579,12 +682,16 @@ cd frontend && npm install && npm run dev     # http://localhost:5173  (sample d
 
 > Status: backend + onboarding + validation + registry + scan orchestration +
 > **live Postgres state** + the **web console** (Overview / Attack Paths / Findings /
-> Cloud Accounts + onboarding wizard, plus Inventory / Identity / Compliance / Remediation /
-> Reports) + the **connector framework** (Jira / Slack / PagerDuty / Splunk / webhook +
-> Settings screen) + **compliance breadth** (30+ frameworks via the NIST-800-53 crosswalk) +
-> **continuous scheduled scanning + drift digests** (CTEM cadence + lifecycle drift/trend/MTTR
-> + per-scan digests through the connectors) shipped. Remaining: a connection pool; unified
-> SARIF/CycloneDX/SPDX ingestion + reachability-verified vuln prioritization.
+> Vulnerabilities / Supply Chain / Cloud Accounts + onboarding wizard, plus Inventory /
+> Identity / Compliance / Remediation / Reports / Settings — with **shareable deep links**
+> and an **interactive product tour**) + the **connector framework** (Jira / Slack /
+> PagerDuty / Splunk / webhook + Settings screen) + **compliance breadth** (30+ frameworks
+> via the NIST-800-53 crosswalk) + **continuous scheduled scanning + drift digests** (CTEM
+> cadence + lifecycle drift/trend/MTTR + per-scan digests through the connectors) +
+> **reachability-verified vulnerability ingest** (SARIF / CycloneDX / SPDX) + **supply-chain
+> ingest** (SBOM diff + SPDX license policy + OpenVEX/CSAF-VEX, with an ingest-only RBAC tier
+> and a GitHub Action) shipped. Remaining: a Postgres connection pool; ECR registry
+> enumeration + opt-in layer-pull.
 
 ---
 
