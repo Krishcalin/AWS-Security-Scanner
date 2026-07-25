@@ -341,6 +341,33 @@ POSTGRES_DDL: List[str] = [
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_usage_dedup  ON usage_events(workspace_id, metric, event_key)",
     "CREATE INDEX IF NOT EXISTS ix_usage_rollup ON usage_events(workspace_id, period, metric)",
     "CREATE INDEX IF NOT EXISTS ix_usage_epoch  ON usage_events(workspace_id, event_epoch)",
+
+    # ── supply-chain ingest (Phase 4 Slice 4). BIGINT epoch twins of aws_state._DDL. ──
+    """CREATE TABLE IF NOT EXISTS sbom_snapshots(
+       snapshot_id TEXT PRIMARY KEY,
+       account TEXT NOT NULL, node_id TEXT NOT NULL, subject_key TEXT NOT NULL,
+       source_format TEXT NOT NULL, source_tool TEXT,
+       component_count INTEGER NOT NULL DEFAULT 0, ingested_epoch BIGINT NOT NULL)""",
+    "CREATE INDEX IF NOT EXISTS ix_sbom_subject ON sbom_snapshots(account, subject_key, ingested_epoch)",
+    """CREATE TABLE IF NOT EXISTS sbom_components(
+       snapshot_id TEXT NOT NULL REFERENCES sbom_snapshots(snapshot_id) ON DELETE CASCADE,
+       purl_identity TEXT NOT NULL,
+       name TEXT, version TEXT, ecosystem TEXT, origin TEXT, purl TEXT,
+       license_raw TEXT, license_spdx TEXT, license_category TEXT,
+       PRIMARY KEY(snapshot_id, purl_identity))""",
+    "CREATE INDEX IF NOT EXISTS ix_sbomc_lic ON sbom_components(snapshot_id, license_category)",
+    """CREATE TABLE IF NOT EXISTS sbom_snapshot_cves(
+       snapshot_id TEXT NOT NULL REFERENCES sbom_snapshots(snapshot_id) ON DELETE CASCADE,
+       cve TEXT NOT NULL, purl_identity TEXT NOT NULL DEFAULT '*', fixed_version TEXT,
+       PRIMARY KEY(snapshot_id, cve, purl_identity))""",
+    """CREATE TABLE IF NOT EXISTS vex_statements(
+       account TEXT NOT NULL, node_id TEXT NOT NULL, cve TEXT NOT NULL,
+       purl_identity TEXT NOT NULL DEFAULT '*',
+       status TEXT NOT NULL CHECK(status IN ('not_affected','affected','fixed','under_investigation')),
+       justification TEXT, vex_format TEXT NOT NULL CHECK(vex_format IN ('openvex','csaf','cyclonedx')),
+       doc_id TEXT NOT NULL, first_seen_epoch BIGINT NOT NULL, last_seen_epoch BIGINT NOT NULL,
+       PRIMARY KEY(account, node_id, cve, purl_identity))""",
+    "CREATE INDEX IF NOT EXISTS ix_vex_lookup ON vex_statements(account, node_id, cve)",
 ]
 
 # Per-account advisory lock replacing sqlite's whole-DB BEGIN IMMEDIATE (different

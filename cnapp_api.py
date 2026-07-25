@@ -30,7 +30,10 @@ except Exception as _e:                              # pragma: no cover - deploy
 
 
 # ── RBAC ──────────────────────────────────────────────────────────────────────
-_ROLE_RANK = {"viewer": 1, "admin": 2}
+# `ingest` is a below-admin tier for CI/CD machine tokens: it can POST an SBOM/scan to
+# /ingest but CANNOT onboard/delete accounts or run scans (those stay admin) — so a
+# leaked CI token can't compromise the account. viewer < ingest < admin.
+_ROLE_RANK = {"viewer": 1, "ingest": 2, "admin": 3}
 DEFAULT_WORKSPACE = "ws-default"
 
 
@@ -212,7 +215,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
 
     class MemberReq(BaseModel):
         principal: str = Field(min_length=1)
-        role: str = Field(default="viewer", pattern=r"^(viewer|admin)$")
+        role: str = Field(default="viewer", pattern=r"^(viewer|ingest|admin)$")
 
     class PlatformAdminReq(BaseModel):
         principal: str = Field(min_length=1)
@@ -364,7 +367,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         return service.org_copilot_answer(body.question, workspace_id=scope.workspace_id)
 
     # ── external-vuln ingest + reachability-ranked inventory ──────────────────
-    @app.post("/accounts/{account_id}/ingest", dependencies=[Depends(account_gate("admin"))])
+    @app.post("/accounts/{account_id}/ingest", dependencies=[Depends(account_gate("ingest"))])
     def ingest(account_id: str, body: IngestReq):
         try:
             return service.ingest_document(
@@ -394,6 +397,36 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     @app.get("/accounts/{account_id}/ingest/docs", dependencies=[Depends(account_gate("viewer"))])
     def ingest_docs(account_id: str, limit: int = 200):
         return service.list_ingest_docs(account_id, limit)
+
+    # ── supply chain: SBOM subjects / snapshots / diff / components / license ────
+    @app.get("/accounts/{account_id}/sbom/subjects", dependencies=[Depends(account_gate("viewer"))])
+    def sbom_subjects(account_id: str):
+        return service.list_sbom_subjects(account_id)
+
+    @app.get("/accounts/{account_id}/sbom/snapshots", dependencies=[Depends(account_gate("viewer"))])
+    def sbom_snapshots(account_id: str, subject: Optional[str] = None):
+        return service.list_sbom_snapshots(account_id, subject=subject)
+
+    @app.get("/accounts/{account_id}/sbom/diff", dependencies=[Depends(account_gate("viewer"))])
+    def sbom_diff(account_id: str, from_id: Optional[str] = Query(default=None, alias="from"),
+                  to_id: Optional[str] = Query(default=None, alias="to"),
+                  subject: Optional[str] = None):
+        d = service.sbom_diff(account_id, from_id=from_id, to_id=to_id, subject=subject)
+        if d is None:
+            raise HTTPException(status_code=404, detail="need two comparable snapshots of one subject")
+        return d
+
+    @app.get("/accounts/{account_id}/components", dependencies=[Depends(account_gate("viewer"))])
+    def components(account_id: str, snapshot: Optional[str] = None, license: Optional[str] = None):
+        return service.list_sbom_components(account_id, snapshot=snapshot, license=license)
+
+    @app.get("/accounts/{account_id}/license-findings", dependencies=[Depends(account_gate("viewer"))])
+    def license_findings(account_id: str):
+        return service.list_license_findings(account_id)
+
+    @app.get("/accounts/{account_id}/vex", dependencies=[Depends(account_gate("viewer"))])
+    def vex_statements(account_id: str):
+        return service.list_vex_statements(account_id)
 
     @app.post("/accounts/{account_id}/vulns/refresh", dependencies=[Depends(account_gate("admin"))])
     def vulns_refresh(account_id: str):

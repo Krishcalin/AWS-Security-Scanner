@@ -1,0 +1,53 @@
+name: "OverWatch Image Scan"
+description: >-
+  Scan an already-built container image with Trivy and post its CycloneDX SBOM (components
+  + CVEs) to your self-hosted OverWatch hub's ingest endpoint. Read-only + zero-telemetry:
+  it never builds/pushes/mutates the image, calls no cloud API, and posts once to the
+  operator's own hub over HTTPS with no redirects.
+branding:
+  icon: shield
+  color: blue
+inputs:
+  image:
+    description: "Image ref to scan (e.g. ghcr.io/acme/app:${{ github.sha }})."
+    required: true
+  account-id:
+    description: "The 12-digit AWS account id this image belongs to."
+    required: true
+  hub-url:
+    description: "Base URL of your OverWatch hub (e.g. https://overwatch.acme.internal). Pass from `vars`, never hardcode."
+    required: true
+  token:
+    description: "An OverWatch ingest-scoped bearer token (the below-admin `ingest` RBAC tier). Pass from `secrets`."
+    required: true
+  target-resource:
+    description: "Optional owner resource (ECR image ref / ARN) to bind the SBOM to a graph node."
+    required: false
+    default: ""
+  workspace-id:
+    description: "Optional workspace id sent as X-Workspace-Id (MSSP / multi-tenant hubs)."
+    required: false
+    default: ""
+  trivy-version:
+    description: "Trivy version to install when not already on PATH."
+    required: false
+    default: "0.58.1"
+  offline:
+    description: "Air-gapped mode: skip Trivy's vuln-DB refresh (use a pre-cached DB)."
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: OverWatch image scan → hub ingest
+      shell: bash
+      env:
+        OW_IMAGE: ${{ inputs.image }}
+        OW_ACCOUNT: ${{ inputs.account-id }}
+        OW_HUB_URL: ${{ inputs.hub-url }}
+        OW_TOKEN: ${{ inputs.token }}
+        OW_TARGET: ${{ inputs.target-resource }}
+        OW_WORKSPACE: ${{ inputs.workspace-id }}
+        OW_TRIVY_VERSION: ${{ inputs.trivy-version }}
+        OW_OFFLINE: ${{ inputs.offline }}
+      run: bash "${{ github.action_path }}/entrypoint.sh"

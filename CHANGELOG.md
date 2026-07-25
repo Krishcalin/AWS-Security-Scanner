@@ -4,6 +4,61 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.30.0] — 2026
+
+**Phase-4 Slice-4: supply-chain ingest — SBOM snapshot/diff · license policy · standalone
+VEX · a CI/CD image-scan Action.** Turns the external-vuln ingest plane into a durable,
+diffable software-supply-chain timeline. Zero new AWS grant, zero scanned-account contact
+(works purely off uploaded SBOM/VEX docs + the account's stored graph); `aws_correlate.py`
+is byte-frozen. *(Registry scan scheduling — the only piece needing a new IAM grant — is a
+separate fast-follow Slice-5.)*
+
+### Added — SBOM snapshots + diff
+- Every inventory-lane ingest (CycloneDX / SPDX / Syft) now persists a **durable SBOM
+  snapshot** — the full component set (a superset of the matched packages, keeping purl-less
+  OS packages) plus that scan's immutable CVE set — keyed idempotently by content hash.
+- **`aws_sbom_diff.py`** (pure) diffs two snapshots of the same subject: components
+  added / removed / version-changed / license-changed, and the CVE delta (new / fixed) from
+  an immutable set-diff. New viewer routes `GET /accounts/{id}/sbom/{subjects,snapshots,diff}`
+  and `/components` (account-isolated; the diff auto-pairs the latest two of a subject).
+
+### Added — license policy (`aws_license.py`, pure)
+- Captures the raw license of every component (CycloneDX `licenses[]` + evidence; SPDX
+  `licenseConcluded`/`Declared`), normalizes it to a canonical SPDX id + category
+  (deprecated-id fold, `WITH`-exception strip, expression resolution — `OR` → most-permissive
+  arm, `AND` → most-restrictive), and evaluates a **config-overridable policy** (default:
+  deny network-copyleft/proprietary, review strong-copyleft/unknown). Verdicts are computed
+  **on read**, so a policy change needs no re-ingest. `GET /accounts/{id}/license-findings`
+  (LIC-DENY → CM-7, LIC-REVIEW → CM-8; in the frozen 38-control crosswalk universe).
+
+### Added — standalone VEX (`aws_vex.py`, pure)
+- Parses **OpenVEX** and **CSAF-VEX** documents into a durable, subcomponent-scoped ledger
+  (`vex_statements`). Suppression is **bidirectional** — a `not_affected`/`fixed` statement
+  suppresses an already-ingested (node, cve) row AND a statement that arrives *before* the
+  scan suppresses the new row, so a false-positive never resurrects on SBOM re-ingest.
+  Suppression rides the existing `ingested_vulns.suppressed` column + the empty-path
+  invariant, so `aws_correlate.py` is untouched (sha256-pinned by `test_correlate_frozen.py`).
+  `GET /accounts/{id}/vex`.
+
+### Added — CI/CD image-scan Action + ingest-only RBAC tier
+- **`.github/actions/overwatch-image-scan/`** — a shell-only GitHub composite action: scan an
+  already-built image with Trivy → post its CycloneDX SBOM to the hub's ingest endpoint.
+  Read-only + zero-telemetry (no Python under `.github/`; scans an existing image, calls no
+  cloud API; posts once over HTTPS with no redirects; fails closed on an empty token).
+- A below-admin **`ingest`** RBAC tier (viewer < ingest < admin): a CI token can POST to
+  `/ingest` but **cannot** onboard/delete accounts or run scans — so a leaked CI token can't
+  compromise the account.
+
+### Added — schema + console
+- `SCHEMA_VERSION 7 → 8` (additive): `sbom_snapshots`, `sbom_components`, `sbom_snapshot_cves`,
+  `vex_statements` (+ Postgres BIGINT twins).
+- A new **Supply Chain** console screen (`/supply-chain`): SBOM Diff, Components & License, and
+  VEX tabs, over zero-AWS sample fixtures.
+
+### Notes
+- `aws_correlate.py` is byte-unchanged; the ingest match lane (`packages` → `match_vulns`) is
+  byte-identical (license capture rides a separate `components` output).
+
 ## [2.29.0] — 2026
 
 **Phase-4 Slice-3: an interactive product tour + shareable deep links.** A guided, self-driving

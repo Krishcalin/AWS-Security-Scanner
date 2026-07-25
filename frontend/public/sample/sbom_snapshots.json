@@ -1,0 +1,4 @@
+[
+  {"snapshot_id": "sha256:b42build", "account": "123456789012", "node_id": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api:build-42@sha256:b42", "subject_key": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api", "source_format": "cyclonedx", "source_tool": "trivy", "component_count": 128, "ingested_epoch": 1706400000},
+  {"snapshot_id": "sha256:b41build", "account": "123456789012", "node_id": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api:build-41@sha256:b41", "subject_key": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api", "source_format": "cyclonedx", "source_tool": "trivy", "component_count": 126, "ingested_epoch": 1706313600}
+]
