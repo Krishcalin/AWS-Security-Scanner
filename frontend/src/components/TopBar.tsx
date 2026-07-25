@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Search, Sparkles, Sun, Moon, ChevronDown, Building2, Check } from 'lucide-react'
+import { Search, Sparkles, Sun, Moon, ChevronDown, Building2, Check, Compass } from 'lucide-react'
 import { useScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'
 import { api } from '../api/client'
 import { applyTheme, isDark } from '../lib/theme'
 import { healthTone, acctLabel } from '../lib/format'
+import { useTour } from '../lib/tour/TourProvider'
 import type { Account } from '../api/types'
 
 function ScopeSwitcher() {
@@ -21,6 +22,7 @@ function ScopeSwitcher() {
     <div className="relative">
       <button
         onClick={() => setOpen((o) => !o)}
+        data-tour="scope-switcher"
         className="flex items-center gap-2 rounded-lg border border-line bg-panel2 px-3 py-1.5 text-sm font-semibold text-ink hover:border-accent/40 transition-colors"
       >
         <Building2 size={15} className="text-ink3" />
@@ -70,6 +72,7 @@ function ScopeSwitcher() {
 export function TopBar() {
   const [dark, setDark] = useState(isDark())
   const toggleTheme = () => { const d = !dark; applyTheme(d); setDark(d) }
+  const { openGallery } = useTour()
 
   return (
     <header className="h-14 shrink-0 border-b border-line bg-panel/85 backdrop-blur flex items-center gap-3 px-5 sticky top-0 z-10">
@@ -92,6 +95,15 @@ export function TopBar() {
         className="h-9 w-9 grid place-items-center rounded-lg border border-line bg-panel2 text-ink2 hover:text-ink transition-colors"
       >
         {dark ? <Sun size={16} /> : <Moon size={16} />}
+      </button>
+
+      <button
+        onClick={openGallery}
+        title="Take a guided tour"
+        className="flex items-center gap-2 rounded-lg border border-line bg-panel2 px-3 py-1.5 text-sm font-semibold text-ink2 hover:text-ink hover:border-accent/40 transition-colors"
+      >
+        <Compass size={15} />
+        <span className="hidden lg:inline">Take a tour</span>
       </button>
 
       <button className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-semibold text-white ow-grad shadow-sm hover:opacity-90 transition-opacity">

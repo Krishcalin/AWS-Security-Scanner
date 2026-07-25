@@ -4,8 +4,10 @@ import { sevColor, gradeColor } from '../lib/format'
 
 export const CARD = 'rounded-2xl border border-line bg-panel shadow-sm'
 
-export function Card({ className = '', children }: { className?: string; children: ReactNode }) {
-  return <div className={`${CARD} ${className}`}>{children}</div>
+// `dataTour` (optional) attaches a stable `data-tour` anchor for the product tour;
+// when omitted React renders no attribute, so every existing call is unchanged.
+export function Card({ className = '', children, dataTour }: { className?: string; children: ReactNode; dataTour?: string }) {
+  return <div data-tour={dataTour} className={`${CARD} ${className}`}>{children}</div>
 }
 
 export function SectionLabel({ n, children }: { n?: string; children: ReactNode }) {
@@ -82,10 +84,10 @@ export function GradeDial({ score, grade, size = 128 }: { score: number; grade: 
 }
 
 /** A copyable one-line code field. */
-export function CopyField({ text }: { text: string }) {
+export function CopyField({ text, dataTour }: { text: string; dataTour?: string }) {
   const [ok, setOk] = useState(false)
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-line px-3 py-2" style={{ background: 'var(--panel2)' }}>
+    <div data-tour={dataTour} className="flex items-center gap-2 rounded-lg border border-line px-3 py-2" style={{ background: 'var(--panel2)' }}>
       <code className="font-mono text-xs text-ink2 flex-1 overflow-x-auto whitespace-nowrap">{text}</code>
       <button
         onClick={() => navigator.clipboard?.writeText(text).then(() => { setOk(true); setTimeout(() => setOk(false), 1200) })}

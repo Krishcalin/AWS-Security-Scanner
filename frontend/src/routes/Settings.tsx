@@ -7,6 +7,7 @@ import { useScope, isOrgScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'
 import { api } from '../api/client'
 import { Card, Loader, ErrorNote, Empty, SevDot } from '../components/ui'
+import { useDeepLinkPanel } from '../lib/deeplink'
 import type { Connector, ConnectorRule, ConnectorType, Delivery, TestResult, PreviewHit } from '../api/types'
 
 // ── per-type metadata: label, accent, config fields, and the secret's name ──────
@@ -294,8 +295,8 @@ function RulesPanel({ connector, previewAccount, accountScoped }:
 }
 
 // ── connector row ───────────────────────────────────────────────────────────────
-function ConnectorRow({ c, previewAccount, accountScoped, onChanged, onEdit }:
-  { c: Connector; previewAccount: string; accountScoped: boolean; onChanged: () => void; onEdit: () => void }) {
+function ConnectorRow({ c, previewAccount, accountScoped, onChanged, onEdit, dataTour }:
+  { c: Connector; previewAccount: string; accountScoped: boolean; onChanged: () => void; onEdit: () => void; dataTour?: string }) {
   const [open, setOpen] = useState(false)
   const [test, setTest] = useState<TestResult | null>(null)
   const [testing, setTesting] = useState(false)
@@ -304,7 +305,7 @@ function ConnectorRow({ c, previewAccount, accountScoped, onChanged, onEdit }:
   const remove = async () => { if (confirm(`Delete connector “${c.name}” and its rules?`)) { await api.deleteConnector(c.connector_id); onChanged() } }
 
   return (
-    <div className="rounded-xl border border-line bg-panel">
+    <div data-tour={dataTour} className="rounded-xl border border-line bg-panel">
       <div className="flex items-center gap-3 px-4 py-3">
         <button onClick={() => setOpen((v) => !v)} className="h-6 w-6 grid place-items-center text-ink3 hover:text-ink">
           {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
@@ -399,11 +400,18 @@ export function Settings() {
   // they are disabled with a hint (rather than silently acting on a hardcoded id).
   const accountScoped = !isOrgScope(scope)
   const previewAccount = scope
-  const [tab, setTab] = useState<Tab>('integrations')
+  // active tab + the add/edit connector modal live in the URL (?tab, ?connector).
+  const [tabParam, setTabRaw] = useDeepLinkPanel('tab')
+  const tab: Tab = tabParam === 'deliveries' ? 'deliveries' : 'integrations'
+  const setTab = (t: Tab) => setTabRaw(t === 'integrations' ? null : t)
+  const [connParam, setConnParam] = useDeepLinkPanel('connector')   // 'new' | <connector_id>
   const [nonce, setNonce] = useState(0)
   const bump = useCallback(() => setNonce((n) => n + 1), [])
   const { data, loading, error } = useFetch<Connector[]>(() => api.listConnectors(), [nonce])
-  const [modal, setModal] = useState<{ open: boolean; edit: Connector | null }>({ open: false, edit: null })
+  const editConn = connParam && connParam !== 'new' ? (data?.find((c) => c.connector_id === connParam) ?? null) : null
+  // render the modal for a fresh add, or once the edit target has resolved from the
+  // loaded list — never mount it in "add" mode while an edit id is still resolving.
+  const showModal = connParam === 'new' || editConn != null
   const [notifying, setNotifying] = useState(false)
   const [notifyMsg, setNotifyMsg] = useState<string | null>(null)
 
@@ -424,12 +432,12 @@ export function Settings() {
           <p className="text-ink2 text-sm mt-1">Route findings to your own tools. Connectors are outbound-only; OverWatch never writes to a scanned AWS account. Secrets are stored as references and never shown again.</p>
         </div>
         {tab === 'integrations' && (
-          <button onClick={() => setModal({ open: true, edit: null })}
+          <button onClick={() => setConnParam('new')} data-tour="add-connector"
             className="ml-auto shrink-0 rounded-lg px-3.5 py-2 text-sm font-semibold text-white ow-grad flex items-center gap-1.5"><Plus size={15} /> Add connector</button>
         )}
       </div>
 
-      <div className="flex items-center gap-1 border-b border-line mb-4">
+      <div data-tour="settings-tabs" className="flex items-center gap-1 border-b border-line mb-4">
         {(['integrations', 'deliveries'] as Tab[]).map((t) => (
           <button key={t} onClick={() => setTab(t)} className="relative px-3.5 py-2 text-sm font-semibold capitalize transition-colors"
             style={{ color: tab === t ? 'var(--accent)' : 'var(--ink2)' }}>
@@ -448,10 +456,10 @@ export function Settings() {
               </Empty></Card>
             ) : (
               <div className="flex flex-col gap-2.5">
-                {data.map((c) => (
+                {data.map((c, i) => (
                   <ConnectorRow key={c.connector_id} c={c} previewAccount={previewAccount}
-                    accountScoped={accountScoped}
-                    onChanged={bump} onEdit={() => setModal({ open: true, edit: c })} />
+                    accountScoped={accountScoped} dataTour={i === 0 ? 'connector-row-0' : undefined}
+                    onChanged={bump} onEdit={() => setConnParam(c.connector_id)} />
                 ))}
               </div>
             )}
@@ -473,8 +481,8 @@ export function Settings() {
         </>
       )}
 
-      {modal.open && <ConnectorModal existing={modal.edit} onClose={() => setModal({ open: false, edit: null })}
-        onSaved={() => { setModal({ open: false, edit: null }); bump() }} />}
+      {showModal && <ConnectorModal existing={editConn} onClose={() => setConnParam(null)}
+        onSaved={() => { setConnParam(null); bump() }} />}
     </div>
   )
 }

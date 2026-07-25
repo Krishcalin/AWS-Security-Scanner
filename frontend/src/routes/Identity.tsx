@@ -6,6 +6,7 @@ import { useFetch } from '../lib/useFetch'
 import { loadGraph } from '../lib/orgdata'
 import { Card, Loader, ErrorNote, Empty, Chip } from '../components/ui'
 import { nodeMeta, shortLabel, prettyRel } from '../lib/nodes'
+import { useDeepLinkPanel } from '../lib/deeplink'
 import type { GNode } from '../api/types'
 
 type Pack = 'all' | 'privesc' | 'crown' | 'exposed'
@@ -16,11 +17,11 @@ interface Principal {
 }
 const risk = (p: Principal) => Number(p.privesc) + Number(p.crown) + Number(p.exposed)
 
-function PrincipalCard({ p, open, onToggle }: { p: Principal; open: boolean; onToggle: () => void }) {
+function PrincipalCard({ p, open, onToggle, dataTour }: { p: Principal; open: boolean; onToggle: () => void; dataTour?: string }) {
   const M = nodeMeta(p.kind)
   const Icon = M.icon
   return (
-    <Card>
+    <Card dataTour={dataTour}>
       <div className="flex items-center gap-3 px-4 py-3">
         <span className="h-8 w-8 rounded-lg grid place-items-center shrink-0" style={{ background: 'var(--panel2)', color: M.tone }}><Icon size={15} /></span>
         <div className="min-w-0 flex-1">
@@ -56,7 +57,7 @@ export function Identity() {
   const isOrg = scope === 'org'
   const { data, loading, error } = useFetch(() => loadGraph(scope), [scope])
   const [pack, setPack] = useState<Pack>('all')
-  const [open, setOpen] = useState<string | null>(null)
+  const [open, setOpen] = useDeepLinkPanel('principal')   // expanded principal in the URL
 
   if (loading) return <Loader />
   if (error) return <ErrorNote msg={error} />
@@ -111,7 +112,7 @@ export function Identity() {
         <Card><Empty icon={<KeyRound size={26} />}>No principals match this query pack.</Empty></Card>
       ) : (
         <div className="flex flex-col gap-2">
-          {shown.map((p) => <PrincipalCard key={p.id} p={p} open={open === p.id} onToggle={() => setOpen(open === p.id ? null : p.id)} />)}
+          {shown.map((p, i) => <PrincipalCard key={p.id} p={p} open={open === p.id} dataTour={i === 0 ? 'principal-row-0' : undefined} onToggle={() => setOpen(open === p.id ? null : p.id)} />)}
         </div>
       )}
     </div>

@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { Wrench, Scissors, Star } from 'lucide-react'
 import { useScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'
@@ -6,13 +5,14 @@ import { api } from '../api/client'
 import { Card, Loader, ErrorNote, Empty, Chip, CopyField } from '../components/ui'
 import { SeverityChip } from '../components/paths'
 import { FindingDetail } from '../components/FindingDetail'
+import { useDeepLinkPanel } from '../lib/deeplink'
 import type { ChokePoint, FindingCatalogEntry } from '../api/types'
 
 const firstSentence = (s: string) => { const m = (s || '').match(/^.*?[.](?:\s|$)/); return m ? m[0].trim() : s }
 
-function ChokeCard({ c }: { c: ChokePoint }) {
+function ChokeCard({ c, dataTour }: { c: ChokePoint; dataTour?: string }) {
   return (
-    <Card className="p-4">
+    <Card dataTour={dataTour} className="p-4">
       <div className="flex items-center gap-2.5">
         {c.is_true_choke
           ? <Star size={16} className="shrink-0" style={{ color: 'var(--gold)' }} fill="var(--gold)" />
@@ -44,12 +44,14 @@ export function Remediation() {
       ? Promise.all([api.orgOverview(), api.orgFindings()]).then(([o, f]) => ({ chokes: o.top_choke_points, findings: f }))
       : Promise.all([api.accountSummary(scope), api.findings(scope)]).then(([s, f]) => ({ chokes: s.choke_points, findings: f })),
     [scope])
-  const [open, setOpen] = useState<FindingCatalogEntry | null>(null)
+  // shares the ?detail codec with Findings — a finding stays open across both screens.
+  const [openId, setOpenId] = useDeepLinkPanel('detail')
 
   if (loading) return <Loader />
   if (error) return <ErrorNote msg={error} />
   if (!data) return null
   const { chokes, findings } = data
+  const open = openId ? (findings.find((e) => e.check_id === openId) ?? null) : null
   const fixable = findings.filter((f) => f.remediation_cmd)
   const totalCut = chokes[0] ? chokes[0].paths_severed : 0
   const totalPaths = chokes[0] ? chokes[0].total_paths : 0
@@ -62,7 +64,7 @@ export function Remediation() {
       </div>
 
       {chokes.length > 0 && (
-        <div className="rounded-2xl px-5 py-4 mb-5" style={{ background: 'var(--accentdim)' }}>
+        <div data-tour="remediation-hero" className="rounded-2xl px-5 py-4 mb-5" style={{ background: 'var(--accentdim)' }}>
           <div className="text-lg font-bold text-accent">Fix the top {Math.min(3, chokes.length)} choke point{Math.min(3, chokes.length) === 1 ? '' : 's'} first</div>
           <div className="text-sm text-ink2 mt-0.5">The single highest-leverage node severs {totalCut}/{totalPaths} of the critical attack paths — start there, not with the long findings list.</div>
         </div>
@@ -73,7 +75,7 @@ export function Remediation() {
         <Card><Empty icon={<Scissors size={24} />}>No choke points — no critical attack paths to sever.</Empty></Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-8">
-          {chokes.map((c, i) => <ChokeCard key={i} c={c} />)}
+          {chokes.map((c, i) => <ChokeCard key={i} c={c} dataTour={i === 0 ? 'choke-card-0' : undefined} />)}
         </div>
       )}
 
@@ -90,15 +92,15 @@ export function Remediation() {
                 <span className="hidden sm:inline"><Chip>{e.section}</Chip></span>
                 <span className="text-xs text-ink3 flex-1 min-w-0 truncate hidden md:block">{firstSentence(e.risk)}</span>
                 {e.account && <span className="font-mono text-[11px] text-ink3 hidden lg:block">{e.account}</span>}
-                <button onClick={() => setOpen(e)} className="text-xs font-semibold text-accent shrink-0 ml-auto md:ml-0">Full remediation →</button>
+                <button onClick={() => setOpenId(e.check_id)} className="text-xs font-semibold text-accent shrink-0 ml-auto md:ml-0">Full remediation →</button>
               </div>
-              <CopyField text={e.remediation_cmd} />
+              <CopyField text={e.remediation_cmd} dataTour={i === 0 ? 'copy-fix' : undefined} />
             </Card>
           ))}
         </div>
       )}
 
-      {open && <FindingDetail e={open} onPath={false} onClose={() => setOpen(null)} />}
+      {open && <FindingDetail e={open} onPath={false} onClose={() => setOpenId(null)} />}
     </div>
   )
 }

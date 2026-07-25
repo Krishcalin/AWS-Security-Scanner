@@ -14,9 +14,9 @@ function Label({ children }: { children: ReactNode }) {
 function Prose({ label, children }: { label: string; children: ReactNode }) {
   return <div><Label>{label}</Label><p className="text-sm text-ink2 leading-relaxed mt-1.5">{children}</p></div>
 }
-function ActionBtn({ icon, children, onClick, active }: { icon: ReactNode; children: ReactNode; onClick?: () => void; active?: boolean }) {
+function ActionBtn({ icon, children, onClick, active, dataTour }: { icon: ReactNode; children: ReactNode; onClick?: () => void; active?: boolean; dataTour?: string }) {
   return (
-    <button onClick={onClick} className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors"
+    <button onClick={onClick} data-tour={dataTour} className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors"
       style={{ borderColor: active ? 'var(--accent)' : 'var(--line)', background: active ? 'var(--accentdim)' : 'var(--panel)', color: active ? 'var(--accent)' : 'var(--ink2)' }}>
       {icon}{children}
     </button>
@@ -46,7 +46,7 @@ export function FindingDetail({ e, onPath, onClose, onWaive }: { e: FindingCatal
     <div className="fixed inset-0 z-40">
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={onClose} />
       <aside className="absolute right-0 top-0 bottom-0 w-full max-w-[720px] bg-canvas border-l border-line shadow-2xl overflow-y-auto">
-        <div className="sticky top-0 z-10 bg-canvas/90 backdrop-blur border-b border-line px-6 py-4 flex items-center gap-3">
+        <div data-tour="finding-detail-head" className="sticky top-0 z-10 bg-canvas/90 backdrop-blur border-b border-line px-6 py-4 flex items-center gap-3">
           <span className="h-2.5 w-2.5 rounded-full" style={{ background: sevColor(e.severity) }} />
           <span className="font-mono text-lg font-extrabold text-ink">{e.check_id}</span>
           <SeverityChip sev={e.severity} />
@@ -110,7 +110,7 @@ export function FindingDetail({ e, onPath, onClose, onWaive }: { e: FindingCatal
 
           <div className="border-t border-line pt-4">
             <div className="flex gap-2 flex-wrap">
-              <ActionBtn icon={<Ticket size={14} />} active={panel === 'ticket'} onClick={() => setPanel(panel === 'ticket' ? null : 'ticket')}>Raise ticket</ActionBtn>
+              <ActionBtn icon={<Ticket size={14} />} active={panel === 'ticket'} dataTour="finding-raise-ticket" onClick={() => setPanel(panel === 'ticket' ? null : 'ticket')}>Raise ticket</ActionBtn>
               <ActionBtn icon={<ShieldOff size={14} />} active={panel === 'waive'} onClick={() => setPanel(panel === 'waive' ? null : 'waive')}>Waive</ActionBtn>
               <ActionBtn icon={<FileCode2 size={14} />} active={panel === 'iac'} onClick={() => setPanel(panel === 'iac' ? null : 'iac')}>View IaC source</ActionBtn>
             </div>

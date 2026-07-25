@@ -9,6 +9,7 @@ import { SeverityChip, PathBadges, PathChain, ChokeRow } from '../components/pat
 import { PathGraph } from '../components/PathGraph'
 import { sevColor } from '../lib/format'
 import { shortLabel } from '../lib/nodes'
+import { useDeepLinkPanel, pathId, matchPath } from '../lib/deeplink'
 import type { OrgOverview, AccountSummary, AttackPath, ChokePoint } from '../api/types'
 
 // ── filter pill ───────────────────────────────────────────────────────────────
@@ -29,9 +30,9 @@ function Toggle({ active, onClick, children, tone }: { active: boolean; onClick:
 }
 
 // ── worklist row ──────────────────────────────────────────────────────────────
-function PathCard({ p, onOpen }: { p: AttackPath; onOpen: () => void }) {
+function PathCard({ p, onOpen, dataTour }: { p: AttackPath; onOpen: () => void; dataTour?: string }) {
   return (
-    <button onClick={onOpen} className="w-full text-left rounded-xl border border-line bg-panel p-4 hover:border-accent/50 hover:shadow-sm transition-all">
+    <button onClick={onOpen} data-tour={dataTour} className="w-full text-left rounded-xl border border-line bg-panel p-4 hover:border-accent/50 hover:shadow-sm transition-all">
       <div className="flex items-center gap-2 mb-2">
         <SeverityChip sev={p.severity} />
         <span className="font-mono text-lg font-extrabold tabular-nums leading-none" style={{ color: sevColor(p.severity) }}>{Math.round(p.score)}</span>
@@ -102,13 +103,13 @@ function PathDetail({ p, chokes, onClose }: { p: AttackPath; chokes: ChokePoint[
         <div className="p-6 flex flex-col gap-5">
           <div><PathBadges p={p} /></div>
 
-          <div>
+          <div data-tour="path-graph">
             <div className="text-xs font-semibold uppercase tracking-wide text-ink3 mb-2">Blast path</div>
             <PathGraph path={p} height={280} />
             <div className="mt-2"><PathChain nodes={p.nodes} terminalKind={p.terminal_kind} /></div>
           </div>
 
-          <Card className="p-5">
+          <Card dataTour="path-why-score" className="p-5">
             <div className="flex items-center justify-between mb-3">
               <div className="text-sm font-bold text-ink">Why this score</div>
               <span className="font-mono text-sm font-extrabold tabular-nums" style={{ color: sevColor(p.severity) }}>{Math.round(p.score)}/100</span>
@@ -138,7 +139,7 @@ function PathDetail({ p, chokes, onClose }: { p: AttackPath; chokes: ChokePoint[
             </div>
           )}
 
-          <div>
+          <div data-tour="path-sever">
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-ink3 mb-2">
               <Scissors size={13} /> Sever this path
             </div>
@@ -171,7 +172,8 @@ export function AttackPaths() {
   const [threatOnly, setThreatOnly] = useState(false)
   const [dataOnly, setDataOnly] = useState(false)
   const [uncondOnly, setUncondOnly] = useState(false)
-  const [open, setOpen] = useState<AttackPath | null>(null)
+  // The open path lives in the URL (?path=<entry>__<terminal>) — shareable + tour-drivable.
+  const [openId, setOpenId] = useDeepLinkPanel('path')
 
   if (loading) return <Loader />
   if (error) return <ErrorNote msg={error} />
@@ -179,6 +181,9 @@ export function AttackPaths() {
 
   const paths: AttackPath[] = isOrg ? (data as OrgOverview).top_attack_paths : (data as AccountSummary).attack_paths
   const chokes: ChokePoint[] = isOrg ? (data as OrgOverview).top_choke_points : (data as AccountSummary).choke_points
+  // resolve the open path from the FULL list (not the filtered view) so a deep link
+  // still opens a path that the current filters would hide.
+  const open = matchPath(paths, openId)
 
   const toggleSev = (s: string) => setSev((cur) => { const n = new Set(cur); n.has(s) ? n.delete(s) : n.add(s); return n })
   const filtered = paths.filter((p) => {
@@ -221,7 +226,7 @@ export function AttackPaths() {
           {filtered.length === 0 ? (
             <Card><Empty icon={<Waypoints size={28} />}>{paths.length === 0 ? 'No attack paths — clean across this scope.' : 'No paths match the current filters.'}</Empty></Card>
           ) : (
-            filtered.map((p, i) => <PathCard key={i} p={p} onOpen={() => setOpen(p)} />)
+            filtered.map((p, i) => <PathCard key={i} p={p} dataTour={i === 0 ? 'path-card-0' : undefined} onOpen={() => setOpenId(pathId(p))} />)
           )}
         </div>
 
@@ -253,7 +258,7 @@ export function AttackPaths() {
         </div>
       </div>
 
-      {open && <PathDetail p={open} chokes={chokes} onClose={() => setOpen(null)} />}
+      {open && <PathDetail p={open} chokes={chokes} onClose={() => setOpenId(null)} />}
     </div>
   )
 }

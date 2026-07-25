@@ -8,6 +8,7 @@ import { useFetch } from '../lib/useFetch'
 import { api } from '../api/client'
 import { Card, Loader, ErrorNote, Empty } from '../components/ui'
 import { sevColor } from '../lib/format'
+import { useDeepLinkPanel, matchVuln, vulnKey } from '../lib/deeplink'
 import type { IngestedVuln } from '../api/types'
 
 const RANK: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 }
@@ -26,11 +27,11 @@ function srcLabel(s: string): string {
   return s.startsWith('ingest:') ? s.slice(7) : s
 }
 
-function Row({ v, open, onToggle }: { v: IngestedVuln; open: boolean; onToggle: () => void }) {
+function Row({ v, open, onToggle, dataTour }: { v: IngestedVuln; open: boolean; onToggle: () => void; dataTour?: string }) {
   const rc = reachChip(v)
   const muted = v.suppressed || !v.on_attack_path
   return (
-    <div className="border-b border-line last:border-0">
+    <div data-tour={dataTour} className="border-b border-line last:border-0">
       <button onClick={onToggle}
         className={`flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-panel2 transition-colors ${muted ? 'opacity-70' : ''}`}>
         <span className="shrink-0 text-ink3">{open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
@@ -101,9 +102,9 @@ function Field({ k, v }: { k: string; v: string }) {
   )
 }
 
-function Stat({ n, label, tone }: { n: number; label: string; tone: string }) {
+function Stat({ n, label, tone, dataTour }: { n: number; label: string; tone: string; dataTour?: string }) {
   return (
-    <div className="rounded-xl border border-line bg-panel px-4 py-3 shadow-sm">
+    <div data-tour={dataTour} className="rounded-xl border border-line bg-panel px-4 py-3 shadow-sm">
       <div className="text-2xl font-extrabold tabular-nums leading-none" style={{ color: tone }}>{n}</div>
       <div className="text-xs text-ink3 mt-1">{label}</div>
     </div>
@@ -119,21 +120,29 @@ export function Vulnerabilities() {
     () => (org ? api.orgVulns() : api.listVulns(scope)), [scope])
   const [facet, setFacet] = useState<Facet>('reachable')
   const [showSuppressed, setShowSuppressed] = useState(false)
-  const [openKey, setOpenKey] = useState<string | null>(null)
-  const [upload, setUpload] = useState(false)
+  // open row (?vuln=<lossless vulnKey>) + upload modal (?upload=1) live in the URL.
+  const [vulnParam, setVulnParam] = useDeepLinkPanel('vuln')
+  const [upload, setUpload] = useDeepLinkPanel('upload')
 
   if (loading) return <Loader />
   if (error) return <ErrorNote msg={error} />
   const all = data ?? []
 
+  // resolve the open row from the FULL set so a deep link opens it regardless of the facet.
+  const openV = matchVuln(all, vulnParam)
+  const openKey = openV ? vulnKey(openV) : null
+  const setOpenVuln = (v: IngestedVuln | null) => setVulnParam(v ? vulnKey(v) : null)
+
   const kevReach = all.filter((v) => v.kev && v.on_attack_path && !v.suppressed).length
   const reachable = all.filter((v) => v.on_attack_path && !v.suppressed).length
 
+  // the deep-linked row is always kept through the filters, so it never silently fails to render.
+  const keep = (v: IngestedVuln) => openKey !== null && vulnKey(v) === openKey
   let rows = all
-  if (!showSuppressed) rows = rows.filter((v) => !v.suppressed)
-  if (facet === 'reachable') rows = rows.filter((v) => v.on_attack_path || (v.kev && !v.suppressed))
-  else if (facet === 'kev') rows = rows.filter((v) => v.kev)
-  else if (facet === 'onpath') rows = rows.filter((v) => v.on_attack_path)
+  if (!showSuppressed) rows = rows.filter((v) => !v.suppressed || keep(v))
+  if (facet === 'reachable') rows = rows.filter((v) => v.on_attack_path || (v.kev && !v.suppressed) || keep(v))
+  else if (facet === 'kev') rows = rows.filter((v) => v.kev || keep(v))
+  else if (facet === 'onpath') rows = rows.filter((v) => v.on_attack_path || keep(v))
   rows = [...rows].sort((a, b) => b.priority_score - a.priority_score
     || (RANK[a.priority_band] ?? 9) - (RANK[b.priority_band] ?? 9))
 
@@ -154,7 +163,7 @@ export function Vulnerabilities() {
           </p>
         </div>
         {!org && (
-          <button onClick={() => setUpload(true)}
+          <button onClick={() => setUpload('1')} data-tour="vuln-upload"
             className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white ow-grad shadow-sm hover:opacity-90">
             <Upload size={16} /> Upload scan
           </button>
@@ -163,12 +172,12 @@ export function Vulnerabilities() {
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
         <Stat n={all.length} label="External CVEs owned" tone="var(--ink)" />
-        <Stat n={reachable} label="Reachable (on attack path)" tone="var(--high)" />
+        <Stat n={reachable} label="Reachable (on attack path)" tone="var(--high)" dataTour="vuln-stat-reachable" />
         <Stat n={kevReach} label="Reachable KEV" tone="var(--crit)" />
         <Stat n={all.filter((v) => v.suppressed).length} label="VEX-suppressed" tone="var(--ink3)" />
       </div>
 
-      <div className="flex items-center gap-2 mb-4 flex-wrap">
+      <div data-tour="vuln-facets" className="flex items-center gap-2 mb-4 flex-wrap">
         {facetBtn('reachable', 'Reachable + KEV')}
         {facetBtn('kev', 'KEV only')}
         {facetBtn('onpath', 'On attack path')}
@@ -185,14 +194,14 @@ export function Vulnerabilities() {
         </Empty></Card>
       ) : (
         <Card className="overflow-hidden">
-          {rows.map((v) => {
-            const key = `${v.account ?? ''}|${v.node_id}|${v.cve}`
-            return <Row key={key} v={v} open={openKey === key} onToggle={() => setOpenKey(openKey === key ? null : key)} />
+          {rows.map((v, i) => {
+            const key = vulnKey(v)
+            return <Row key={key} v={v} open={openKey === key} dataTour={i === 0 ? 'vuln-row-0' : undefined} onToggle={() => setOpenVuln(openKey === key ? null : v)} />
           })}
         </Card>
       )}
 
-      {upload && <UploadModal account={scope} onClose={() => setUpload(false)} />}
+      {!org && upload === '1' && <UploadModal account={scope} onClose={() => setUpload(null)} />}
     </div>
   )
 }
