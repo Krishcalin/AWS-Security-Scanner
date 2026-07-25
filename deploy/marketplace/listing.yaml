@@ -1,0 +1,59 @@
+# AWS Marketplace listing metadata for OverWatch (a CONTAINER product — self-hosted).
+# The buyer runs the hub in their OWN dedicated security account/VPC; the vendor never
+# hosts customer data (so it is air-gappable + zero-telemetry). This file is the source
+# for the Marketplace Management Portal listing fields — it is NOT consumed at runtime.
+
+product:
+  title: "OverWatch — Agentless AWS CNAPP"
+  short_description: >-
+    Agentless, read-only Cloud-Native Application Protection Platform for AWS. Collapses a
+    whole estate into the ranked handful of internet -> exposed workload -> exploitable CVE
+    -> over-privileged role -> crown-jewel-data attack paths, and names the choke point that
+    severs the most. No agents, no access keys, no telemetry.
+  type: container            # self-hosted; AMI is an acceptable alternative packaging
+  categories:
+    - Security
+    - "Cloud Security Posture Management (CSPM)"
+    - "Cloud Infrastructure Entitlement Management (CIEM)"
+    - "Vulnerability Management (CWPP)"
+  highlights:
+    - "Attack-path graph + choke points — a ranked worklist, not a flat findings dump."
+    - "Agentless + read-only-of-config (SecurityAudit + ViewOnlyAccess; never a data read)."
+    - "Air-gappable + ZERO telemetry — no phone-home, no analytics (see NETWORK.md)."
+    - "Multi-tenant (MSSP) — isolated workspaces + workspace-scoped RBAC + usage metering."
+    - "CSPM + CIEM + agentless CWPP + KSPM/KIEM + DSPM + CDR-lite + AI-SPM in one engine."
+  support:
+    docs: "https://github.com/Krishcalin/AWS-Security-Scanner"
+    security: "SECURITY.md (responsible disclosure)"
+
+architecture: >-
+  Hub-and-spoke. One hub (this container) runs in the buyer's dedicated security account
+  and assumes a per-account read-only CnappScannerRole in each onboarded spoke, gated by a
+  per-tenant sts:ExternalId (confused-deputy guard). Region/AZ are irrelevant to the API
+  scan. Onboard spokes via CloudFormation (deploy/cnapp-scanner-role.yaml) or Terraform
+  (deploy/terraform/scanner-role) — both produce the identical role.
+
+deployment:
+  template: deploy/marketplace/hub-deploy.yaml     # buyer launches the hub + hub role
+  hub_role: deploy/cnapp-hub-role.yaml
+  container_port: 8080
+
+pricing:
+  # The billable metric is what the backend actually emits (Slice-1 metering): accounts
+  # under management. Both dimensions map to the same unit, so the ledger is authoritative.
+  dimensions:
+    - id: accounts_under_mgmt
+      name: "Account under management (per month)"
+      unit: "account/month"
+      type: usage
+      basis: >-
+        Metered hourly via marketplacemetering:MeterUsage from the running hub
+        (cnapp_marketplace_metering.meter_hourly reads the account.active gauge). OPT-IN;
+        requires a marketplacemetering VPC endpoint.
+    - id: annual_committed_accounts
+      name: "Annual committed accounts (private offer / air-gap SKU)"
+      unit: "account/year"
+      type: contract
+      basis: >-
+        Flat annual commitment sized by declared account count. NO metering egress — the
+        SKU for air-gapped buyers who cannot reach the Marketplace metering endpoint.

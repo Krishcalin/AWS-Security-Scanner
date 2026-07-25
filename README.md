@@ -420,12 +420,24 @@ every onboarded **spoke** account by assuming a **read-only cross-account role**
 (confused-deputy guard). Region/AZ are irrelevant to the API scan — control-plane
 endpoints are reachable from anywhere; the hub's own AZ never constrains coverage.
 
-**Onboarding.** Either deploy the single-account CloudFormation stack
+**Onboarding.** Deploy the single-account CloudFormation stack
 ([`deploy/cnapp-scanner-role.yaml`](deploy/cnapp-scanner-role.yaml)) via a one-click
-Launch-Stack URL, or connect an entire **AWS Organization** with a service-managed
+Launch-Stack URL, apply the equivalent **Terraform module**
+([`deploy/terraform/scanner-role/`](deploy/terraform/scanner-role/) — a structural test keeps it
+byte-equivalent to the CFN), or connect an entire **AWS Organization** with a service-managed
 **StackSet** ([`deploy/cnapp-stackset.md`](deploy/cnapp-stackset.md)) that auto-enrolls
 current and future member accounts. The role attaches only **SecurityAudit +
 ViewOnlyAccess** (read-only of configuration/IAM — never workload data).
+
+**Air-gapped / zero-telemetry.** OverWatch makes **zero** telemetry / phone-home / update-check
+calls — every egress is an AWS API or an operator-configured opt-in seam (see
+[`NETWORK.md`](NETWORK.md), enforced by `tests/test_zero_telemetry.py`). It packages for **fully
+offline** deployment: a multi-stage [`Dockerfile`](Dockerfile) that installs from a pre-downloaded
+wheelhouse (`--no-index`), [`scripts/build_offline_bundle.sh`](scripts/build_offline_bundle.sh)
+(one transfer tarball), and [`docs/AIRGAP_RUNBOOK.md`](docs/AIRGAP_RUNBOOK.md) (AWS via VPC
+endpoints, vuln bundle from disk). Listed on **AWS Marketplace** as a self-hosted container product
+([`deploy/marketplace/`](deploy/marketplace/)), priced on *accounts under management* (metered) with
+a contract SKU for air-gapped buyers.
 
 **Backend modules** (pure, dependency-injected, offline-testable):
 
