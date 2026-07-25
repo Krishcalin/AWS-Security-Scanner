@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/banner.svg" alt="OverWatch — Agentless AWS CNAPP · Attack-Path Graph" width="800"/>
+  <img src="docs/overwatch-logo.png" alt="OverWatch — Agentless AWS CNAPP" width="460"/>
 </p>
 
 <p align="center">
@@ -652,6 +652,7 @@ AWS-Security-Scanner/
 ├── scripts/
 │   └── validate_live.py     # Read-only live-account validation harness
 ├── docs/
+│   ├── overwatch-logo.png   # brand logo (README banner) + overwatch-mark* (console + report)
 │   └── banner.svg
 ├── CLAUDE.md                # Developer documentation
 ├── CHANGELOG.md             # Release notes

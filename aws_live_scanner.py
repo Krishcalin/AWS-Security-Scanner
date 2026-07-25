@@ -82,6 +82,20 @@ import aws_graph_neptune
 
 VERSION = "2.30.0"
 
+
+def _report_logo() -> str:
+    """The OverWatch mark for the report header — embedded as a self-contained data URI so a
+    shared/emailed report needs no external asset. Falls back to the shield glyph if the logo
+    isn't present in this deployment (the report never breaks)."""
+    import base64
+    import os
+    try:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "overwatch-mark-96.png")
+        with open(p, "rb") as f:
+            return "<img src='data:image/png;base64," + base64.b64encode(f.read()).decode("ascii") + "' alt='OverWatch'>"
+    except Exception:
+        return "&#128737;"
+
 # Light-theme CSS for the HTML report (plain string — real braces, no interpolation, so it
 # concatenates cleanly with the f-string body in save_html).
 _REPORT_CSS = """<style>
@@ -97,7 +111,8 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line
 .wrap{max-width:1120px;margin:0 auto;padding:0 22px 70px;} code{font-family:var(--mono);}
 .rhead{display:flex;flex-wrap:wrap;align-items:center;gap:14px 20px;padding:22px 0 20px;border-bottom:1px solid var(--line);margin-bottom:24px;}
 .brand{display:flex;align-items:center;gap:12px;}
-.logo{width:38px;height:38px;border-radius:9px;display:grid;place-items:center;background:linear-gradient(150deg,#2e90fa,#1570ef);font-size:20px;box-shadow:0 4px 14px rgba(21,112,239,.35);}
+.logo{width:38px;height:38px;border-radius:9px;overflow:hidden;display:grid;place-items:center;background:linear-gradient(150deg,#2e90fa,#1570ef);font-size:20px;box-shadow:0 4px 14px rgba(21,112,239,.35);}
+.logo img{width:100%;height:100%;object-fit:cover;display:block;}
 .brand h1{font-size:19px;margin:0;font-weight:700;letter-spacing:-.2px;}
 .tag{font-size:10.5px;letter-spacing:.8px;font-weight:700;color:var(--accent2);border:1px solid #bcd7fb;background:var(--accentdim);padding:3px 9px;border-radius:20px;text-transform:uppercase;vertical-align:middle;}
 .sub{font-size:12px;color:var(--ink2);}
@@ -11300,7 +11315,7 @@ class AWSLiveScanner:
             + _REPORT_CSS + "</head><body><div class='wrap'>"
             + f"""
 <header class="rhead">
-  <div class="brand"><div class="logo">&#128737;</div>
+  <div class="brand"><div class="logo">{_report_logo()}</div>
     <div><h1>OverWatch <span class="tag">Security Report</span></h1>
       <div class="sub">Agentless AWS CNAPP &middot; risk, impact &amp; step-by-step remediation</div></div></div>
   <div class="rmeta"><span>account <b>{esc(self.account)}</b></span><span>region <b>{esc(self.region)}</b></span>

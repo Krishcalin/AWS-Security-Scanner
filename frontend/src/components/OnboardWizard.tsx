@@ -101,7 +101,7 @@ export function OnboardWizard({ onClose, onComplete }: { onClose: () => void; on
         {/* step rail */}
         <div data-tour="wizard-rail" className="w-52 shrink-0 border-r border-line p-5 hidden sm:flex flex-col gap-1" style={{ background: 'var(--panel)' }}>
           <div className="flex items-center gap-2 mb-4">
-            <div className="h-7 w-7 rounded-lg ow-grad grid place-items-center text-white text-sm">🛡️</div>
+            <img src="/overwatch-mark.png" alt="OverWatch" className="h-7 w-7 rounded-lg object-cover" />
             <span className="font-bold text-ink text-sm">Onboard account</span>
           </div>
           {STEPS.map((s, i) => (
