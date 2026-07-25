@@ -32,7 +32,7 @@ export function Sidebar() {
   return (
     <aside className="w-60 shrink-0 border-r border-line bg-panel flex flex-col">
       <div className="h-14 flex items-center gap-2.5 px-5 border-b border-line">
-        <div className="h-8 w-8 rounded-lg ow-grad grid place-items-center text-white text-lg shadow">🛡️</div>
+        <img src="/overwatch-mark.png" alt="OverWatch" className="h-8 w-8 rounded-lg object-cover shadow" />
         <div className="leading-tight">
           <div className="font-extrabold tracking-tight text-ink">OverWatch</div>
           <div className="text-[10px] text-ink3 font-mono -mt-0.5">AWS CNAPP</div>

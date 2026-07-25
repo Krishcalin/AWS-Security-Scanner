@@ -10,6 +10,7 @@ __pycache__
 .vscode
 tests
 docs
+!docs/overwatch-mark-96.png   # keep the report-header logo (embedded as a data URI at report time)
 reports
 evidence
 scratchpad
