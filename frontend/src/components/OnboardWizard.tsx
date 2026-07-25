@@ -99,7 +99,7 @@ export function OnboardWizard({ onClose, onComplete }: { onClose: () => void; on
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div className="relative bg-canvas border border-line rounded-2xl shadow-2xl w-full max-w-[920px] max-h-[88vh] overflow-hidden flex">
         {/* step rail */}
-        <div className="w-52 shrink-0 border-r border-line p-5 hidden sm:flex flex-col gap-1" style={{ background: 'var(--panel)' }}>
+        <div data-tour="wizard-rail" className="w-52 shrink-0 border-r border-line p-5 hidden sm:flex flex-col gap-1" style={{ background: 'var(--panel)' }}>
           <div className="flex items-center gap-2 mb-4">
             <div className="h-7 w-7 rounded-lg ow-grad grid place-items-center text-white text-sm">🛡️</div>
             <span className="font-bold text-ink text-sm">Onboard account</span>

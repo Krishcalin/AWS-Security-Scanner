@@ -7,6 +7,7 @@ import { loadGraph } from '../lib/orgdata'
 import { Card, Loader, ErrorNote, Empty, SevDot } from '../components/ui'
 import { nodeMeta, shortLabel } from '../lib/nodes'
 import { sevColor } from '../lib/format'
+import { useDeepLinkPanel } from '../lib/deeplink'
 import type { GNode, FindingCatalogEntry } from '../api/types'
 
 const EXCLUDE = new Set(['InternetSource', 'AdminCapability', 'Vulnerability', 'ThreatFinding', 'InstanceProfile'])
@@ -44,7 +45,9 @@ export function Inventory() {
   const { data, loading, error } = useFetch(
     () => Promise.all([loadGraph(scope), isOrg ? api.orgFindings() : api.findings(scope)])
       .then(([g, f]) => ({ g, f: f as FindingCatalogEntry[] })), [scope])
-  const [view, setView] = useState<'list' | 'tree'>('list')
+  const [viewParam, setViewRaw] = useDeepLinkPanel('view')   // list | tree in the URL
+  const view: 'list' | 'tree' = viewParam === 'tree' ? 'tree' : 'list'
+  const setView = (v: 'list' | 'tree') => setViewRaw(v === 'list' ? null : 'tree')
   const [q, setQ] = useState('')
   const [openKeys, setOpenKeys] = useState<Set<string>>(new Set())
 
@@ -105,8 +108,8 @@ export function Inventory() {
         <Card><Empty icon={<Boxes size={26} />}>No resources in this scope.</Empty></Card>
       ) : view === 'list' ? (
         <div className="flex flex-col gap-3">
-          {[...byKind.entries()].map(([kind, list]) => (
-            <Card key={kind} className="p-2">
+          {[...byKind.entries()].map(([kind, list], i) => (
+            <Card key={kind} dataTour={i === 0 ? 'inventory-first-kind' : undefined} className="p-2">
               <div className="flex items-center gap-2 px-3 py-2">
                 <span className="text-sm font-bold text-ink">{nodeMeta(kind).label}</span>
                 <span className="text-xs text-ink3">{list.length}</span>

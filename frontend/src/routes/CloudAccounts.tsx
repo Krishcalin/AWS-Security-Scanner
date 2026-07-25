@@ -5,6 +5,7 @@ import { api } from '../api/client'
 import { Card, Loader, ErrorNote, Empty } from '../components/ui'
 import { OnboardWizard } from '../components/OnboardWizard'
 import { healthTone, relTime, acctLabel, scoreColor } from '../lib/format'
+import { useDeepLinkPanel } from '../lib/deeplink'
 import type { Account } from '../api/types'
 
 function Stat({ n, label, tone }: { n: number; label: string; tone: string }) {
@@ -74,7 +75,8 @@ export function CloudAccounts() {
   const [overrides, setOverrides] = useState<Record<string, Partial<Account>>>({})
   const [removed, setRemoved] = useState<Set<string>>(new Set())
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
-  const [wizard, setWizard] = useState(false)
+  // the onboarding wizard is deep-linkable (?onboard=1); its internal step stays local.
+  const [wizard, setWizard] = useDeepLinkPanel('onboard')
 
   if (loading) return <Loader />
   if (error) return <ErrorNote msg={error} />
@@ -114,7 +116,7 @@ export function CloudAccounts() {
           <h1 className="text-2xl font-extrabold tracking-tight text-ink flex items-center gap-2"><Cloud size={22} className="text-accent" /> Cloud Accounts</h1>
           <p className="text-ink2 text-sm mt-1">{merged.length} account{merged.length === 1 ? '' : 's'} · keyless, role-based onboarding</p>
         </div>
-        <button onClick={() => setWizard(true)} className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white ow-grad shadow-sm hover:opacity-90">
+        <button onClick={() => setWizard('1')} data-tour="add-account" className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white ow-grad shadow-sm hover:opacity-90">
           <Plus size={16} /> Add account
         </button>
       </div>
@@ -138,9 +140,9 @@ export function CloudAccounts() {
         </div>
       )}
 
-      {wizard && (
+      {wizard === '1' && (
         <OnboardWizard
-          onClose={() => setWizard(false)}
+          onClose={() => setWizard(null)}
           onComplete={(a) => { setAdded((cur) => [a, ...cur.filter((x) => x.account_id !== a.account_id)]); setRemoved((s) => { const n = new Set(s); n.delete(a.account_id); return n }) }}
         />
       )}

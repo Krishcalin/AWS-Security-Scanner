@@ -4,6 +4,63 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.29.0] — 2026
+
+**Phase-4 Slice-3: an interactive product tour + shareable deep links.** A guided, self-driving
+tour that replays canned scenarios over the REAL console — navigating, setting scope, spotlighting
+live elements, and opening real panels — plus the refactor that makes it possible: the URL is now
+the single source of truth for scope and every open panel, so views are shareable, bookmarkable,
+and refresh-safe. Frontend-only; `aws_live_scanner.py` and the hub API are unchanged.
+
+### Added — URL-as-source-of-truth (shareable deep links)
+- **Scope in the URL** (`?scope=<account>`; absent ⇒ org) — a pasted link carries both the scope and
+  any open panel. `state/scope.tsx` now derives scope from the URL and clears panel params on a scope
+  switch (an open panel from another account is never resolved to nothing).
+- **`lib/deeplink.ts`** — a shared `useDeepLinkPanel(param)` hook binds each screen's open panel to a
+  URL search param (functional updater preserves sibling params; panels default to `replace` history),
+  plus URL-safe id codecs: a collision-free `pathId` (readable `internet__customers-db__<hash>`, since
+  the engine emits parallel routes to the same crown) and a lossless `vulnKey`, with resolvers that run
+  against the **unfiltered** catalog so a deep link opens its target even when the current filters would
+  hide it.
+- Every panel is now deep-linkable: Attack Paths `?path`, Findings / Remediation `?detail`,
+  Vulnerabilities `?vuln` and `?upload`, Cloud Accounts `?onboard`, Settings `?tab`+`?connector`,
+  Compliance `?framework`+`?controls`, Identity `?principal`, Inventory `?view`.
+
+### Added — the product tour (`lib/tour/` + `components/tour/`)
+- A portalled overlay (above the slide-overs / modals) that drives navigation + scope + panels by
+  **navigating to one URL per step**, then spotlights a real element via a `data-tour` anchor resolved
+  with a `MutationObserver` (waits past `<Loader/>` gates) and a post-open re-measure window (defeats
+  the slide-over transform race). Auto-advance is gated on a settle-once flag, so it never restarts on
+  scroll re-measures.
+- **Hybrid** replay: auto-advancing steps plus take-the-wheel interactive beats where the user clicks
+  the spotlighted real control to continue (a four-pane mask leaves that control clickable).
+- **Five canned scenarios** grounded in the sample data: trace a critical attack path (flagship),
+  reachability beats CVSS, triage & route a finding, keyless onboarding, and one-scan-every-framework.
+- Three entry points: a floating launcher + scenario gallery (with session resume), a "Take a tour"
+  item in the top bar, and a dismissible first-run prompt (never auto-starts).
+- Accessibility: `inert` app-root + focus into the coachmark on auto steps; focus to the live control
+  on interactive steps; `aria-live` step announcements; full keyboard map (Esc / ← / → / Space, ignored
+  while typing); `prefers-reduced-motion` disables auto-advance, animated scroll, and transitions.
+
+### Added — test harness + guardrails
+- **Vitest** (the frontend's first JS test harness) — `deeplink.test.ts` (id codecs vs the real
+  fixtures, incl. pathId-collision + vulnKey regressions) and `scenarios/scenarios.test.ts`, a guardrail
+  that fails the build if any scenario references a drifted fixture id (path / vuln / finding / control)
+  or a `data-tour` anchor that doesn't exist in source. Plus a DEV-only structural validator.
+
+### Fixed — from read-only adversarial review (8 confirmed defects)
+- Collision-free `pathId` (was `entry__terminal`, which opened the wrong parallel path); lossless
+  single-param `?vuln=<vulnKey>` (was a lossy `?cve`+`?node` that could open the wrong row); the
+  deep-linked vuln row is now exempt from the facet filters (was a silent no-op when off-path); the
+  Ingest modal is gated to account scope (`?upload=1` in org scope targeted account "org"); the
+  Compliance failing-controls chevron stays collapsible under a deep link; the tour keyboard handler no
+  longer hijacks Esc/←/→ while typing in an input; the first-run prompt is marked seen on Start; and
+  `waitForAnchor` takes an `AbortSignal` so a step change tears its `MutationObserver` down.
+
+### Notes
+- The console is byte-behaviorally unchanged when the tour is idle: the overlay renders `null` and
+  mounts no listeners, and every `data-tour` addition is an inert attribute.
+
 ## [2.28.0] — 2026
 
 **Phase-4 Slice-2: air-gapped / zero-telemetry packaging + a Terraform onboarding module + an

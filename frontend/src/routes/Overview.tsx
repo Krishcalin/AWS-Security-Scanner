@@ -51,11 +51,11 @@ function Page({ title, sub, children }: { title: string; sub: string; children: 
 }
 
 /** A deep-linking Top-N tile — click-through to its pre-filtered screen. */
-function Tile({ to, icon, label, value, sub, tone = 'var(--accent)' }: {
-  to: string; icon: ReactNode; label: string; value: ReactNode; sub?: string; tone?: string
+function Tile({ to, icon, label, value, sub, tone = 'var(--accent)', dataTour }: {
+  to: string; icon: ReactNode; label: string; value: ReactNode; sub?: string; tone?: string; dataTour?: string
 }) {
   return (
-    <Link to={to} className={`${'group'} rounded-2xl border border-line bg-panel shadow-sm p-4 flex flex-col gap-2 hover:border-accent/40 transition-colors`}>
+    <Link to={to} data-tour={dataTour} className={`${'group'} rounded-2xl border border-line bg-panel shadow-sm p-4 flex flex-col gap-2 hover:border-accent/40 transition-colors`}>
       <div className="flex items-center justify-between">
         <span className="h-8 w-8 rounded-lg grid place-items-center" style={{ background: 'var(--panel2)', color: tone }}>{icon}</span>
         <ArrowRight size={15} className="text-ink3 opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -69,9 +69,9 @@ function Tile({ to, icon, label, value, sub, tone = 'var(--accent)' }: {
   )
 }
 
-function PathRow({ p }: { p: AttackPath }) {
+function PathRow({ p, dataTour }: { p: AttackPath; dataTour?: string }) {
   return (
-    <Link to="/attack-paths" className="block rounded-xl border border-line2 hover:border-accent/40 bg-panel2/40 px-3.5 py-3 transition-colors">
+    <Link to="/attack-paths" data-tour={dataTour} className="block rounded-xl border border-line2 hover:border-accent/40 bg-panel2/40 px-3.5 py-3 transition-colors">
       <div className="flex items-center gap-2 mb-1.5">
         <SeverityChip sev={p.severity} />
         <span className="font-mono text-sm font-bold tabular-nums" style={{ color: sevColor(p.severity) }}>{Math.round(p.score)}</span>
@@ -108,7 +108,7 @@ function OrgView() {
     <Page title="Security Overview" sub={`Organization · ${o.accounts_scanned} account${o.accounts_scanned === 1 ? '' : 's'} scanned`}>
       {/* hero */}
       <div className="grid grid-cols-1 lg:grid-cols-[auto_1fr] gap-4 mb-4">
-        <Card className="p-5 flex items-center gap-5">
+        <Card dataTour="org-grade" className="p-5 flex items-center gap-5">
           <GradeDial score={o.org_posture_score} grade={grade} />
           <div>
             <div className="text-xs font-semibold uppercase tracking-wide text-ink3">Org posture</div>
@@ -121,7 +121,7 @@ function OrgView() {
           </div>
         </Card>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <Tile to="/attack-paths" icon={<Waypoints size={17} />} tone="var(--crit)" value={o.critical_attack_paths} label="Critical attack paths" sub="ranked toxic combinations" />
+          <Tile to="/attack-paths" dataTour="kpi-critical-paths" icon={<Waypoints size={17} />} tone="var(--crit)" value={o.critical_attack_paths} label="Critical attack paths" sub="ranked toxic combinations" />
           <Tile to="/inventory" icon={<Gem size={17} />} tone="var(--gold)" value={o.crown_jewels_at_risk} label="Crown jewels at risk" sub="reachable sensitive data" />
           <Tile to="/remediation" icon={<Scissors size={17} />} tone="var(--accent)" value={topChoke ? `${cutPct}%` : '—'} label="Top choke leverage" sub={topChoke ? `fix 1 → cut ${cutPct}% of paths` : 'no choke points'} />
           <Tile to="/accounts" icon={<Cloud size={17} />} tone="var(--info)" value={o.accounts_scanned} label="Accounts" sub="onboarded & scanning" />
@@ -134,7 +134,7 @@ function OrgView() {
           <PanelHead title="Top attack paths" to="/attack-paths" />
           <div className="px-5 pb-5 flex flex-col gap-2.5">
             {o.top_attack_paths.length === 0 ? <Empty icon={<Waypoints size={26} />}>No attack paths — clean across the org.</Empty>
-              : o.top_attack_paths.slice(0, 5).map((p, i) => <PathRow key={i} p={p} />)}
+              : o.top_attack_paths.slice(0, 5).map((p, i) => <PathRow key={i} p={p} dataTour={i === 0 ? 'top-path-0' : undefined} />)}
           </div>
         </Card>
         <Card>

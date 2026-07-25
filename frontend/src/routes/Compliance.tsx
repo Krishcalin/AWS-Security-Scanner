@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { ShieldCheck, ChevronDown, ChevronRight, Waypoints, Info, ExternalLink } from 'lucide-react'
 import { useScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'
@@ -51,15 +51,20 @@ function ConfPill({ mix }: { mix?: { high: number; medium: number; low: number }
   )
 }
 
-function FrameworkCard({ id, card, meta, minConf }:
-  { id: string; card: ComplianceFramework; meta?: ComplianceFrameworkMeta; minConf: number }) {
-  const [open, setOpen] = useState(false)
+function FrameworkCard({ id, card, meta, minConf, forceControlsOpen }:
+  { id: string; card: ComplianceFramework; meta?: ComplianceFrameworkMeta; minConf: number; forceControlsOpen?: boolean }) {
+  // a deep link (?framework=<id>&controls=1) opens this card's failing controls — via an
+  // effect on the flag's TRANSITION (so the tour can force it open even while the card is
+  // already mounted), while `open` stays the source of truth so the chevron can collapse it.
+  const [open, setOpen] = useState(!!forceControlsOpen)
   const [srcOpen, setSrcOpen] = useState(false)
+  useEffect(() => { if (forceControlsOpen) setOpen(true) }, [forceControlsOpen])
   const pass = card.pass_rate >= minConf
   const failed = [...new Set(card.failed_controls)]
   const prov = card.control_provenance ?? {}
+  const showFailed = open
   return (
-    <Card className="overflow-hidden">
+    <Card dataTour={`framework-${id}`} className="overflow-hidden">
       <div className="p-5">
         <div className="flex items-start justify-between gap-2 mb-1">
           <div className="min-w-0">
@@ -81,7 +86,7 @@ function FrameworkCard({ id, card, meta, minConf }:
         <div className="flex items-center gap-3 mt-3">
           {failed.length > 0 && (
             <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-1 text-xs font-semibold text-accent">
-              {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />} {failed.length} failing control{failed.length === 1 ? '' : 's'}
+              {showFailed ? <ChevronDown size={13} /> : <ChevronRight size={13} />} {failed.length} failing control{failed.length === 1 ? '' : 's'}
             </button>
           )}
           {meta && meta.sources.length > 0 && (
@@ -97,13 +102,13 @@ function FrameworkCard({ id, card, meta, minConf }:
           ))}
         </div>
       )}
-      {open && (
+      {showFailed && (
         <div className="px-5 pb-5 flex gap-1.5 flex-wrap border-t border-line2 pt-3">
           {failed.map((ctrl, i) => {
             const p = prov[ctrl]
             const tip = p ? `${id} ${ctrl} ← NIST ${p.via_nist.join(', ')} · ${p.confidence}` : ctrl
             return (
-              <Link to="/findings" key={i} title={tip}
+              <Link to="/findings" key={i} title={tip} data-tour={`ctrl-${ctrl}`}
                 className="font-mono text-xs rounded-md px-2 py-1 hover:border-accent/40 border border-line flex items-center gap-1"
                 style={{ background: 'var(--panel2)', color: 'var(--ink2)' }}>
                 {ctrl}
@@ -123,6 +128,11 @@ export function Compliance() {
   const [minConf, setMinConf] = useState(80)     // conformance-% threshold (pass/fail label)
   const [conf, setConf] = useState<Conf>('any')  // mapping-confidence tier (re-derives)
   const [fam, setFam] = useState('all')
+  // deep link: ?framework=<id>&controls=1 force-opens that card's failing controls.
+  const [params] = useSearchParams()
+  const fwParam = params.get('framework')
+  const forceControls = params.get('controls') === '1'
+  const forceOpen = (id: string) => forceControls && fwParam === id
 
   const { data, loading, error } = useFetch<Bundle>(
     () => Promise.all([
@@ -167,7 +177,7 @@ export function Compliance() {
         <span className="text-xs text-ink3">— {native.length} frameworks with per-check control tags</span>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-        {native.map(([fw, c]) => <FrameworkCard key={fw} id={fw} card={c} meta={meta.get(fw)} minConf={minConf} />)}
+        {native.map(([fw, c]) => <FrameworkCard key={fw} id={fw} card={c} meta={meta.get(fw)} minConf={minConf} forceControlsOpen={forceOpen(fw)} />)}
       </div>
 
       {/* crosswalk-derived */}
@@ -190,7 +200,7 @@ export function Compliance() {
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {derived.map(([fw, c]) => <FrameworkCard key={fw} id={fw} card={c} meta={meta.get(fw)} minConf={minConf} />)}
+        {derived.map(([fw, c]) => <FrameworkCard key={fw} id={fw} card={c} meta={meta.get(fw)} minConf={minConf} forceControlsOpen={forceOpen(fw)} />)}
       </div>
 
       <div className="flex items-start gap-2 mt-6 rounded-xl border border-line px-4 py-3 text-xs text-ink2" style={{ background: 'var(--panel2)' }}>

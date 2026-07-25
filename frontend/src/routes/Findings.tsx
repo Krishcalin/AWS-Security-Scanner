@@ -6,6 +6,7 @@ import { api } from '../api/client'
 import { Card, Loader, ErrorNote, Empty, SevDot, Chip } from '../components/ui'
 import { FindingDetail } from '../components/FindingDetail'
 import { sevColor } from '../lib/format'
+import { useDeepLinkPanel } from '../lib/deeplink'
 import type { FindingCatalogEntry, OrgOverview, AccountSummary } from '../api/types'
 
 type Source = 'all' | 'misconfig' | 'vuln' | 'data'
@@ -40,10 +41,10 @@ function Pill({ active, onClick, children, tone }: { active: boolean; onClick: (
   )
 }
 
-function FindingRow({ e, onPath, onOpen }: { e: FindingCatalogEntry; onPath: boolean; onOpen: () => void }) {
+function FindingRow({ e, onPath, onOpen, dataTour }: { e: FindingCatalogEntry; onPath: boolean; onOpen: () => void; dataTour?: string }) {
   const [exp, setExp] = useState(false)
   return (
-    <div className="rounded-xl border border-line bg-panel hover:border-accent/40 transition-colors">
+    <div data-tour={dataTour} className="rounded-xl border border-line bg-panel hover:border-accent/40 transition-colors">
       <div className="flex items-center gap-3 px-4 py-3 cursor-pointer" onClick={onOpen}>
         <SevDot sev={e.severity} />
         <span className="font-mono text-sm font-bold text-ink w-24 shrink-0">{e.check_id}</span>
@@ -93,12 +94,17 @@ export function Findings() {
   const [sev, setSev] = useState<Set<string>>(new Set())
   const [onPathOnly, setOnPathOnly] = useState(false)
   const [group, setGroup] = useState<'none' | 'section' | 'severity'>('none')
-  const [open, setOpen] = useState<FindingCatalogEntry | null>(null)
+  // open finding lives in the URL (?detail=<check_id>) — shareable + tour-drivable.
+  const [openId, setOpenId] = useDeepLinkPanel('detail')
   const [waived, setWaived] = useState<Set<string>>(new Set())
 
   if (loading) return <Loader />
   if (error) return <ErrorNote msg={error} />
   if (!data) return null
+
+  // resolve from the FULL catalog, not the filtered rows, so a deep link opens a
+  // finding even when the active tab/severity/on-path filters would hide it.
+  const open = openId ? (data.find((e) => e.check_id === openId) ?? null) : null
 
   const onPathSet = new Set(paths.data ?? [])
   const isOnPath = (e: FindingCatalogEntry) => onPathSet.has(e.check_id)
@@ -140,7 +146,7 @@ export function Findings() {
       </div>
 
       {/* source sub-tabs */}
-      <div className="flex items-center gap-1 border-b border-line mb-4">
+      <div data-tour="findings-tabs" className="flex items-center gap-1 border-b border-line mb-4">
         {TABS.map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className="relative px-3.5 py-2 text-sm font-semibold transition-colors"
@@ -153,7 +159,7 @@ export function Findings() {
 
       {/* toolbar */}
       <div className="flex items-center gap-2 flex-wrap mb-4">
-        <div className="relative">
+        <div data-tour="findings-search" className="relative">
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink3" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search check, section, resource…"
             className="rounded-lg border border-line bg-panel pl-8 pr-3 py-1.5 text-sm text-ink placeholder:text-ink3 outline-none focus:border-accent/50 w-64" />
@@ -174,7 +180,7 @@ export function Findings() {
         <Card><Empty icon={<CircleAlert size={26} />}>{data.length === 0 ? 'No findings — clean across this scope.' : 'No findings match the current filters.'}</Empty></Card>
       ) : (
         <div className="flex flex-col gap-4">
-          {groups.map((grp) => (
+          {groups.map((grp, gi) => (
             <div key={grp.key} className="flex flex-col gap-2">
               {grp.key && (
                 <div className="flex items-center gap-2 px-1">
@@ -184,14 +190,15 @@ export function Findings() {
                 </div>
               )}
               {grp.items.map((e, i) => (
-                <FindingRow key={`${e.account ?? ''}${e.check_id}${i}`} e={e} onPath={isOnPath(e)} onOpen={() => setOpen(e)} />
+                <FindingRow key={`${e.account ?? ''}${e.check_id}${i}`} e={e} onPath={isOnPath(e)}
+                  dataTour={gi === 0 && i === 0 ? 'finding-row-0' : undefined} onOpen={() => setOpenId(e.check_id)} />
               ))}
             </div>
           ))}
         </div>
       )}
 
-      {open && <FindingDetail e={open} onPath={isOnPath(open)} onClose={() => setOpen(null)} onWaive={(cid) => { setWaived((s) => new Set(s).add(cid)); setOpen(null) }} />}
+      {open && <FindingDetail e={open} onPath={isOnPath(open)} onClose={() => setOpenId(null)} onWaive={(cid) => { setWaived((s) => new Set(s).add(cid)); setOpenId(null) }} />}
     </div>
   )
 }

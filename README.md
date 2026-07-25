@@ -11,7 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"/>
   <img src="https://img.shields.io/badge/license-GPL--3.0-orange?style=flat-square" alt="GPL-3.0 License"/>
-  <img src="https://img.shields.io/badge/OverWatch-CNAPP%20v2.26.0-38bdf8?style=flat-square" alt="OverWatch CNAPP v2.26.0"/>
+  <img src="https://img.shields.io/badge/OverWatch-CNAPP%20v2.29.0-38bdf8?style=flat-square" alt="OverWatch CNAPP v2.29.0"/>
   <img src="https://img.shields.io/badge/pillars-CSPM%20%7C%20CIEM%20%7C%20CWPP%20%7C%20DSPM%20%7C%20AI--SPM%20%7C%20CDR-6366f1?style=flat-square" alt="CNAPP pillars"/>
   <img src="https://img.shields.io/badge/compliance-CIS%20%7C%20PCI--DSS%20%7C%20HIPAA%20%7C%20SOC2%20%7C%20NIST-purple?style=flat-square" alt="5 Compliance Frameworks"/>
   <img src="https://img.shields.io/badge/checks-296%20severity--mapped-red?style=flat-square" alt="296 severity-mapped checks"/>
@@ -562,11 +562,16 @@ screens over one design system: **Overview** (posture dashboard, org ↔ account
 showing each path's gated-multiplicative score breakdown), **Findings** (unified
 deduped queue with source sub-tabs + a risk → business-impact → step-by-step
 remediation detail panel), and **Cloud Accounts** with a keyless 5-step **onboarding
-wizard** (server-minted ExternalId + CloudFormation / Org StackSet). It runs on
-engine-shaped sample fixtures with **zero AWS**, and a `VITE_DATA_SOURCE=live` build
-flips every screen to the live hub. `cnapp_api.create_hosted_app(service,
-static_dir="frontend/dist")` serves the API under `/api` and the SPA at `/` (with a
-history-API fallback) as one deployable. See [`frontend/README.md`](frontend/README.md).
+wizard** (server-minted ExternalId + CloudFormation / Org StackSet). Every view is a
+**shareable deep link** — scope and each open panel live in the URL, so a pasted
+`/attack-paths?scope=…&path=…` reopens exactly what you were looking at — and an
+**interactive product tour** replays five canned scenarios *over the live console*
+(navigating, setting scope, spotlighting real elements, opening real panels) for a
+zero-AWS guided walkthrough. It runs on engine-shaped sample fixtures with **zero
+AWS**, and a `VITE_DATA_SOURCE=live` build flips every screen to the live hub.
+`cnapp_api.create_hosted_app(service, static_dir="frontend/dist")` serves the API under
+`/api` and the SPA at `/` (with a history-API fallback) as one deployable. See
+[`frontend/README.md`](frontend/README.md).
 
 ```bash
 cd frontend && npm install && npm run dev     # http://localhost:5173  (sample data, no AWS)
