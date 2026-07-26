@@ -139,6 +139,24 @@ resource "aws_iam_role_policy" "cdr_forensics" {
   })
 }
 
+# ECR registry image layer-pull (Slice-5 Tier B, --side-scan-images): reads image layer
+# BYTES (a workload-DATA read), tag-scoped to cnapp:imagescan. GetAuthorizationToken has no
+# resource-level support so it takes Resource = "*".
+resource "aws_iam_role_policy" "image_layer_pull" {
+  count = var.enable_image_layer_pull ? 1 : 0
+  name  = "CnappImageLayerPull"
+  role  = aws_iam_role.scanner.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = ["ecr:GetAuthorizationToken"], Resource = "*" },
+      { Effect = "Allow", Resource = "arn:aws:ecr:*:*:repository/*",
+        Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"],
+      Condition = { StringEquals = { "aws:ResourceTag/cnapp:imagescan" = "true" } } },
+    ]
+  })
+}
+
 # ── OPT-IN: EKS KSPM/KIEM read-only access ENTRY (a per-cluster access grant, NOT an IAM
 # policy — mirrors the CFN comment). Run once at onboarding; the scanner never GETs beyond
 # what AmazonEKSViewPolicy allows (pods/SA/PSA/NetworkPolicy; excludes secrets).

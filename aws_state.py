@@ -923,8 +923,13 @@ class StateStore:
                                  ["snapshot_id", "purl_identity"], self._SBOM_COMP_COLS[2:], seq)
 
     def insert_snapshot_cves(self, snapshot_id: str, cves: Iterable[Dict]) -> None:
+        # REPLACE-SET (not upsert-accumulate): a re-sweep of the SAME image (same snapshot_id
+        # = SBOM content hash) against a NEWER vuln feed may match a DIFFERENT CVE set. Clear
+        # the snapshot's existing CVE rows first so a fixed/withdrawn CVE doesn't linger.
+        # Called inside the ingest transaction, so the clear + insert are atomic.
         seq = [(snapshot_id, c["cve"], c.get("purl_identity", "*"), c.get("fixed_version"))
                for c in cves]
+        self._be.execute("DELETE FROM sbom_snapshot_cves WHERE snapshot_id=?", (snapshot_id,))
         if seq:
             self._be.upsert_many("sbom_snapshot_cves",
                                  ["snapshot_id", "cve", "purl_identity", "fixed_version"],

@@ -63,7 +63,9 @@ def test_no_telemetry_sdk_imports():
 # ── B. network primitives are confined to the two allowlisted egress files ────
 # The ONLY files permitted to import a socket-touching primitive. Adding a new file to
 # this set is the signal that forces a security review (update NETWORK.md too).
-EGRESS_ALLOWLIST = {"aws_kube.py", "cnapp_connectors.py"}
+# aws_layer_fetch.py: the ECR layer-blob GET seam (HTTPS + *.amazonaws.com only, byte-capped,
+# opt-in behind --side-scan-images + the CnappImageLayerPull grant). See test_layer_fetch.py.
+EGRESS_ALLOWLIST = {"aws_kube.py", "cnapp_connectors.py", "aws_layer_fetch.py"}
 # urllib.parse / urllib.error are NOT network I/O (string ops / exception types) and are
 # allowed anywhere; the real egress primitives are these (client + server + mail/ftp/rpc +
 # 3rd-party http + shell-out via subprocess):

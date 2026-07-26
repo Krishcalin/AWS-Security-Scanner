@@ -128,6 +128,19 @@ def run_scan_job(svc, job: dict, *, spec: ScanSpec = None) -> dict:
         except Exception:                             # noqa: BLE001
             became_reachable = []
 
+    # 4.7 best-effort: persist any registry-pulled image SBOMs (Slice-5 Tier B) as durable
+    #     snapshots so diff / license / VEX apply. Read-only (works off the pulled SBOM +
+    #     stored graph); a persistence error must NEVER fail a 'done' job.
+    if getattr(svc, "state", None) is not None and getattr(sc, "registry_sboms", None):
+        for _sbom in sc.registry_sboms:
+            try:
+                svc.ingest_document(account_id, doc=_sbom["doc"],
+                                    source_tool="ecr-sidescan", target_resource=_sbom["node_id"])
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception:                             # noqa: BLE001
+                pass
+
     # 5. best-effort: fire enabled connectors — the per-finding queue AND (if we have a
     #    drift dict) one drift-digest per scan. A dead/slow receiver or any notify error
     #    must NEVER fail a completed job, so each is wrapped + swallowed.

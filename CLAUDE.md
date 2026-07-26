@@ -12,7 +12,7 @@ remediation, and code-to-cloud mapping. It ships as the live scanner + its
 gold `#f5b53d`, critical red `#ff3b5c`. Python module names stay `aws_*`/`cnapp_*` —
 no code rename.) The repo also includes a separate pre-deploy IaC static scanner.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **OverWatch — Live CNAPP** (`aws_live_scanner.py` v2.30.0) -- live AWS account audit via boto3 (**296 severity-mapped checks across 44 sections**, **222 actionable checks each with a full risk/impact/step-by-step remediation write-up**, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure + L7 reachability engine**, **deep-plane ingestion + flagship attack paths**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing + least-privilege policy generation**, **agentless side-scan CWPP** (Linux OS-pkg + language-dep + container-image + Lambda + managed-engine-EOL + Windows-via-SSM), **agentless KSPM/KIEM** (CIS-EKS + K8s RBAC + IRSA cross-plane) + **Fargate task fusion** + **VPC Flow-Log micro-segmentation**, **tag-based DSPM** (12 datastore kinds) + **AWS-resident secrets posture**, **AI-SPM** (AI execution-role blast radius fused into the graph), **CDR-lite streaming detection ingest → reachability-ranked incidents** + **cloud-forensics timeline**, a **grounded-RAG copilot** (answers only from the scan's own corpus), **external-vuln ingest** (SARIF/CycloneDX/SPDX → reachability re-rank), **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**, **hosted multi-account onboarding + live Postgres backend**, **multi-tenancy / workspaces + workspace-scoped RBAC + usage metering (MSSP)**, **air-gapped / zero-telemetry packaging + a Terraform onboarding module + an AWS Marketplace listing**, **an interactive product tour + shareable URL deep links** in the web console, **supply-chain ingest** — SBOM snapshot/diff + license policy + standalone OpenVEX/CSAF-VEX + a shell-only CI/CD image-scan GitHub Action + a below-admin `ingest` RBAC tier). The full 8-phase vuln/misconfig detection roadmap (`docs/OVERWATCH_VULN_ROADMAP.md`) is COMPLETE; per-release history is in `CHANGELOG.md`. (Note: `aws_live_scanner.VERSION` tracks the whole platform, incl. hosted-backend + packaging releases; the scanner engine itself is unchanged by the multi-tenancy / packaging slices. **Zero-telemetry** — every egress is AWS or an operator-opt-in seam, enforced by `tests/test_zero_telemetry.py`; see `NETWORK.md` + `docs/AIRGAP_RUNBOOK.md`. Offline packaging = pinned `requirements*.txt` + a `--no-index` `Dockerfile` + `scripts/build_offline_bundle.sh`; the fail-closed ASGI launcher is `cnapp_server.py`. Onboarding via CFN **or** the parity-tested `deploy/terraform/scanner-role/`; distributed as a self-hosted Marketplace container (`deploy/marketplace/`) priced on accounts-under-management.)
+- **OverWatch — Live CNAPP** (`aws_live_scanner.py` v2.31.0) -- live AWS account audit via boto3 (**296 severity-mapped checks across 44 sections**, **222 actionable checks each with a full risk/impact/step-by-step remediation write-up**, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure + L7 reachability engine**, **deep-plane ingestion + flagship attack paths**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing + least-privilege policy generation**, **agentless side-scan CWPP** (Linux OS-pkg + language-dep + container-image + Lambda + managed-engine-EOL + Windows-via-SSM), **agentless KSPM/KIEM** (CIS-EKS + K8s RBAC + IRSA cross-plane) + **Fargate task fusion** + **VPC Flow-Log micro-segmentation**, **tag-based DSPM** (12 datastore kinds) + **AWS-resident secrets posture**, **AI-SPM** (AI execution-role blast radius fused into the graph), **CDR-lite streaming detection ingest → reachability-ranked incidents** + **cloud-forensics timeline**, a **grounded-RAG copilot** (answers only from the scan's own corpus), **external-vuln ingest** (SARIF/CycloneDX/SPDX → reachability re-rank), **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**, **hosted multi-account onboarding + live Postgres backend**, **multi-tenancy / workspaces + workspace-scoped RBAC + usage metering (MSSP)**, **air-gapped / zero-telemetry packaging + a Terraform onboarding module + an AWS Marketplace listing**, **an interactive product tour + shareable URL deep links** in the web console, **supply-chain ingest** — SBOM snapshot/diff + license policy + standalone OpenVEX/CSAF-VEX + a shell-only CI/CD image-scan GitHub Action + a below-admin `ingest` RBAC tier), **agentless ECR registry enumeration + opt-in layer-pull** (Tier-A native scan findings across all tagged images + Tier-B own-SBOM CVEs behind a two-key `CnappImageLayerPull` grant, converging on one ECRImage node, persisting as diffable snapshots; the hardened `aws_layer_fetch` egress seam). The full 8-phase vuln/misconfig detection roadmap (`docs/OVERWATCH_VULN_ROADMAP.md`) is COMPLETE; per-release history is in `CHANGELOG.md`. (Note: `aws_live_scanner.VERSION` tracks the whole platform, incl. hosted-backend + packaging releases; the scanner engine itself is unchanged by the multi-tenancy / packaging slices. **Zero-telemetry** — every egress is AWS or an operator-opt-in seam, enforced by `tests/test_zero_telemetry.py`; see `NETWORK.md` + `docs/AIRGAP_RUNBOOK.md`. Offline packaging = pinned `requirements*.txt` + a `--no-index` `Dockerfile` + `scripts/build_offline_bundle.sh`; the fail-closed ASGI launcher is `cnapp_server.py`. Onboarding via CFN **or** the parity-tested `deploy/terraform/scanner-role/`; distributed as a self-hosted Marketplace container (`deploy/marketplace/`) priced on accounts-under-management.)
 - **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
 - **Exposure Oracle** (`aws_exposure.py`) -- pure, dependency-free internet-reachability core (SG ∩ stateless NACL ∩ IGW route ∩ public-IP)
 - **Deep-Plane Core** (`aws_deepplane.py`) -- pure Inspector/Macie/GuardDuty/Access-Analyzer parsers + the CAN_READ_DATA object-probe matcher
@@ -43,7 +43,9 @@ no code rename.) The repo also includes a separate pre-deploy IaC static scanner
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.30.0 (boto3, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem+least-priv, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, AI-SPM, CDR, forensics, copilot, vuln-ingest, supply-chain)
+├── aws_live_scanner.py      # Live audit scanner v2.31.0 (boto3, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem+least-priv, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, AI-SPM, CDR, forensics, copilot, vuln-ingest, supply-chain, ecr-registry)
+├── aws_registry_sbom.py     # ECR registry side-scan — select/pull/scan images → own SBOM + CVEs, pure (Slice-5 Tier B)
+├── aws_layer_fetch.py       # The hardened ECR layer-blob GET seam (HTTPS + *.amazonaws.com only, redirect-revalidated, byte-capped), allowlisted
 ├── aws_remediate.py         # Remediation engine — prioritized plan (reuses minimal_cut/ChokePoint) + remediation-as-code + exports, pure
 ├── aws_codetocloud.py       # Code-to-cloud — IaC index (TF block extractor + CFN parse) + tiered T1–T5 matcher, pure
 ├── aws_finding_detail.py    # Finding detail — risk/impact/step-by-step remediation for all 222 actionable checks, pure offline data (GENERATED)
@@ -141,7 +143,7 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.30.0)
+## Live Audit Scanner (`aws_live_scanner.py` v2.31.0)
 
 - **Type**: Live AWS account audit via boto3 (a full CNAPP)
 - **Lines**: ~12,300
@@ -694,9 +696,26 @@ though the scanner engine is untouched.
   hub) ships the CI path. New viewer routes `GET /accounts/{id}/sbom/{subjects,snapshots,diff}`,
   `/components`, `/license-findings`, `/vex`; a **Supply Chain** console screen. 11 adversarial
   defects fixed (HIGH purl-blind VEX over-suppression → product-wide-only; cross-account snapshot
-  collision → `f"{account}:{doc_id}"`; epoch-tie merge; license AND-join precedence; …). *(ECR
-  registry enumeration + opt-in layer-pull — the only piece needing a new IAM grant — is a
-  fast-follow Slice-5.)*
+  collision → `f"{account}:{doc_id}"`; epoch-tie merge; license AND-join precedence; …).
+- **Slice 5 — agentless ECR registry enumeration + opt-in layer-pull** (v2.31.0) — closes the
+  supply-chain loop: OverWatch scans the registry itself, not only CI-pushed SBOMs. **Tier A**
+  (always-on, no new grant) widens CNT-02 to the newest-N *tagged* images per repo (bounded per
+  repo + a per-scan aggregate budget `_ecr_budget`) reading Amazon's native basic/enhanced scan
+  findings, + registry scan-mode detection. **Tier B** (opt-in **two-key**: `--side-scan-images`
+  + the `CnappImageLayerPull` grant) pulls layers → own SBOM→OSV pipeline (Inspector-independent)
+  via new pure `aws_registry_sbom.py`; new checks **CWPP-05** (HIGH) / **CWPP-06** (CRITICAL, KEV)
+  filtered to CRIT/HIGH-or-KEV; native + own-SBOM CVEs MERGE-converge on the same `ECRImage` node
+  (split by `scan_source`) and persist as diffable Slice-4 snapshots. A **registry-only** image
+  (no inbound RUNS_IMAGE) carries `HAS_VULN` but never enters `E_PATH` — shift-left, never a false
+  CRITICAL (`aws_correlate.py` byte-frozen; `SCHEMA_VERSION` stays 8). The one new network primitive
+  is the hardened, allowlisted `aws_layer_fetch.http_get` (HTTPS + `*.amazonaws.com` only,
+  redirect-revalidated, byte-capped, short-read fail-closed). New viewer routes
+  `GET /accounts/{id}/registry/{repos,images}`; a console **Registry** tab. IAM: `CnappImageLayerPull`
+  in CFN + count-gated Terraform (`enable_image_layer_pull`, default false, repo-scoped + tag-gated
+  on `cnapp:imagescan`; parity-tested incl. Resource/Condition). **20 adversarial defects → 18 fixed +
+  regression-tested** (HIGH: redirect-follow SSRF bypass, truncated-read partial bytes, partial-rootfs
+  false-clean, CNT-02-in-posture; …); 2 LOW dropped (CFN block-scoped parity — impractical with the
+  opt-in comment prose). Full suite **1811**.
 
 ### Detailed finding reports (`aws_finding_detail.py`, v2.19.0)
 

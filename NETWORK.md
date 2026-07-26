@@ -21,6 +21,7 @@ Every outbound connection made by OverWatch falls into exactly one of two classe
 | Seam | Outbound connector notifications (Jira / Slack / PagerDuty / Splunk / webhook) | `cnapp_connectors.default_http_post` (`cnapp_connectors.py`) | operator's ticketing/SIEM host | **connectors `enabled=0`** | unused (leave disabled) |
 | Seam | Kubernetes API reads for KSPM/KIEM (Layer B) | `aws_kube.default_k8s_get` (`aws_kube.py`) | operator's EKS API endpoint | **opt-in** | unused, or in-VPC EKS |
 | Seam | Container-image layer fetch (agentless image side-scan) | `aws_sidescan_image.fetch_ecr_layers` (injected `http_get`) | operator's ECR | **opt-in** | in-VPC ECR endpoint |
+| Seam | ECR **registry** layer-blob GET (Slice-5 Tier-B; the shipped default `http_get`) | `aws_layer_fetch.http_get` (`aws_layer_fetch.py`) | operator's ECR (presigned S3 URL) | **opt-in** (`--side-scan-images` + `CnappImageLayerPull` grant) | in-VPC S3/ECR endpoint |
 | Seam | Lambda artifact fetch | `aws_sidescan_lambda.fetch_lambda_artifact` (injected `http_get`) | operator's AWS | **opt-in** | in-VPC |
 | Seam | Grounded copilot LLM | `PlatformService(copilot_llm=…)` (`cnapp_service.py`) | operator's LLM endpoint | **`None` → offline extractive** | unused, or in-VPC model |
 | Seam | AWS Marketplace metering (optional) | `cnapp_marketplace_metering` → `marketplacemetering:MeterUsage` | AWS (metering) | **opt-in, off by default** | unused (use a contract/private-offer SKU) |
@@ -35,10 +36,15 @@ Every outbound connection made by OverWatch falls into exactly one of two classe
 - **Kubernetes egress (`default_k8s_get`)**: TLS **pinned to the cluster's own CA**
   (`ssl.create_default_context(cadata=…)`), **read-only GET**, fails open (returns
   `None`) on any error.
+- **ECR registry layer GET (`aws_layer_fetch.http_get`)**: **HTTPS-only** and
+  **`*.amazonaws.com`-only** (the presigned ECR/S3 layer host), TLS verified against the
+  system trust store, a hard per-layer **byte cap**, and a **timeout**; any deviation raises
+  `LayerFetchError` so the caller fail-CLOSES the image (never a partial rootfs). Off unless
+  **both** `--side-scan-images` and the opt-in `CnappImageLayerPull` grant are present.
 - **Network primitives** (`urllib.request`, `ssl`, `socket`, `http.client`, …) may be
-  imported by **only two files** — `aws_kube.py` and `cnapp_connectors.py`. Every other
-  module is stdlib/boto3 only. (`urllib.parse` — URL string encoding — is not network
-  I/O and is used freely.)
+  imported by **only three files** — `aws_kube.py`, `cnapp_connectors.py`, and
+  `aws_layer_fetch.py`. Every other module is stdlib/boto3 only. (`urllib.parse` — URL
+  string encoding — is not network I/O and is used freely.)
 
 ## Air-gapped posture
 

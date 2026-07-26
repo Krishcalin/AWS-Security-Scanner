@@ -428,6 +428,15 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     def vex_statements(account_id: str):
         return service.list_vex_statements(account_id)
 
+    # ── Slice-5: agentless ECR registry views ────────────────────────────────
+    @app.get("/accounts/{account_id}/registry/repos", dependencies=[Depends(account_gate("viewer"))])
+    def registry_repos(account_id: str):
+        return service.list_registry_repos(account_id)
+
+    @app.get("/accounts/{account_id}/registry/images", dependencies=[Depends(account_gate("viewer"))])
+    def registry_images(account_id: str, repo: Optional[str] = None):
+        return service.list_registry_images(account_id, repo=repo)
+
     @app.post("/accounts/{account_id}/vulns/refresh", dependencies=[Depends(account_gate("admin"))])
     def vulns_refresh(account_id: str):
         try:

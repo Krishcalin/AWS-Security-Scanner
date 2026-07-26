@@ -55,6 +55,12 @@ variable "enable_eks_kspm" {
   description = "Create a read-only EKS access entry (AmazonEKSViewPolicy) for the KSPM/KIEM in-cluster layer on each cluster in eks_cluster_names."
 }
 
+variable "enable_image_layer_pull" {
+  type        = bool
+  default     = false
+  description = "ECR registry image layer-pull (Slice-5 Tier B, --side-scan-images): reads image layer bytes (a workload-DATA read class) tag-scoped to cnapp:imagescan. Off by default."
+}
+
 variable "eks_cluster_names" {
   type        = list(string)
   default     = []

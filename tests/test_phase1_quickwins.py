@@ -322,7 +322,12 @@ _REPO = {"repositoryName": "app",
          "encryptionConfiguration": {"encryptionType": "AES256"}}
 
 
-def test_cnt_02_ingests_high_critical_from_newest_image():
+def _hv_digests(s):
+    return "".join((e.get("dst", "") + e.get("src", "")) for e in s.graph.edges("HAS_VULN"))
+
+
+def test_cnt_02_ingests_high_critical_across_tagged_images():
+    # Tier-A default sweeps every tagged image (was: newest image only).
     s = _ecr_scanner(
         [_REPO],
         images=[{"imageDigest": "sha256:new", "imagePushedAt": 100, "imageTags": ["v2"]},
@@ -330,21 +335,54 @@ def test_cnt_02_ingests_high_critical_from_newest_image():
         findings={"findings": [
             {"name": "CVE-2024-1", "severity": "CRITICAL"},
             {"name": "CVE-2024-2", "severity": "HIGH"},
-            {"name": "CVE-2024-3", "severity": "MEDIUM"}]})   # filtered out
+            {"name": "CVE-2024-3", "severity": "MEDIUM"}]})   # MEDIUM filtered out
     s._check_ecr()
     c2 = [r for r in s.results if r.check_id == "CNT-02" and r.status == "FAIL"]
-    assert len(c2) == 2 and all("app:v2" == r.resource for r in c2)
+    assert len(c2) == 4                                       # 2 CVEs x 2 tagged images
+    assert {r.resource for r in c2} == {"app:v2", "app:v1"}
     st = s.graph.stats()
     assert "ECRImage" in st["node_kinds"] and "HAS_VULN" in st["edge_kinds"]
-    # the newest image (by imagePushedAt) is the one scanned
-    assert any("sha256:new" in (e.get("dst", "") + e.get("src", ""))
-               for e in s.graph.edges("HAS_VULN"))
+    d = _hv_digests(s)
+    assert "sha256:new" in d and "sha256:old" in d           # both images enriched
+
+
+def test_cnt_02_newest_first_cap():
+    # ecr_scan_max_images caps to the newest-N tagged images (newest-first ordering).
+    s = _ecr_scanner(
+        [_REPO],
+        images=[{"imageDigest": "sha256:new", "imagePushedAt": 100, "imageTags": ["v2"]},
+                {"imageDigest": "sha256:old", "imagePushedAt": 50, "imageTags": ["v1"]}],
+        findings={"findings": [{"name": "CVE-2024-1", "severity": "CRITICAL"}]})
+    s.ecr_scan_max_images = 1
+    s._check_ecr()
+    c2 = [r for r in s.results if r.check_id == "CNT-02" and r.status == "FAIL"]
+    assert len(c2) == 1 and all(r.resource == "app:v2" for r in c2)   # newest tag only
+    d = _hv_digests(s)
+    assert "sha256:new" in d and "sha256:old" not in d
+
+
+def test_cnt_02_untagged_images_skipped():
+    # G1: untagged images (usually orphaned build artifacts) are never enriched.
+    s = _ecr_scanner(
+        [_REPO],
+        images=[{"imageDigest": "sha256:untagged", "imagePushedAt": 100}],   # no imageTags
+        findings={"findings": [{"name": "CVE-2024-1", "severity": "CRITICAL"}]})
+    s._check_ecr()
+    assert not any(r.check_id == "CNT-02" for r in s.results)
+
+
+def test_ecr_scan_mode_recorded():
+    s = _ecr_scanner([_REPO], images=[])
+    s._clients["ecr:us-east-1"].get_registry_scanning_configuration.return_value = {
+        "scanningConfiguration": {"scanType": "ENHANCED"}}
+    s._check_ecr()
+    assert s._ecr_scan_mode == "ENHANCED"
 
 
 def test_cnt_02_enhanced_findings_shape():
     s = _ecr_scanner(
         [_REPO],
-        images=[{"imageDigest": "sha256:e", "imagePushedAt": 1, "imageTags": []}],
+        images=[{"imageDigest": "sha256:e", "imagePushedAt": 1, "imageTags": ["e1"]}],
         findings={"enhancedFindings": [
             {"severity": "HIGH",
              "packageVulnerabilityDetails": {"vulnerabilityId": "CVE-2025-9"}}]})
@@ -354,7 +392,7 @@ def test_cnt_02_enhanced_findings_shape():
 
 def test_cnt_02_scan_not_found_is_silent():
     s = _ecr_scanner([_REPO],
-                     images=[{"imageDigest": "sha256:z", "imagePushedAt": 1}],
+                     images=[{"imageDigest": "sha256:z", "imagePushedAt": 1, "imageTags": ["z1"]}],
                      findings_exc=RuntimeError("ScanNotFoundException"))
     s._check_ecr()
     assert not any(r.check_id == "CNT-02" for r in s.results)
@@ -757,7 +795,9 @@ def test_cnt_02_datetime_pushed_at_no_crash_and_scan_source():
     assert hv[0]["source"].startswith(_REPO["repositoryUri"])
     assert hv[0]["source"] != "ecr-native-scan"
     assert hv[0].get("scan_source") == "ecr-native-scan"
-    assert "sha256:new" in hv[0]["source"]   # newest image chosen despite the missing field
+    # all tagged images are enriched now; the newest (despite a missing pushedAt on a
+    # sibling) is sorted first and must be present among the HAS_VULN sources
+    assert any("sha256:new" in e["source"] for e in hv)
 
 
 # aws_graph.to_dict hardening — a stray edge prop can't clobber the endpoint keys

@@ -480,3 +480,28 @@ export interface VexStatementRow {
   first_seen_epoch: number
   last_seen_epoch: number
 }
+
+// ── Slice-5: agentless ECR registry views ──────────────────────────────────
+export interface RegistryImage {
+  node_id: string
+  repository: string
+  image_uri: string
+  digest: string
+  subject_key: string
+  deployed: boolean
+  scan_sources: string[]
+  vuln_count: number
+  critical: number
+  high: number
+}
+
+export interface RegistryRepo {
+  repository: string
+  image_uri: string
+  images: number
+  deployed: number
+  critical: number
+  high: number
+  vuln_count: number
+  findings: { check_id: string; status: string; severity?: string; message?: string }[]
+}

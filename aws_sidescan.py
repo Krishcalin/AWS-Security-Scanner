@@ -109,11 +109,20 @@ def _norm_tar_path(name: str) -> Optional[str]:
 
 def merge_layers(layers: List[bytes], *, max_file_bytes: int = 10_000_000,
                  max_total_bytes: int = 1_000_000_000, max_entries: int = 500_000,
-                 notes: Optional[List[str]] = None) -> Dict[str, bytes]:
+                 notes: Optional[List[str]] = None,
+                 stats: Optional[dict] = None) -> Dict[str, bytes]:
     """Overlay OCI/Docker image layers (each a gzip/tar changeset, BOTTOM-TO-TOP)
     into a merged absolute-path -> content map, honoring whiteouts. PURE and
     fail-open: an unreadable layer/member becomes a note, never a crash. Feeds
-    ImageLayerExtractor so the UNCHANGED sidescan pipeline runs on the image."""
+    ImageLayerExtractor so the UNCHANGED sidescan pipeline runs on the image.
+
+    ``stats`` (optional, mutated): records ``dropped_layers`` (whole layers that failed
+    to open — a corrupt blob) and ``truncated`` (the entry cap was hit) so a caller that
+    needs a COMPLETE rootfs (the registry side-scan) can fail-closed rather than scan a
+    partial filesystem. Callers that tolerate a partial rootfs simply omit ``stats``."""
+    def _drop(key):
+        if stats is not None:
+            stats[key] = stats.get(key, 0) + 1 if key == "dropped_layers" else True
     # merged values are bytes (a real file) OR ("\x00sym", target) (a symlink), so that
     # symlinks participate in per-layer overlay: an upper real file / whiteout at the
     # same path overrides the lower symlink (fixed vs an end-of-merge unconditional bake).
@@ -122,12 +131,14 @@ def merge_layers(layers: List[bytes], *, max_file_bytes: int = 10_000_000,
     entries = 0
     for blob in layers:
         if entries >= max_entries:
+            _drop("truncated")
             break
         try:
             tf = tarfile.open(fileobj=io.BytesIO(blob), mode="r:*")
         except Exception as e:
             if notes is not None:
                 notes.append(f"image layer unreadable: {e}")
+            _drop("dropped_layers")
             continue
         files_this: Dict[str, bytes] = {}
         layer_files: Dict[str, bytes] = {}    # for in-layer hardlink resolution
@@ -140,6 +151,7 @@ def merge_layers(layers: List[bytes], *, max_file_bytes: int = 10_000_000,
         for m in members:
             entries += 1
             if entries > max_entries:
+                _drop("truncated")
                 break
             try:
                 name = m.name
@@ -245,8 +257,11 @@ class ImageLayerExtractor(DictExtractor):
     pure implementations — an image scans byte-identically to the test double."""
 
     def __init__(self, layers: List[bytes], *, notes: Optional[List[str]] = None,
-                 **caps):
-        super().__init__(merge_layers(layers, notes=notes, **caps))
+                 stats: Optional[dict] = None, **caps):
+        # `stats` (if given) is populated by merge_layers with dropped_layers/truncated so a
+        # caller needing a complete rootfs can fail-closed. self.stats is always present.
+        self.stats: dict = stats if stats is not None else {}
+        super().__init__(merge_layers(layers, notes=notes, stats=self.stats, **caps))
 
 
 # ── data shapes ──────────────────────────────────────────────────────────────

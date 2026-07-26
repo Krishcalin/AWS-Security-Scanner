@@ -687,6 +687,28 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Prevent recurrence: add a pre-commit/CI secret scanner and an SCP that denies creation of long-lived IAM access keys, favoring short-lived role credentials",
         ],
     },
+    "CWPP-05": {
+        "risk": "OverWatch pulled this ECR image's layers, reconstructed its filesystem, and found a HIGH/CRITICAL OS- or application-package CVE by running its own SBOM against the OSV/EPSS/KEV feed -- coverage that does NOT depend on Amazon Inspector or basic scanning being enabled on the registry. A vulnerable image in the registry is a supply-chain liability the moment it is deployed: every task, pod, or function that runs this digest inherits the flaw. Catching it at the registry is shift-left -- you fix the image once, before it ever reaches a reachable workload.",
+        "impact": "A vulnerable image that reaches production gives an attacker on any workload running it a code-execution or privilege-escalation foothold; left in the registry it will be redeployed and re-introduce the flaw across the fleet.",
+        "steps": [
+            "Confirm the vulnerable package/version and the affected image digest from the finding, and check whether any live task/pod/function runs this digest (a RUNS_IMAGE edge in the graph marks a deployed image)",
+            "Rebuild the image on a patched base: bump the base image and the vulnerable package in the Dockerfile, rebuild, and push a new digest to ECR",
+            "Roll deployments to the new digest, then retire the vulnerable image once nothing references it: aws ecr batch-delete-image --repository-name <REPO> --image-ids imageDigest=<DIGEST>",
+            "Add a repository lifecycle policy so stale vulnerable images expire automatically: aws ecr put-lifecycle-policy --repository-name <REPO> --lifecycle-policy-text <POLICY>",
+            "Prevent recurrence: enable ECR enhanced scanning (aws ecr put-registry-scanning-configuration) and gate CI so an image with a HIGH/CRITICAL CVE never ships",
+        ],
+    },
+    "CWPP-06": {
+        "risk": "OverWatch's agentless image side-scan found a CVE in this ECR image that is on the CISA KEV catalog -- actively exploited in the wild with public exploit code -- baked into a registry artifact. Any environment that deploys this digest ships a confirmed, weaponized flaw, and automated exploitation of KEV bugs is routine, so the window between deploy and compromise is short. This is the most urgent registry finding the side-scan can produce.",
+        "impact": "A KEV CVE in a deployed image commonly leads to rapid full compromise of every workload running it -- remote code execution, theft of the task/pod execution role, ransomware, or a lateral-movement beachhead -- and the registry keeps re-seeding it until the image is rebuilt.",
+        "steps": [
+            "Identify every workload running the affected digest immediately (RUNS_IMAGE edges / ECS/EKS/Lambda deployments) and treat internet-reachable ones as urgent",
+            "Rebuild the image on a patched base and push a new digest: patch the Dockerfile base/package, rebuild, and push to ECR",
+            "Roll all deployments to the patched digest, then block the exploited image: aws ecr batch-delete-image --repository-name <REPO> --image-ids imageDigest=<DIGEST>",
+            "Assume possible exploitation of any already-running instance of the image: hunt in GuardDuty/CloudTrail and rotate the execution-role credentials and secrets it could reach",
+            "Prevent recurrence: enable ECR enhanced (registry) scanning, subscribe patch automation to the CISA KEV feed, and enforce a CI gate that fails the build on a KEV CVE",
+        ],
+    },
     "DATA-01": {
         "risk": "This check FAILs when Amazon Macie classifies an S3 bucket as a crown jewel -- it holds sensitive data (PII, credentials, financial or health records) at a given Macie sensitivity score. It is a data-context signal, not a misconfiguration by itself: it tells you exactly where your high-value data lives so its exposure, encryption, and access controls warrant the strictest scrutiny. Attackers prioritize precisely these buckets; a crown-jewel bucket that is also public, over-shared, or unencrypted is a top-priority breach target, so confirming intent and hardening it is essential.",
         "impact": "Sensitive regulated data has been positively identified in this bucket, so any access-control or encryption weakness on it converts directly into a reportable data breach with regulatory and reputational consequences.",
