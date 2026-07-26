@@ -46,7 +46,7 @@ export function Sidebar() {
       </nav>
 
       <div className="p-3 border-t border-line flex items-center justify-between text-[11px] text-ink3 font-mono">
-        <span>v2.31.0</span>
+        <span>v2.32.0</span>
         <span className="rounded px-1.5 py-0.5" style={{ background: 'var(--panel2)' }}>
           {DATA_MODE === 'live' ? 'live' : 'sample'}
         </span>

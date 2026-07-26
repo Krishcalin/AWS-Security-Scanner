@@ -4,6 +4,30 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.32.0] — 2026
+
+**Hub hardening: a psycopg3 connection pool for the Postgres backend** (the last deferred
+scale item). Until now `PostgresBackend` held one connection and serialized *all* hub DB
+work on a single process-wide lock — under the FastAPI threadpool, every request queued
+behind every other. No behavior change; the sqlite path is byte-identical.
+
+### Changed
+- `cnapp_backend.Backend` gains a thread-local connection seam (`_conn()`): on the pooled
+  path each operation borrows a connection from a `psycopg_pool.ConnectionPool` (real
+  concurrency, no global lock), while a `transaction()` checks out ONE connection for its
+  whole duration so nested ops reuse it and different threads run in parallel. The sqlite /
+  injected-connection path is unchanged (single connection under the reentrant lock).
+- `PostgresBackend.connect()` builds the pool (`min=2`/`max=10`, env-overridable via
+  `CNAPP_DB_POOL_MIN`/`CNAPP_DB_POOL_MAX`) and **fails loud** at startup if Postgres is
+  unreachable — never a silent sqlite fallback. The pool's `configure` callback forces
+  `autocommit=True` on every connection (psycopg_pool defaults to `False`), preserving the
+  no-idle-in-transaction guarantee the single-connection design had.
+- `record_health`'s cross-connection read-modify-write (the `consecutive_failures` backoff)
+  is now wrapped in `Backend.serialized()` — a pooled `transaction()` gives per-row
+  atomicity but not mutual exclusion, so two concurrent validations on two pooled
+  connections would otherwise lose an increment. On sqlite it is a reentrant no-op.
+- `psycopg-pool==3.3.1` was already pinned; no new dependency. Full suite **1812 passing**.
+
 ## [2.31.0] — 2026
 
 **Phase-4 Slice-5: agentless ECR registry enumeration + opt-in layer-pull.** Closes the

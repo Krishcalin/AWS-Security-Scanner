@@ -4,6 +4,7 @@ path with an injected fake psycopg3 connection (no live server), the
 StateBackendUnavailable contract, and the drift-reset self-check."""
 import os
 import sys
+from contextlib import contextmanager
 
 import pytest
 
@@ -172,18 +173,29 @@ def test_scan_counter_reset_matches_defaulted_columns():
     assert set(S.SCAN_COUNTER_RESET.keys()) == omitted
 
 
-# ── regression (adversarial): autocommit=True + real transaction() ───────────
-def test_connect_uses_autocommit_true(monkeypatch):
-    """A shared psycopg conn MUST be autocommit=True — else reads leak
-    'idle in transaction' and a failed statement poisons the connection."""
-    import psycopg
+# ── regression (adversarial): pooled connect + configure forces autocommit ───
+def test_connect_builds_pool_configure_forces_autocommit(monkeypatch):
+    """connect() now builds a psycopg_pool.ConnectionPool; its per-connection
+    `configure` MUST force autocommit=True (the pool defaults to False) — else a
+    depth-0 read leaks 'idle in transaction' and a failed statement poisons the conn."""
+    import psycopg_pool
     captured = {}
-    def fake_connect(dsn, **kw):
-        captured.update(kw); captured["dsn"] = dsn
-        return FakeConn()
-    monkeypatch.setattr(psycopg, "connect", fake_connect)
-    B.PostgresBackend.connect("postgresql://u@h/db")
-    assert captured["autocommit"] is True
+
+    class FakePool:
+        def __init__(self, **kw):
+            captured.update(kw)
+
+        def open(self, **kw):
+            captured["opened"] = True
+
+    monkeypatch.setattr(psycopg_pool, "ConnectionPool", FakePool)
+    be = B.PostgresBackend.connect("postgresql://u@h/db")
+    assert be.pool is not None and captured.get("opened") is True
+    assert captured["open"] is False and "configure" in captured
+    # run the configure callback on a fake conn: it must force autocommit + a row factory
+    fc = FakeConn()
+    captured["configure"](fc)
+    assert fc.autocommit is True and fc.row_factory is not None
 
 
 def test_transaction_goes_through_psycopg_transaction_cm():
@@ -203,6 +215,36 @@ def test_reads_do_not_open_a_transaction():
     fc.stub("FROM accounts", ["account_id"], [(ACCT,)])
     _pg(fc).query_one("SELECT * FROM accounts WHERE account_id=?", (ACCT,))
     assert fc.transactions == 0 and fc.rollbacks == 0
+
+
+# ── pooled path: ops borrow a connection; a transaction checks out ONE conn ───
+class _FakePool:
+    """A minimal psycopg_pool.ConnectionPool stand-in over one FakeConn."""
+    def __init__(self, conn):
+        self._c = conn
+        self.closed = False
+
+    @contextmanager
+    def connection(self):
+        yield self._c
+
+    def close(self):
+        self.closed = True
+
+
+def test_pooled_backend_borrows_and_transaction_uses_one_conn():
+    fc = FakeConn()
+    be = B.PostgresBackend(pool=_FakePool(fc))
+    assert be.pool is not None and be.raw is None
+    be.execute("UPDATE t SET a=? WHERE b=?", ("x", "y"))     # non-txn: borrow + commit
+    c0 = fc.commits
+    assert c0 >= 1
+    with be.transaction():                                    # one conn for the whole block
+        be.execute("UPDATE t SET a=?", ("z",))
+        assert fc.commits == c0                               # not committed mid-transaction
+    assert fc.commits == c0 + 1 and fc.transactions == 1      # conn.transaction() committed once
+    be.close()
+    assert be.pool.closed is True                             # close() closes the pool
 
 
 # ── regression: SQLite >= 3.24 guard is centralized in backend_for ───────────

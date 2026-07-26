@@ -205,7 +205,13 @@ class AccountRegistry:
         ts = make_scan_ts(now_epoch)
         err_code = next((c.error_code for c in result.checks
                          if c.status == "fail" and c.error_code), None)
-        with self._be.transaction():        # atomic read-modify-write (locked)
+        # serialized() across the pool: the consecutive_failures increment is a cross-
+        # connection read-modify-write; a pooled transaction() alone gives per-row atomicity
+        # but not mutual exclusion, so two concurrent UNAUTHORIZED validations on two pooled
+        # connections would each read N and write N+1 (lost update). On sqlite it is a
+        # reentrant no-op. record_health is infrequent (validation cadence), so serializing
+        # it does not touch the concurrent scan/findings path.
+        with self._be.serialized(), self._be.transaction():   # atomic read-modify-write
             prev = self._be.query_one("SELECT consecutive_failures FROM connection_health "
                                       "WHERE account=? AND role_arn=?", (account, role_arn))
             prev_cf = int(prev["consecutive_failures"]) if prev else 0
