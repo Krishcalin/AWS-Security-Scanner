@@ -1,5 +1,5 @@
 import { createContext, useContext, useCallback, type ReactNode } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import { PANEL_PARAMS } from '../lib/deeplink'
 
 // The account/region scope the whole console is viewed through: the org aggregate

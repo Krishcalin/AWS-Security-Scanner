@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom'
+import { NavLink } from 'react-router'
 import { NAV_MAIN, NAV_ADMIN, type NavItem } from '../lib/nav'
 import { DATA_MODE } from '../api/client'
 

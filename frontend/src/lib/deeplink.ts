@@ -6,7 +6,7 @@
 // drops the user's `?scope=` or a filter). Panels default to `replace` history so the
 // browser Back button isn't polluted by every open/close.
 import { useCallback } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import type { AttackPath, IngestedVuln } from '../api/types'
 
 /** The whitelist of URL params the panels + tour own. The tour cleans exactly these

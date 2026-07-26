@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router'
 import { PANEL_PARAMS } from '../deeplink'
 import { resolveAnchor, waitForAnchor, scrollAnchorIntoView, trackRect, reducedMotion } from './anchor'
 import { markTourSeen, saveResume, clearResume } from './storage'

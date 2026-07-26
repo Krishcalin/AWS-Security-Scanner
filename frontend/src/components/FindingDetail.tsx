@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { X, Copy, Check, Ticket, ShieldOff, FileCode2, Waypoints } from 'lucide-react'
 import { Chip } from './ui'
 import { SeverityChip } from './paths'
