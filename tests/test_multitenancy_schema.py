@@ -23,13 +23,13 @@ def _tables(be):
 
 
 def test_schema_version_is_8():
-    assert aws_state.SCHEMA_VERSION == 8
+    assert aws_state.SCHEMA_VERSION == 9
 
 
 def test_migration_creates_multitenancy_tables():
     r = _reg()
     assert NEW_TABLES <= _tables(r._be)
-    assert r._be.raw.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert r._be.raw.execute("PRAGMA user_version").fetchone()[0] == 9
 
 
 def test_ws_default_seeded():

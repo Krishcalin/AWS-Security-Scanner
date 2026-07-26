@@ -4,6 +4,42 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.33.0] — 2026
+
+**Multi-tenancy hardening: workspace-scoped connectors** (closes the last MSSP isolation
+gap). The connector framework was global — in a multi-tenant hub, tenant A could see,
+manage, and receive tenant B's connectors. Now each connector binds to exactly one
+workspace and every path is tenant-isolated. Single-tenant / no-`WorkspaceStore`
+deployments stay **byte-identical** (filters engage only when a `WorkspaceStore` is wired).
+
+### Added
+- `connector_workspace` binding table (`SCHEMA_VERSION 8→9`, sqlite + Postgres twins) — a
+  structural mirror of `workspace_accounts` (a *binding table*, not a column add, because
+  the migration mechanism is additive-`CREATE TABLE IF NOT EXISTS` only — the repo has zero
+  `ALTER TABLE`). Every pre-existing connector is backfilled to `ws-default` on open.
+- `connector_gate` (mirrors `account_gate`) on every `{connector_id}` route — a cross-tenant
+  or unknown connector returns **404** (existence-hiding, never 403). `POST /connectors`
+  binds the new connector to the caller's workspace in the same transaction; the id-less
+  reads (`GET /connectors`, `/notifications`, `/digests`) are filtered to the caller's
+  workspace. Superadmins retain a cross-tenant read view (no extra schema).
+- Delivery-path scoping: a scan of an account resolves *its* workspace, and `run_rules` /
+  `run_digest` load ONLY that workspace's connectors/rules/ledger — so a cross-tenant
+  delivery is structurally impossible (a foreign connector is absent from the match dict).
+
+### Fixed
+- A `rule_id` cross-read: a foreign rule id under your own connector previously returned the
+  *other* tenant's rule body at HTTP 200 — now 404 (the rule must belong to the connector).
+- **CDR needed no change** — detections are account-scoped and `/org/incidents` already fans
+  out over workspace-filtered accounts; a regression test locks it.
+- Read-only adversarial verification (10 agents) confirmed **5 defects → all fixed +
+  regression-tested**: (HIGH) `preview_rules` (the rule dry-run) loaded connectors/rules
+  globally, leaking another tenant's connector ids/names + rule ids — now scoped like
+  `run_rules`; (MED) `delete_workspace` ignored bound connectors → an opaque 500 and an
+  undeletable workspace — now a clean guard; (MED) the global-unique `connectors.name`
+  collision surfaced as a 500 and a weak existence oracle — now a clean 400 that never
+  discloses which tenant holds the name (per-workspace name uniqueness is a documented
+  follow-up needing an index-drop migration). Full suite **1823 passing**.
+
 ## [2.32.0] — 2026
 
 **Hub hardening: a psycopg3 connection pool for the Postgres backend** (the last deferred

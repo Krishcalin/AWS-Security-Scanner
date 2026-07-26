@@ -11,11 +11,11 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"/>
   <img src="https://img.shields.io/badge/license-GPL--3.0-orange?style=flat-square" alt="GPL-3.0 License"/>
-  <img src="https://img.shields.io/badge/OverWatch-CNAPP%20v2.31.0-38bdf8?style=flat-square" alt="OverWatch CNAPP v2.31.0"/>
+  <img src="https://img.shields.io/badge/OverWatch-CNAPP%20v2.33.0-38bdf8?style=flat-square" alt="OverWatch CNAPP v2.33.0"/>
   <img src="https://img.shields.io/badge/pillars-CSPM%20%7C%20CIEM%20%7C%20CWPP%20%7C%20DSPM%20%7C%20AI--SPM%20%7C%20CDR-6366f1?style=flat-square" alt="CNAPP pillars"/>
   <img src="https://img.shields.io/badge/compliance-CIS%20%7C%20PCI--DSS%20%7C%20HIPAA%20%7C%20SOC2%20%7C%20NIST-purple?style=flat-square" alt="5 Compliance Frameworks"/>
   <img src="https://img.shields.io/badge/checks-296%20severity--mapped-red?style=flat-square" alt="296 severity-mapped checks"/>
-  <img src="https://img.shields.io/badge/tests-1811%20passing-brightgreen?style=flat-square" alt="1811 Tests"/>
+  <img src="https://img.shields.io/badge/tests-1823%20passing-brightgreen?style=flat-square" alt="1823 Tests"/>
 </p>
 
 ---

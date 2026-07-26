@@ -90,6 +90,14 @@ class WorkspaceStore:
         if n:
             raise ValueError(f"workspace {workspace_id} still has {n} account(s); "
                              "reassign or offboard them first")
+        # connectors bind to a workspace independently of accounts; the connector_workspace FK
+        # is RESTRICT, so deleting a workspace with bound connectors would raise an opaque
+        # IntegrityError (500) and leave the workspace undeletable. Guard it the same way.
+        nc = dict(self._be.query_one(
+            "SELECT COUNT(*) c FROM connector_workspace WHERE workspace_id=?", (workspace_id,)))["c"]
+        if nc:
+            raise ValueError(f"workspace {workspace_id} still has {nc} connector(s); "
+                             "delete them first")
         with self._be.transaction():
             self._be.execute("DELETE FROM workspace_members WHERE workspace_id=?", (workspace_id,))
             self._be.execute("DELETE FROM workspaces WHERE workspace_id=?", (workspace_id,))
@@ -161,3 +169,25 @@ class WorkspaceStore:
         return [dict(r)["account_id"] for r in self._be.query_all(
             "SELECT account_id FROM workspace_accounts WHERE workspace_id=? ORDER BY account_id",
             (workspace_id,))]
+
+    # ── connector<->workspace binding (multi-tenancy) ────────────────────────────
+    def workspace_of_connector(self, connector_id: str) -> Optional[str]:
+        r = self._be.query_one(
+            "SELECT workspace_id FROM connector_workspace WHERE connector_id=?", (connector_id,))
+        return dict(r)["workspace_id"] if r else None
+
+    def bind_connector(self, connector_id: str, workspace_id: str, now_epoch: int) -> None:
+        """Bind a connector to a workspace (connector_id PK => exactly one workspace). A
+        re-bind to a DIFFERENT workspace is refused — a connector must never be silently
+        moved across tenants (the isolation invariant); re-binding to the SAME workspace is
+        an idempotent no-op. Callers wrap this in the same txn as upsert_connector."""
+        existing = self.workspace_of_connector(connector_id)
+        if existing is not None:
+            if existing != workspace_id:
+                raise ValueError(
+                    f"connector {connector_id} already bound to workspace {existing}")
+            return
+        self._be.execute(
+            "INSERT INTO connector_workspace(connector_id, workspace_id, created_at) "
+            "VALUES(?,?,?) ON CONFLICT (connector_id) DO NOTHING",
+            (connector_id, workspace_id, int(now_epoch)))

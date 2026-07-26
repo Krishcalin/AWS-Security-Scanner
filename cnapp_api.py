@@ -154,6 +154,18 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
             return scope
         return dep
 
+    def connector_gate(min_role: str):
+        """Role gate + tenant isolation for a connector-scoped route (the connector twin of
+        ``account_gate``): the caller must have ``min_role`` in the resolved workspace AND
+        the ``{connector_id}`` must belong to that workspace (or the caller is a superadmin).
+        A cross-tenant / unknown connector ⇒ 404 (existence-hiding), never 403."""
+        def dep(connector_id: str, scope: Scope = Depends(require(min_role))):
+            if not service.connector_in_scope(connector_id, workspace_id=scope.workspace_id,
+                                              is_superadmin=scope.principal.is_superadmin):
+                raise HTTPException(status_code=404, detail="connector not found")
+            return scope
+        return dep
+
     class OnboardReq(BaseModel):
         account_id: str = Field(pattern=r"^[0-9]{12}$")     # 422 on a malformed id
         region: str = "us-east-1"
@@ -513,41 +525,44 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     # ── connectors (admin mutate, viewer read) ────────────────────────────────
     # The connector control plane wields outbound HTTP + operator secrets, so every
     # mutation is admin; reads are viewer and NEVER return a secret (masked shape).
-    @app.post("/connectors", status_code=201, dependencies=[Depends(require("admin"))])
-    def create_connector(body: ConnectorReq, principal: Principal = Depends(_effective_principal)):
+    @app.post("/connectors", status_code=201)
+    def create_connector(body: ConnectorReq, scope: Scope = Depends(require("admin"))):
+        # no {connector_id} path param, so isolation is by BINDING the new connector to the
+        # caller's workspace on create (multi-tenant), not connector_gate.
         try:
             return service.create_connector(type=body.type, name=body.name,
                                             config=body.config, secret=body.secret,
-                                            created_by=principal.subject)
+                                            created_by=scope.principal.subject,
+                                            workspace_id=scope.workspace_id)
         except (ValueError, RuntimeError) as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    @app.get("/connectors", dependencies=[Depends(require("viewer"))])
-    def list_connectors():
-        return service.list_connectors()
+    @app.get("/connectors")
+    def list_connectors(scope: Scope = Depends(require("viewer"))):
+        return service.list_connectors(workspace_id=scope.workspace_id)
 
-    @app.get("/connectors/{connector_id}", dependencies=[Depends(require("viewer"))])
+    @app.get("/connectors/{connector_id}", dependencies=[Depends(connector_gate("viewer"))])
     def get_connector(connector_id: str):
         c = service.get_connector(connector_id)
         if not c:
             raise HTTPException(status_code=404, detail="connector not found")
         return c
 
-    @app.put("/connectors/{connector_id}", dependencies=[Depends(require("admin"))])
+    @app.put("/connectors/{connector_id}", dependencies=[Depends(connector_gate("admin"))])
     def update_connector(connector_id: str, body: ConnectorUpdateReq):
         try:
             return service.update_connector(connector_id, name=body.name, config=body.config)
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e))
 
-    @app.post("/connectors/{connector_id}/enable", dependencies=[Depends(require("admin"))])
+    @app.post("/connectors/{connector_id}/enable", dependencies=[Depends(connector_gate("admin"))])
     def enable_connector(connector_id: str, body: EnableReq):
         try:
             return service.set_connector_enabled(connector_id, body.enabled)
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e))
 
-    @app.post("/connectors/{connector_id}/rotate-secret", dependencies=[Depends(require("admin"))])
+    @app.post("/connectors/{connector_id}/rotate-secret", dependencies=[Depends(connector_gate("admin"))])
     def rotate_secret(connector_id: str, body: SecretReq):
         try:
             return service.rotate_connector_secret(connector_id, body.secret)
@@ -556,7 +571,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    @app.post("/connectors/{connector_id}/test", dependencies=[Depends(require("admin"))])
+    @app.post("/connectors/{connector_id}/test", dependencies=[Depends(connector_gate("admin"))])
     def test_connector(connector_id: str):
         try:
             return service.test_connector(connector_id)
@@ -564,7 +579,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
             raise HTTPException(status_code=404, detail=str(e))
 
     @app.delete("/connectors/{connector_id}", status_code=204,
-                dependencies=[Depends(require("admin"))])
+                dependencies=[Depends(connector_gate("admin"))])
     def delete_connector(connector_id: str):
         service.delete_connector(connector_id)
 
@@ -578,12 +593,12 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
             raise HTTPException(status_code=404, detail="account not found")
         return service.preview_rules(body.account_id)
 
-    @app.get("/connectors/{connector_id}/rules", dependencies=[Depends(require("viewer"))])
+    @app.get("/connectors/{connector_id}/rules", dependencies=[Depends(connector_gate("viewer"))])
     def list_rules(connector_id: str):
         return service.list_rules(connector_id)
 
     @app.post("/connectors/{connector_id}/rules", status_code=201,
-              dependencies=[Depends(require("admin"))])
+              dependencies=[Depends(connector_gate("admin"))])
     def create_rule(connector_id: str, body: RuleReq,
                     principal: Principal = Depends(_effective_principal)):
         try:
@@ -592,7 +607,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
             raise HTTPException(status_code=404, detail=str(e))
 
     @app.put("/connectors/{connector_id}/rules/{rule_id}",
-             dependencies=[Depends(require("admin"))])
+             dependencies=[Depends(connector_gate("admin"))])
     def update_rule(connector_id: str, rule_id: int, body: RuleReq):
         try:
             return service.update_rule(connector_id, rule_id, body.spec)
@@ -600,7 +615,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
             raise HTTPException(status_code=404, detail=str(e))
 
     @app.delete("/connectors/{connector_id}/rules/{rule_id}", status_code=204,
-                dependencies=[Depends(require("admin"))])
+                dependencies=[Depends(connector_gate("admin"))])
     def delete_rule(connector_id: str, rule_id: int):
         service.delete_rule(connector_id, rule_id)
 
@@ -609,24 +624,28 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     def notify_account(account_id: str):
         return service.notify_account(account_id)
 
-    @app.get("/connectors/{connector_id}/deliveries", dependencies=[Depends(require("viewer"))])
+    @app.get("/connectors/{connector_id}/deliveries", dependencies=[Depends(connector_gate("viewer"))])
     def deliveries(connector_id: str, account: Optional[str] = None,
                    status: Optional[str] = None):
         return service.list_deliveries(connector_id, account=account, status=status)
 
-    @app.get("/notifications", dependencies=[Depends(require("viewer"))])
-    def notifications(account: Optional[str] = None, status: Optional[str] = None):
-        return service.list_deliveries(None, account=account, status=status)
+    @app.get("/notifications")
+    def notifications(account: Optional[str] = None, status: Optional[str] = None,
+                      scope: Scope = Depends(require("viewer"))):
+        return service.list_deliveries(None, account=account, status=status,
+                                       workspace_id=scope.workspace_id)
 
     # ── drift-digest delivery audit + preview ─────────────────────────────────
-    @app.get("/connectors/{connector_id}/digests", dependencies=[Depends(require("viewer"))])
+    @app.get("/connectors/{connector_id}/digests", dependencies=[Depends(connector_gate("viewer"))])
     def connector_digests(connector_id: str, account: Optional[str] = None,
                           status: Optional[str] = None):
         return service.list_digests(connector_id, account=account, status=status)
 
-    @app.get("/digests", dependencies=[Depends(require("viewer"))])
-    def digests(account: Optional[str] = None, status: Optional[str] = None):
-        return service.list_digests(None, account=account, status=status)
+    @app.get("/digests")
+    def digests(account: Optional[str] = None, status: Optional[str] = None,
+                scope: Scope = Depends(require("viewer"))):
+        return service.list_digests(None, account=account, status=status,
+                                    workspace_id=scope.workspace_id)
 
     @app.post("/accounts/{account_id}/digest/preview", dependencies=[Depends(account_gate("admin"))])
     def digest_preview(account_id: str):
