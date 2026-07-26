@@ -80,7 +80,7 @@ import aws_winvuln
 import aws_finding_detail
 import aws_graph_neptune
 
-VERSION = "2.33.0"
+VERSION = "2.34.0"
 
 
 def _report_logo() -> str:
@@ -1713,6 +1713,7 @@ class AWSLiveScanner:
         self.flow_logs_window_hours = aws_flowlog.WINDOW_HOURS
         self._flow_read = None                      # test/prod seam: (logs, groups, q, s, e) -> rows|None
         self.vuln_db_path: Optional[str] = None
+        self.vuln_db_pubkey: Optional[str] = None   # opt-in: hex key or .pub path — verify the signed feed
         self._side_scan_report: Optional[Dict] = None
         self._backend_meta: Optional[Dict] = None
         self._graph_export_meta: Optional[Dict] = None
@@ -10770,12 +10771,52 @@ class AWSLiveScanner:
         self._vuln_db_loaded = True
         return bundle
 
+    def _resolve_vuln_db_pubkey(self) -> Optional[bytes]:
+        """The operator's Ed25519 feed-signing PUBLIC key, from --vuln-db-pubkey: either a
+        64-char hex string or a path to a .pub file. None => signature checking is off (the
+        feed loads unsigned, as before). Returns None on any malformed key (fail-safe)."""
+        pk = self.vuln_db_pubkey
+        if not pk:
+            return None
+        try:
+            raw = pk.strip()
+            if len(raw) == 64 and all(c in "0123456789abcdefABCDEF" for c in raw):
+                return bytes.fromhex(raw)
+            return bytes.fromhex(open(pk, encoding="utf-8").read().strip())
+        except Exception:
+            return None
+
     def _do_load_vuln_db(self):
         if not self.vuln_db_path:
             return None
         try:
-            with open(self.vuln_db_path, encoding="utf-8") as fh:
-                data = json.load(fh)
+            with open(self.vuln_db_path, "rb") as fh:
+                raw = fh.read()
+            # OPT-IN provenance check: when --vuln-db-pubkey is set, the feed MUST carry a valid
+            # Ed25519 detached signature (<path>.sig). Fail-CLOSED (reject the feed) on a bad or
+            # missing signature. Unsigned feeds still load when NO key is configured (back-compat).
+            if self.vuln_db_pubkey:
+                pub = self._resolve_vuln_db_pubkey()
+                if pub is None:
+                    # the operator opted INTO enforcement but the key won't resolve (bad hex /
+                    # unreadable .pub path) — reject, never silently downgrade to trust-anything.
+                    self._add("WARN", "CWPP-04", "SIDESCAN", "vuln-db",
+                              "--vuln-db-pubkey is set but could not be resolved (need a 64-char "
+                              "hex key or a readable .pub file); feed REJECTED (fail-closed)")
+                    return None
+                import aws_ed25519
+                sig_path = self.vuln_db_path + ".sig"
+                try:
+                    sig = bytes.fromhex(open(sig_path, encoding="utf-8").read().strip())
+                except Exception:
+                    sig = b""
+                if not aws_ed25519.verify(pub, raw, sig):
+                    self._add("WARN", "CWPP-04", "SIDESCAN", "vuln-db",
+                              f"--vuln-db signature verification FAILED for {self.vuln_db_path} "
+                              f"(need {os.path.basename(sig_path)} signed by the --vuln-db-pubkey "
+                              "key); feed REJECTED")
+                    return None
+            data = json.loads(raw.decode("utf-8"))
             # The record-parsing is INSIDE the try too, so a malformed-but-valid-JSON feed
             # (e.g. a bare int, or {"kev": 5}) fails open to the WARN below — never propagates.
             if isinstance(data, list):
@@ -11854,6 +11895,7 @@ def _apply_phase6_config(sc, args) -> None:
     sc.side_scan_images_max = max(1, min(getattr(args, "side_scan_images_max", 1), 50))
     sc.ecr_scan_max_images = max(1, min(getattr(args, "ecr_scan_max_images", 20), 100))
     sc.vuln_db_path = args.vuln_db
+    sc.vuln_db_pubkey = getattr(args, "vuln_db_pubkey", None)
     sc.flow_logs = getattr(args, "flow_logs", False)
 
 
@@ -12180,8 +12222,14 @@ examples:
     parser.add_argument(
         "--vuln-db", dest="vuln_db", metavar="FILE",
         help="Offline OSV vulnerability feed (JSON) for side-scan CVE matching. "
-             "A raw OSV record list, or {osv,epss,kev,exploits}. Absent = inventory "
-             "+ secrets only.",
+             "A raw OSV record list, or {osv,epss,kev,exploits}. Build a signed bundle with "
+             "scripts/overwatch_vulndb.py. Absent = inventory + secrets only.",
+    )
+    parser.add_argument(
+        "--vuln-db-pubkey", dest="vuln_db_pubkey", metavar="KEY",
+        help="Ed25519 public key (64-hex or a .pub path) that the --vuln-db feed must be "
+             "signed with (<feed>.sig). Opt-in: when set, an unsigned or bad-signature feed "
+             "is REJECTED (fail-closed). Omit to load an unsigned feed as before.",
     )
     parser.add_argument(
         "--backend", metavar="URL",

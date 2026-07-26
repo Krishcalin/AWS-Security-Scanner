@@ -22,6 +22,7 @@ export const PANEL_PARAMS = [
   'framework', 'controls', // Compliance          → framework drill + failing-controls reveal
   'principal',         // Identity                → PrincipalCard expander
   'view',              // Inventory               → list | tree
+  'copilot',           // (global)                → Ask OverWatch slide-over chat
 ] as const
 
 export type PanelParam = (typeof PANEL_PARAMS)[number]

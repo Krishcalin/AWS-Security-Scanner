@@ -37,6 +37,18 @@ export interface ChokePoint {
   account?: string
 }
 
+// Mirror of aws_copilot.answer()'s return dict (cnapp_service.copilot_answer /
+// org_copilot_answer). `mode` is 'extractive' offline (grounded, no hallucination);
+// `abstained` is true when nothing relevant was retrieved.
+export interface CopilotAnswer {
+  answer: string
+  citations: string[]
+  retrieved: { id: string; score: number }[]
+  abstained: boolean
+  mode: 'extractive' | 'llm'
+  intent: string
+}
+
 export interface ControlProvenance {
   control: string
   via_nist: string[]
@@ -105,6 +117,21 @@ export interface GraphStats {
 export interface GNode { id: string; kind: string; [k: string]: unknown }
 export interface GEdge { source: string; target: string; kind: string; [k: string]: unknown }
 export interface GraphFull { directed: boolean; multigraph: boolean; nodes: GNode[]; edges: GEdge[] }
+
+// Blast radius of a graph node (cnapp_service.get_blast_radius) — what X can reach
+// (crowns/admins, forward) and what can reach X (sources, reverse), over E_PATH.
+export interface BlastRow { id: string; kind: string; label: string; path: string[]; terminal: 'data' | 'admin' | null }
+export interface BlastRadius {
+  node: string
+  exists: boolean
+  kind: string | null
+  label: string
+  reaches: BlastRow[]
+  reached_by: BlastRow[]
+  internet_reachable: boolean
+  max_hops: number
+  counts: { crowns: number; admins: number; sources: number }
+}
 
 export interface OrgOverview {
   accounts_scanned: number

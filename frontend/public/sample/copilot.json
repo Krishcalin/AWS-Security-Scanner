@@ -1,0 +1,56 @@
+{
+  "answers": [
+    {
+      "match": ["top risk", "biggest", "most critical", "what matters", "priorit", "riskiest", "summary", "summarise", "summarize", "overview", "posture", "focus on"],
+      "answer": {
+        "answer": "Top 3 risk(s) in this scan (severity, attack-path first):\n- **ATTACK-01** (CRITICAL) [on an attack path]: OverWatch traced a complete attack path from an internet-exposed EC2 instance to account administrator.\n  Fix: Break the public exposure and scope the instance-profile role to least privilege with a permissions boundary.\n- **ATTACK-02** (CRITICAL) [on an attack path]: An internet-exposed host runs an exploitable CVE, carries an over-privileged role, and that role can read crown-jewel data.\n  Fix: Sever the flagship chain at any hop — patch the CVE, remove public ingress, or scope the role's data access.\n- **IAM-02** (CRITICAL): A privileged principal is missing MFA, weakening the account's identity perimeter.\n  Fix: Enforce MFA and rotate the exposed credential.",
+        "citations": ["ATTACK-01", "ATTACK-02", "IAM-02"],
+        "retrieved": [{ "id": "ATTACK-01", "score": 9.4 }, { "id": "ATTACK-02", "score": 9.1 }, { "id": "IAM-02", "score": 6.2 }],
+        "abstained": false,
+        "mode": "extractive",
+        "intent": "top_risks"
+      }
+    },
+    {
+      "match": ["attack path", "attack-path", "breach", "how could", "how would", "kill chain", "chained"],
+      "answer": {
+        "answer": "Ranked attack path(s):\n- **CRITICAL** (score 100) [KEV] [active threat]: internet → i-0app01server → exploitable CVE → over-privileged role → customers-db (crown-jewel data). Driving findings: ATTACK-02.\n- **CRITICAL** (score 96): internet → i-0app01server → instance-profile role → account administrator. Driving findings: ATTACK-01.",
+        "citations": ["path:0", "path:1", "ATTACK-02", "ATTACK-01"],
+        "retrieved": [{ "id": "path:0", "score": 7.8 }, { "id": "path:1", "score": 7.1 }],
+        "abstained": false,
+        "mode": "extractive",
+        "intent": "paths"
+      }
+    },
+    {
+      "match": ["choke", "fix first", "where do i start", "where should i start", "single fix", "biggest bang", "one fix", "fewest"],
+      "answer": {
+        "answer": "Fix these choke points first (most paths severed per fix):\n- Fix **i-0app01server** (`arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server`) (true choke — severs ALL paths to its targets): severs 4 of 4 path(s). Remove the public ingress and enforce IMDSv2, then patch the exploitable CVE — one host fix collapses every critical path.",
+        "citations": ["arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server"],
+        "retrieved": [{ "id": "arn:aws:ec2:us-east-1:123456789012:instance/i-0app01server", "score": 5.5 }],
+        "abstained": false,
+        "mode": "extractive",
+        "intent": "choke"
+      }
+    },
+    {
+      "match": ["fix attack-01", "remediate attack-01", "how do i fix", "how to fix", "remediate", "fix the", "how do i remediate"],
+      "answer": {
+        "answer": "To remediate **ATTACK-01** (CRITICAL): OverWatch traced a complete internet-to-admin path via an instance-profile role.\nAffected: i-0app01server\nSteps:\n  1. Confirm both ends of the path — the public ingress on the host and the role's escalation permissions.\n  2. Break the exposure: revoke the unneeded 0.0.0.0/0 ingress, or front the service with a restricted ALB/WAF.\n  3. Break the privilege: scope the role to least privilege and cap it with a permissions boundary.\n  4. Re-scan to confirm the path no longer resolves, and enforce IMDSv2 to blunt role-credential theft.",
+        "citations": ["ATTACK-01"],
+        "retrieved": [{ "id": "ATTACK-01", "score": 9.4 }],
+        "abstained": false,
+        "mode": "extractive",
+        "intent": "fix"
+      }
+    }
+  ],
+  "abstain": {
+    "answer": "I don't have anything about that in this scan. Ask about the findings, attack paths, choke points, or how to remediate a specific check (e.g. \"how do I fix ATTACK-01?\").",
+    "citations": [],
+    "retrieved": [],
+    "abstained": true,
+    "mode": "extractive",
+    "intent": "general"
+  }
+}

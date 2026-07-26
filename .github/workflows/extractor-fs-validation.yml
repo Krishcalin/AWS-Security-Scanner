@@ -1,0 +1,68 @@
+# Linux-CI validation for the agentless EBS filesystem extractor (aws_sidescan_fs.py).
+#
+# The partition-table reader + root-fs selection are unit-tested with SYNTHETIC images on any
+# OS (tests/test_sidescan_fs.py). This job does what a Windows dev host CANNOT: it validates
+# the reader against REAL filesystems (mkfs.ext4 / mkfs.xfs) and stages the dissect.target
+# environment for the userspace ext4/xfs PARSE follow-on.
+#
+# FOLLOW-ON (flips the flagship EC2 VM scan live — see aws_sidescan_fs.py docstring):
+#   1. Pin dissect.target into requirements + the offline wheelhouse.
+#   2. Implement the DissectExtractor real parse (dissect volume/fs -> FilesystemExtractor).
+#   3. Add a golden-image test asserting a mkfs'd rootfs scans byte-identically to a
+#      DictExtractor double, then remove the `|| true` guard on the parse step and bump VERSION.
+name: extractor-fs-validation
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - "aws_sidescan_fs.py"
+      - "tests/test_sidescan_fs.py"
+      - ".github/workflows/extractor-fs-validation.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test + (future) fs-parse deps
+        run: |
+          python -m pip install --upgrade pip pytest
+          # The parse follow-on rides dissect.target (pure-Python; ext4+xfs+LVM+NTFS).
+          # Installed here so the environment is proven now; the adapter validation is TODO.
+          python -m pip install "dissect.target" || echo "dissect.target install deferred"
+          sudo apt-get update && sudo apt-get install -y xfsprogs e2fsprogs
+
+      - name: Unit tests (synthetic partition images — OS-agnostic)
+        run: python -m pytest tests/test_sidescan_fs.py -q
+
+      - name: Validate the partition reader against REAL mkfs filesystems
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          # tiny real ext4 + xfs images (loopback, no mount — we only read raw bytes)
+          dd if=/dev/zero of="$work/ext4.img" bs=1M count=16 status=none
+          mkfs.ext4 -q -F "$work/ext4.img"
+          dd if=/dev/zero of="$work/xfs.img"  bs=1M count=32 status=none
+          mkfs.xfs -q -f "$work/xfs.img"
+          python - "$work" <<'PY'
+          import sys, aws_sidescan_fs as fsx
+          work = sys.argv[1]
+          # a bare (partitionless) mkfs image: probe_root sniffs the superblock at offset 0
+          for name, want in (("ext4.img", "ext"), ("xfs.img", "xfs")):
+              with open(f"{work}/{name}", "rb") as fh:
+                  r = fsx.probe_root(fh)
+              assert r.fstype == want and r.offset == 0, f"{name}: got {r}"
+              print(f"OK: real {name} -> fstype={r.fstype} offset={r.offset}")
+          print("partition reader validated against real mkfs filesystems")
+          PY
+
+      # FOLLOW-ON: once DissectExtractor implements the real parse, add a golden-image scan
+      # assertion here (a mkfs'd rootfs with a known dpkg/rpm DB must inventory correctly and
+      # match a DictExtractor double). Until then the parse stays inert (CWPP-04 INFO).
+      - name: DissectExtractor golden-image parse (pending — see follow-on)
+        run: echo "TODO: validate the dissect.target ext4/xfs parse against a golden rootfs, then flip VERSION"

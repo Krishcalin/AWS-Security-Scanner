@@ -1,12 +1,13 @@
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
-import { X, ArrowRight, Waypoints, Scissors, Zap, ShieldCheck } from 'lucide-react'
+import { X, ArrowRight, Waypoints, Scissors, Zap, ShieldCheck, Radar } from 'lucide-react'
 import { useScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'
 import { api } from '../api/client'
 import { Card, Loader, ErrorNote, Empty } from '../components/ui'
 import { SeverityChip, PathBadges, PathChain, ChokeRow } from '../components/paths'
 import { PathGraph } from '../components/PathGraph'
+import { BlastRadius } from '../components/BlastRadius'
 import { sevColor } from '../lib/format'
 import { shortLabel } from '../lib/nodes'
 import { useDeepLinkPanel, pathId, matchPath } from '../lib/deeplink'
@@ -81,7 +82,7 @@ function FactorBar({ label, hint, value }: { label: string; hint: string; value:
 }
 
 // ── detail slide-over ─────────────────────────────────────────────────────────
-function PathDetail({ p, chokes, onClose }: { p: AttackPath; chokes: ChokePoint[]; onClose: () => void }) {
+function PathDetail({ p, chokes, onClose, onFocusNode }: { p: AttackPath; chokes: ChokePoint[]; onClose: () => void; onFocusNode?: (nodeId: string) => void }) {
   const onPath = chokes.filter((c) => p.nodes.includes(c.node_id))
   return (
     <div className="fixed inset-0 z-40">
@@ -104,8 +105,11 @@ function PathDetail({ p, chokes, onClose }: { p: AttackPath; chokes: ChokePoint[
           <div><PathBadges p={p} /></div>
 
           <div data-tour="path-graph">
-            <div className="text-xs font-semibold uppercase tracking-wide text-ink3 mb-2">Blast path</div>
-            <PathGraph path={p} height={280} />
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-semibold uppercase tracking-wide text-ink3">Blast path</div>
+              {onFocusNode && <div className="flex items-center gap-1 text-[11px] text-ink3"><Radar size={12} /> Click a node for its blast radius</div>}
+            </div>
+            <PathGraph path={p} height={280} onNodeFocus={onFocusNode} />
             <div className="mt-2"><PathChain nodes={p.nodes} terminalKind={p.terminal_kind} /></div>
           </div>
 
@@ -174,6 +178,9 @@ export function AttackPaths() {
   const [uncondOnly, setUncondOnly] = useState(false)
   // The open path lives in the URL (?path=<entry>__<terminal>) — shareable + tour-drivable.
   const [openId, setOpenId] = useDeepLinkPanel('path')
+  // the blast-radius drill is a transient interaction (a node click), so it lives in local
+  // state rather than the URL — {account, node} identifies the graph node to explode.
+  const [blast, setBlast] = useState<{ account: string; node: string } | null>(null)
 
   if (loading) return <Loader />
   if (error) return <ErrorNote msg={error} />
@@ -258,7 +265,19 @@ export function AttackPaths() {
         </div>
       </div>
 
-      {open && <PathDetail p={open} chokes={chokes} onClose={() => setOpenId(null)} />}
+      {open && (
+        <PathDetail
+          p={open}
+          chokes={chokes}
+          onClose={() => setOpenId(null)}
+          onFocusNode={
+            // resolve the account for the per-account blast-radius query: an org path
+            // carries its own account; in account scope it's the current scope.
+            (() => { const acct = open.account ?? (isOrg ? null : scope); return acct ? (node: string) => setBlast({ account: acct, node }) : undefined })()
+          }
+        />
+      )}
+      {blast && <BlastRadius account={blast.account} node={blast.node} onClose={() => setBlast(null)} />}
     </div>
   )
 }
