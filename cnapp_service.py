@@ -287,6 +287,27 @@ class PlatformService:
         acct_ws = self.workspaces.workspace_of_account(account_id) or DEFAULT_WORKSPACE
         return acct_ws == workspace_id
 
+    def connector_in_scope(self, connector_id: str, *, workspace_id: Optional[str] = None,
+                           is_superadmin: bool = False) -> bool:
+        """Tenant-isolation gate for a connector — the connector twin of
+        ``account_in_scope``. A superadmin, or an unscoped/single-tenant call (workspace_id
+        None, or no WorkspaceStore wired), always may. Otherwise the connector's bound
+        workspace must equal the caller's — a legacy/unbound connector counts as
+        ``ws-default``. The API maps a False here to a 404 (existence-hiding)."""
+        if is_superadmin or workspace_id is None or self.workspaces is None:
+            return True
+        conn_ws = self.workspaces.workspace_of_connector(connector_id) or DEFAULT_WORKSPACE
+        return conn_ws == workspace_id
+
+    def _account_ws(self, account_id: str) -> Optional[str]:
+        """The workspace an account's notifications may be delivered through: single-tenant /
+        no WorkspaceStore ⇒ None (global, byte-identical); else the account's bound workspace
+        (an unbound/legacy account counts as ws-default). A scan of this account then fires
+        ONLY that workspace's connectors — never another tenant's."""
+        if self.workspaces is None:
+            return None
+        return self.workspaces.workspace_of_account(account_id) or DEFAULT_WORKSPACE
+
     def list_accounts(self, *, onboarding_status=None, health=None,
                       workspace_id: Optional[str] = None) -> List[dict]:
         rows = [_mask_account(a) for a in
@@ -1174,21 +1195,37 @@ class PlatformService:
         return self.connectors
 
     def create_connector(self, *, type: str, name: str, config: dict,
-                         secret: Optional[str] = None, created_by: str = "") -> dict:
+                         secret: Optional[str] = None, created_by: str = "",
+                         workspace_id: Optional[str] = None) -> dict:
         """Create a connector. The one-time plaintext ``secret`` is handed to the
         injected secret_writer and only the returned ref is persisted; the response
-        is masked (secret_configured bool). enabled defaults to 0 (safe by default)."""
+        is masked (secret_configured bool). enabled defaults to 0 (safe by default).
+        In a multi-tenant hub the connector is BOUND to the caller's workspace in the
+        same transaction (single-tenant / no WorkspaceStore ⇒ unbound, global)."""
         store = self._require_connectors()
         now = self.clock()
         cid = self.connector_id_gen()
         ref = cc.store_secret(cid, secret, secret_writer=self.secret_writer) if secret else None
-        store.upsert_connector(cid, now_epoch=now, type=type, name=name, config=config or {},
-                               secret_ref=ref, enabled=False, created_by=created_by)
+        try:
+            with store._be.transaction():
+                store.upsert_connector(cid, now_epoch=now, type=type, name=name, config=config or {},
+                                       secret_ref=ref, enabled=False, created_by=created_by)
+                if self.workspaces is not None:
+                    self.workspaces.bind_connector(cid, workspace_id or DEFAULT_WORKSPACE, now)
+        except Exception as e:
+            # connectors.name is GLOBALLY unique (a pre-tenancy constraint). A collision — even
+            # against another tenant's name — must surface as a clean 400 "name already in use",
+            # NEVER an opaque 500 and never disclosing WHICH tenant holds it. (Per-workspace name
+            # uniqueness is a follow-up: it needs a migration that drops the global ix_conn_name.)
+            if cc._is_unique_violation(e):
+                raise ValueError("connector name already in use")
+            raise
         return cc.ConnectorStore._mask_connector(store.get_connector(cid))
 
-    def list_connectors(self) -> List[dict]:
+    def list_connectors(self, *, workspace_id: Optional[str] = None) -> List[dict]:
         store = self._require_connectors()
-        return [cc.ConnectorStore._mask_connector(c) for c in store.list_connectors()]
+        return [cc.ConnectorStore._mask_connector(c)
+                for c in store.list_connectors(workspace_id=self._scoped_ws(workspace_id))]
 
     def get_connector(self, connector_id: str) -> Optional[dict]:
         c = self._require_connectors().get_connector(connector_id)
@@ -1251,7 +1288,10 @@ class PlatformService:
 
     def update_rule(self, connector_id: str, rule_id: int, spec: dict) -> dict:
         store = self._require_connectors()
-        if not store.get_rule(rule_id):
+        rule = store.get_rule(rule_id)
+        # the rule MUST belong to this connector — else the scoped UPDATE below matches 0 rows
+        # yet the trailing get_rule would return the OTHER connector's rule body (a cross-read).
+        if not rule or rule.connector_id != connector_id:
             raise KeyError(f"rule {rule_id} not found")
         store.upsert_rule(connector_id, now_epoch=self.clock(), rule_id=rule_id, spec=spec or {})
         return _rule_dict(store.get_rule(rule_id))
@@ -1318,10 +1358,13 @@ class PlatformService:
 
     def preview_rules(self, account_id: str) -> List[dict]:
         """Dry-run: which findings WOULD fire which connectors — zero outbound HTTP,
-        zero AWS contact. The safe way to author rules."""
+        zero AWS contact. The safe way to author rules. SCOPED to the account's workspace
+        exactly like the real send path (run_rules) — else the dry-run would leak another
+        tenant's connector ids/names + rule ids."""
         store = self._require_connectors()
-        connectors = {c.connector_id: c for c in store.list_connectors()}
-        rules = store.list_rules(enabled_only=True)
+        ws = self._account_ws(account_id)
+        connectors = {c.connector_id: c for c in store.list_connectors(workspace_id=ws)}
+        rules = store.list_rules(enabled_only=True, workspace_id=ws)
         findings, _ = self._enriched_findings(account_id)
         out = []
         for f in findings:
@@ -1340,14 +1383,16 @@ class PlatformService:
         findings, coverage = self._enriched_findings(account_id)
         res = cc.run_rules(store, findings, coverage, http_post=self.http_post,
                            secret_reader=self.secret_reader, now_epoch=self.clock(),
-                           hub_base=self.hub_base)
+                           hub_base=self.hub_base, workspace_id=self._account_ws(account_id))
         return {"sent": res.sent, "suppressed": res.suppressed, "resolved": res.resolved,
                 "failed": res.failed, "digested": res.digested}
 
     def list_deliveries(self, connector_id: Optional[str] = None, *,
-                       account: Optional[str] = None, status: Optional[str] = None) -> List[dict]:
-        return self._require_connectors().list_deliveries(connector_id, account=account,
-                                                          status=status)
+                       account: Optional[str] = None, status: Optional[str] = None,
+                       workspace_id: Optional[str] = None) -> List[dict]:
+        return self._require_connectors().list_deliveries(
+            connector_id, account=account, status=status,
+            workspace_id=self._scoped_ws(workspace_id))
 
     # ── drift digests ───────────────────────────────────────────────────────────
     def _build_digest(self, account_id: str, drift: dict, *, scan_id: str, scan_epoch: int,
@@ -1385,7 +1430,7 @@ class PlatformService:
                                     became_reachable=became_reachable)
         res = cc.run_digest(self.connectors, digest, http_post=self.http_post,
                             secret_reader=self.secret_reader, now_epoch=self.clock(),
-                            hub_base=self.hub_base)
+                            hub_base=self.hub_base, workspace_id=self._account_ws(account_id))
         return {"digested": res.digested, "failed": res.failed}
 
     def preview_digest(self, account_id: str) -> Optional[dict]:
@@ -1410,8 +1455,11 @@ class PlatformService:
                 "posture_delta": r.get("delta")}
 
     def list_digests(self, connector_id: Optional[str] = None, *,
-                    account: Optional[str] = None, status: Optional[str] = None) -> List[dict]:
-        return self._require_connectors().list_digests(connector_id, account=account, status=status)
+                    account: Optional[str] = None, status: Optional[str] = None,
+                    workspace_id: Optional[str] = None) -> List[dict]:
+        return self._require_connectors().list_digests(
+            connector_id, account=account, status=status,
+            workspace_id=self._scoped_ws(workspace_id))
 
     # ── compliance breadth (crosswalk from the NIST 800-53 spine) ───────────────
     def _get_crosswalk(self):

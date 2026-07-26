@@ -329,6 +329,12 @@ POSTGRES_DDL: List[str] = [
        workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id),
        created_at BIGINT NOT NULL)""",
     "CREATE INDEX IF NOT EXISTS ix_wsacct_ws ON workspace_accounts(workspace_id)",
+    # v9: connector→workspace binding (multi-tenancy)
+    """CREATE TABLE IF NOT EXISTS connector_workspace(
+       connector_id TEXT PRIMARY KEY REFERENCES connectors(connector_id) ON DELETE CASCADE,
+       workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id),
+       created_at BIGINT NOT NULL)""",
+    "CREATE INDEX IF NOT EXISTS ix_connws_ws ON connector_workspace(workspace_id)",
     """CREATE TABLE IF NOT EXISTS platform_admins(
        principal TEXT PRIMARY KEY, created_at BIGINT NOT NULL)""",
     """CREATE TABLE IF NOT EXISTS usage_events(

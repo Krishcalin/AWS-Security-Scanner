@@ -35,7 +35,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-SCHEMA_VERSION = 8   # v8: + supply-chain ingest (sbom_snapshots/components/snapshot_cves/vex_statements)
+SCHEMA_VERSION = 9   # v9: + connector_workspace (multi-tenancy: connector→workspace binding)
 KEY_VERSION = 1
 
 # Caller-injected scan timestamp (one per run). epoch = arithmetic column,
@@ -316,6 +316,15 @@ CREATE TABLE IF NOT EXISTS workspace_accounts(
   workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id),
   created_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS ix_wsacct_ws ON workspace_accounts(workspace_id);
+
+-- v9: connector→workspace binding (multi-tenancy). connector_id PK => exactly one
+-- workspace per connector; connector_rules/notification_log/digest_log inherit it via
+-- their connector_id FK. Backfilled to ws-default in _seed_default_workspace.
+CREATE TABLE IF NOT EXISTS connector_workspace(
+  connector_id TEXT PRIMARY KEY REFERENCES connectors(connector_id) ON DELETE CASCADE,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id),
+  created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_connws_ws ON connector_workspace(workspace_id);
 
 CREATE TABLE IF NOT EXISTS platform_admins(
   principal TEXT PRIMARY KEY, created_at INTEGER NOT NULL);

@@ -352,6 +352,12 @@ def _seed_default_workspace(be: Backend) -> None:
                 "INSERT INTO workspace_accounts(account_id, workspace_id, created_at) "
                 "SELECT account_id, 'ws-default', 0 FROM accounts WHERE 1=1 "
                 "ON CONFLICT (account_id) DO NOTHING")
+            be.execute(
+                # v9: bind every pre-existing (global) connector to ws-default, so a
+                # single-tenant hub and the whole test suite behave identically.
+                "INSERT INTO connector_workspace(connector_id, workspace_id, created_at) "
+                "SELECT connector_id, 'ws-default', 0 FROM connectors WHERE 1=1 "
+                "ON CONFLICT (connector_id) DO NOTHING")
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception:

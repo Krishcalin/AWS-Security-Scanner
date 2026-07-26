@@ -1150,9 +1150,17 @@ class ConnectorStore:
         return _hydrate_connector(self._be.query_one(
             "SELECT * FROM connectors WHERE connector_id=?", (connector_id,)))
 
-    def list_connectors(self) -> List[Connector]:
-        return [_hydrate_connector(r) for r in
-                self._be.query_all("SELECT * FROM connectors ORDER BY name, connector_id")]
+    # workspace-scoping filter (multi-tenancy): restrict to a workspace's connector set.
+    # workspace_id=None (single-tenant / no WorkspaceStore wired) => no filter, global behavior.
+    _WS_FILTER = "connector_id IN (SELECT connector_id FROM connector_workspace WHERE workspace_id=?)"
+
+    def list_connectors(self, *, workspace_id: str = None) -> List[Connector]:
+        sql, params = "SELECT * FROM connectors", []
+        if workspace_id is not None:
+            sql += f" WHERE {self._WS_FILTER}"
+            params.append(workspace_id)
+        sql += " ORDER BY name, connector_id"
+        return [_hydrate_connector(r) for r in self._be.query_all(sql, params)]
 
     def delete_connector(self, connector_id: str) -> None:
         # Atomic all-or-nothing. notification_log has a NOT-NULL FK to connectors with
@@ -1214,14 +1222,16 @@ class ConnectorStore:
         return _hydrate_rule(self._be.query_one(
             "SELECT * FROM connector_rules WHERE id=?", (rule_id,)))
 
-    def list_rules(self, connector_id: str = None, *, enabled_only: bool = False
-                   ) -> List[ConnectorRule]:
+    def list_rules(self, connector_id: str = None, *, enabled_only: bool = False,
+                   workspace_id: str = None) -> List[ConnectorRule]:
         sql, params = "SELECT * FROM connector_rules", []
         clauses = []
         if connector_id:
             clauses.append("connector_id=?"); params.append(connector_id)
         if enabled_only:
             clauses.append("enabled=1")
+        if workspace_id is not None:
+            clauses.append(self._WS_FILTER); params.append(workspace_id)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY priority, id"
@@ -1284,11 +1294,13 @@ class ConnectorStore:
             "UPDATE notification_log SET state='resolved' WHERE connector_id=? AND dedup_key=?",
             (connector_id, dedup_key))
 
-    def open_rows(self, connector_id: str = None) -> List[LedgerRow]:
+    def open_rows(self, connector_id: str = None, *, workspace_id: str = None) -> List[LedgerRow]:
         sql = "SELECT * FROM notification_log WHERE state='open'"
         params: List = []
         if connector_id:
             sql += " AND connector_id=?"; params.append(connector_id)
+        if workspace_id is not None:
+            sql += f" AND {self._WS_FILTER}"; params.append(workspace_id)
         return [_hydrate_ledger(r) for r in self._be.query_all(sql, params)]
 
     def ledger_snapshot(self, connector_ids: Sequence[str]) -> Dict[str, LedgerRow]:
@@ -1302,7 +1314,7 @@ class ConnectorStore:
         return out
 
     def list_deliveries(self, connector_id: str = None, *, account: str = None,
-                        status: str = None) -> List[dict]:
+                        status: str = None, workspace_id: str = None) -> List[dict]:
         sql, params, clauses = "SELECT * FROM notification_log", [], []
         if connector_id:
             clauses.append("connector_id=?"); params.append(connector_id)
@@ -1310,6 +1322,8 @@ class ConnectorStore:
             clauses.append("account=?"); params.append(account)
         if status:
             clauses.append("status=?"); params.append(status)
+        if workspace_id is not None:
+            clauses.append(self._WS_FILTER); params.append(workspace_id)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY created_at DESC, id DESC"
@@ -1357,7 +1371,7 @@ class ConnectorStore:
             (res.http_status, (res.error or "")[:500], digest_id))
 
     def list_digests(self, connector_id: str = None, *, account: str = None,
-                     status: str = None) -> List[dict]:
+                     status: str = None, workspace_id: str = None) -> List[dict]:
         sql, params, clauses = "SELECT * FROM digest_log", [], []
         if connector_id:
             clauses.append("connector_id=?"); params.append(connector_id)
@@ -1365,6 +1379,8 @@ class ConnectorStore:
             clauses.append("account=?"); params.append(account)
         if status:
             clauses.append("status=?"); params.append(status)
+        if workspace_id is not None:
+            clauses.append(self._WS_FILTER); params.append(workspace_id)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY created_at DESC, id DESC"
@@ -1464,13 +1480,17 @@ def _is_unique_violation(e: Exception) -> bool:
 # ═══════════════════════════════════════════════════════════════════════════════
 def run_rules(store: ConnectorStore, findings: Sequence[EnrichedFinding],
               scan_coverage: set, *, http_post: HttpPost, secret_reader: SecretReader,
-              now_epoch: int, hub_base: str = "") -> RunResult:
+              now_epoch: int, hub_base: str = "", workspace_id: str = None) -> RunResult:
     """Impure orchestrator (called by the worker after results.put, or a manual
     /notify). Load enabled rules + connectors; match across findings; plan against
     the ledger snapshot; then per send-action: claim/bump → dispatch →
-    mark_sent/mark_failed; finally coverage-gated resolve_stale. Delivery counts out."""
-    connectors = {c.connector_id: c for c in store.list_connectors()}
-    rules = store.list_rules(enabled_only=True)
+    mark_sent/mark_failed; finally coverage-gated resolve_stale. Delivery counts out.
+
+    ``workspace_id`` (multi-tenancy): when set, ONLY the connectors/rules/ledger of that
+    workspace are loaded, so a scan of one tenant's account never fires another tenant's
+    connectors. None (single-tenant / no WorkspaceStore) => global, byte-identical."""
+    connectors = {c.connector_id: c for c in store.list_connectors(workspace_id=workspace_id)}
+    rules = store.list_rules(enabled_only=True, workspace_id=workspace_id)
     rules_by_id = {r.id: r for r in rules}
 
     # 1. match every finding → collapsed actions
@@ -1513,8 +1533,8 @@ def run_rules(store: ConnectorStore, findings: Sequence[EnrichedFinding],
         else:
             store.mark_failed(nid, res, now_epoch); failed += 1
 
-    # 2. coverage-gated auto-resolve
-    open_rows = store.open_rows()
+    # 2. coverage-gated auto-resolve (scoped to the workspace's connectors)
+    open_rows = store.open_rows(workspace_id=workspace_id)
     res_actions, freed = resolve_stale(open_rows, present, scan_coverage, rules_by_id,
                                        now_epoch=now_epoch)
     for dk in freed:
@@ -1799,11 +1819,14 @@ def _digest_opt_in(c: Connector, account: str) -> bool:
 
 
 def run_digest(store: ConnectorStore, digest: dict, *, http_post: HttpPost,
-               secret_reader: SecretReader, now_epoch: int, hub_base: str = "") -> RunResult:
+               secret_reader: SecretReader, now_epoch: int, hub_base: str = "",
+               workspace_id: str = None) -> RunResult:
     """Impure orchestrator (sibling to run_rules). For each enabled connector that
     opts into digests (config.digest.enabled): apply the material/min_new gates, then
-    claim-then-send exactly once per (connector, account, window)."""
-    conns = [c for c in store.list_connectors() if c.enabled and _digest_opt_in(c, digest["account"])]
+    claim-then-send exactly once per (connector, account, window). ``workspace_id`` scopes
+    the connector set to one tenant (None => global)."""
+    conns = [c for c in store.list_connectors(workspace_id=workspace_id)
+             if c.enabled and _digest_opt_in(c, digest["account"])]
     digested = failed = 0
     results: List[DispatchResult] = []
     for c in conns:
