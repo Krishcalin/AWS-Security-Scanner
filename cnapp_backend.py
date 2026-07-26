@@ -50,28 +50,57 @@ class ExecResult:
 
 
 class Backend(ABC):
-    """Owns the connection, a reentrant lock, the dialect, and a txn-depth counter.
-    ``execute``/``executemany``/``upsert`` commit iff depth==0; ``transaction()``
-    nests and commits (or rolls back + re-raises) only at the first level."""
+    """Owns the dialect + a connection strategy.
+
+    * **Single-connection path** (sqlite, or an injected test connection): every
+      operation serializes on one reentrant lock over one connection — today's exact
+      behavior, byte-identical.
+    * **Pooled path** (production Postgres): each operation BORROWS a connection from a
+      ``psycopg_pool.ConnectionPool`` (no global lock, real concurrency), and a
+      ``transaction()`` checks out ONE connection for its whole duration via a
+      thread-local so nested ops reuse it and different threads run in parallel.
+
+    ``execute``/``executemany``/``upsert`` commit iff NOT inside a ``transaction()``."""
 
     dialect: Any
     raw: Any
+    pool: Any
     OperationalError: type
 
     def __init__(self) -> None:
         self.lock = threading.RLock()
-        self._depth = 0
+        self._local = threading.local()   # .conn = the txn's checked-out connection (per thread)
+        self.pool = None                  # set by a pooled PostgresBackend; else single-connection
 
-    # ── subclass primitives ────────────────────────────────────────────────
+    # ── connection strategy ─────────────────────────────────────────────────
+    @contextmanager
+    def _conn(self):
+        """Yield the connection an operation should use. Inside a transaction the
+        thread-local checked-out conn is reused; pooled ⇒ borrow+return; else ⇒ the
+        single connection under the reentrant lock (sqlite / injected test conn)."""
+        active = getattr(self._local, "conn", None)
+        if active is not None:            # inside transaction() on this thread
+            yield active
+        elif self.pool is not None:       # pooled: borrow one, return on exit
+            with self.pool.connection() as c:
+                yield c
+        else:                             # single connection, serialized on the lock
+            with self.lock:
+                yield self.raw
+
+    def _in_txn(self) -> bool:
+        return getattr(self._local, "conn", None) is not None
+
+    # ── subclass primitives (operate on the passed-in connection) ───────────
     @abstractmethod
-    def _exec(self, sql: str, params: Sequence): ...            # -> DBAPI cursor
+    def _exec(self, conn, sql: str, params: Sequence): ...      # -> DBAPI cursor
     @abstractmethod
-    def _execmany(self, sql: str, seq: List[Sequence]) -> None: ...
+    def _execmany(self, conn, sql: str, seq: List[Sequence]) -> None: ...
     @abstractmethod
-    def _txn_cm(self):                                          # -> a context manager
+    def _txn_cm(self, conn):                                    # -> a context manager
         """Return a context manager that BEGINs on enter, COMMITs on a clean exit,
-        and ROLLBACKs on an exception (sqlite: BEGIN IMMEDIATE/COMMIT/ROLLBACK;
-        Postgres: psycopg's own ``conn.transaction()``)."""
+        and ROLLBACKs on an exception, on the GIVEN connection (sqlite: BEGIN
+        IMMEDIATE/COMMIT/ROLLBACK; Postgres: ``conn.transaction()``)."""
     @abstractmethod
     def migrate(self) -> None: ...
     @abstractmethod
@@ -79,26 +108,26 @@ class Backend(ABC):
 
     # ── shared surface (identical behavior on both engines) ─────────────────
     def execute(self, sql: str, params: Sequence = ()) -> ExecResult:
-        with self.lock:
-            cur = self._exec(self.dialect.convert(sql), params)
-            if self._depth == 0:
-                self.raw.commit()
+        with self._conn() as c:
+            cur = self._exec(c, self.dialect.convert(sql), params)
+            if not self._in_txn():
+                c.commit()
             return ExecResult(getattr(cur, "lastrowid", None),
                               getattr(cur, "rowcount", -1))
 
     def executemany(self, sql: str, seq: Iterable[Sequence]) -> None:
-        with self.lock:
-            self._execmany(self.dialect.convert(sql), list(seq))
-            if self._depth == 0:
-                self.raw.commit()
+        with self._conn() as c:
+            self._execmany(c, self.dialect.convert(sql), list(seq))
+            if not self._in_txn():
+                c.commit()
 
     def query_one(self, sql: str, params: Sequence = ()):
-        with self.lock:
-            return self._exec(self.dialect.convert(sql), params).fetchone()
+        with self._conn() as c:
+            return self._exec(c, self.dialect.convert(sql), params).fetchone()
 
     def query_all(self, sql: str, params: Sequence = ()) -> list:
-        with self.lock:
-            return self._exec(self.dialect.convert(sql), params).fetchall()
+        with self._conn() as c:
+            return self._exec(c, self.dialect.convert(sql), params).fetchall()
 
     def scalar(self, sql: str, params: Sequence = ()) -> Any:
         row = self.query_one(sql, params)
@@ -116,39 +145,63 @@ class Backend(ABC):
         # so it is executed WITHOUT a second convert.
         sql = build_upsert(table, cols, conflict_cols, update_cols, reset_cols,
                            returning, ph=self._ph)
-        with self.lock:
-            cur = self._exec(sql, params)
+        with self._conn() as c:
+            cur = self._exec(c, sql, params)
             row = cur.fetchone() if returning else None
-            if self._depth == 0:
-                self.raw.commit()
+            if not self._in_txn():
+                c.commit()
             return row
 
     def upsert_many(self, table, cols, conflict_cols, update_cols, seq, *,
                     reset_cols=None) -> None:
         sql = build_upsert(table, cols, conflict_cols, update_cols, reset_cols,
                            ph=self._ph)
-        with self.lock:
-            self._execmany(sql, list(seq))
-            if self._depth == 0:
-                self.raw.commit()
+        with self._conn() as c:
+            self._execmany(c, sql, list(seq))
+            if not self._in_txn():
+                c.commit()
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
-        with self.lock:
-            first = self._depth == 0
-            self._depth += 1
-            try:
-                if first:
-                    with self._txn_cm():      # real BEGIN/COMMIT/ROLLBACK
+        if self._in_txn():                # nested on this thread → reuse, no new BEGIN
+            yield
+            return
+        if self.pool is not None:         # pooled: ONE connection for the whole block
+            with self.pool.connection() as c:
+                self._local.conn = c
+                try:
+                    with self._txn_cm(c):
                         yield
-                else:                         # nested: reuse the outer transaction
-                    yield
-            finally:
-                self._depth -= 1
+                finally:
+                    self._local.conn = None
+        else:                             # single connection under the lock (sqlite / test conn)
+            with self.lock:
+                self._local.conn = self.raw
+                try:
+                    with self._txn_cm(self.raw):
+                        yield
+                finally:
+                    self._local.conn = None
+
+    @contextmanager
+    def serialized(self) -> Iterator[None]:
+        """Serialize a cross-connection read-modify-write across the WHOLE pool. A
+        transaction() on the pooled path checks out one connection and gives per-row
+        atomicity, but NOT mutual exclusion — two threads on two connections each
+        SELECT-then-UPDATE would lose an increment (e.g. record_health's
+        consecutive_failures). Wrap such an RMW in ``serialized()``: on the pooled path
+        this reentrant lock is the only cross-connection mutex; on the single-connection
+        path it is the same lock the ops already take (a reentrant no-op). Use only for
+        the RARE RMW ops, never the scan/findings hot path."""
+        with self.lock:
+            yield
 
     def close(self) -> None:
         try:
-            self.raw.close()
+            if self.pool is not None:
+                self.pool.close()
+            elif getattr(self, "raw", None) is not None:
+                self.raw.close()
         except Exception:
             pass
 
@@ -169,32 +222,33 @@ class SqliteBackend(Backend):
         conn.execute("PRAGMA busy_timeout=5000")
         return cls(conn)
 
-    def _exec(self, sql, params):
-        return self.raw.execute(sql, params)
+    def _exec(self, conn, sql, params):
+        return conn.execute(sql, params)
 
-    def _execmany(self, sql, seq):
-        self.raw.executemany(sql, seq)
+    def _execmany(self, conn, sql, seq):
+        conn.executemany(sql, seq)
 
     @contextmanager
-    def _txn_cm(self):
-        self.raw.execute("BEGIN IMMEDIATE")
+    def _txn_cm(self, conn):
+        conn.execute("BEGIN IMMEDIATE")
         try:
             yield
         except BaseException:
-            self.raw.execute("ROLLBACK")
+            conn.execute("ROLLBACK")
             raise
         else:
-            self.raw.execute("COMMIT")
+            conn.execute("COMMIT")
 
     def insert_returning_id(self, sql, params, id_col="id") -> int:
-        with self.lock:
-            cur = self._exec(self.dialect.convert(sql), params)
-            if self._depth == 0:
-                self.raw.commit()
+        with self._conn() as c:
+            cur = self._exec(c, self.dialect.convert(sql), params)
+            if not self._in_txn():
+                c.commit()
             return cur.lastrowid
 
     def migrate(self) -> None:
         import aws_state
+        # single-threaded at startup — use the one connection directly.
         ver = self.raw.execute("PRAGMA user_version").fetchone()[0]
         if ver < aws_state.SCHEMA_VERSION:
             self.raw.executescript(aws_state._DDL)
@@ -203,13 +257,15 @@ class SqliteBackend(Backend):
 
 
 class PostgresBackend(Backend):
-    """A single injected psycopg3 connection (real via ``connect()``, or a fake in
-    tests), serialized by the reentrant lock exactly like today's shared-connection
-    AccountRegistry. A ``psycopg_pool.ConnectionPool`` is a deferred optimization."""
+    """Pooled psycopg3 in production (a ``psycopg_pool.ConnectionPool`` built by
+    ``connect()``), or a single injected connection in tests. A ``transaction()``
+    checks out ONE pooled connection for its whole duration; every other operation
+    borrows a connection and returns it — real concurrency, no process-wide lock."""
 
-    def __init__(self, conn) -> None:
+    def __init__(self, conn=None, *, pool=None) -> None:
         super().__init__()
-        self.raw = conn
+        self.raw = conn                          # single injected conn (tests); None when pooled
+        self.pool = pool                         # psycopg_pool.ConnectionPool in production
         self.dialect = PostgresDialect()
         import psycopg
         self.OperationalError = psycopg.errors.OperationalError
@@ -217,56 +273,64 @@ class PostgresBackend(Backend):
     @classmethod
     def connect(cls, dsn: str, *, connect_timeout: int = 3) -> "PostgresBackend":
         try:
-            import psycopg
+            import psycopg        # noqa: F401  (also proves the driver is importable)
+            import psycopg_pool
         except Exception as e:          # driver absent -> fail loud, never sqlite
             raise StateBackendUnavailable(
-                f"postgresql:// backend needs psycopg: {e}")
-        try:
-            # autocommit=True: single statements (every read + each depth-0 write)
-            # auto-commit, so a SELECT never leaves the shared connection "idle in
-            # transaction" and a failed statement never leaves it in the aborted
-            # state that would poison every later request. Multi-statement atomic
-            # blocks use conn.transaction() (see _txn_cm) for an explicit BEGIN.
-            conn = psycopg.connect(dsn, autocommit=True,
-                                   connect_timeout=connect_timeout)
+                f"postgresql:// backend needs psycopg + psycopg-pool: {e}")
+
+        def _configure(conn):
+            # per-connection setup the single-conn path did inline. CRITICAL: psycopg_pool
+            # builds connections autocommit=FALSE by default; forcing True keeps a depth-0
+            # statement (every read + each non-txn write) from leaving the connection "idle
+            # in transaction", and lets conn.transaction() do explicit BEGINs for atomic blocks.
+            conn.autocommit = True
             conn.row_factory = hybrid_row_factory
+
+        try:
+            min_size = int(os.getenv("CNAPP_DB_POOL_MIN", "2"))
+            max_size = max(min_size, int(os.getenv("CNAPP_DB_POOL_MAX", "10")))
+            pool = psycopg_pool.ConnectionPool(
+                conninfo=dsn, min_size=min_size, max_size=max_size,
+                timeout=connect_timeout, open=False, configure=_configure)
+            pool.open(wait=True, timeout=connect_timeout)   # fail loud at startup if unreachable
         except StateBackendUnavailable:
             raise
-        except Exception as e:          # unreachable / auth -> fail loud, never sqlite
+        except Exception as e:          # unreachable / auth / pool timeout -> fail loud, never sqlite
             raise StateBackendUnavailable(f"postgres backend unavailable: {e}")
-        return cls(conn)
+        return cls(pool=pool)
 
-    def _exec(self, sql, params):
-        return self.raw.execute(sql, params)     # psycopg3 Connection.execute -> cursor
+    def _exec(self, conn, sql, params):
+        return conn.execute(sql, params)         # psycopg3 Connection.execute -> cursor
 
-    def _execmany(self, sql, seq):
-        cur = self.raw.cursor()                  # psycopg3 has no conn.executemany
+    def _execmany(self, conn, sql, seq):
+        cur = conn.cursor()                      # psycopg3 has no conn.executemany
         cur.executemany(sql, list(seq))
 
-    def _txn_cm(self):
-        return self.raw.transaction()            # psycopg's own BEGIN/COMMIT/ROLLBACK
+    def _txn_cm(self, conn):
+        return conn.transaction()                # psycopg's own BEGIN/COMMIT/ROLLBACK
 
     def insert_returning_id(self, sql, params, id_col="id") -> int:
         rsql = self.dialect.convert(sql) + f" RETURNING {id_col}"
-        with self.lock:
-            row = self.raw.execute(rsql, params).fetchone()
-            if self._depth == 0:
-                self.raw.commit()
+        with self._conn() as c:
+            row = c.execute(rsql, params).fetchone()
+            if not self._in_txn():
+                c.commit()
             return row[0]
 
     def migrate(self) -> None:
         import aws_state
-        with self.lock:
+        with self._conn() as c:                  # one connection for the whole migration
             for stmt in self.dialect.ddl():      # POSTGRES_DDL, all IF NOT EXISTS
-                self.raw.execute(stmt)
-            row = self.raw.execute(
+                c.execute(stmt)
+            row = c.execute(
                 "SELECT COALESCE(MAX(version),0) FROM schema_migrations").fetchone()
             if row[0] < aws_state.SCHEMA_VERSION:
-                self.raw.execute(
+                c.execute(
                     "INSERT INTO schema_migrations(version,applied_epoch) "
                     "VALUES(%s,%s) ON CONFLICT (version) DO NOTHING",
                     (aws_state.SCHEMA_VERSION, 0))
-            self.raw.commit()
+            c.commit()
 
 
 def _seed_default_workspace(be: Backend) -> None:
