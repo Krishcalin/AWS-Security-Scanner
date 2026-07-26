@@ -19,10 +19,21 @@ variable "hub_role_arn" {
 }
 
 # ── opt-in grants (default OFF; each gates a policy that reproduces a commented CFN block) ──
+
+# Two-key EBS side-scan (see aws_sidescan_ebs). The DEFAULT read-only mode (--side-scan-
+# snapshot-mode existing) reads PRE-EXISTING snapshots and needs only enable_sidescan_read
+# (zero write on the scanned account). Point-in-time create mode (--side-scan-snapshot-mode
+# create) additionally needs enable_sidescan (the snapshot-lifecycle WRITES).
+variable "enable_sidescan_read" {
+  type        = bool
+  default     = false
+  description = "Agentless EBS side-scan READ-ONLY (pre-existing snapshots): ebs:*SnapshotBlock + ec2:DescribeSnapshots. No writes on the scanned account. This is the key for the default read-only side-scan mode."
+}
+
 variable "enable_sidescan" {
   type        = bool
   default     = false
-  description = "Agentless EBS side-scan snapshot lifecycle (WRITES, tag-scoped to cnapp:sidescan)."
+  description = "Agentless EBS side-scan snapshot-lifecycle WRITES (ec2:CreateSnapshot/CopySnapshot/DeleteSnapshot, tag-scoped to cnapp:sidescan) for point-in-time create mode. A superset that also carries the block reads, so create mode needs only this key."
 }
 
 variable "enable_flowlog_insights" {

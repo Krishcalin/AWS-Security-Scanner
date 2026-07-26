@@ -130,6 +130,42 @@ class SecurityGraph:
                 q.append((nxt, npath))
         return out
 
+    def reverse_reachable(self, start: str, edge_kinds: Optional[Iterable[str]],
+                          max_hops: int = 8, edge_filter=None) -> Dict[str, List[str]]:
+        """Bounded REVERSE BFS — everything that can *reach* ``start`` (its predecessors)
+        over edges whose kind is in ``edge_kinds`` (all if None). The mirror of
+        :meth:`reachable`: it builds a reverse adjacency (``dst -> [edge]``) from ``_out``
+        once per call in O(E), so there is NO persistent ``_in`` index and ``add_edge`` /
+        ``to_dict`` / ``from_dict`` (and the Neptune serialization) stay byte-identical.
+        Returns ``{node_id: shortest_path}`` where the path is ordered ``source .. start``
+        (``start`` included at the tail); ``start`` is excluded as a key. Cycle-safe,
+        capped at ``max_hops`` edges. ``edge_filter`` semantics match ``reachable``."""
+        ks = set(edge_kinds) if edge_kinds else None
+        pred: Dict[str, List[Dict]] = defaultdict(list)
+        for lst in self._out.values():
+            for e in lst:
+                if ks is not None and e["kind"] not in ks:
+                    continue
+                if edge_filter is not None and not edge_filter(e):
+                    continue
+                pred[e["dst"]].append(e)
+        seen = {start}
+        out: Dict[str, List[str]] = {}
+        q = deque([(start, [start])])
+        while q:
+            cur, path = q.popleft()
+            if len(path) - 1 >= max_hops:
+                continue
+            for e in pred.get(cur, []):
+                prv = e["src"]
+                if prv in seen:
+                    continue
+                seen.add(prv)
+                npath = [prv] + path                 # source .. start
+                out[prv] = npath
+                q.append((prv, npath))
+        return out
+
     # ── serialization (node-link; the Neptune seed) ───────────────────────────
     def to_dict(self) -> Dict:
         return {

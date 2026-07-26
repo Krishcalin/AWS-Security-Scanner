@@ -6,6 +6,7 @@ import { api } from '../api/client'
 import { applyTheme, isDark } from '../lib/theme'
 import { healthTone, acctLabel } from '../lib/format'
 import { useTour } from '../lib/tour/TourProvider'
+import { useDeepLinkPanel } from '../lib/deeplink'
 import type { Account } from '../api/types'
 
 function ScopeSwitcher() {
@@ -73,6 +74,7 @@ export function TopBar() {
   const [dark, setDark] = useState(isDark())
   const toggleTheme = () => { const d = !dark; applyTheme(d); setDark(d) }
   const { openGallery } = useTour()
+  const [, setCopilot] = useDeepLinkPanel('copilot')
 
   return (
     <header className="h-14 shrink-0 border-b border-line bg-panel/85 backdrop-blur flex items-center gap-3 px-5 sticky top-0 z-10">
@@ -106,7 +108,10 @@ export function TopBar() {
         <span className="hidden lg:inline">Take a tour</span>
       </button>
 
-      <button className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-semibold text-white ow-grad shadow-sm hover:opacity-90 transition-opacity">
+      <button
+        onClick={() => setCopilot('1')}
+        title="Ask OverWatch — grounded copilot over your scan"
+        className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-semibold text-white ow-grad shadow-sm hover:opacity-90 transition-opacity">
         <Sparkles size={15} />
         <span className="hidden sm:inline">Ask OverWatch</span>
       </button>

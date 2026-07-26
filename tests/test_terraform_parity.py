@@ -113,6 +113,10 @@ def test_tf_extras_actions_match_cfn_exactly():
 # Canonical action sets — the single source of truth the TF resources AND the CFN comment
 # blocks must both contain (the CFN keeps these commented-out, so they're compared as text).
 _OPTIN = {
+    # read-only key (pre-existing snapshots): the default side-scan mode; NO write actions.
+    "sidescan_read": ["ebs:ListSnapshotBlocks", "ebs:ListChangedBlocks", "ebs:GetSnapshotBlock",
+                      "ec2:DescribeSnapshots"],
+    # create-mode superset: the read actions PLUS the snapshot-lifecycle writes.
     "sidescan": ["ebs:ListSnapshotBlocks", "ebs:ListChangedBlocks", "ebs:GetSnapshotBlock",
                  "ec2:DescribeSnapshots", "ec2:CreateSnapshot", "ec2:CreateTags",
                  "ec2:CopySnapshot", "ec2:ModifySnapshotAttribute", "ec2:DeleteSnapshot"],
@@ -133,6 +137,7 @@ _OPTIN = {
 # so the CFN side is compared by block-scoped substring membership + a foreign-action guard
 # (together == set-equality) rather than the quoted-action regex used on the TF side.
 _CFN_POLICYNAME = {
+    "sidescan_read": "CnappSideScanReadOnly",
     "sidescan": "CnappSideScanSnapshotOps",
     "flowlog_insights": "CnappFlowLogInsights",
     "dspm_surfaces": "CnappDspmSurfaces",
@@ -166,6 +171,18 @@ def test_tf_optin_blocks_match_cfn():
             assert a in cfn_text, f"opt-in {res}: CFN comment missing {a!r} (drift vs TF)"
 
 
+def test_tf_sidescan_read_is_pure_read_no_writes():
+    # the DEFAULT side-scan mode (pre-existing snapshots) must be provably write-free: the
+    # read-only grant carries ONLY EBS-direct reads + DescribeSnapshots, never a snapshot write.
+    block = _tf_block("sidescan_read")
+    for write in ("CreateSnapshot", "CopySnapshot", "ModifySnapshotAttribute",
+                  "DeleteSnapshot", "CreateTags"):
+        assert write not in block, f"read-only side-scan grant must not include {write}"
+    assert "CnappSideScanReadOnly" in block and "var.enable_sidescan_read" in _tf()
+    # the CFN comment carries the same read-only PolicyName
+    assert "CnappSideScanReadOnly" in open(CFN, encoding="utf-8").read()
+
+
 def test_tf_image_layer_pull_is_repo_and_tag_scoped():
     # the byte-read grant MUST stay scoped to ECR repos AND gated on the cnapp:imagescan tag,
     # in BOTH the TF resource and the CFN comment — broadening the resource or dropping the tag
@@ -197,7 +214,8 @@ def test_tf_default_role_has_no_write_or_data_actions():
                       "GetDownloadUrlForLayer", "BatchGetImage"):
         assert forbidden not in always_on, f"default TF role must not grant {forbidden}"
     # and each opt-in policy is guarded by a default-false toggle
-    for res, var in (("sidescan", "enable_sidescan"),
+    for res, var in (("sidescan_read", "enable_sidescan_read"),
+                     ("sidescan", "enable_sidescan"),
                      ("flowlog_insights", "enable_flowlog_insights"),
                      ("dspm_surfaces", "enable_dspm_surfaces"),
                      ("cdr_forensics", "enable_cdr_forensics"),
@@ -205,7 +223,8 @@ def test_tf_default_role_has_no_write_or_data_actions():
         assert re.search(rf'resource "aws_iam_role_policy" "{res}"\s*{{\s*\n\s*count\s*=\s*var\.{var}',
                          tf), f"{res} must be count-gated by var.{var}"
     vars_src = open(TF_VARS, encoding="utf-8").read()
-    for var in ("enable_sidescan", "enable_flowlog_insights", "enable_dspm_surfaces",
-                "enable_cdr_forensics", "enable_eks_kspm", "enable_image_layer_pull"):
+    for var in ("enable_sidescan_read", "enable_sidescan", "enable_flowlog_insights",
+                "enable_dspm_surfaces", "enable_cdr_forensics", "enable_eks_kspm",
+                "enable_image_layer_pull"):
         assert re.search(rf'variable "{var}"[\s\S]*?default\s*=\s*false', vars_src), \
             f"{var} must default to false"

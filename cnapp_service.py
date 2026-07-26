@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol
 
 import aws_copilot
+import aws_correlate
+import aws_graph
 import aws_ingest
 import aws_cdr
 import aws_forensics
@@ -435,6 +437,62 @@ class PlatformService:
     def get_graph(self, account_id: str) -> Optional[dict]:
         p = self.results.get_latest(account_id)
         return (p or {}).get("graph_full")
+
+    def get_blast_radius(self, account_id: str, node: str,
+                         *, max_hops: int = 8) -> Optional[dict]:
+        """Blast radius of a graph node, computed ON DEMAND from the account's persisted
+        ``graph_full`` (read-only; zero AWS calls). Over the attack-edge universe
+        (``aws_correlate.E_PATH``) it answers: what crown-jewel / admin can ``node`` REACH
+        (forward), and what can REACH ``node`` (reverse). Returns None when the account has
+        no scan (→404). ``max_hops`` is clamped to a sane bound. Imports-and-calls the
+        byte-frozen ``aws_correlate`` (E_PATH, crown_nodes) — never edits it."""
+        gd = self.get_graph(account_id)
+        if gd is None:
+            return None
+        hops = max(1, min(int(max_hops or 8), 12))
+        g = aws_graph.SecurityGraph.from_dict(gd)
+
+        def _seg(nid: str) -> str:
+            return nid.rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+
+        def _row(nid: str, path: List[str], terminal: Optional[str] = None) -> dict:
+            nd = g.node(nid) or {}
+            props = nd.get("props") or {}
+            return {"id": nid, "kind": nd.get("kind", "Unknown"),
+                    "label": props.get("name") or _seg(nid),
+                    "path": path, "terminal": terminal}
+
+        if g.node(node) is None:
+            return {"node": node, "exists": False, "kind": None, "label": _seg(node),
+                    "reaches": [], "reached_by": [], "internet_reachable": False,
+                    "max_hops": hops, "counts": {"crowns": 0, "admins": 0, "sources": 0}}
+
+        E = aws_correlate.E_PATH
+        fwd = g.reachable(node, E, max_hops=hops)
+        rev = g.reverse_reachable(node, E, max_hops=hops)
+        crowns = aws_correlate.crown_nodes(g)
+        admins = {n["id"] for n in g.nodes("AdminCapability")}
+
+        reaches: List[dict] = []
+        for nid, path in fwd.items():
+            term = "data" if nid in crowns else ("admin" if nid in admins else None)
+            if term:
+                reaches.append(_row(nid, path, term))
+        # crowns first, then shortest path, then id — a stable, most-critical-first order
+        reaches.sort(key=lambda r: (r["terminal"] != "data", len(r["path"]), r["id"]))
+
+        reached_by = [_row(nid, path) for nid, path in rev.items()]
+        reached_by.sort(key=lambda r: (len(r["path"]), r["id"]))
+        internet = any((g.node(nid) or {}).get("kind") == "InternetSource" for nid in rev)
+
+        nd = g.node(node)
+        return {"node": node, "exists": True, "kind": nd.get("kind", "Unknown"),
+                "label": (nd.get("props") or {}).get("name") or _seg(node),
+                "reaches": reaches, "reached_by": reached_by,
+                "internet_reachable": internet, "max_hops": hops,
+                "counts": {"crowns": sum(1 for r in reaches if r["terminal"] == "data"),
+                           "admins": sum(1 for r in reaches if r["terminal"] == "admin"),
+                           "sources": len(reached_by)}}
 
     def get_issues(self, account_id: str, *, severity: Optional[str] = None,
                    status: Optional[str] = None) -> List[dict]:

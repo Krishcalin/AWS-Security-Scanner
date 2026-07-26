@@ -10,9 +10,11 @@ import type {
   TrendRow, DriftDigest, DigestDelivery,
   IngestedVuln, IngestDoc, IngestResult,
   SbomSubject, SbomSnapshot, SbomComponent, SbomDiffData, LicenseFinding, VexStatementRow,
-  RegistryRepo, RegistryImage,
+  RegistryRepo, RegistryImage, CopilotAnswer, BlastRadius,
 } from './types'
 import { deriveCrosswalk } from '../lib/crosswalk'
+import { computeBlastRadius } from '../lib/blast'
+import { pickCopilotAnswer } from '../lib/copilot'
 
 const MODE = (import.meta.env.VITE_DATA_SOURCE as string) ?? 'sample'
 const API_BASE = (import.meta.env.VITE_API_BASE as string) ?? '/api'
@@ -444,12 +446,29 @@ const sbomApi = {
   },
 }
 
+// ── grounded copilot (RAG over the account's OWN scan; no data leaves the boundary) ──
+// Sample mode resolves a canned answer from a fixture (matching the real answer() dict
+// shape); live mode POSTs to the scope-appropriate hub route. The LLM is a backend-only
+// injected seam — the browser NEVER calls a model host, so air-gap holds.
+interface CopilotFixture { answers: { match: string[]; answer: CopilotAnswer }[]; abstain: CopilotAnswer }
+let _copilotFx: CopilotFixture | null = null
+async function sampleCopilot(question: string): Promise<CopilotAnswer> {
+  if (!_copilotFx) _copilotFx = await get<CopilotFixture>('/sample/copilot.json')
+  // most-specific match wins (longest matched keyword), so a broad 'summary' never shadows a
+  // specific 'attack path' — mirrors the backend's intent-priority in detect_intent.
+  const hit = pickCopilotAnswer(_copilotFx.answers, question)
+  return hit ? hit.answer : _copilotFx.abstain
+}
+
 export const api = {
   ...connectorApi,
   ...complianceApi,
   ...schedulingApi,
   ...vulnApi,
   ...sbomApi,
+  copilot: (scope: string, question: string): Promise<CopilotAnswer> =>
+    SAMPLE ? sampleCopilot(question)
+      : post<CopilotAnswer>(scope === 'org' ? '/org/copilot' : `/accounts/${scope}/copilot`, { question }),
   orgOverview: () => get<OrgOverview>(endpoint('/org/overview', 'org_overview.json')),
   listAccounts: () => get<Account[]>(endpoint('/accounts', 'accounts.json')),
   accountSummary: (id: string) =>
@@ -460,6 +479,14 @@ export const api = {
     get<AttackPath[]>(endpoint(`/accounts/${id}/paths`, `account_${id}_paths.json`)),
   graph: (id: string) =>
     get<GraphFull>(endpoint(`/accounts/${id}/graph`, `account_${id}_graph.json`)),
+  // blast radius of a graph node — live hits the read-only hub route; sample BFSes the
+  // account's graph fixture client-side (same shape via computeBlastRadius).
+  blastRadius: async (id: string, node: string, maxHops = 8): Promise<BlastRadius> => {
+    if (!SAMPLE)
+      return get<BlastRadius>(`${API_BASE}/accounts/${id}/graph/blast-radius?node=${encodeURIComponent(node)}&max_hops=${maxHops}`)
+    const g = await get<GraphFull>(`/sample/account_${id}_graph.json`)
+    return computeBlastRadius(g, node, maxHops)
+  },
   findings: (id: string) =>
     get<FindingCatalogEntry[]>(endpoint(`/accounts/${id}/findings`, `account_${id}_findings.json`)),
   orgFindings: () =>

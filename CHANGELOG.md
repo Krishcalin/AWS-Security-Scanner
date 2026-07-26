@@ -4,6 +4,53 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.34.0] — 2026
+
+**Phase-1 "turnkey the wedge + productize the graph"** — four builds that make OverWatch's
+sovereign wedge complete and its existing engine legible: a signed offline vuln-feed bundle,
+an interactive blast-radius query, the grounded copilot wired into the console, and the
+read-only-by-default posture for the (in-progress) agentless EBS side-scan.
+
+### Added
+- **Offline vuln-feed bundle** (`overwatch-vulndb`) — the runtime ships a best-in-class
+  matching engine but BYO catalog; this turns that into a turnkey, *signed* air-gap artifact.
+  `scripts/overwatch_vulndb.py` (pure-stdlib) merges staged OSV + EPSS + KEV into the exact
+  `{records, epss, kev, exploits}` JSON the `--vuln-db` loader already parses (records kept
+  byte-exact; ecosystems scoped to the engine-matched set), and signs it with a **vendored
+  pure-stdlib Ed25519** (`aws_ed25519.py`, RFC 8032, no new runtime dependency — keeps
+  `requirements-core` boto3-only). `scripts/build_vulndb_bundle.sh` does the internet fetch in
+  **bash** (curl — outside the Python zero-telemetry tripwire), exactly like
+  `build_offline_bundle.sh`. New `--vuln-db-pubkey` opt-in: when set, the feed **must** carry a
+  valid `<feed>.sig` — an unsigned, tampered, or unresolvable-key feed is **rejected
+  fail-closed** (CWPP-04 WARN); unsigned feeds still load when no key is configured.
+- **Blast-radius / reverse-reachability** — `SecurityGraph.reverse_reachable()` (an on-demand
+  reverse walk; the stored graph + Neptune serialization stay byte-identical) + a read-only
+  `GET /accounts/{id}/graph/blast-radius` route (viewer-gated, tenant-scoped) + an interactive
+  `@xyflow` panel launched from any attack-path node: "what can this node reach (crown-jewels /
+  admin) and what can reach it," over the frozen `aws_correlate.E_PATH` edge universe. The
+  client computes it identically to the hub in sample mode (code-point-exact ordering parity).
+- **"Ask OverWatch" copilot in the console** — the grounded, abstain-guarded RAG copilot was
+  API-wired but had no UI; now a slide-over chat panel renders its answers + citations + a
+  "grounded · retrieval-only" chip. The LLM stays a backend-only seam — the browser never
+  calls a model host, so the air-gap holds.
+- **Two-key EBS side-scan IAM split** — a new read-only `CnappSideScanReadOnly` grant
+  (`enable_sidescan_read`, in the Terraform module + the CFN twin, parity-tested) so the
+  **default** pre-existing-snapshot side-scan mode needs *zero* write IAM on the scanned
+  account; point-in-time create-snapshot stays a separate opt-in write grant.
+- **Agentless EBS filesystem partition plane** (`aws_sidescan_fs.py`) — a dependency-free
+  GPT/MBR partition-table reader + Linux root-filesystem selection over the reassembled
+  `SparseImageIO`, filling the pre-committed `DissectExtractor` seam. It fails **safe** on an
+  encrypted (LUKS), LVM, or unreadable volume (honest note / `SideScanUnavailable` →
+  CWPP-04 INFO) — never a false-clean inventory.
+
+### Notes
+- The userspace ext4/xfs *byte-parse* (via a pinned `dissect.target`) is a tracked **Linux-CI
+  follow-on**: it needs golden filesystem images (`mkfs`) that can't be produced on the
+  Windows dev host, so — matching the repo's existing `parse_windows_software_hive` /
+  `parse_rpmdb_bdb` deferral discipline — `DissectExtractor` stays inert (INFO) until the
+  parse is validated against a golden image on a Linux runner, at which point the flagship
+  EC2 VM scan flips live.
+
 ## [2.33.0] — 2026
 
 **Multi-tenancy hardening: workspace-scoped connectors** (closes the last MSSP isolation

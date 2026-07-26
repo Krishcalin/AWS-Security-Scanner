@@ -74,7 +74,27 @@ resource "aws_iam_role_policy" "extras" {
 
 # ── OPT-IN grants (default OFF). Each reproduces the corresponding commented CFN block. ──
 
-# Agentless EBS side-scan snapshot lifecycle (WRITES, tag-scoped to cnapp:sidescan).
+# Agentless EBS side-scan READ-ONLY (pre-existing snapshots) — the key for the DEFAULT
+# read-only mode (--side-scan-snapshot-mode existing). Pure EBS-direct block reads +
+# ec2:DescribeSnapshots; NO write on the scanned account, so pre-existing mode needs no
+# write IAM at all. (Create mode uses CnappSideScanSnapshotOps below, which is a superset.)
+resource "aws_iam_role_policy" "sidescan_read" {
+  count = var.enable_sidescan_read ? 1 : 0
+  name  = "CnappSideScanReadOnly"
+  role  = aws_iam_role.scanner.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Resource = "*", Action = [
+        "ebs:ListSnapshotBlocks", "ebs:ListChangedBlocks", "ebs:GetSnapshotBlock",
+      "ec2:DescribeSnapshots"] },
+    ]
+  })
+}
+
+# Agentless EBS side-scan snapshot lifecycle (WRITES, tag-scoped to cnapp:sidescan) for
+# point-in-time create mode (--side-scan-snapshot-mode create). Superset: also carries the
+# block reads, so create mode needs only this key.
 resource "aws_iam_role_policy" "sidescan" {
   count = var.enable_sidescan ? 1 : 0
   name  = "CnappSideScanSnapshotOps"

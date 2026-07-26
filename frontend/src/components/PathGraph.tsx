@@ -34,7 +34,7 @@ function KindNode({ data }: NodeProps) {
 
 const nodeTypes = { kind: KindNode }
 
-export function PathGraph({ path, height = 300 }: { path: AttackPath; height?: number }) {
+export function PathGraph({ path, height = 300, onNodeFocus }: { path: AttackPath; height?: number; onNodeFocus?: (nodeId: string) => void }) {
   const nodes: Node[] = path.nodes.map((nid, i) => ({
     id: nid,
     type: 'kind',
@@ -71,6 +71,9 @@ export function PathGraph({ path, height = 300 }: { path: AttackPath; height?: n
         fitViewOptions={{ padding: 0.2 }}
         nodesConnectable={false}
         edgesFocusable={false}
+        nodesDraggable={!!onNodeFocus}
+        onNodeClick={onNodeFocus ? (_, n) => onNodeFocus(n.id) : undefined}
+        className={onNodeFocus ? '[&_.react-flow__node]:cursor-pointer' : undefined}
         minZoom={0.3}
         maxZoom={1.5}
       >

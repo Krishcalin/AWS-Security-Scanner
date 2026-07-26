@@ -17,6 +17,7 @@ import { Placeholder } from './routes/Placeholder'
 import { TourProvider } from './lib/tour/TourProvider'
 import { TourOverlay } from './components/tour/TourOverlay'
 import { TourLauncher } from './components/tour/TourLauncher'
+import { CopilotPanel } from './components/CopilotPanel'
 
 export default function App() {
   // BrowserRouter is outermost so ScopeProvider (scope lives in `?scope=`) and the
@@ -43,6 +44,7 @@ export default function App() {
               <Route path="*" element={<Placeholder />} />
             </Route>
           </Routes>
+          <CopilotPanel />
           <TourOverlay />
           <TourLauncher />
         </TourProvider>

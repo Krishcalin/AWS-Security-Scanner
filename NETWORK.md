@@ -25,7 +25,8 @@ Every outbound connection made by OverWatch falls into exactly one of two classe
 | Seam | Lambda artifact fetch | `aws_sidescan_lambda.fetch_lambda_artifact` (injected `http_get`) | operator's AWS | **opt-in** | in-VPC |
 | Seam | Grounded copilot LLM | `PlatformService(copilot_llm=…)` (`cnapp_service.py`) | operator's LLM endpoint | **`None` → offline extractive** | unused, or in-VPC model |
 | Seam | AWS Marketplace metering (optional) | `cnapp_marketplace_metering` → `marketplacemetering:MeterUsage` | AWS (metering) | **opt-in, off by default** | unused (use a contract/private-offer SKU) |
-| Data | OSV / EPSS / KEV vulnerability bundle | `--vuln-db <path>` / injected `vuln_bundle` (`aws_live_scanner.py`, `cnapp_service.py`) | **local file — NEVER internet-fetched** | `None` → enrichment empty (honest) | mounted read-only from disk |
+| Data | OSV / EPSS / KEV vulnerability bundle | `--vuln-db <path>` / injected `vuln_bundle` (`aws_live_scanner.py`, `cnapp_service.py`) | **local file — NEVER internet-fetched** | `None` → enrichment empty (honest) | mounted read-only from disk; build + sign with `scripts/overwatch_vulndb.py`, verify in-boundary via `--vuln-db-pubkey` |
+| Build-host | vuln-feed fetch (OSV/EPSS/KEV) | `scripts/build_vulndb_bundle.sh` (**bash `curl`**) | osv-vulnerabilities GCS · FIRST.org EPSS · CISA KEV | **build host ONLY — never in the runtime** | run once on a connected host; carry the signed bundle across the air-gap |
 
 ## Security guarantees (pinned by `tests/test_zero_telemetry.py`)
 
@@ -45,6 +46,13 @@ Every outbound connection made by OverWatch falls into exactly one of two classe
   imported by **only three files** — `aws_kube.py`, `cnapp_connectors.py`, and
   `aws_layer_fetch.py`. Every other module is stdlib/boto3 only. (`urllib.parse` — URL
   string encoding — is not network I/O and is used freely.)
+- **Signed vuln-feed provenance (offline)**: the feed is built + signed on a *connected*
+  host (`scripts/overwatch_vulndb.py`, a **vendored pure-stdlib Ed25519** — no `cryptography`
+  wheel, no new runtime dependency) and **verified inside the air-gap** with only the public
+  key (`--vuln-db-pubkey`). The internet fetch is `curl` in a **bash** script, so no shipped
+  `.py` gains a network primitive — the runtime's egress surface is provably unchanged. When
+  a pubkey is configured, an unsigned / tampered / unresolvable-key feed is **rejected
+  fail-closed**; the runtime never fetches, it only loads (and optionally verifies) a local file.
 
 ## Air-gapped posture
 

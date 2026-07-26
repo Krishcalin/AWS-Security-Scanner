@@ -19,6 +19,36 @@ It contains: the Docker image (`docker save`), the pinned wheelhouse, the prebui
 (`frontend/dist`), the deploy artifacts (`deploy/`, Terraform + CFN), and this runbook.
 Nothing in the bundle needs the internet on the sealed side.
 
+## The signed vulnerability feed (optional, recommended)
+
+OverWatch's CVE-matching engine is best-in-class but ships **without a catalog** — the feed is
+BYO so nothing is stale-by-build. Build a **signed** feed on the connected host and carry it
+across the air-gap; the sealed hub verifies it with only a public key.
+
+```bash
+# Once, on the connected host: generate a signing keypair. Keep the .key OFFLINE.
+python scripts/overwatch_vulndb.py keygen --out-prefix overwatch-vulndb-key
+
+# Fetch (curl, bash) + assemble (pure-stdlib) + sign, in one step:
+scripts/build_vulndb_bundle.sh overwatch-vulndb-key.key vulndb-out
+#   -> vulndb-out/overwatch-vulndb.json  + .json.sig  + .json.manifest.json
+```
+
+Carry `overwatch-vulndb.json` + `overwatch-vulndb.json.sig` (and pin the `.pub` in the image).
+On the sealed side, run the scanner with the feed **and** the public key so a tampered or
+unsigned feed is **rejected fail-closed**:
+
+```bash
+python aws_live_scanner.py ... --side-scan \
+    --vuln-db /feeds/overwatch-vulndb.json \
+    --vuln-db-pubkey overwatch-vulndb-key.pub
+```
+
+The fetch is `curl` in bash on the *connected* host only; the runtime never reaches out — it
+loads a local file and verifies the detached Ed25519 signature entirely in-boundary. Omit
+`--vuln-db-pubkey` to load an unsigned feed (back-compat); signed-and-verified is the
+recommended posture.
+
 ## On the air-gapped hub
 
 1. **Load the image**

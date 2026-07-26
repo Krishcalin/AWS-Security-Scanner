@@ -86,11 +86,28 @@ Resources:
         - { Key: 'cnapp:managed', Value: 'true' }
 
   # ── OPT-IN ONLY (disabled by default) ──────────────────────────────────────
-  # Agentless EBS workload side-scan needs snapshot-lifecycle WRITE actions
-  # (CreateSnapshot on a customer volume, share to the hub, cleanup). These are
-  # writes and touch a customer resource, so they are NOT in the default role.
-  # To enable: set the EnableSideScan condition and attach CnappSideScanSnapshotOps
-  # (tag-scoped to cnapp:sidescan; mirrors aws_sidescan_ebs OWNER_TAG / is_owned).
+  # Agentless EBS workload side-scan is a TWO-KEY grant, split by snapshot mode:
+  #
+  # (1) READ-ONLY / pre-existing-snapshot mode (--side-scan-snapshot-mode existing, the
+  #     DEFAULT) reads PRE-EXISTING snapshots via the EBS Direct APIs. It performs NO write
+  #     on the scanned account, so it needs ONLY CnappSideScanReadOnly below. This is the
+  #     key that keeps "read-only by default on a scanned account" literally true.
+  #
+  #   - PolicyName: CnappSideScanReadOnly
+  #     PolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Effect: Allow
+  #           Action: [ ebs:ListSnapshotBlocks, ebs:ListChangedBlocks, ebs:GetSnapshotBlock,
+  #                     ec2:DescribeSnapshots ]
+  #           Resource: '*'
+  #
+  # (2) CREATE mode (--side-scan-snapshot-mode create) additionally needs the snapshot-
+  #     lifecycle WRITE actions (CreateSnapshot on a customer volume, copy/share to the hub,
+  #     cleanup). These are writes and touch a customer resource, so they are opt-in only.
+  #     CnappSideScanSnapshotOps is a SUPERSET (also carries the block reads), so create mode
+  #     needs only this one policy (tag-scoped to cnapp:sidescan; mirrors aws_sidescan_ebs
+  #     OWNER_TAG / is_owned).
   #
   #   - PolicyName: CnappSideScanSnapshotOps
   #     PolicyDocument:

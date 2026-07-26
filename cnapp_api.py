@@ -347,6 +347,17 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     def graph(account_id: str):
         return service.get_graph(account_id)
 
+    @app.get("/accounts/{account_id}/graph/blast-radius",
+             dependencies=[Depends(account_gate("viewer"))])
+    def blast_radius(account_id: str, node: str = Query(min_length=1),
+                     max_hops: int = Query(8, ge=1, le=12)):
+        # read-only reverse+forward reachability over the persisted graph; the node is
+        # resolved strictly against THIS account's graph (unknown -> exists:false, 200).
+        r = service.get_blast_radius(account_id, node, max_hops=max_hops)
+        if r is None:
+            raise HTTPException(status_code=404, detail="no scan results for account")
+        return r
+
     @app.get("/accounts/{account_id}/summary", dependencies=[Depends(account_gate("viewer"))])
     def account_summary(account_id: str):
         s = service.get_account_summary(account_id)
