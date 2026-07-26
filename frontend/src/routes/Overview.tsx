@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { Waypoints, Gem, ShieldCheck, CircleAlert, Cloud, ArrowRight, Scissors, ShieldAlert, Flame } from 'lucide-react'
 import { useScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'

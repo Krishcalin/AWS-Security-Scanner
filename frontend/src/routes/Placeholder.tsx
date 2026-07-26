@@ -1,4 +1,4 @@
-import { useLocation, Link } from 'react-router-dom'
+import { useLocation, Link } from 'react-router'
 import { Hammer } from 'lucide-react'
 import { NAV_MAIN, NAV_ADMIN } from '../lib/nav'
 
