@@ -80,7 +80,7 @@ import aws_winvuln
 import aws_finding_detail
 import aws_graph_neptune
 
-VERSION = "2.30.0"
+VERSION = "2.31.0"
 
 
 def _report_logo() -> str:
@@ -261,6 +261,8 @@ SEVERITY_WEIGHTS = {"CRITICAL": 15, "HIGH": 5, "MEDIUM": 2, "LOW": 0.5, "INFO": 
 CHECK_SEVERITY = {
     # Agentless side-scan (CWPP, Phase 6)
     "CWPP-01": "HIGH", "CWPP-02": "CRITICAL", "CWPP-03": "HIGH",
+    # Phase 4 Slice-5: agentless ECR registry image side-scan (own SBOM, Tier B)
+    "CWPP-05": "HIGH", "CWPP-06": "CRITICAL",
     # Phase 8: Windows agentless OS-vuln (SSM patch compliance) — WINVULN-03 is the
     # interim explicit-WARN that removes the silent false-clean on Windows hosts.
     "WINVULN-01": "HIGH", "WINVULN-02": "CRITICAL", "WINVULN-03": "MEDIUM", "WINVULN-04": "LOW",
@@ -403,6 +405,8 @@ COMPLIANCE_MAP = {
     "CWPP-01": {"NIST": "RA-5", "PCI-DSS": "6.3.1", "SOC2": "CC7.1"},
     "CWPP-02": {"NIST": "SI-2", "PCI-DSS": "11.3.1", "SOC2": "CC7.1"},
     "CWPP-03": {"NIST": "IA-5", "PCI-DSS": "8.3.1", "SOC2": "CC6.1"},
+    "CWPP-05": {"NIST": "RA-5", "PCI-DSS": "6.3.1", "SOC2": "CC7.1"},
+    "CWPP-06": {"NIST": "SI-2", "PCI-DSS": "11.3.1", "SOC2": "CC7.1"},
     # Phase 8 Windows OS-vuln (CIS omitted — no in-guest OS-patch control in CIS AWS
     # Foundations, matching VULN-01/02). WINVULN-03 = the "must actually scan" controls.
     "WINVULN-01": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
@@ -703,6 +707,8 @@ REMEDIATION_MAP = {
     "CWPP-01": "Patch the vulnerable package (CVE reachable on an internet-exposed host — prioritize): aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=instanceids,Values=<INSTANCE_ID> --parameters Operation=Install, then rebuild the AMI from the patched instance.",
     "CWPP-02": "KEV/exploited CVE on a reachable host — patch immediately or isolate: aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=instanceids,Values=<INSTANCE_ID> --parameters Operation=Install ; consider aws ec2 stop-instances --instance-ids <INSTANCE_ID> until patched.",
     "CWPP-03": "Rotate/revoke the exposed credential and move it off disk: aws secretsmanager rotate-secret --secret-id <SECRET_ARN> (or aws iam update-access-key / delete-access-key), attach an instance role, and reference AWS Secrets Manager instead of the on-disk file.",
+    "CWPP-05": "Rebuild the container image on a patched base and push a new digest: bump the base image / vulnerable package in the Dockerfile, rebuild, and push; then retire the vulnerable image with aws ecr batch-delete-image --repository-name <REPO> --image-ids imageDigest=<DIGEST> once nothing runs it, and add a lifecycle policy so old images do not linger.",
+    "CWPP-06": "KEV/exploited CVE in a registry image — rebuild on a patched base and block the digest immediately: patch the Dockerfile base/package, rebuild and push, then aws ecr batch-delete-image --repository-name <REPO> --image-ids imageDigest=<DIGEST>; enable aws ecr put-image-scanning-configuration / registry scanning and a pull-through-cache policy so the exploited image is not redeployed.",
     # Phase 8 Windows OS-vuln — AWS-RunPatchBaseline is OPERATOR-run text only; the scanner
     # only reads describe/get SSM APIs and NEVER executes anything on the host.
     "WINVULN-01": "Install the missing Windows security/critical updates via Patch Manager (operator-run; the scanner only reads describe/get APIs, never executes on the host): aws ssm send-command --document-name AWS-RunPatchBaseline --targets Key=InstanceIds,Values=<INSTANCE_ID> --parameters Operation=Install ; then rebuild the golden AMI. If past end-of-support, upgrade to a supported Windows release.",
@@ -1682,6 +1688,22 @@ class AWSLiveScanner:
         self.side_scan_tags: List[str] = []
         self.side_scan_max = 20                     # hard target ceiling
         self.side_scan_secrets = True
+        # ── Phase 4 Slice-5: agentless ECR registry coverage ─────────────────
+        # Tier A (always-on, no new grant): CNT-02 native-scan findings across the
+        # newest-N *tagged* images per repo (was: newest image only). Bounded per
+        # repo; tunable via the per-account knob. Untagged images are skipped.
+        self.ecr_scan_max_images = 20               # Tier-A newest-N tagged per repo
+        self.ecr_scan_max_total = 400               # Tier-A aggregate per-scan image budget
+        self._ecr_scan_mode: Optional[str] = None   # ENHANCED|BASIC|DISABLED (registry-wide)
+        # Tier B (OPT-IN, two-key: this flag + the CnappImageLayerPull IAM grant):
+        # pull image layers → own SBOM → OSV match, Inspector-independent. Inert
+        # until --side-scan-images is set; the layer bytes are fetched via the
+        # injected _layer_get seam (raw HTTPS GET of the presigned S3 URL).
+        self.side_scan_images = False               # --side-scan-images opt-in
+        self.side_scan_images_max = 1               # hard per-repo pull ceiling (expensive)
+        self.ecr_image_max_bytes = 2 * 1024 ** 3    # per-image compressed size cap (2 GiB)
+        self._layer_get = None                      # test/prod seam: (url)->bytes|None
+        self.registry_sboms: List[Dict] = []        # pulled-image SBOMs -> hosted snapshot persist
         # ── Phase 3 Layer B: VPC Flow-Log observed-traffic overlay (--flow-logs) ──
         # Off by default: reading flow-log CONTENT needs an OPTIONAL, resource-scoped
         # logs:StartQuery grant NOT in the default role, and Insights bills per GB
@@ -3400,7 +3422,9 @@ class AWSLiveScanner:
         self._log("CNT-01: ECR scan-on-push and encryption")
         try:
             ecr   = self._client("ecr")
+            self._record_ecr_scan_mode(ecr)             # Tier-A: registry scan mode
             repos = ecr.describe_repositories()["repositories"]
+            self._ecr_budget = self.ecr_scan_max_total  # Tier-A aggregate image budget (this region)
             if not repos:
                 self._add("WARN", "CNT-01", "ECR", "ecr",
                           "No ECR repositories found")
@@ -3431,7 +3455,12 @@ class AWSLiveScanner:
                               f"(supply-chain poisoning) | {rname}")
                 self._check_ecr_repo_policy(ecr, repo)      # CNT-03
                 self._check_ecr_lifecycle(ecr, repo)        # CNT-05
-                self._ingest_ecr_scan(ecr, repo)
+                self._ingest_ecr_scan(ecr, repo)            # CNT-02 Tier-A (native, always-on)
+                try:
+                    self._scan_registry_images(ecr, repo)   # Tier-B (opt-in layer-pull)
+                except Exception as e:                      # one repo's pull never aborts the sweep
+                    self._add("INFO", "CWPP-04", "ECR", rname,
+                              f"registry image side-scan failed for {rname}: {e}")
         except Exception as e:
             self._add("WARN", "CNT-01", "ECR", "ecr", str(e))
 
@@ -3530,28 +3559,59 @@ class AWSLiveScanner:
                 self._add("WARN", "CNT-05", "ECR", rname,
                           f"No lifecycle policy — untagged/old images accumulate | {rname}")
 
+    def _record_ecr_scan_mode(self, ecr) -> None:
+        """Best-effort: record the registry-wide scanning mode. ENHANCED (Inspector)
+        already yields application-package CVEs natively; BASIC (Clair) is OS-package
+        only, so the opt-in Tier-B layer-pull adds the most value on BASIC registries.
+        Stored for the API/console + to hint Tier-B worth — never a finding here."""
+        try:
+            fn = getattr(ecr, "get_registry_scanning_configuration", None)
+            if fn is None:
+                return
+            cfg = fn().get("scanningConfiguration") or {}
+            self._ecr_scan_mode = ((cfg.get("scanType") or "").upper() or None)
+        except Exception:
+            self._ecr_scan_mode = None          # denied/old-SDK -> unknown, no finding
+
     def _ingest_ecr_scan(self, ecr, repo: Dict) -> None:
-        """CNT-02 — pull the ECR *native* image-scan findings for the newest image in a
-        repo and project HIGH/CRITICAL CVEs into the graph as ECRImage --HAS_VULN-->.
-        This is free basic-scan signal that surfaces even when Amazon Inspector
-        (enhanced scanning) is disabled. Bounded and fully best-effort."""
+        """CNT-02 (Tier A) — pull the ECR *native* image-scan findings for the newest-N
+        *tagged* images in a repo (bounded by self.ecr_scan_max_images) and project
+        HIGH/CRITICAL CVEs into the graph as ECRImage --HAS_VULN-->. Free basic-scan
+        signal that surfaces even when Amazon Inspector (enhanced scanning) is off.
+        Untagged images are skipped (usually orphaned build artifacts). Best-effort."""
         rname = repo["repositoryName"]
         ruri  = repo.get("repositoryUri", rname)
         try:
             imgs: List[Dict] = []
             for page in ecr.get_paginator("describe_images").paginate(
-                repositoryName=rname, filter={"tagStatus": "ANY"}
+                repositoryName=rname, filter={"tagStatus": "TAGGED"}
             ):
                 imgs.extend(page.get("imageDetails", []))
         except Exception:
             return
-        if not imgs:
-            return
         # imagePushedAt is a tz-aware datetime in real boto3 (and optional). Use a
         # comparable epoch sentinel so a missing field can't raise TypeError.
         _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
-        latest = max(imgs, key=lambda d: d.get("imagePushedAt") or _epoch)
-        digest = latest.get("imageDigest")
+        tagged = [d for d in imgs if d.get("imageTags") and d.get("imageDigest")]
+        tagged.sort(key=lambda d: d.get("imagePushedAt") or _epoch, reverse=True)
+        # per-repo clamp (defense in depth beyond argparse) AND a per-scan aggregate budget so
+        # a large estate (many repos x newest-N) can't multiply describe_image_scan_findings
+        # into a throttle/wall-time blow-up.
+        per_repo = max(1, min(self.ecr_scan_max_images, 100))
+        budget = getattr(self, "_ecr_budget", None)
+        for img in tagged[:per_repo]:
+            if budget is not None:
+                if self._ecr_budget <= 0:
+                    break
+                self._ecr_budget -= 1
+            self._ingest_ecr_image_findings(ecr, rname, ruri, img)
+
+    def _ingest_ecr_image_findings(self, ecr, rname: str, ruri: str, img: Dict) -> None:
+        """Emit CNT-02 ECRImage --HAS_VULN--> CVE edges for ONE image's native ECR scan
+        findings (basic `findings[]` or enhanced `enhancedFindings[]`). Shared by the
+        Tier-A sweep. The ECRImage node id (`{ruri}@{digest}`) converges with the
+        Inspector / RUNS_IMAGE / Tier-B side-scan lanes via `ecr_image_node_ids`."""
+        digest = img.get("imageDigest")
         if not digest:
             return
         try:
@@ -3574,7 +3634,7 @@ class AWSLiveScanner:
         g = self._ensure_graph()
         node = f"{ruri}@{digest}"
         g.add_node(node, "ECRImage", repository=rname, digest=digest, image_uri=ruri)
-        tags = latest.get("imageTags") or []
+        tags = img.get("imageTags") or []
         tag_s = f":{tags[0]}" if tags else ""
         for cve, sev in cves[:100]:
             # NB: prop key must NOT be "source"/"target"/"id"/"kind" — those collide
@@ -3582,8 +3642,79 @@ class AWSLiveScanner:
             g.add_node(cve, "Vulnerability", severity=sev, scan_source="ecr-native-scan")
             g.add_edge(node, cve, "HAS_VULN", cve=cve, severity=sev, scan_source="ecr-native-scan")
             self._add("FAIL", "CNT-02", "ECR", f"{rname}{tag_s}",
-                      f"container-image {sev} {cve} in newest image of {rname} "
+                      f"container-image {sev} {cve} in {rname}{tag_s} "
                       f"(ECR native scan) | {rname}@{digest[:19]}")
+
+    def _scan_registry_images(self, ecr, repo: Dict) -> None:
+        """Tier B (OPT-IN, two-key: --side-scan-images + the CnappImageLayerPull IAM grant)
+        — pull the newest-N *tagged* images' layers, run OverWatch's own SBOM->OSV side-scan
+        (Inspector-independent), and emit ECRImage --HAS_VULN--> edges (scan_source=
+        'ecr-sidescan') that MERGE-converge with the Tier-A native-scan / Inspector /
+        RUNS_IMAGE lanes on the SAME node id. A registry-only image (no inbound RUNS_IMAGE
+        from a reachable workload) carries HAS_VULN but never enters E_PATH, so it ranks
+        shift-left and aws_correlate.py stays byte-frozen. Fully best-effort / fail-open;
+        the default (no-flag) path never runs it (the guard below returns immediately)."""
+        if not self.side_scan_images:
+            return
+        import aws_registry_sbom
+        import aws_layer_fetch
+        rname = repo["repositoryName"]
+        ruri  = repo.get("repositoryUri", rname)
+        bundle = self._load_vuln_db()
+        feed = bundle[0] if bundle else None
+        epss = bundle[1] if bundle else {}
+        kev  = bundle[2] if bundle else set()
+        exploits = bundle[3] if bundle else set()
+        http_get = self._layer_get or aws_layer_fetch.http_get
+        cap = self.ecr_image_max_bytes
+        # one-time INFO when CVE matching will be skipped (no --vuln-db) — mirrors the host
+        # side-scan so a side-scan-images run without a feed isn't a silent "all clean".
+        if feed is None and self.vuln_db_path is None and not getattr(self, "_registry_vulndb_warned", False):
+            self._registry_vulndb_warned = True
+            self._add("INFO", "CWPP-04", "ECR", "registry",
+                      "no --vuln-db supplied; registry image inventory + secrets only, CVE match skipped")
+        sel_notes: List[str] = []                       # select-level notes (emitted ONCE, below)
+        images = aws_registry_sbom.select_registry_images(
+            ecr, rname, newest_n=self.side_scan_images_max, max_image_bytes=cap, notes=sel_notes)
+        g = self._ensure_graph()
+        for img in images:
+            # per-image notes are diagnostic and carried in r.note — pass a throwaway list so a
+            # failure reason is surfaced exactly ONCE (the skip INFO), never double-emitted.
+            r = aws_registry_sbom.scan_registry_image(
+                ecr, rname, ruri, img, http_get=http_get, feed=feed, epss=epss, kev=kev,
+                exploits=exploits, max_image_bytes=cap,
+                do_secrets=self.side_scan_secrets, notes=[])
+            if not r.ok or r.result is None:
+                self._add("INFO", "CWPP-04", "ECR", rname,
+                          f"registry image side-scan skipped for {rname}@{r.digest[:19]}: {r.note}")
+                continue
+            tag_s = f":{r.tags[0]}" if r.tags else ""
+            # only CRITICAL/HIGH (or KEV) CVEs become graph edges + findings — matches the
+            # Tier-A native-scan filter, so severity is honest (not fixed by the check id).
+            sev_vulns = [m for m in r.result.vulns
+                         if m.kev or (m.severity or "").upper() in ("CRITICAL", "HIGH")]
+            aws_sidescan.emit_node_vuln_edges(
+                g, r.node_id, "ECRImage", sev_vulns, snapshot_id=(r.doc_id or ""),
+                scan_source="ecr-sidescan", repository=rname, digest=r.digest, image_uri=ruri)
+            for m in sev_vulns:
+                fid = "CWPP-06" if m.kev else "CWPP-05"
+                self._add("FAIL", fid, "ECR", f"{rname}{tag_s}",
+                          f"registry image {m.severity} {m.cve} (EPSS {m.epss}, "
+                          f"exploit={m.exploit_available}, fix={'YES' if m.fixed_version else 'NO'}) "
+                          f"in {m.package} {m.installed_version} (agentless SBOM) "
+                          f"| {rname}@{r.digest[:19]}")
+            for s in r.result.secrets:
+                self._add("FAIL", "CWPP-03", "ECR", f"{rname}{tag_s}",
+                          f"{s.kind} in image layer at {s.path}:{s.line} ({s.match_preview}) "
+                          f"| {rname}@{r.digest[:19]}")
+            # stash the FULL SBOM (all components, not just the sev-filtered CVEs) so the hosted
+            # worker persists it as a durable snapshot (diff / license / VEX), best-effort.
+            if r.components:
+                self.registry_sboms.append(
+                    {"node_id": r.node_id,
+                     "doc": aws_registry_sbom.to_cyclonedx(r.node_id, r.components)})
+        for note in sel_notes:
+            self._add("INFO", "CWPP-04", "ECR", rname, f"{note} | {rname}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 8: BACKUP & DR
@@ -11719,6 +11850,9 @@ def _apply_phase6_config(sc, args) -> None:
     sc.side_scan_tags = args.side_scan_tag or []
     sc.side_scan_max = max(1, min(args.side_scan_max, 500))
     sc.side_scan_secrets = args.side_scan_secrets
+    sc.side_scan_images = getattr(args, "side_scan_images", False)
+    sc.side_scan_images_max = max(1, min(getattr(args, "side_scan_images_max", 1), 50))
+    sc.ecr_scan_max_images = max(1, min(getattr(args, "ecr_scan_max_images", 20), 100))
     sc.vuln_db_path = args.vuln_db
     sc.flow_logs = getattr(args, "flow_logs", False)
 
@@ -12017,6 +12151,23 @@ examples:
     parser.add_argument(
         "--no-side-scan-secrets", dest="side_scan_secrets", action="store_false",
         help="Skip the on-disk secret scan during side-scan (CVEs only)",
+    )
+    parser.add_argument(
+        "--side-scan-images", dest="side_scan_images", action="store_true",
+        help="Agentless ECR REGISTRY layer-pull (Slice-5 Tier B): pull image layers, "
+             "build OverWatch's own SBOM, and add ECRImage HAS_VULN edges — "
+             "Inspector-independent. OFF by default; needs the opt-in CnappImageLayerPull "
+             "IAM grant too (two-key). Tier-A native scan findings run without this flag.",
+    )
+    parser.add_argument(
+        "--side-scan-images-max", dest="side_scan_images_max", type=int, default=1,
+        help="Hard cap on images to layer-pull per repo for --side-scan-images (default 1; "
+             "layer pull is expensive)",
+    )
+    parser.add_argument(
+        "--ecr-scan-max-images", dest="ecr_scan_max_images", type=int, default=20,
+        help="Tier-A cap on the newest-N tagged images per repo enriched with ECR native "
+             "scan findings (CNT-02; default 20)",
     )
     parser.add_argument(
         "--flow-logs", dest="flow_logs", action="store_true",

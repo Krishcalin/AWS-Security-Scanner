@@ -11,11 +11,11 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"/>
   <img src="https://img.shields.io/badge/license-GPL--3.0-orange?style=flat-square" alt="GPL-3.0 License"/>
-  <img src="https://img.shields.io/badge/OverWatch-CNAPP%20v2.30.0-38bdf8?style=flat-square" alt="OverWatch CNAPP v2.30.0"/>
+  <img src="https://img.shields.io/badge/OverWatch-CNAPP%20v2.31.0-38bdf8?style=flat-square" alt="OverWatch CNAPP v2.31.0"/>
   <img src="https://img.shields.io/badge/pillars-CSPM%20%7C%20CIEM%20%7C%20CWPP%20%7C%20DSPM%20%7C%20AI--SPM%20%7C%20CDR-6366f1?style=flat-square" alt="CNAPP pillars"/>
   <img src="https://img.shields.io/badge/compliance-CIS%20%7C%20PCI--DSS%20%7C%20HIPAA%20%7C%20SOC2%20%7C%20NIST-purple?style=flat-square" alt="5 Compliance Frameworks"/>
   <img src="https://img.shields.io/badge/checks-296%20severity--mapped-red?style=flat-square" alt="296 severity-mapped checks"/>
-  <img src="https://img.shields.io/badge/tests-1766%20passing-brightgreen?style=flat-square" alt="1766 Tests"/>
+  <img src="https://img.shields.io/badge/tests-1811%20passing-brightgreen?style=flat-square" alt="1811 Tests"/>
 </p>
 
 ---
@@ -645,6 +645,21 @@ image SBOM and pushes it in one CI step. Read routes (viewer):
 **Supply Chain** screen (snapshot picker + diff, component inventory with license chips,
 license-policy findings, VEX ledger).
 
+**Agentless ECR registry enumeration + opt-in layer-pull.** Beyond CI-pushed SBOMs, OverWatch
+scans the registry itself. **Tier A** (always on, no new grant) widens the native ECR
+scan-finding sweep from the newest image to the newest-N *tagged* images per repo (bounded per
+repo + a per-scan aggregate budget). **Tier B** (opt-in **two-key**: the `--side-scan-images`
+flag *and* the `CnappImageLayerPull` grant — repo-scoped, tag-gated on `cnapp:imagescan`) pulls
+image layers, reconstructs the rootfs, and runs OverWatch's own SBOM→OSV pipeline
+(Inspector-independent) — fail-closed on a partial/corrupt rootfs, and the layer bytes are
+fetched through one hardened, allowlisted `aws_layer_fetch.http_get` (HTTPS + `*.amazonaws.com`
+only, re-validated on every redirect). Native (`ecr-native-scan`) and own-SBOM (`ecr-sidescan`)
+CVEs **converge on the same `ECRImage` node** (split by a `scan_source` chip) and persist as
+diffable snapshots; a **registry-only** image (not deployed) carries `HAS_VULN` but never enters
+an attack path — it ranks shift-left, never a false CRITICAL (`aws_correlate.py` stays frozen).
+Read routes `GET /accounts/{id}/registry/{repos,images}`; a **Registry** tab on the Supply Chain
+screen (deployed vs registry-only, scan-source chips, a "not reachable" label).
+
 ### Shared Postgres state
 
 Opening the state store with a `postgresql://` URL runs
@@ -690,8 +705,10 @@ cd frontend && npm install && npm run dev     # http://localhost:5173  (sample d
 > cadence + lifecycle drift/trend/MTTR + per-scan digests through the connectors) +
 > **reachability-verified vulnerability ingest** (SARIF / CycloneDX / SPDX) + **supply-chain
 > ingest** (SBOM diff + SPDX license policy + OpenVEX/CSAF-VEX, with an ingest-only RBAC tier
-> and a GitHub Action) shipped. Remaining: a Postgres connection pool; ECR registry
-> enumeration + opt-in layer-pull.
+> and a GitHub Action) + **agentless ECR registry enumeration + opt-in layer-pull** (Tier-A
+> native scan findings across all tagged images; Tier-B own-SBOM CVEs behind a two-key grant,
+> converging on one node and persisting as diffable snapshots) shipped. Remaining: a Postgres
+> connection pool.
 
 ---
 

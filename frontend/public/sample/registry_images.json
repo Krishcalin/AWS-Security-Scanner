@@ -1,0 +1,38 @@
+[
+  {
+    "node_id": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api@sha256:9f2c1a7deployed",
+    "repository": "payments-api",
+    "image_uri": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api",
+    "digest": "sha256:9f2c1a7deployed00000000000000000000000000000000000000000000000",
+    "subject_key": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api",
+    "deployed": true,
+    "scan_sources": ["ecr-native-scan", "ecr-sidescan"],
+    "vuln_count": 2,
+    "critical": 1,
+    "high": 1
+  },
+  {
+    "node_id": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api@sha256:41ab88candidate",
+    "repository": "payments-api",
+    "image_uri": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api",
+    "digest": "sha256:41ab88candidate0000000000000000000000000000000000000000000000",
+    "subject_key": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api",
+    "deployed": false,
+    "scan_sources": ["ecr-sidescan"],
+    "vuln_count": 1,
+    "critical": 0,
+    "high": 1
+  },
+  {
+    "node_id": "123456789012.dkr.ecr.us-east-1.amazonaws.com/web-frontend@sha256:7c0e5registryonly",
+    "repository": "web-frontend",
+    "image_uri": "123456789012.dkr.ecr.us-east-1.amazonaws.com/web-frontend",
+    "digest": "sha256:7c0e5registryonly000000000000000000000000000000000000000000000",
+    "subject_key": "123456789012.dkr.ecr.us-east-1.amazonaws.com/web-frontend",
+    "deployed": false,
+    "scan_sources": ["ecr-native-scan"],
+    "vuln_count": 1,
+    "critical": 0,
+    "high": 1
+  }
+]

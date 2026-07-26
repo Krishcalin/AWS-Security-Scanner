@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import {
   Boxes, GitCompareArrows, Scale, ShieldQuestion, Plus, Minus, ArrowRight,
-  ShieldAlert, ShieldCheck, FileClock,
+  ShieldAlert, ShieldCheck, FileClock, PackageCheck,
 } from 'lucide-react'
 import { useScope, isOrgScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'
@@ -9,9 +9,10 @@ import { api } from '../api/client'
 import { Card, Loader, ErrorNote, Empty, Chip } from '../components/ui'
 import type {
   SbomSubject, SbomDiffData, SbomComponent, LicenseFinding, VexStatementRow,
+  RegistryRepo, RegistryImage,
 } from '../api/types'
 
-type Tab = 'diff' | 'components' | 'vex'
+type Tab = 'registry' | 'diff' | 'components' | 'vex'
 
 // license category → tone (semantic, separate from the accent): deny-worthy = red,
 // review = amber, allow = green/neutral.
@@ -253,9 +254,80 @@ function VexTab({ id }: { id: string }) {
   )
 }
 
+// ── registry (Slice-5): repos → images, deployed vs registry-only + scan source ──
+function ScanSourceChip({ src }: { src: string }) {
+  const label = src === 'ecr-native-scan' ? 'ECR scan'
+    : src === 'ecr-sidescan' ? 'own SBOM' : src.replace('ingest:', '')
+  const tone = src === 'ecr-sidescan' ? { fg: 'var(--accent)', bg: 'var(--accentdim)' }
+    : src === 'ecr-native-scan' ? { fg: 'var(--ink2)', bg: 'var(--panel2)' }
+    : { fg: 'var(--info)', bg: 'var(--infobg)' }
+  return <Chip fg={tone.fg} bg={tone.bg} mono>{label}</Chip>
+}
+
+function RegistryTab({ id }: { id: string }) {
+  const repos = useFetch<RegistryRepo[]>(() => api.registryRepos(id), [id])
+  const images = useFetch<RegistryImage[]>(() => api.registryImages(id), [id])
+  const [open, setOpen] = useState<string | null>(null)
+  if (repos.loading || images.loading) return <Loader />
+  if (repos.error) return <ErrorNote msg={repos.error} />
+  const rs = repos.data ?? []
+  const imgs = images.data ?? []
+  if (rs.length === 0) {
+    return <Card><Empty icon={<PackageCheck size={26} />}>
+      No ECR repositories in the latest scan. Tier-A native scan findings run automatically;
+      the opt-in <b>--side-scan-images</b> layer-pull adds an own-SBOM CVE + license view.
+    </Empty></Card>
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {rs.map((r) => {
+        const ri = imgs.filter((im) => im.repository === r.repository)
+        const isOpen = open === r.repository
+        return (
+          <Card key={r.repository} className="overflow-hidden">
+            <button onClick={() => setOpen(isOpen ? null : r.repository)}
+              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-panel2 transition-colors text-left">
+              <PackageCheck size={16} className="text-accent shrink-0" />
+              <span className="font-semibold text-ink truncate">{r.repository}</span>
+              <span className="text-xs text-ink3 whitespace-nowrap">{r.images} image{r.images === 1 ? '' : 's'} · {r.deployed} deployed</span>
+              <div className="ml-auto flex items-center gap-2">
+                {r.critical > 0 && <Chip fg="var(--crit)" bg="var(--critbg)" mono>{r.critical} crit</Chip>}
+                {r.high > 0 && <Chip fg="var(--high)" bg="var(--highbg)" mono>{r.high} high</Chip>}
+                {r.findings.length > 0 && <Chip fg="var(--med)" bg="var(--medbg)">{r.findings.length} posture</Chip>}
+                <ArrowRight size={14} className="text-ink3 transition-transform" style={{ transform: isOpen ? 'rotate(90deg)' : 'none' }} />
+              </div>
+            </button>
+            {isOpen && (
+              <div className="border-t border-line2">
+                {ri.length === 0 ? <div className="px-4 py-3 text-xs text-ink3">No CVE-enriched images in this repo.</div> :
+                  ri.map((im) => (
+                    <div key={im.node_id} className="flex items-center gap-3 px-4 py-2.5 border-b border-line2 last:border-0 text-sm">
+                      <span className="font-mono text-xs text-ink2 truncate" title={im.digest}>{im.digest.replace('sha256:', '').slice(0, 16)}</span>
+                      {im.deployed
+                        ? <Chip fg="var(--info)" bg="var(--infobg)">deployed</Chip>
+                        : <Chip fg="var(--ink3)" bg="var(--panel2)">registry-only</Chip>}
+                      <div className="flex items-center gap-1 flex-wrap">{im.scan_sources.map((s) => <ScanSourceChip key={s} src={s} />)}</div>
+                      <div className="ml-auto flex items-center gap-2 whitespace-nowrap">
+                        {im.critical > 0 && <Chip fg="var(--crit)" bg="var(--critbg)" mono>{im.critical}C</Chip>}
+                        {im.high > 0 && <Chip fg="var(--high)" bg="var(--highbg)" mono>{im.high}H</Chip>}
+                        {!im.deployed && (im.critical + im.high) > 0 && (
+                          <span className="text-[11px] text-ink3">not reachable</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </Card>
+        )
+      })}
+    </div>
+  )
+}
+
 export function SupplyChain() {
   const { scope } = useScope()
-  const [tab, setTab] = useState<Tab>('diff')
+  const [tab, setTab] = useState<Tab>('registry')
 
   if (isOrgScope(scope)) {
     return (
@@ -266,6 +338,7 @@ export function SupplyChain() {
   }
 
   const TABS: { k: Tab; label: string; icon: ReactNode }[] = [
+    { k: 'registry', label: 'Registry', icon: <PackageCheck size={15} /> },
     { k: 'diff', label: 'SBOM Diff', icon: <GitCompareArrows size={15} /> },
     { k: 'components', label: 'Components & License', icon: <Scale size={15} /> },
     { k: 'vex', label: 'VEX', icon: <FileClock size={15} /> },
@@ -283,6 +356,7 @@ export function SupplyChain() {
           </button>
         ))}
       </div>
+      {tab === 'registry' && <RegistryTab id={scope} />}
       {tab === 'diff' && <DiffTab id={scope} />}
       {tab === 'components' && <ComponentsTab id={scope} />}
       {tab === 'vex' && <VexTab id={scope} />}

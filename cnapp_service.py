@@ -730,6 +730,95 @@ class PlatformService:
         return ([] if self.state is None
                 else self.state.list_components(account_id, snapshot_id=snapshot, license_category=license))
 
+    # ── Slice-5: agentless ECR registry views (derived from the persisted scan) ──
+    def list_registry_images(self, account_id: str, repo: Optional[str] = None) -> List[dict]:
+        """ECR registry images from the latest scan graph — each with its repo, digest, the
+        scan_source(s) that found its CVEs (ecr-native-scan / ecr-sidescan / ingest:<tool>), a
+        **deployed** vs **registry-only** flag (an inbound RUNS_IMAGE edge marks a deployed
+        image), CVE counts, and its ``subject_key`` for deep-linking into the SBOM diff /
+        components / VEX tabs. Read-only — works purely off the persisted ``graph_full``."""
+        g = self.get_graph(account_id) or {}
+        runners: set = set()
+        vulns: dict = {}
+        for e in g.get("edges", []):
+            k = e.get("kind")
+            if k == "RUNS_IMAGE":
+                runners.add(e.get("target"))
+            elif k == "HAS_VULN":
+                v = vulns.setdefault(e.get("source"),
+                                     {"sources": set(), "count": 0, "critical": 0, "high": 0})
+                if e.get("scan_source"):
+                    v["sources"].add(e["scan_source"])
+                v["count"] += 1
+                sev = (e.get("severity") or "").upper()
+                if sev == "CRITICAL":
+                    v["critical"] += 1
+                elif sev == "HIGH":
+                    v["high"] += 1
+        out = []
+        for n in g.get("nodes", []):
+            if n.get("kind") != "ECRImage":
+                continue
+            if not (n.get("digest") or ""):
+                continue                              # skip tag-only placeholder nodes (dedupe)
+            nid = n.get("id") or ""
+            rname, ruri = n.get("repository") or "", n.get("image_uri") or ""
+            if repo and repo not in (rname, ruri):
+                continue
+            v = vulns.get(nid, {})
+            out.append({
+                "node_id": nid, "repository": rname, "image_uri": ruri,
+                "digest": n.get("digest") or "",
+                "subject_key": aws_ingest.subject_key(nid, "ECRImage"),
+                "deployed": nid in runners,
+                "scan_sources": sorted(v.get("sources", set())),
+                "vuln_count": v.get("count", 0),
+                "critical": v.get("critical", 0), "high": v.get("high", 0),
+            })
+        out.sort(key=lambda x: (x["repository"], x["digest"]))
+        return out
+
+    # per-repo posture checks (NOT CNT-02, which is a per-CVE finding, and NOT the
+    # registry-wide CNT-06 whose resource is 'registry'/'ecr').
+    _REPO_POSTURE = ("CNT-01", "CNT-03", "CNT-04", "CNT-05")
+
+    def list_registry_repos(self, account_id: str) -> List[dict]:
+        """ECR repositories with image count, deployed/registry-only split, aggregate CVE
+        counts, and per-repo posture findings (CNT-01/03/04/05). A repo with a bad posture
+        but no CVE-enriched image node still surfaces (seeded from the posture keys), so the
+        worst-misconfigured repos are never hidden. Read-only."""
+        imgs = self.list_registry_images(account_id)
+        p = self.results.get_latest(account_id) or {}
+        posture: dict = {}
+        for r in p.get("results", []):
+            if (r.get("check_id") or "") not in self._REPO_POSTURE or r.get("status") not in ("FAIL", "WARN"):
+                continue
+            rn = (r.get("resource") or "").split(":")[0]
+            if rn in ("", "registry", "ecr"):         # registry-wide, not attributable to one repo
+                continue
+            posture.setdefault(rn, []).append(
+                {"check_id": r["check_id"], "status": r["status"],
+                 "severity": r.get("severity"), "message": r.get("message")})
+        repos: dict = {}
+        for im in imgs:
+            rn = im["repository"]
+            d = repos.setdefault(rn, {"repository": rn, "image_uri": im["image_uri"],
+                                      "images": 0, "deployed": 0,
+                                      "critical": 0, "high": 0, "vuln_count": 0})
+            d["images"] += 1
+            d["deployed"] += 1 if im["deployed"] else 0
+            d["critical"] += im["critical"]
+            d["high"] += im["high"]
+            d["vuln_count"] += im["vuln_count"]
+        for rn in posture:                            # posture-only repos (no image node) still surface
+            repos.setdefault(rn, {"repository": rn, "image_uri": "", "images": 0,
+                                  "deployed": 0, "critical": 0, "high": 0, "vuln_count": 0})
+        out = []
+        for rn, d in sorted(repos.items()):
+            d["findings"] = posture.get(rn, [])
+            out.append(d)
+        return out
+
     def sbom_diff(self, account_id: str, from_id: Optional[str] = None,
                   to_id: Optional[str] = None, subject: Optional[str] = None) -> Optional[dict]:
         """Diff two SBOM snapshots (A=from/older, B=to/newer). Explicit ids win; else the

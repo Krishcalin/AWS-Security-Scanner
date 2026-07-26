@@ -124,10 +124,37 @@ _OPTIN = {
     "cdr_forensics": ["cloudtrail:LookupEvents", "securityhub:GetFindings",
                       "guardduty:ListDetectors", "guardduty:GetDetector",
                       "guardduty:ListFindings", "guardduty:GetFindings"],
+    "image_layer_pull": ["ecr:GetAuthorizationToken", "ecr:BatchGetImage",
+                         "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"],
 }
 
 
+# CFN opt-in comment blocks are keyed by PolicyName; actions there are UNQUOTED YAML flow,
+# so the CFN side is compared by block-scoped substring membership + a foreign-action guard
+# (together == set-equality) rather than the quoted-action regex used on the TF side.
+_CFN_POLICYNAME = {
+    "sidescan": "CnappSideScanSnapshotOps",
+    "flowlog_insights": "CnappFlowLogInsights",
+    "dspm_surfaces": "CnappDspmSurfaces",
+    "cdr_forensics": "CnappCdrForensicsRead",
+    "image_layer_pull": "CnappImageLayerPull",
+}
+
+
+def _cfn_optin_block(policy_name):
+    """The commented CFN block text for one opt-in PolicyName (bounded at the next
+    PolicyName / the Outputs section) so checks are block-scoped, not whole-file."""
+    text = open(CFN, encoding="utf-8").read()
+    start = text.index(f"PolicyName: {policy_name}")
+    rest = text[start + len(f"PolicyName: {policy_name}"):]
+    ends = [i for i in (rest.find("PolicyName:"), rest.find("Outputs:")) if i >= 0]
+    return rest[:min(ends)] if ends else rest
+
+
 def test_tf_optin_blocks_match_cfn():
+    # TF side: exact set-equality (quoted actions -> _ACTION_RE). CFN side: substring
+    # membership (actions are UNQUOTED YAML flow, and explanatory prose between blocks
+    # mentions other actions, so a per-block foreign-action guard is not reliable).
     cfn_text = open(CFN, encoding="utf-8").read()
     for res, actions in _OPTIN.items():
         block = _tf_block(res)                          # the count-gated TF resource
@@ -135,9 +162,18 @@ def test_tf_optin_blocks_match_cfn():
         assert tf_actions == set(actions), (
             f"opt-in {res} TF drift: TF-only={tf_actions - set(actions)}, "
             f"expected-only={set(actions) - tf_actions}")
-        # …and the CFN's commented block must carry the same actions (kept in lock-step)
-        for a in actions:
+        for a in actions:                              # …and the CFN comment carries the same actions
             assert a in cfn_text, f"opt-in {res}: CFN comment missing {a!r} (drift vs TF)"
+
+
+def test_tf_image_layer_pull_is_repo_and_tag_scoped():
+    # the byte-read grant MUST stay scoped to ECR repos AND gated on the cnapp:imagescan tag,
+    # in BOTH the TF resource and the CFN comment — broadening the resource or dropping the tag
+    # (a real least-privilege regression) now fails CI.
+    for text, where in ((_tf_block("image_layer_pull"), "TF"),
+                        (_cfn_optin_block("CnappImageLayerPull"), "CFN")):
+        assert "arn:aws:ecr:*:*:repository/*" in text, f"{where}: layer-pull must be repo-scoped"
+        assert "aws:ResourceTag/cnapp:imagescan" in text, f"{where}: layer-pull must be tag-scoped"
 
 
 def test_tf_eks_access_entry_matches_cfn_intent():
@@ -157,17 +193,19 @@ def test_tf_default_role_has_no_write_or_data_actions():
     always_on = "\n".join(ln for ln in tf.split("# ── OPT-IN")[0].splitlines()
                           if not ln.lstrip().startswith("#"))
     for forbidden in ("CreateSnapshot", "DeleteSnapshot", "ModifySnapshotAttribute",
-                      "CopySnapshot", "GetObject", "StartQuery", "LookupEvents"):
+                      "CopySnapshot", "GetObject", "StartQuery", "LookupEvents",
+                      "GetDownloadUrlForLayer", "BatchGetImage"):
         assert forbidden not in always_on, f"default TF role must not grant {forbidden}"
     # and each opt-in policy is guarded by a default-false toggle
     for res, var in (("sidescan", "enable_sidescan"),
                      ("flowlog_insights", "enable_flowlog_insights"),
                      ("dspm_surfaces", "enable_dspm_surfaces"),
-                     ("cdr_forensics", "enable_cdr_forensics")):
+                     ("cdr_forensics", "enable_cdr_forensics"),
+                     ("image_layer_pull", "enable_image_layer_pull")):
         assert re.search(rf'resource "aws_iam_role_policy" "{res}"\s*{{\s*\n\s*count\s*=\s*var\.{var}',
                          tf), f"{res} must be count-gated by var.{var}"
     vars_src = open(TF_VARS, encoding="utf-8").read()
     for var in ("enable_sidescan", "enable_flowlog_insights", "enable_dspm_surfaces",
-                "enable_cdr_forensics", "enable_eks_kspm"):
+                "enable_cdr_forensics", "enable_eks_kspm", "enable_image_layer_pull"):
         assert re.search(rf'variable "{var}"[\s\S]*?default\s*=\s*false', vars_src), \
             f"{var} must default to false"

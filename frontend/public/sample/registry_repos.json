@@ -1,0 +1,24 @@
+[
+  {
+    "repository": "payments-api",
+    "image_uri": "123456789012.dkr.ecr.us-east-1.amazonaws.com/payments-api",
+    "images": 2,
+    "deployed": 1,
+    "critical": 1,
+    "high": 2,
+    "vuln_count": 3,
+    "findings": [
+      { "check_id": "CNT-01", "status": "FAIL", "severity": "HIGH", "message": "Scan-on-push=OFF enc=AES256 | payments-api" }
+    ]
+  },
+  {
+    "repository": "web-frontend",
+    "image_uri": "123456789012.dkr.ecr.us-east-1.amazonaws.com/web-frontend",
+    "images": 1,
+    "deployed": 0,
+    "critical": 0,
+    "high": 1,
+    "vuln_count": 1,
+    "findings": []
+  }
+]

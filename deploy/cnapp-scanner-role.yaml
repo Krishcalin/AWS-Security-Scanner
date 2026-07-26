@@ -181,6 +181,23 @@ Resources:
   #                     guardduty:ListDetectors, guardduty:GetDetector, guardduty:ListFindings,
   #                     guardduty:GetFindings ]
   #           Resource: '*'      # all read-only mgmt-plane lookups; no data/secret-value read
+  #
+  # ECR registry image layer-pull (Slice-5 Tier B, --side-scan-images): reads image layer
+  # BYTES — a workload-DATA read class — so it is opt-in and tag-scoped to cnapp:imagescan.
+  # GetAuthorizationToken has no resource-level support (Resource '*'):
+  #
+  #   - PolicyName: CnappImageLayerPull
+  #     PolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Effect: Allow
+  #           Action: [ ecr:GetAuthorizationToken ]
+  #           Resource: '*'
+  #         - Effect: Allow
+  #           Action: [ ecr:BatchGetImage, ecr:GetDownloadUrlForLayer,
+  #                     ecr:BatchCheckLayerAvailability ]
+  #           Resource: 'arn:aws:ecr:*:*:repository/*'
+  #           Condition: { StringEquals: { 'aws:ResourceTag/cnapp:imagescan': 'true' } }
 
 Outputs:
   RoleArn:

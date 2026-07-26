@@ -10,6 +10,7 @@ import type {
   TrendRow, DriftDigest, DigestDelivery,
   IngestedVuln, IngestDoc, IngestResult,
   SbomSubject, SbomSnapshot, SbomComponent, SbomDiffData, LicenseFinding, VexStatementRow,
+  RegistryRepo, RegistryImage,
 } from './types'
 import { deriveCrosswalk } from '../lib/crosswalk'
 
@@ -431,6 +432,15 @@ const sbomApi = {
   vexStatements: async (id: string): Promise<VexStatementRow[]> => {
     if (!SAMPLE) return get<VexStatementRow[]>(`${API_BASE}/accounts/${id}/vex`)
     return get<VexStatementRow[]>('/sample/vex.json').catch(() => [])
+  },
+  registryRepos: async (id: string): Promise<RegistryRepo[]> => {
+    if (!SAMPLE) return get<RegistryRepo[]>(`${API_BASE}/accounts/${id}/registry/repos`)
+    return get<RegistryRepo[]>('/sample/registry_repos.json').catch(() => [])
+  },
+  registryImages: async (id: string, repo?: string): Promise<RegistryImage[]> => {
+    if (!SAMPLE) return get<RegistryImage[]>(`${API_BASE}/accounts/${id}/registry/images${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`)
+    const all = await get<RegistryImage[]>('/sample/registry_images.json').catch(() => [])
+    return repo ? all.filter((im) => im.repository === repo || im.image_uri === repo) : all
   },
 }
 

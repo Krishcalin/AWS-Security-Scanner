@@ -4,6 +4,60 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.31.0] — 2026
+
+**Phase-4 Slice-5: agentless ECR registry enumeration + opt-in layer-pull.** Closes the
+supply-chain loop — OverWatch now discovers and scans the registry itself, not only SBOMs a
+CI pipeline pushes. Two tiers; `aws_correlate.py` byte-frozen; `SCHEMA_VERSION` stays 8; the
+no-flag default path is unchanged except for the intended Tier-A coverage widening.
+
+### Added — Tier A: enumeration + native scan findings (no new IAM grant)
+- CNT-02 now enriches the newest-N **tagged** images per repo (was: the newest image only),
+  reading Amazon's own scan findings (basic `findings[]` / enhanced `enhancedFindings[]`).
+  Untagged images (usually orphaned build artifacts) are skipped. Bounded per repo
+  (`--ecr-scan-max-images`, default 20) AND by a per-scan aggregate budget (400) so a large
+  estate can't multiply `DescribeImageScanFindings` into a throttle/wall-time blow-up.
+- Registry scan-mode detection (`get_registry_scanning_configuration`) records BASIC vs
+  ENHANCED (surfaced in the console; hints where Tier B adds the most value).
+
+### Added — Tier B: opt-in layer-pull → own SBOM (Inspector-independent)
+- Two-key gate (both required): the `--side-scan-images` flag **and** the opt-in
+  `CnappImageLayerPull` IAM grant. Pulls image layers, reconstructs the rootfs, and runs
+  OverWatch's own SBOM→OSV/EPSS/KEV pipeline — coverage even when a registry uses basic
+  scanning or none. New pure `aws_registry_sbom.py` (`select_registry_images` /
+  `scan_registry_image` / `_package_to_component` / `registry_sbom_doc_id` / `to_cyclonedx`).
+- New checks **CWPP-05** (HIGH) / **CWPP-06** (CRITICAL, KEV) for registry-image CVEs
+  (CRITICAL/HIGH-or-KEV only, matching the Tier-A law), plus full risk/impact/remediation
+  write-ups. Native (`ecr-native-scan`) and own-SBOM (`ecr-sidescan`) CVEs MERGE-converge on
+  the same `ECRImage` node, split only by a `scan_source` property.
+- Pulled SBOMs persist as durable Slice-4 snapshots (via `ingest_document`), so **diff /
+  license policy / VEX apply for free**. A registry-only image (no inbound `RUNS_IMAGE`)
+  carries `HAS_VULN` but never enters `E_PATH` — it ranks shift-left, never a false CRITICAL.
+
+### Added — egress seam, IAM, API, console
+- `aws_layer_fetch.py` — the shipped default `http_get`: the SOLE new network primitive,
+  HTTPS + `*.amazonaws.com`-only (re-validated on every redirect), byte-capped, and
+  fail-closed on a short read. Registered in `test_zero_telemetry.py` + NETWORK.md.
+- `CnappImageLayerPull` opt-in grant in the CFN role + the count-gated Terraform module
+  (`enable_image_layer_pull`, default false), repo-scoped + tag-gated on `cnapp:imagescan`;
+  the always-on role never grants a layer-pull action (parity-tested, incl. Resource/Condition).
+- Read-only routes `GET /accounts/{id}/registry/{repos,images}`; a console **Registry** tab
+  on Supply Chain (repos → images, deployed vs registry-only, scan-source chips, and a
+  "not reachable" shift-left label on registry-only CVEs).
+
+### Verified
+- Read-only adversarial verification (14 agents) confirmed **20 defects → 18 fixed +
+  regression-tested**: (HIGH) the layer-fetch followed redirects, bypassing the HTTPS/AWS-only
+  SSRF guard → a redirect-revalidating opener; (HIGH) a truncated download returned partial
+  bytes → Content-Length validated, fail-closed; (HIGH) a corrupt/dropped layer still returned
+  a "complete" scan (false-clean) → `merge_layers` now reports dropped-layer/truncation stats
+  and the registry scan fail-closes `partial-rootfs`; (HIGH) CNT-02 per-CVE findings were
+  swept into per-repo posture; (MED) size-cap bypass on unknown `imageSizeInBytes`; (MED)
+  CWPP-05/06 emitted for every severity; (MED) posture-only repos hidden / registry-wide
+  CNT-06 shown as a fake repo; (MED) no aggregate Tier-A budget; (MED) parity never checked
+  the tag/resource scope; (LOW) snapshot CVE-set accumulated across feed changes → replace-set;
+  and more. Full Python suite **1811 passing**; frontend build + lint + vitest green.
+
 ## [2.30.0] — 2026
 
 **Phase-4 Slice-4: supply-chain ingest — SBOM snapshot/diff · license policy · standalone
