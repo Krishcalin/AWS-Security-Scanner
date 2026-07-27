@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { FileText, Download, FileJson, FileSpreadsheet, Info } from 'lucide-react'
+import { FileText, Download, FileJson, FileSpreadsheet, Info, FileCode2 } from 'lucide-react'
 import { useScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'
 import { api } from '../api/client'
 import { Card, Loader, ErrorNote } from '../components/ui'
-import type { OrgOverview, AccountSummary, FindingCatalogEntry, AccountCompliance } from '../api/types'
+import { crossAccountFindings, exposureReport, buildExecHtml } from '../lib/reports'
+import type { OrgOverview, AccountSummary, FindingCatalogEntry, AccountCompliance, GraphFull } from '../api/types'
 
 const SECTIONS = [
   { k: 'summary', label: 'Executive summary' },
@@ -12,6 +13,8 @@ const SECTIONS = [
   { k: 'findings', label: 'Findings detail' },
   { k: 'compliance', label: 'Compliance scorecard' },
   { k: 'remediation', label: 'Remediation plan' },
+  { k: 'network', label: 'Network exposure', acctOnly: true },
+  { k: 'crossaccount', label: 'Cross-account network', acctOnly: true },
 ] as const
 
 function download(name: string, text: string, type: string) {
@@ -28,16 +31,17 @@ function toCsv(findings: FindingCatalogEntry[]): string {
   return [head, ...rows].map((r) => r.map(esc).join(',')).join('\n')
 }
 
-interface RepData { o: OrgOverview | null; s: AccountSummary | null; f: FindingCatalogEntry[]; c: AccountCompliance | null }
+interface RepData { o: OrgOverview | null; s: AccountSummary | null; f: FindingCatalogEntry[]; c: AccountCompliance | null; g: GraphFull | null }
 
 export function Reports() {
   const { scope } = useScope()
   const isOrg = scope === 'org'
   const { data, loading, error } = useFetch<RepData>(
     () => isOrg
-      ? Promise.all([api.orgOverview(), api.orgFindings()]).then(([o, f]) => ({ o, s: null, f, c: null }))
-      : Promise.all([api.accountSummary(scope), api.findings(scope), api.accountCompliance(scope)])
-          .then(([s, f, c]) => ({ o: null, s, f, c })),
+      ? Promise.all([api.orgOverview(), api.orgFindings()]).then(([o, f]) => ({ o, s: null, f, c: null, g: null }))
+      // graph is account-scoped only (no /org/graph) — powers the Network exposure section
+      : Promise.all([api.accountSummary(scope), api.findings(scope), api.accountCompliance(scope), api.graph(scope)])
+          .then(([s, f, c, g]) => ({ o: null, s, f, c, g })),
     [scope])
   const [sections, setSections] = useState<Set<string>>(new Set(SECTIONS.map((s) => s.k)))
   const [schedule, setSchedule] = useState('none')
@@ -61,7 +65,19 @@ export function Reports() {
     }
     if (sections.has('remediation')) rep.choke_points = isOrg ? data.o?.top_choke_points : data.s?.choke_points
     if (sections.has('findings')) rep.finding_catalog = data.f
+    // account-scope-only sections (no /org/graph); the checkboxes are disabled under org anyway
+    if (sections.has('network') && !isOrg) rep.network_exposure = exposureReport(data.g)
+    if (sections.has('crossaccount') && !isOrg) rep.cross_account_network = crossAccountFindings(data.f)
     return JSON.stringify(rep, null, 2)
+  }
+
+  // Executive HTML — a branded, self-contained artifact opened for print-to-PDF (no PDF dep,
+  // no backend route; assembled from data the page already holds).
+  const openExecHtml = () => {
+    const html = buildExecHtml({ scope: stamp, isOrg, summary: data.s, orgScore: data.o?.org_posture_score, findings: data.f })
+    const w = window.open('', '_blank')
+    if (w) { w.document.write(html); w.document.close(); w.focus() }
+    else download(`overwatch-${stamp}-executive.html`, html, 'text/html')  // popup blocked → download
   }
 
   return (
@@ -75,12 +91,15 @@ export function Reports() {
         <Card className="p-5">
           <div className="text-sm font-bold text-ink mb-3">Sections</div>
           <div className="flex flex-col gap-2 mb-5">
-            {SECTIONS.map((s) => (
-              <label key={s.k} className="flex items-center gap-2.5 text-sm text-ink2 cursor-pointer">
-                <input type="checkbox" checked={sections.has(s.k)} onChange={() => toggle(s.k)} className="accent-[var(--accent)]" />
-                {s.label}
-              </label>
-            ))}
+            {SECTIONS.map((s) => {
+              const disabled = isOrg && 'acctOnly' in s && s.acctOnly
+              return (
+                <label key={s.k} className={`flex items-center gap-2.5 text-sm ${disabled ? 'text-ink3 cursor-not-allowed' : 'text-ink2 cursor-pointer'}`}>
+                  <input type="checkbox" disabled={!!disabled} checked={!disabled && sections.has(s.k)} onChange={() => toggle(s.k)} className="accent-[var(--accent)]" />
+                  {s.label}{disabled && <span className="text-[10px] text-ink3">(account scope only)</span>}
+                </label>
+              )
+            })}
           </div>
           <div className="text-sm font-bold text-ink mb-2">Schedule</div>
           <select value={schedule} onChange={(e) => setSchedule(e.target.value)} className="w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm text-ink">
@@ -102,10 +121,13 @@ export function Reports() {
             <button onClick={() => download(`overwatch-${stamp}-findings.csv`, toCsv(data.f), 'text/csv')} className="flex items-center gap-2 rounded-lg border border-line bg-panel px-4 py-2.5 text-sm font-semibold text-ink hover:border-accent/40">
               <FileSpreadsheet size={16} className="text-accent" /> Findings CSV <Download size={14} className="ml-auto text-ink3" />
             </button>
+            <button onClick={openExecHtml} className="flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white ow-grad hover:opacity-90">
+              <FileCode2 size={16} /> Executive HTML <span className="ml-auto text-[11px] opacity-80">open / print → PDF</span>
+            </button>
           </div>
           <div className="flex items-start gap-2 mt-4 rounded-lg px-3 py-2.5 text-xs text-ink2" style={{ background: 'var(--panel2)' }}>
             <Info size={14} className="mt-0.5 shrink-0 text-ink3" />
-            <span><b>HTML · SARIF 2.1.0 · ASFF</b> are produced by the engine (`save_html` / `save_sarif` / `save_asff`) with the same light theme as this console — available from the hub in live mode.</span>
+            <span><b>Executive HTML</b> is assembled in-console (open it to print → PDF); nothing leaves your boundary. <b>SARIF 2.1.0 · ASFF</b> are additionally produced by the engine (`save_sarif` / `save_asff`) from the hub in live mode.</span>
           </div>
         </Card>
       </div>

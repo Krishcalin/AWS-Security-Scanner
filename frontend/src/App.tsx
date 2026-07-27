@@ -14,6 +14,9 @@ import { Remediation } from './routes/Remediation'
 import { Reports } from './routes/Reports'
 import { Settings } from './routes/Settings'
 import { Placeholder } from './routes/Placeholder'
+import { CategoryDashboard } from './routes/CategoryDashboard'
+import { Projects, ProjectView } from './routes/Projects'
+import { DASHBOARDS } from './lib/dashboards'
 import { TourProvider } from './lib/tour/TourProvider'
 import { TourOverlay } from './components/tour/TourOverlay'
 import { TourLauncher } from './components/tour/TourLauncher'
@@ -41,6 +44,11 @@ export default function App() {
               <Route path="/reports" element={<Reports />} />
               <Route path="/accounts" element={<CloudAccounts />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/projects" element={<Projects />} />
+              <Route path="/projects/:id" element={<ProjectView />} />
+              {DASHBOARDS.map((d) => (
+                <Route key={d.slug} path={`/${d.slug}`} element={<CategoryDashboard spec={d} />} />
+              ))}
               <Route path="*" element={<Placeholder />} />
             </Route>
           </Routes>

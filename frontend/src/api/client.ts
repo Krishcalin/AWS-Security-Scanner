@@ -7,14 +7,15 @@ import type {
   OnboardRequest, OnboardResult, ValidationResult, GraphFull,
   Connector, ConnectorRule, TestResult, Delivery, PreviewHit,
   CrosswalkData, CrosswalkEdge, AccountCompliance, ComplianceFrameworkMeta,
-  TrendRow, DriftDigest, DigestDelivery,
+  TrendRow, DriftDigest, DigestDelivery, MttrStat,
   IngestedVuln, IngestDoc, IngestResult,
   SbomSubject, SbomSnapshot, SbomComponent, SbomDiffData, LicenseFinding, VexStatementRow,
-  RegistryRepo, RegistryImage, CopilotAnswer, BlastRadius,
+  RegistryRepo, RegistryImage, CopilotAnswer, BlastRadius, Project, ProjectDetail,
 } from './types'
 import { deriveCrosswalk } from '../lib/crosswalk'
 import { computeBlastRadius } from '../lib/blast'
 import { pickCopilotAnswer } from '../lib/copilot'
+import { findingInProject, severityCounts, type ProjectMatch } from '../lib/projects'
 
 const MODE = (import.meta.env.VITE_DATA_SOURCE as string) ?? 'sample'
 const API_BASE = (import.meta.env.VITE_API_BASE as string) ?? '/api'
@@ -313,6 +314,18 @@ const schedulingApi = {
     const s = await get<AccountSummary>(`/sample/account_${id}_summary.json`).catch(() => null)
     return s ? synthTrend(id, s.posture_score) : []
   },
+  mttr: async (id: string): Promise<MttrStat> => {
+    if (!SAMPLE) return get<MttrStat>(`${API_BASE}/accounts/${id}/mttr`)
+    // sample: a deterministic, plausible remediation cadence (median ~3d, 2 findings over SLA)
+    return {
+      resolved_count: 14, mean_seconds: 4.2 * 86400, median_seconds: 3 * 86400,
+      by_severity: {
+        CRITICAL: { count: 3, mean_seconds: 1.5 * 86400, median_seconds: 1 * 86400 },
+        HIGH: { count: 6, mean_seconds: 3.1 * 86400, median_seconds: 2.5 * 86400 },
+      },
+      open_over_sla: 2, sla_days: 30,
+    }
+  },
   drift: async (id: string): Promise<TrendRow | Record<string, never>> => {
     if (!SAMPLE) return get(`${API_BASE}/accounts/${id}/drift`)
     const t = await schedulingApi.trend(id)
@@ -460,12 +473,44 @@ async function sampleCopilot(question: string): Promise<CopilotAnswer> {
   return hit ? hit.answer : _copilotFx.abstain
 }
 
+// ── Projects (LBI/MBI/HBI business-impact grouping; read-only roll-up) ─────────
+const SAMPLE_ACCOUNTS = ['123456789012', '234567890123', '345678901234']
+async function sampleProjectFindings(match: ProjectMatch): Promise<FindingCatalogEntry[]> {
+  // a globs-only project (no accounts) matches across ALL accounts — mirror the live
+  // org_findings all-accounts sweep, else such a project is silently empty in sample mode.
+  const accts = (match.accounts && match.accounts.length) ? match.accounts : SAMPLE_ACCOUNTS
+  const lists = await Promise.all(accts.map((a) =>
+    get<FindingCatalogEntry[]>(`/sample/account_${a}_findings.json`).catch(() => [])
+      .then((fs) => fs.map((f) => ({ ...f, account: a })))))
+  return lists.flat().filter((f) => findingInProject(f, match))
+}
+type ProjectDef = { id: string; name: string; tier: string; match: ProjectMatch }
+const projectsApi = {
+  listProjects: async (): Promise<Project[]> => {
+    if (!SAMPLE) return get<Project[]>(`${API_BASE}/projects`)
+    const defs = await get<ProjectDef[]>('/sample/projects.json').catch(() => [] as ProjectDef[])
+    return Promise.all(defs.map(async (d) => {
+      const findings = await sampleProjectFindings(d.match)
+      return { ...d, severity_counts: severityCounts(findings), finding_count: findings.length }
+    }))
+  },
+  projectSummary: async (id: string): Promise<ProjectDetail> => {
+    if (!SAMPLE) return get<ProjectDetail>(`${API_BASE}/projects/${encodeURIComponent(id)}`)
+    const defs = await get<ProjectDef[]>('/sample/projects.json').catch(() => [] as ProjectDef[])
+    const d = defs.find((p) => p.id === id)
+    if (!d) throw new Error('404 project not found')
+    const findings = await sampleProjectFindings(d.match)
+    return { ...d, severity_counts: severityCounts(findings), finding_count: findings.length, findings }
+  },
+}
+
 export const api = {
   ...connectorApi,
   ...complianceApi,
   ...schedulingApi,
   ...vulnApi,
   ...sbomApi,
+  ...projectsApi,
   copilot: (scope: string, question: string): Promise<CopilotAnswer> =>
     SAMPLE ? sampleCopilot(question)
       : post<CopilotAnswer>(scope === 'org' ? '/org/copilot' : `/accounts/${scope}/copilot`, { question }),

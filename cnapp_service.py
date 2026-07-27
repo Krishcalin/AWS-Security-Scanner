@@ -144,6 +144,7 @@ class PlatformService:
                  crosswalk=None, state=None, vuln_bundle=None, workspaces=None, metering=None,
                  copilot_llm: Optional[Callable] = None,
                  trail_reader: Optional[Callable] = None,
+                 projects: Optional[List[dict]] = None,
                  clock: Callable[[], int] = None):
         import time
         # Optional grounded-copilot LLM seam (system, question, context) -> str. None (default)
@@ -183,6 +184,11 @@ class PlatformService:
         self._vuln_bundle_data = vuln_bundle
         self._osv_feed_cache = None
         self._http_post = http_post             # None -> lazy urllib default (see http_post)
+        # ── Projects (LBI/MBI/HBI business-impact grouping) ───────────────────
+        # Read-only, config-driven resource groupings ({id,name,tier,match:{accounts,resource_globs}}).
+        # DISPLAY-ONLY: a project rolls up its EXISTING findings; the tier NEVER feeds the posture
+        # or attack-path score (aws_correlate stays byte-frozen). No DB table (no schema churn).
+        self.projects = projects or []
         self.clock = clock or (lambda: int(time.time()))
 
     @property
@@ -584,6 +590,52 @@ class PlatformService:
                 out.append(tagged)
         out.sort(key=lambda e: (order.get(e.get("severity", ""), 4), e.get("check_id", "")))
         return out
+
+    # ── Projects (LBI/MBI/HBI business-impact grouping; read-only, display-only) ─
+    @staticmethod
+    def _finding_in_project(entry: dict, proj: dict) -> bool:
+        """A finding belongs to a project when its account is in ``match.accounts`` (if given)
+        AND one of its ``affected`` resources matches a ``match.resource_globs`` (if given). A
+        project with neither an account nor a glob matches NOTHING (never everything)."""
+        m = proj.get("match") or {}
+        accts = set(m.get("accounts") or [])
+        globs = m.get("resource_globs") or []
+        if accts and entry.get("account") not in accts:
+            return False
+        if globs:
+            from aws_state import _glob
+            return any(_glob(g, str(r)) for r in (entry.get("affected") or []) for g in globs)
+        return bool(accts)                       # account-only project (globs omitted)
+
+    @staticmethod
+    def _project_rollup(proj: dict, matched: List[dict]) -> dict:
+        sev = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        for e in matched:
+            s = e.get("severity", "")
+            if s in sev:
+                sev[s] += 1
+        return {"id": proj.get("id"), "name": proj.get("name", proj.get("id")),
+                "tier": proj.get("tier", ""), "match": proj.get("match") or {},
+                "severity_counts": sev, "finding_count": len(matched)}
+
+    def list_projects(self, *, workspace_id: Optional[str] = None) -> List[dict]:
+        """All configured projects with a per-project severity roll-up over the CURRENT
+        finding catalog (scoped to a tenant). Empty when no projects are configured."""
+        if not self.projects:
+            return []
+        findings = self.org_findings(workspace_id=workspace_id)
+        return [self._project_rollup(p, [f for f in findings if self._finding_in_project(f, p)])
+                for p in self.projects]
+
+    def project_summary(self, project_id: str, *, workspace_id: Optional[str] = None) -> Optional[dict]:
+        """One project's roll-up PLUS its matched findings (for the project detail view).
+        None when the project id is unknown (→404)."""
+        proj = next((p for p in self.projects if p.get("id") == project_id), None)
+        if proj is None:
+            return None
+        matched = [f for f in self.org_findings(workspace_id=workspace_id)
+                   if self._finding_in_project(f, proj)]
+        return {**self._project_rollup(proj, matched), "findings": matched}
 
     # ── external-vuln ingest plane (SARIF/CycloneDX/SPDX) ───────────────────────
     def _require_state(self):

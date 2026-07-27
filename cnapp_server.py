@@ -16,6 +16,9 @@ Environment:
   CNAPP_HUB_ROLE_ARN     hub role ARN stamped into onboarding launch URLs.
   CNAPP_CFN_TEMPLATE_URL scanner-role CFN template URL for the quick-create link.
   CNAPP_VULN_DB          OSV/EPSS/KEV bundle path (mounted read-only; optional).
+  CNAPP_PROJECTS         Projects (LBI/MBI/HBI business-impact groupings) as a JSON list, or a
+                         path to a JSON file — read-only, config-driven, optional. Shape:
+                         [{id,name,tier,match:{accounts,resource_globs}}]. Fail-safe (bad → none).
   OVERWATCH_AIRGAP       "1" documents the sealed posture — no behavioural branch (all
                          optional seams already default off); the runbook enforces it.
 
@@ -36,6 +39,22 @@ def _secret_unconfigured(*_a, **_k):
         "configure a secret store: wire secret_writer/secret_reader in build_service() to "
         "your SSM Parameter Store / Secrets Manager (secrets are stored ONLY as "
         "secretsmanager://|ssm:// refs, never plaintext)")
+
+
+def _load_projects():
+    """Load read-only Project defs (LBI/MBI/HBI business-impact groupings) from CNAPP_PROJECTS
+    — either a JSON list, or a path to a JSON file. Fail-SAFE: any error → no projects (the
+    feature is simply absent, never a server crash). Local env/file read only — no network, so
+    the zero-telemetry boundary is untouched. Shape: [{id,name,tier,match:{accounts,resource_globs}}]."""
+    import json
+    raw = os.environ.get("CNAPP_PROJECTS", "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw) if raw.startswith("[") else json.load(open(raw, encoding="utf-8"))
+        return [p for p in data if isinstance(p, dict) and p.get("id")]
+    except Exception:
+        return []
 
 
 def build_service():
@@ -65,6 +84,7 @@ def build_service():
         workspaces=cnapp_workspace.WorkspaceStore(be),
         metering=cnapp_metering.MeteringStore(be),
         connectors=cnapp_connectors.ConnectorStore(be),
+        projects=_load_projects(),
     )
 
 
