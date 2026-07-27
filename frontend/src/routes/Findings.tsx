@@ -41,7 +41,7 @@ function Pill({ active, onClick, children, tone }: { active: boolean; onClick: (
   )
 }
 
-function FindingRow({ e, onPath, onOpen, dataTour }: { e: FindingCatalogEntry; onPath: boolean; onOpen: () => void; dataTour?: string }) {
+export function FindingRow({ e, onPath, onOpen, dataTour }: { e: FindingCatalogEntry; onPath: boolean; onOpen: () => void; dataTour?: string }) {
   const [exp, setExp] = useState(false)
   return (
     <div data-tour={dataTour} className="rounded-xl border border-line bg-panel hover:border-accent/40 transition-colors">

@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router'
-import { NAV_MAIN, NAV_ADMIN, type NavItem } from '../lib/nav'
+import { NAV_MAIN, NAV_ADMIN, NAV_DASHBOARDS, type NavItem } from '../lib/nav'
 import { DATA_MODE } from '../api/client'
 
 function Row({ item }: { item: NavItem }) {
@@ -41,12 +41,14 @@ export function Sidebar() {
 
       <nav className="flex-1 overflow-y-auto py-3 px-3 flex flex-col gap-0.5">
         {NAV_MAIN.map((i) => <Row key={i.to} item={i} />)}
+        <div className="mt-4 mb-1 px-3 text-[10px] font-semibold uppercase tracking-wider text-ink3">Risk Dashboards</div>
+        {NAV_DASHBOARDS.map((i) => <Row key={i.to} item={i} />)}
         <div className="mt-4 mb-1 px-3 text-[10px] font-semibold uppercase tracking-wider text-ink3">Manage</div>
         {NAV_ADMIN.map((i) => <Row key={i.to} item={i} />)}
       </nav>
 
       <div className="p-3 border-t border-line flex items-center justify-between text-[11px] text-ink3 font-mono">
-        <span>v2.34.0</span>
+        <span>v2.35.0</span>
         <span className="rounded px-1.5 py-0.5" style={{ background: 'var(--panel2)' }}>
           {DATA_MODE === 'live' ? 'live' : 'sample'}
         </span>

@@ -315,6 +315,27 @@ export interface TrendRow {
   suppressed_count: number
   delta: number | null
 }
+// Projects — LBI/MBI/HBI business-impact groupings (GET /projects, /projects/{id})
+export interface Project {
+  id: string
+  name: string
+  tier: string // HBI | MBI | LBI | ''
+  match: { accounts?: string[]; resource_globs?: string[] }
+  severity_counts: Record<string, number>
+  finding_count: number
+}
+export interface ProjectDetail extends Project { findings: FindingCatalogEntry[] }
+
+// Mean-time-to-remediate (aws_state.mttr / GET /accounts/{id}/mttr)
+export interface MttrStat {
+  resolved_count: number
+  mean_seconds: number | null
+  median_seconds: number | null
+  by_severity?: Record<string, { count: number; mean_seconds: number; median_seconds: number | null }>
+  open_over_sla?: number
+  sla_days?: number
+}
+
 export interface DigestFinding { check_id: string; severity: string; resource: string; on_attack_path: boolean }
 export interface DriftDigest {
   account: string

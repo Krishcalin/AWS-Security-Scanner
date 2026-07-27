@@ -1,0 +1,20 @@
+[
+  {
+    "id": "prod-payments",
+    "name": "Production Payments",
+    "tier": "HBI",
+    "match": { "accounts": ["123456789012"], "resource_globs": ["*i-0app01server*", "*customers-db*", "*payments*"] }
+  },
+  {
+    "id": "platform",
+    "name": "Core Platform",
+    "tier": "MBI",
+    "match": { "accounts": ["123456789012"] }
+  },
+  {
+    "id": "sandbox",
+    "name": "Developer Sandbox",
+    "tier": "LBI",
+    "match": { "accounts": ["345678901234"] }
+  }
+]

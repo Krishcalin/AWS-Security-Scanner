@@ -50,7 +50,7 @@ import fnmatch
 import argparse
 from urllib.parse import unquote
 from collections import defaultdict
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
@@ -80,7 +80,7 @@ import aws_winvuln
 import aws_finding_detail
 import aws_graph_neptune
 
-VERSION = "2.34.0"
+VERSION = "2.35.0"
 
 
 def _report_logo() -> str:
@@ -257,6 +257,10 @@ class Result:
 # ─── Severity weights for risk scoring ───────────────────────────────────────
 SEVERITY_WEIGHTS = {"CRITICAL": 15, "HIGH": 5, "MEDIUM": 2, "LOW": 0.5, "INFO": 0}
 
+# RDS-13 idle-database detection (cost/hygiene): a DB with zero connections over the window.
+IDLE_DB_WINDOW_DAYS = 14
+IDLE_DB_PERIOD_SECONDS = 86400
+
 # Map check_id → default severity when status is FAIL
 CHECK_SEVERITY = {
     # Agentless side-scan (CWPP, Phase 6)
@@ -397,6 +401,9 @@ CHECK_SEVERITY = {
     "APIGW-04": "LOW", "ELB-04": "LOW", "RS-05": "LOW",
     "ACM-03": "LOW", "COG-04": "LOW", "AGW2-03": "LOW",
     "LMB-05": "MEDIUM",
+    # Cost/hygiene — orphaned/idle resources (emitted WARN => severity forced LOW; never
+    # penalizes the posture score, which counts FAIL only). Surface waste, don't distort risk.
+    "EBS-05": "LOW", "EC2-09": "LOW", "ELB-08": "LOW", "RDS-13": "LOW",
 }
 
 # ─── Compliance mapping: check_id → { framework: control } ──────────────────
@@ -690,6 +697,11 @@ COMPLIANCE_MAP = {
     "SFN-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "APIGW-04": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
     "ELB-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CM-6"},
+    # Cost/hygiene — orphaned/idle resource inventory. NIST CM-8 (System Component Inventory)
+    # is already in the frozen 38-control universe (used by LOG-03/SSM-01), so adding these
+    # keeps the universe at 38 and the crosswalk digest unchanged.
+    "EBS-05": {"NIST": "CM-8"}, "EC2-09": {"NIST": "CM-8"},
+    "ELB-08": {"NIST": "CM-8"}, "RDS-13": {"NIST": "CM-8"},
     "RS-05": {"PCI-DSS": "8.2.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "IA-2"},
     "ACM-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
     "ACM-04": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
@@ -3119,6 +3131,19 @@ class AWSLiveScanner:
                 self._add("WARN", _cid, "EC2", "ec2",
                           f"compute-depth sub-check {_fn.__name__} failed: {e}")
 
+        # EC2-09 — Unassociated Elastic IPs (cost/hygiene). A VPC EIP with an AllocationId but
+        # no AssociationId/InstanceId/NetworkInterfaceId is allocated-but-unattached = billed.
+        try:
+            for addr in ec2.describe_addresses().get("Addresses", []):
+                if not (addr.get("AssociationId") or addr.get("InstanceId")
+                        or addr.get("NetworkInterfaceId")):
+                    eip = addr.get("PublicIp") or addr.get("AllocationId") or "unknown"
+                    self._add("WARN", "EC2-09", "EC2", eip,
+                              f"Unassociated Elastic IP — allocated but unattached, incurring cost | {eip}")
+        except Exception:
+            pass                                     # fail-open (cost/hygiene, not security) — a
+            # throttled/denied describe_addresses must NOT emit a finding or flip CM-8 to FAILED
+
     # ── Phase 6: helper reused by _check_launch_templates + _check_asg ────────────
     def _lt_http_tokens(self, ec2, lt_id: str, version) -> Optional[str]:
         """The HttpTokens value ('required'/'optional') of a launch-template version, or
@@ -4165,6 +4190,34 @@ class AWSLiveScanner:
             if csnaps and unenc_c == 0:
                 self._add("PASS", "AUR-05", "RDS", "cluster-snapshots",
                           f"All {len(csnaps)} manual Aurora cluster snapshots encrypted at rest")
+
+        # RDS-13 — Idle RDS instance (cost/hygiene): zero DatabaseConnections over the window.
+        # Read-only CloudWatch GetMetricStatistics (no new dependency/primitive). RDS instances
+        # only (Aurora has its own series). Fail-open: a throttled/denied metric read is skipped.
+        try:
+            cw = self._client("cloudwatch")
+            end = datetime.now(timezone.utc)
+            start = end - timedelta(days=IDLE_DB_WINDOW_DAYS)
+            for db in _rds_instances():
+                iid = db.get("DBInstanceIdentifier")
+                if not iid:
+                    continue
+                try:
+                    pts = cw.get_metric_statistics(
+                        Namespace="AWS/RDS", MetricName="DatabaseConnections",
+                        Dimensions=[{"Name": "DBInstanceIdentifier", "Value": iid}],
+                        StartTime=start, EndTime=end,
+                        Period=IDLE_DB_PERIOD_SECONDS, Statistics=["Maximum"],
+                    ).get("Datapoints", [])
+                except Exception:
+                    continue                             # fail-open per DB
+                # Only flag when we actually have datapoints AND every one is zero-connection.
+                if pts and all((p.get("Maximum") or 0) == 0 for p in pts):
+                    self._add("WARN", "RDS-13", "RDS", iid,
+                              f"Idle RDS instance — zero DatabaseConnections over "
+                              f"{IDLE_DB_WINDOW_DAYS}d, incurring cost | {iid}")
+        except Exception:
+            pass                                         # fail-open (cost/hygiene, not security)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 10: AMAZON S3 GLACIER
@@ -7036,6 +7089,27 @@ class AWSLiveScanner:
                               f"Desync mitigation mode='{mode}' — HTTP request-smuggling "
                               f"exposure (recommend 'defensive' or 'strictest') | {name}")
 
+            # ELB-08 — Load balancer with no healthy backend targets (cost/hygiene; ALB + NLB).
+            # Fail-open: a throttled/denied read must NOT change the scan outcome.
+            try:
+                tgs = elb.describe_target_groups(LoadBalancerArn=arn).get("TargetGroups", [])
+                if tgs:
+                    any_healthy = False
+                    for tg in tgs:
+                        thds = elb.describe_target_health(
+                            TargetGroupArn=tg.get("TargetGroupArn", "")).get(
+                            "TargetHealthDescriptions", [])
+                        if any((t.get("TargetHealth") or {}).get("State") == "healthy"
+                               for t in thds):
+                            any_healthy = True
+                            break
+                    if not any_healthy:
+                        self._add("WARN", "ELB-08", "ELB", name,
+                                  f"Load balancer has no healthy backend targets across "
+                                  f"{len(tgs)} target group(s) — likely orphaned, incurring cost | {name}")
+            except Exception:
+                pass                                     # fail-open (cost/hygiene, not security)
+
             # Listener-level checks (TLS)
             try:
                 listeners = elb.describe_listeners(
@@ -7160,14 +7234,18 @@ class AWSLiveScanner:
         except Exception as e:
             self._add("WARN", "EBS-01", "EBS", "account", str(e))
 
-        # EBS-02 — Unencrypted volumes
+        # EBS-02 — Unencrypted volumes  (+ EBS-05 orphaned/unattached, same page — zero new API)
         try:
             unenc = []
+            orphaned = []
             paginator = ec2.get_paginator("describe_volumes")
             for page in paginator.paginate():
                 for vol in page.get("Volumes", []):
                     if not vol.get("Encrypted", False):
                         unenc.append(vol.get("VolumeId", "unknown"))
+                    # 'available' = not attached to any instance = paid-for but unused (waste)
+                    if vol.get("State") == "available":
+                        orphaned.append(vol.get("VolumeId", "unknown"))
             if unenc:
                 for vid in unenc:
                     self._add("FAIL", "EBS-02", "EBS", vid,
@@ -7175,6 +7253,10 @@ class AWSLiveScanner:
             else:
                 self._add("PASS", "EBS-02", "EBS", "all-volumes",
                           "All EBS volumes are encrypted")
+            # EBS-05 — orphaned (unattached) volumes: cost/hygiene WARN, no posture-score impact
+            for vid in orphaned:
+                self._add("WARN", "EBS-05", "EBS", vid,
+                          f"Orphaned EBS volume — 'available' (unattached), incurring cost | {vid}")
         except Exception as e:
             self._add("WARN", "EBS-02", "EBS", "volumes", str(e))
 

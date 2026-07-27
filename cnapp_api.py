@@ -377,6 +377,18 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     def org_findings(scope: Scope = Depends(require("viewer"))):
         return service.org_findings(workspace_id=scope.workspace_id)
 
+    # ── Projects (LBI/MBI/HBI business-impact grouping; read-only roll-up) ──────
+    @app.get("/projects")
+    def projects(scope: Scope = Depends(require("viewer"))):
+        return service.list_projects(workspace_id=scope.workspace_id)
+
+    @app.get("/projects/{project_id}")
+    def project_detail(project_id: str, scope: Scope = Depends(require("viewer"))):
+        p = service.project_summary(project_id, workspace_id=scope.workspace_id)
+        if p is None:
+            raise HTTPException(status_code=404, detail="project not found")
+        return p
+
     # ── grounded copilot (viewer; answers only from the account's own scan) ────
     @app.post("/accounts/{account_id}/copilot", dependencies=[Depends(account_gate("viewer"))])
     def copilot(account_id: str, body: CopilotReq):

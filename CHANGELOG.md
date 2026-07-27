@@ -4,6 +4,45 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [2.35.0] — 2026
+
+**Coverage-close Batch 1 — "surface over existing engines"** (from the Wiz use-case gap
+analysis). Ten use-case gaps closed by exposing signals OverWatch's engines already produce
+— no new scanning capability, no charter change. Everything stays agentless, read-only, and
+zero-telemetry.
+
+### Added
+- **Cost / hygiene findings** (4 new checks, all `WARN`/`LOW` → **zero posture-score impact**;
+  the score counts FAIL only): **EBS-05** orphaned (unattached) volumes, **EC2-09** unassociated
+  Elastic IPs, **ELB-08** load balancers with no healthy backends, **RDS-13** idle databases
+  (zero `DatabaseConnections` over a window, via read-only CloudWatch `GetMetricStatistics`).
+  All read-only + **fail-open**, tagged NIST **CM-8** (already in the frozen 38-control universe,
+  so it stays at 38).
+- **Risk Dashboards** — six named, deep-linkable console screens rolling up the *existing*
+  finding catalog by domain: **External Exposure · Data Security · Containers · AI Security ·
+  Secrets · Excessive Access**. One shared `CategoryDashboard` over `/findings`—no new backend.
+- **MTTR tile + issue burn-down chart** — the drift card now renders median-time-to-remediate
+  and SLA breaches (from the already-live `GET /accounts/{id}/mttr`) plus an open-issue-backlog
+  burn-down over recent scans (from the stored `total_open` history).
+- **Report exports** — three new Reports sections: **Network exposure** (from the `EXPOSED_TO`
+  graph edges), **Cross-account network** (trust-boundary-crossing findings), and a one-click
+  **Executive HTML** report (assembled in-console, open → print-to-PDF; nothing leaves the
+  boundary, no PDF dependency). Host-config report stays a documented, blocked placeholder
+  pending the deferred EBS filesystem parse.
+- **Projects (LBI / MBI / HBI business-impact grouping)** — read-only, **config-driven**
+  (`CNAPP_PROJECTS` env/JSON; no DB table, no schema change) resource groupings with a
+  per-project severity roll-up over the current finding catalog (glob + account match). Tier is
+  **display-only** — it never feeds the posture or attack-path score (`aws_correlate` stays
+  byte-frozen). New `GET /projects` + `/projects/{id}` (viewer-gated) and a `/projects` console.
+
+### Notes
+- Adversarial-verified (read-only fan-out): 8 candidates → **7 confirmed defects fixed +
+  regression-tested** before release — EC2-09 now fails open (a denied read no longer flips
+  CM-8), the dashboard/report/Projects client-side matchers were corrected to mirror the backend
+  exactly (sample == live: code-point ordering, fnmatch character classes, all-accounts sweep),
+  the Executive HTML no longer renders a `StatusCount` as prose and counts severity from findings
+  (correct under org scope), and all finding text is HTML-escaped.
+
 ## [2.34.0] — 2026
 
 **Phase-1 "turnkey the wedge + productize the graph"** — four builds that make OverWatch's
