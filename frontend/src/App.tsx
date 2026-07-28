@@ -16,6 +16,7 @@ import { Settings } from './routes/Settings'
 import { Placeholder } from './routes/Placeholder'
 import { CategoryDashboard } from './routes/CategoryDashboard'
 import { Projects, ProjectView } from './routes/Projects'
+import { Query } from './routes/Query'
 import { DASHBOARDS } from './lib/dashboards'
 import { TourProvider } from './lib/tour/TourProvider'
 import { TourOverlay } from './components/tour/TourOverlay'
@@ -46,6 +47,7 @@ export default function App() {
               <Route path="/settings" element={<Settings />} />
               <Route path="/projects" element={<Projects />} />
               <Route path="/projects/:id" element={<ProjectView />} />
+              <Route path="/query" element={<Query />} />
               {DASHBOARDS.map((d) => (
                 <Route key={d.slug} path={`/${d.slug}`} element={<CategoryDashboard spec={d} />} />
               ))}

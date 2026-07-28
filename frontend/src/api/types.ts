@@ -326,6 +326,21 @@ export interface Project {
 }
 export interface ProjectDetail extends Project { findings: FindingCatalogEntry[] }
 
+// Controls — saved-WQL-query-as-Control (GET /controls). A config-driven saved query that
+// overlays a display-only WARN finding when it matches; the roll-up says how many nodes it
+// matches across active accounts (status WARN when >0, else PASS — the control is satisfied).
+export interface ControlRow {
+  id: string
+  name: string
+  severity: string
+  section: string
+  description: string
+  query: unknown
+  match_count: number
+  accounts_matched: string[]
+  status: 'WARN' | 'PASS'
+}
+
 // Mean-time-to-remediate (aws_state.mttr / GET /accounts/{id}/mttr)
 export interface MttrStat {
   resolved_count: number

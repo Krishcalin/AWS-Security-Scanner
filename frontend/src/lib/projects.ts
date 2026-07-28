@@ -5,8 +5,11 @@ import type { FindingCatalogEntry } from '../api/types'
 export interface ProjectMatch { accounts?: string[]; resource_globs?: string[] }
 
 // case-sensitive glob — a faithful fnmatch.translate so it mirrors Python's fnmatchcase
-// (aws_state._glob), INCLUDING [...]/[!...] character classes, so SAMPLE == LIVE.
-function globMatch(pattern: string, value: string): boolean {
+// (aws_state._glob), INCLUDING [...]/[!...] character classes, so SAMPLE == LIVE. NOTE: in
+// fnmatch ONLY '!' negates a class; a leading '^' is a LITERAL member (CPython escapes it to
+// \^). JS regex would treat [^…] as negation, so a leading '^' must be escaped, not passed
+// through — otherwise [^c] means opposite things live vs sample.
+export function globMatch(pattern: string, value: string): boolean {
   let re = ''
   let i = 0
   const n = pattern.length
@@ -16,14 +19,15 @@ function globMatch(pattern: string, value: string): boolean {
     else if (c === '?') re += '.'
     else if (c === '[') {
       let j = i
-      if (j < n && (pattern[j] === '!' || pattern[j] === '^')) j++
+      if (j < n && pattern[j] === '!') j++               // ONLY '!' is fnmatch's negation marker
       if (j < n && pattern[j] === ']') j++
       while (j < n && pattern[j] !== ']') j++
       if (j >= n) { re += '\\[' }                       // unterminated '[' → literal
       else {
         let cls = pattern.slice(i, j).replace(/\\/g, '\\\\')
         i = j + 1
-        if (cls[0] === '!') cls = '^' + cls.slice(1)    // [!abc] → [^abc]
+        if (cls[0] === '!') cls = '^' + cls.slice(1)     // [!abc] → [^abc] (negation)
+        else if (cls[0] === '^') cls = '\\' + cls        // leading '^' is a LITERAL member → \^
         re += '[' + cls + ']'
       }
     } else {

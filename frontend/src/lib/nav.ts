@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Waypoints, CircleAlert, ShieldAlert, Boxes, KeyRound,
   ShieldCheck, Wrench, FileText, Cloud, Settings2, PackageCheck,
-  Globe, Database, Container, BrainCircuit, UserRoundMinus, FolderKanban,
+  Globe, Database, Container, BrainCircuit, UserRoundMinus, FolderKanban, Terminal,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -21,6 +21,7 @@ export const NAV_MAIN: NavItem[] = [
   { to: '/vulnerabilities', label: 'Vulnerabilities', icon: ShieldAlert },
   { to: '/supply-chain', label: 'Supply Chain', icon: PackageCheck },
   { to: '/inventory', label: 'Inventory', icon: Boxes },
+  { to: '/query', label: 'Query', icon: Terminal },
   { to: '/identity', label: 'Identity', icon: KeyRound },
   { to: '/compliance', label: 'Compliance', icon: ShieldCheck },
   { to: '/remediation', label: 'Remediation', icon: Wrench },

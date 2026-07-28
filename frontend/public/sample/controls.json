@@ -1,0 +1,45 @@
+[
+  {
+    "id": "internet-workloads",
+    "name": "Internet-reachable workloads",
+    "severity": "HIGH",
+    "description": "Compute instances reachable from the internet over the attack-edge graph — the front door an attacker starts from.",
+    "query": {
+      "kind_in": ["EC2Instance"],
+      "where": { "pred": "reachable_from", "target": "internet" }
+    }
+  },
+  {
+    "id": "roles-to-admin",
+    "name": "IAM roles with a path to admin",
+    "severity": "HIGH",
+    "description": "IAM roles that can reach an AdminCapability via assume-role / privilege-escalation edges.",
+    "query": {
+      "kind": "IAMRole",
+      "where": { "pred": "reaches", "target": "admin" }
+    }
+  },
+  {
+    "id": "crown-data-inventory",
+    "name": "Crown-jewel datastores",
+    "severity": "MEDIUM",
+    "description": "Every datastore flagged crown-jewel (Macie / DSPM sensitivity) — the assets worth protecting.",
+    "query": { "where": { "pred": "crown_jewel" } }
+  },
+  {
+    "id": "exposed-crown-data",
+    "name": "Publicly exposed crown data",
+    "severity": "CRITICAL",
+    "description": "Crown-jewel S3 buckets reachable from the internet — the toxic combination. Should always be zero.",
+    "query": {
+      "kind": "S3Bucket",
+      "where": {
+        "op": "and",
+        "of": [
+          { "pred": "crown_jewel" },
+          { "pred": "reachable_from", "target": "internet" }
+        ]
+      }
+    }
+  }
+]

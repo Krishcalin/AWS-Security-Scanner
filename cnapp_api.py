@@ -209,6 +209,9 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     class CopilotReq(BaseModel):
         question: str = Field(min_length=1, max_length=2000)
 
+    class WqlReq(BaseModel):
+        query: dict                                  # a WQL query object (validated by aws_wql.parse)
+
     class DetectionReq(BaseModel):
         events: Union[dict, List[dict]]              # one raw detection or a batch
         source: str = Field(min_length=1)            # guardduty | securityhub | cloudtrail
@@ -347,6 +350,18 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     def graph(account_id: str):
         return service.get_graph(account_id)
 
+    @app.post("/accounts/{account_id}/graph/query",
+              dependencies=[Depends(account_gate("viewer"))])
+    def graph_query(account_id: str, body: WqlReq):
+        # read-only WQL over the persisted graph; a malformed/unsafe query → 400, no scan → 404
+        try:
+            r = service.run_wql(account_id, body.query)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if r is None:
+            raise HTTPException(status_code=404, detail="no scan results for account")
+        return r
+
     @app.get("/accounts/{account_id}/graph/blast-radius",
              dependencies=[Depends(account_gate("viewer"))])
     def blast_radius(account_id: str, node: str = Query(min_length=1),
@@ -388,6 +403,11 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         if p is None:
             raise HTTPException(status_code=404, detail="project not found")
         return p
+
+    # ── Controls (saved-WQL-query-as-Control; read-only org roll-up) ────────────
+    @app.get("/controls")
+    def controls(scope: Scope = Depends(require("viewer"))):
+        return service.list_controls(workspace_id=scope.workspace_id)
 
     # ── grounded copilot (viewer; answers only from the account's own scan) ────
     @app.post("/accounts/{account_id}/copilot", dependencies=[Depends(account_gate("viewer"))])

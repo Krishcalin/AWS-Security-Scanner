@@ -19,6 +19,9 @@ Environment:
   CNAPP_PROJECTS         Projects (LBI/MBI/HBI business-impact groupings) as a JSON list, or a
                          path to a JSON file — read-only, config-driven, optional. Shape:
                          [{id,name,tier,match:{accounts,resource_globs}}]. Fail-safe (bad → none).
+  CNAPP_CONTROLS         Controls (saved-WQL-query-as-Control) as a JSON list, or a path to a
+                         JSON file — read-only, config-driven, optional. Shape:
+                         [{id,name,query,severity?,section?,description?}]. Fail-safe (bad → none).
   OVERWATCH_AIRGAP       "1" documents the sealed posture — no behavioural branch (all
                          optional seams already default off); the runbook enforces it.
 
@@ -57,6 +60,23 @@ def _load_projects():
         return []
 
 
+def _load_controls():
+    """Load read-only Control defs (saved-WQL-query-as-Control) from CNAPP_CONTROLS — either a
+    JSON list, or a path to a JSON file. Fail-SAFE (mirror _load_projects): any error → no
+    controls. Local env/file read only. Shape: [{id,name,query,severity?,section?,description?}].
+    A def must carry an id AND a dict query to be admitted; the query itself is validated (and
+    fail-safe) later by the WQL compiler at read time."""
+    import json
+    raw = os.environ.get("CNAPP_CONTROLS", "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw) if raw.startswith("[") else json.load(open(raw, encoding="utf-8"))
+        return [c for c in data if isinstance(c, dict) and c.get("id") and isinstance(c.get("query"), dict)]
+    except Exception:
+        return []
+
+
 def build_service():
     """Construct the PlatformService from env. Multi-tenant + metered; fail-closed auth
     is applied at the API layer, not here."""
@@ -85,6 +105,7 @@ def build_service():
         metering=cnapp_metering.MeteringStore(be),
         connectors=cnapp_connectors.ConnectorStore(be),
         projects=_load_projects(),
+        controls=_load_controls(),
     )
 
 
