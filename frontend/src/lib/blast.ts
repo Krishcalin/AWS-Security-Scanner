@@ -11,7 +11,7 @@ export const E_PATH = new Set([
 ])
 
 // mirror cnapp_service._seg: rsplit('/') then rsplit(':')
-function seg(id: string): string {
+export function seg(id: string): string {
   const a = id.split('/').pop() ?? id
   return a.split(':').pop() ?? a
 }
@@ -19,7 +19,7 @@ function seg(id: string): string {
 // Code-point id comparison — must match Python's raw-string tie-break (str < str), NOT
 // localeCompare (which folds case + variable-weights punctuation), so SAMPLE and LIVE order
 // identical graphs identically. e.g. "…/Zeus" sorts before "…/apollo" (Z=0x5A < a=0x61).
-function cmpId(a: string, b: string): number {
+export function cmpId(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0
 }
 

@@ -145,6 +145,7 @@ class PlatformService:
                  copilot_llm: Optional[Callable] = None,
                  trail_reader: Optional[Callable] = None,
                  projects: Optional[List[dict]] = None,
+                 controls: Optional[List[dict]] = None,
                  clock: Callable[[], int] = None):
         import time
         # Optional grounded-copilot LLM seam (system, question, context) -> str. None (default)
@@ -189,6 +190,13 @@ class PlatformService:
         # DISPLAY-ONLY: a project rolls up its EXISTING findings; the tier NEVER feeds the posture
         # or attack-path score (aws_correlate stays byte-frozen). No DB table (no schema churn).
         self.projects = projects or []
+        # ── Controls (saved-WQL-query-as-Control) ─────────────────────────────
+        # Read-only, config-driven saved queries ({id,name,query,severity?,section?,description?}).
+        # DISPLAY-ONLY: a matching control overlays a synthetic WARN finding into the catalog at
+        # READ time; it never re-runs scoring (compute_risk_score counts FAIL only, baked at scan
+        # time → aws_correlate stays byte-frozen). No DB table (no schema churn). Fail-safe per
+        # control: a bad/unsafe saved query is inert, never an error.
+        self.controls = controls or []
         self.clock = clock or (lambda: int(time.time()))
 
     @property
@@ -500,6 +508,21 @@ class PlatformService:
                            "admins": sum(1 for r in reaches if r["terminal"] == "admin"),
                            "sources": len(reached_by)}}
 
+    def run_wql(self, account_id: str, query: dict) -> Optional[dict]:
+        """Run a WQL query against the account's persisted graph (read-only; on-demand — never
+        stored). None when the account has no scan (→404). Raises ValueError on a malformed /
+        unsafe query (→400). Imports-and-calls aws_wql (which imports frozen aws_correlate)."""
+        gd = self.get_graph(account_id)
+        if gd is None:
+            return None
+        import aws_wql
+        g = aws_graph.SecurityGraph.from_dict(gd)
+        try:
+            rows = aws_wql.evaluate(query, g)
+        except aws_wql.WQLError as e:
+            raise ValueError(str(e))
+        return {"count": len(rows), "nodes": rows}
+
     def get_issues(self, account_id: str, *, severity: Optional[str] = None,
                    status: Optional[str] = None) -> List[dict]:
         p = self.results.get_latest(account_id) or {}
@@ -517,8 +540,10 @@ class PlatformService:
     def get_finding_catalog(self, account_id: str) -> List[dict]:
         """The deduped, severity-ranked finding_catalog (risk / business impact /
         step-by-step remediation / compliance / affected resources) for an account's
-        latest scan — the data source for the Findings workspace + detail panel."""
-        return list((self.results.get_latest(account_id) or {}).get("finding_catalog", []))
+        latest scan — the data source for the Findings workspace + detail panel. When
+        Controls are configured, their synthetic WARN entries are appended (display-only)."""
+        base = list((self.results.get_latest(account_id) or {}).get("finding_catalog", []))
+        return base + self._controls_for_account(account_id)
 
     # ── grounded copilot (Slice 2) ────────────────────────────────────────────
     def copilot_answer(self, account_id: str, question: str) -> Optional[dict]:
@@ -577,9 +602,13 @@ class PlatformService:
                     for a in self.registry.list_accounts(onboarding_status="active", workspace_id=self._scoped_ws(workspace_id))]
         return aggregate_overview([p for p in payloads if p])
 
-    def org_findings(self, *, workspace_id: Optional[str] = None) -> List[dict]:
-        """Flat, severity-ranked finding_catalog across all active accounts, each
-        entry tagged with its account — the org-wide Findings queue."""
+    def org_findings(self, *, workspace_id: Optional[str] = None,
+                     include_controls: bool = True) -> List[dict]:
+        """Flat, severity-ranked finding_catalog across all active accounts, each entry tagged
+        with its account — the org-wide Findings queue. Control WARN overlays are included by
+        default (the Findings queue shows them); ``include_controls=False`` returns ONLY real
+        scan findings so the Projects business-impact roll-up is not inflated by display-only
+        controls (and so it matches the SAMPLE Projects path, which reads raw findings)."""
         order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "": 4}
         out: List[dict] = []
         for a in self.registry.list_accounts(onboarding_status="active", workspace_id=self._scoped_ws(workspace_id)):
@@ -588,6 +617,8 @@ class PlatformService:
                 tagged = dict(e)
                 tagged["account"] = a["account_id"]
                 out.append(tagged)
+            if include_controls:
+                out.extend(self._controls_for_account(a["account_id"]))   # display-only WARN overlay
         out.sort(key=lambda e: (order.get(e.get("severity", ""), 4), e.get("check_id", "")))
         return out
 
@@ -623,7 +654,7 @@ class PlatformService:
         finding catalog (scoped to a tenant). Empty when no projects are configured."""
         if not self.projects:
             return []
-        findings = self.org_findings(workspace_id=workspace_id)
+        findings = self.org_findings(workspace_id=workspace_id, include_controls=False)
         return [self._project_rollup(p, [f for f in findings if self._finding_in_project(f, p)])
                 for p in self.projects]
 
@@ -633,9 +664,65 @@ class PlatformService:
         proj = next((p for p in self.projects if p.get("id") == project_id), None)
         if proj is None:
             return None
-        matched = [f for f in self.org_findings(workspace_id=workspace_id)
+        matched = [f for f in self.org_findings(workspace_id=workspace_id, include_controls=False)
                    if self._finding_in_project(f, proj)]
         return {**self._project_rollup(proj, matched), "findings": matched}
+
+    # ── Controls (saved-WQL-query-as-Control; read-only, display-only) ──────────
+    def _controls_for_account(self, account_id: str) -> List[dict]:
+        """Synthetic WARN finding_catalog entries for every configured control whose saved WQL
+        matches >=1 node in this account's graph. Read-time + display-only (status=WARN → never
+        touches the FAIL-only posture score). The graph is rehydrated ONCE and every control is
+        evaluated against it. Fail-safe per control: a bad/unsafe saved query is inert, never an
+        error. Empty when no controls, no scan, or nothing matches."""
+        if not self.controls:
+            return []
+        gd = self.get_graph(account_id)
+        if gd is None:
+            return []
+        import aws_controls
+        import aws_wql
+        g = aws_graph.SecurityGraph.from_dict(gd)
+        out: List[dict] = []
+        for ctrl in self.controls:
+            try:
+                rows = aws_wql.evaluate(ctrl.get("query"), g)
+            except aws_wql.WQLError:
+                continue                                    # inert control (never crashes findings)
+            if rows:
+                out.append(aws_controls.control_finding(ctrl, account_id, rows))
+        return out
+
+    def list_controls(self, *, workspace_id: Optional[str] = None) -> List[dict]:
+        """All configured controls with an org-wide roll-up: how many nodes each matches and in
+        which active accounts. ``status`` is WARN when a control matches anything, else PASS (the
+        control is satisfied). Empty when no controls are configured. Read-only; scoped to a tenant."""
+        if not self.controls:
+            return []
+        import aws_controls
+        import aws_wql
+        agg = {str(c.get("id")): {"count": 0, "accounts": []} for c in self.controls}
+        for a in self.registry.list_accounts(onboarding_status="active", workspace_id=self._scoped_ws(workspace_id)):
+            gd = self.get_graph(a["account_id"])
+            if gd is None:
+                continue
+            g = aws_graph.SecurityGraph.from_dict(gd)
+            for ctrl in self.controls:
+                try:
+                    rows = aws_wql.evaluate(ctrl.get("query"), g)
+                except aws_wql.WQLError:
+                    continue
+                if rows:
+                    slot = agg[str(ctrl.get("id"))]
+                    slot["count"] += len(rows)
+                    slot["accounts"].append(a["account_id"])
+        out: List[dict] = []
+        for ctrl in self.controls:
+            slot = agg[str(ctrl.get("id"))]
+            out.append({**aws_controls.control_meta(ctrl),
+                        "match_count": slot["count"], "accounts_matched": slot["accounts"],
+                        "status": "WARN" if slot["count"] else "PASS"})
+        return out
 
     # ── external-vuln ingest plane (SARIF/CycloneDX/SPDX) ───────────────────────
     def _require_state(self):

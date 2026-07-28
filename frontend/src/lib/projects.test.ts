@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { findingInProject, severityCounts } from './projects'
+import { findingInProject, severityCounts, globMatch } from './projects'
 import type { FindingCatalogEntry } from '../api/types'
 
 // The client matcher must mirror cnapp_service._finding_in_project so SAMPLE == LIVE. Also
@@ -36,6 +36,26 @@ describe('findingInProject', () => {
     const neg = { accounts: ['1'], resource_globs: ['[!p]*'] }
     expect(findingInProject(F('1', ['queue-1']), neg)).toBe(true)
     expect(findingInProject(F('1', ['prod-1']), neg)).toBe(false)
+  })
+})
+
+describe('globMatch mirrors fnmatch: ONLY "!" negates, "^" is literal', () => {
+  // fnmatch.fnmatchcase — the LIVE oracle (aws_state._glob). A leading "^" is a LITERAL class
+  // member (CPython escapes it to \^), NOT negation; only "!" negates. Verified against Python.
+  it('[^c]* matches names starting with ^ or c (NOT negation)', () => {
+    expect(globMatch('[^c]*', 'crown-public')).toBe(true)   // starts with 'c'
+    expect(globMatch('[^c]*', 'crown-private')).toBe(true)
+    expect(globMatch('[^c]*', 'island')).toBe(false)        // 'i' is neither '^' nor 'c'
+  })
+  it('[!c]* is the real negation (names NOT starting with c)', () => {
+    expect(globMatch('[!c]*', 'island')).toBe(true)
+    expect(globMatch('[!c]*', 'crown-public')).toBe(false)
+  })
+  it('ranges and mid-class carets still work', () => {
+    expect(globMatch('[A-Z]*', 'Zeus')).toBe(true)
+    expect(globMatch('[A-Z]*', 'apollo')).toBe(false)
+    expect(globMatch('a[b^c]*', 'a^x')).toBe(true)          // '^' literal inside a class
+    expect(globMatch('[^a-z]*', 'crown-public')).toBe(true) // '^' literal + a-z range
   })
 })
 

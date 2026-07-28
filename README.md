@@ -506,6 +506,8 @@ Pure, dependency-injected, offline-testable:
 | `aws_aispm.py` | **AI-SPM pillar** — pure classifiers for the blast radius of an AI resource's execution role (privesc-capable / reaches-crown-data / no-network-isolation) fused onto the graph post-clobber; emits `AISPM-01..03` + the flagship `AIPATH-01` |
 | `aws_cdr.py` | **CDR-lite** — normalize GuardDuty / Security Hub ASFF / CloudTrail-anomaly detections, fold onto the stored graph as `THREAT_ON`, re-run reachability so a detection on an internet→crown/admin path escalates to a ranked **incident** (reuses `aws_ingest` predicates; no `aws_correlate` change) |
 | `aws_forensics.py` | **Cloud-forensics timeline** — reconstruct who-did-what-when around a resource from read-only CloudTrail management events, correlated with graph / findings / detections; fail-open `FORENSIC-00` behind an injected seam |
+| `aws_wql.py` | **WQL graph query** — a typed, bounded JSON query language compiled to the frozen `aws_graph` traversal primitives (no free Gremlin / Neptune / `eval`). `parse()` is the security boundary (rejects any unknown field/op/predicate/prop → `WQLError`); `evaluate()` returns deterministic `(kind,id)`-sorted node rows. Mirrored byte-for-byte in `frontend/src/lib/wql.ts` for SAMPLE==LIVE, guarded by a cross-language parity fixture |
+| `aws_controls.py` | **Saved-query-as-Control** — pure transform of a matched WQL result into a display-only `WARN` finding (`status=WARN` → never touches the FAIL-only posture score); mirrored in `frontend/src/lib/controls.ts` |
 
 ### HTTP API surface
 
@@ -513,6 +515,8 @@ All routes delegate to `PlatformService`; admin routes stay on the private
 hub control plane. `POST /accounts` (onboard → launch URL), `POST /accounts/{id}/validate`,
 `GET /accounts`, `POST /scans`, `GET /scans/{job_id}`,
 `GET /accounts/{id}/summary|issues|findings|paths|graph`, `GET /org/overview`, `GET /org/findings`;
+**graph query (WQL)** — `POST /accounts/{id}/graph/query` (typed query → matching nodes; malformed → 400),
+`GET /accounts/{id}/graph/blast-radius`, `GET /projects[/{id}]`, `GET /controls`;
 **copilot** — `POST /accounts/{id}/copilot`, `POST /org/copilot`;
 **ingest** — `POST /accounts/{id}/ingest`, `GET /accounts/{id}/vulns[/{cve}]`, `GET /org/vulns`;
 **CDR** — `POST /accounts/{id}/detections`, `GET /accounts/{id}/{detections,incidents}`,
@@ -669,6 +673,39 @@ one `Backend` abstraction (`cnapp_backend.py`); the sqlite path is byte-identica
 a missing driver / unreachable server fails loudly rather than falling back to a
 local file.
 
+### Graph query (WQL) & Controls
+
+**WQL** gives the security graph a queryable surface without a Gremlin/Neptune backend (both
+would break the self-hosted / air-gap charter). A query is a **closed, typed JSON object** —
+no free text, no regex, no `eval` — compiled by `aws_wql.py` to the frozen `aws_graph`
+traversal primitives. `parse()` is the security boundary: any unknown field, op, predicate, or
+non-whitelisted prop is rejected with `WQLError` (→ HTTP 400), and `limit`/`max_hops` are
+clamped, so a query can never escape the grammar or run unbounded.
+
+```jsonc
+// "crown-jewel S3 buckets reachable from the internet" — the toxic-combination query
+{ "kind": "S3Bucket",
+  "where": { "op": "and", "of": [
+    { "pred": "crown_jewel" },
+    { "pred": "reachable_from", "target": "internet" } ] } }
+```
+
+Predicates: `kind` · `has_prop` · `prop` (`eq/neq/in/gt/gte/lt/lte/exists/contains`) ·
+`prop_glob` · `has_edge` (in/out) · `reachable_from` internet · `reaches` crown|admin ·
+`crown_jewel`, composed with `and`/`or`/`not`. `evaluate()` returns deterministic,
+`(kind,id)` code-point-sorted node rows. **`POST /accounts/{id}/graph/query`** runs it live;
+the whole compiler is mirrored byte-for-byte in `frontend/src/lib/wql.ts` so SAMPLE mode
+(querying the graph fixture client-side) returns identical rows — a cross-language parity
+fixture (`scripts/gen_wql_parity.py` → `wql_parity.json`) fails CI on any drift.
+
+**Controls** turn a saved WQL query into governance: configure `CNAPP_CONTROLS`
+(`[{id,name,query,severity?,description?}]`, a JSON list or file path; fail-safe) and each
+matching query overlays a **display-only `WARN` finding** into the catalog. Controls are read
+at request time and are strictly display-only — they never re-run scoring (the FAIL-only
+posture score stays baked at scan time) and never trigger notifications. **`GET /controls`**
+returns the org roll-up (match count per account, `WARN`/`PASS`), and the console's **Query**
+screen is a guided predicate-builder + raw-JSON editor + saved-Controls library over it.
+
 ### Web console
 
 A **React 19 + Vite + TypeScript + Tailwind** SPA over
@@ -679,7 +716,8 @@ showing each path's gated-multiplicative score breakdown), **Findings** (unified
 deduped queue with source sub-tabs + a risk → business-impact → step-by-step
 remediation detail panel), and **Cloud Accounts** with a keyless 5-step **onboarding
 wizard** (server-minted ExternalId + CloudFormation / Org StackSet) — plus
-**Vulnerabilities**, **Supply Chain**, **Inventory**, **Identity**, **Compliance**,
+**Vulnerabilities**, **Supply Chain**, **Inventory**, **Query** (WQL console — guided
+predicate builder + raw JSON + saved Controls), **Projects**, **Identity**, **Compliance**,
 **Remediation**, **Reports**, and **Settings → Integrations**. Every view is a
 **shareable deep link** — scope and each open panel live in the URL, so a pasted
 `/attack-paths?scope=…&path=…` reopens exactly what you were looking at — and an
@@ -754,6 +792,8 @@ AWS-Security-Scanner/
 ├── aws_aispm.py             # AI-SPM — AI execution-role blast-radius classifiers (privesc/reaches-crown/no-net-iso), pure
 ├── aws_cdr.py               # CDR-lite — normalize GuardDuty/ASFF/CloudTrail detections → THREAT_ON → reachability-ranked incidents, pure
 ├── aws_forensics.py         # Cloud-forensics timeline — read-only CloudTrail events correlated with graph/findings/detections, pure
+├── aws_wql.py               # WQL — typed, bounded JSON query language compiled to the frozen aws_graph primitives (parse = security boundary), pure
+├── aws_controls.py          # Saved-query-as-Control — matched WQL result → display-only WARN finding, pure
 ├── cnapp_onboarding.py · cnapp_validate.py · cnapp_registry.py · cnapp_service.py · cnapp_worker.py · cnapp_api.py · cnapp_backend.py · cnapp_connectors.py  # Hosted platform backend
 ├── frontend/                # OverWatch web console — React 19 + Vite + TS + Tailwind SPA (Overview / Attack Paths / Findings / Cloud Accounts + onboarding wizard)
 ├── deploy/                  # CloudFormation scanner-role + Org StackSet + hub-role templates

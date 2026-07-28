@@ -10,10 +10,12 @@ import type {
   TrendRow, DriftDigest, DigestDelivery, MttrStat,
   IngestedVuln, IngestDoc, IngestResult,
   SbomSubject, SbomSnapshot, SbomComponent, SbomDiffData, LicenseFinding, VexStatementRow,
-  RegistryRepo, RegistryImage, CopilotAnswer, BlastRadius, Project, ProjectDetail,
+  RegistryRepo, RegistryImage, CopilotAnswer, BlastRadius, Project, ProjectDetail, ControlRow,
 } from './types'
 import { deriveCrosswalk } from '../lib/crosswalk'
-import { computeBlastRadius } from '../lib/blast'
+import { computeBlastRadius, cmpId } from '../lib/blast'
+import { evaluate as evalWql, type WqlResult } from '../lib/wql'
+import { controlsForAccount, rollupControls, type ControlDef } from '../lib/controls'
 import { pickCopilotAnswer } from '../lib/copilot'
 import { findingInProject, severityCounts, type ProjectMatch } from '../lib/projects'
 
@@ -504,6 +506,33 @@ const projectsApi = {
   },
 }
 
+// ── Controls (saved-WQL-query-as-Control; read-only). Sample mode reads the config-driven
+// control defs + each account's graph fixture and rolls them up with the SAME controls.ts
+// engine the backend mirrors, so the /controls list and the WARN overlay match live. ────────
+let _ctrlCache: ControlDef[] | null = null
+async function sampleControls(): Promise<ControlDef[]> {
+  if (_ctrlCache === null)
+    _ctrlCache = await get<ControlDef[]>('/sample/controls.json').catch(() => [] as ControlDef[])
+  return _ctrlCache
+}
+async function sampleControlFindings(accountId: string): Promise<FindingCatalogEntry[]> {
+  const defs = await sampleControls()
+  if (!defs.length) return []
+  const g = await get<GraphFull>(`/sample/account_${accountId}_graph.json`).catch(() => null)
+  return g ? controlsForAccount(defs, accountId, g) : []
+}
+const controlsApi = {
+  listControls: async (): Promise<ControlRow[]> => {
+    if (!SAMPLE) return get<ControlRow[]>(`${API_BASE}/controls`)
+    const defs = await sampleControls()
+    if (!defs.length) return []
+    const accts = await Promise.all(SAMPLE_ACCOUNTS.map(async (account) => ({
+      account, graph: await get<GraphFull>(`/sample/account_${account}_graph.json`).catch(() => null),
+    })))
+    return rollupControls(defs, accts.filter((a): a is { account: string; graph: GraphFull } => a.graph !== null))
+  },
+}
+
 export const api = {
   ...connectorApi,
   ...complianceApi,
@@ -511,6 +540,7 @@ export const api = {
   ...vulnApi,
   ...sbomApi,
   ...projectsApi,
+  ...controlsApi,
   copilot: (scope: string, question: string): Promise<CopilotAnswer> =>
     SAMPLE ? sampleCopilot(question)
       : post<CopilotAnswer>(scope === 'org' ? '/org/copilot' : `/accounts/${scope}/copilot`, { question }),
@@ -532,10 +562,32 @@ export const api = {
     const g = await get<GraphFull>(`/sample/account_${id}_graph.json`)
     return computeBlastRadius(g, node, maxHops)
   },
-  findings: (id: string) =>
-    get<FindingCatalogEntry[]>(endpoint(`/accounts/${id}/findings`, `account_${id}_findings.json`)),
-  orgFindings: () =>
-    get<FindingCatalogEntry[]>(endpoint('/org/findings', 'org_findings.json')),
+  // WQL query over the account's graph — live POSTs the typed query to the read-only hub route;
+  // sample runs the byte-identical wql.ts engine over the graph fixture (SAMPLE==LIVE by the
+  // shared parity fixture). A malformed query throws the same way either mode (WQLError → 400).
+  graphQuery: async (id: string, query: unknown): Promise<WqlResult> => {
+    if (!SAMPLE) return post<WqlResult>(`/accounts/${id}/graph/query`, { query })
+    const g = await get<GraphFull>(`/sample/account_${id}_graph.json`)
+    return evalWql(query, g)
+  },
+  // findings — live already overlays Controls server-side; sample folds the control WARN
+  // entries in client-side (same controls.ts engine) so the Findings screen matches.
+  findings: async (id: string): Promise<FindingCatalogEntry[]> => {
+    if (!SAMPLE) return get<FindingCatalogEntry[]>(`${API_BASE}/accounts/${id}/findings`)
+    const [base, ctrl] = await Promise.all([
+      get<FindingCatalogEntry[]>(`/sample/account_${id}_findings.json`), sampleControlFindings(id)])
+    return [...base, ...ctrl]
+  },
+  orgFindings: async (): Promise<FindingCatalogEntry[]> => {
+    if (!SAMPLE) return get<FindingCatalogEntry[]>(`${API_BASE}/org/findings`)
+    const base = await get<FindingCatalogEntry[]>('/sample/org_findings.json')
+    const overlays = (await Promise.all(SAMPLE_ACCOUNTS.map((a) => sampleControlFindings(a)))).flat()
+    // mirror cnapp_service.org_findings: sort the merged (findings + control overlays) list by
+    // (severity, check_id) so a HIGH control WARN ranks with the HIGH findings, not at the bottom.
+    const ORD: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, '': 4 }
+    return [...base, ...overlays].sort((a, b) =>
+      ((ORD[a.severity] ?? 4) - (ORD[b.severity] ?? 4)) || cmpId(a.check_id, b.check_id))
+  },
 
   // write flow (admin) — mocked in sample mode, real POSTs in live mode
   onboard: (req: OnboardRequest) =>
