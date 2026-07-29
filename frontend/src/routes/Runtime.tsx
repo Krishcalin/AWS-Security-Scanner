@@ -1,5 +1,5 @@
 import { Link } from 'react-router'
-import { Radar, ShieldAlert, ShieldCheck, Globe, Gem, AlertTriangle, ArrowRight } from 'lucide-react'
+import { Radar, ShieldAlert, ShieldCheck, Globe, Gem, AlertTriangle, ArrowRight, Bug } from 'lucide-react'
 import { useScope, isOrgScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'
 import { api } from '../api/client'
@@ -119,7 +119,7 @@ function OrgRuntime({ data }: { data: OrgEdrCoverage }) {
 }
 
 // ── per-account ───────────────────────────────────────────────────────────────
-function AccountRuntime({ cov, incidents }: { cov: EdrCoverage; incidents: RuntimeIncident[] }) {
+function AccountRuntime({ cov, incidents, malware }: { cov: EdrCoverage; incidents: RuntimeIncident[]; malware: RuntimeIncident[] }) {
   const o = cov.overall
   const kinds = Object.entries(cov.per_kind).filter(([, v]) => v.total > 0)
   return (
@@ -154,19 +154,27 @@ function AccountRuntime({ cov, incidents }: { cov: EdrCoverage; incidents: Runti
           ? <Empty icon={<Radar size={22} />}>No runtime incidents on reachable workloads.</Empty>
           : <div className="flex flex-col divide-y divide-line/60">{incidents.map((i) => <IncidentRow key={i.detection_id} i={i} />)}</div>}
       </Card>
+
+      <Card className="p-4">
+        <div className="text-xs font-bold uppercase tracking-wide text-ink3 mb-2 flex items-center gap-1.5"><Bug size={13} /> Malware detected on reachable resources <span className="text-ink3/70 normal-case font-normal">(GuardDuty / ClamAV / YARA, correlated by reachability)</span></div>
+        {malware.length === 0
+          ? <Empty icon={<Bug size={22} />}>No malware on reachable resources.</Empty>
+          : <div className="flex flex-col divide-y divide-line/60">{malware.map((i) => <IncidentRow key={i.detection_id} i={i} />)}</div>}
+      </Card>
     </div>
   )
 }
 
-interface RtData { org: OrgEdrCoverage | null; cov: EdrCoverage | null; inc: RuntimeIncident[] }
+interface RtData { org: OrgEdrCoverage | null; cov: EdrCoverage | null; inc: RuntimeIncident[]; mal: RuntimeIncident[] }
 
 export function Runtime() {
   const { scope } = useScope()
   const org = isOrgScope(scope)
   const { data, loading, error } = useFetch<RtData>(
     (): Promise<RtData> => org
-      ? api.orgEdrCoverage().then((d) => ({ org: d, cov: null, inc: [] }))
-      : Promise.all([api.edrCoverage(scope), api.runtimeIncidents(scope)]).then(([cov, inc]) => ({ org: null, cov, inc })),
+      ? api.orgEdrCoverage().then((d) => ({ org: d, cov: null, inc: [], mal: [] }))
+      : Promise.all([api.edrCoverage(scope), api.runtimeIncidents(scope), api.malwareIncidents(scope)])
+          .then(([cov, inc, mal]) => ({ org: null, cov, inc, mal })),
     [scope])
 
   if (loading) return <Loader />
@@ -183,7 +191,7 @@ export function Runtime() {
       </div>
       {data.org
         ? <OrgRuntime data={data.org} />
-        : data.cov && <AccountRuntime cov={data.cov} incidents={data.inc} />}
+        : data.cov && <AccountRuntime cov={data.cov} incidents={data.inc} malware={data.mal} />}
     </div>
   )
 }

@@ -1,0 +1,34 @@
+{
+  "overall": {
+    "total": 2,
+    "exposed": 2,
+    "unencrypted": 1
+  },
+  "by_type": {
+    "PII": 1,
+    "PCI": 1
+  },
+  "accounts": [
+    {
+      "account": "123456789012",
+      "total": 2,
+      "exposed": 2,
+      "unencrypted": 1,
+      "gap_count": 0
+    },
+    {
+      "account": "234567890123",
+      "total": 0,
+      "exposed": 0,
+      "unencrypted": 0,
+      "gap_count": 0
+    },
+    {
+      "account": "345678901234",
+      "total": 0,
+      "exposed": 0,
+      "unencrypted": 0,
+      "gap_count": 0
+    }
+  ]
+}

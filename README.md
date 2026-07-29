@@ -506,6 +506,8 @@ Pure, dependency-injected, offline-testable:
 | `aws_aispm.py` | **AI-SPM pillar** — pure classifiers for the blast radius of an AI resource's execution role (privesc-capable / reaches-crown-data / no-network-isolation) fused onto the graph post-clobber; emits `AISPM-01..03` + the flagship `AIPATH-01` |
 | `aws_cdr.py` | **CDR-lite** — normalize GuardDuty / Security Hub ASFF / CloudTrail-anomaly detections, fold onto the stored graph as `THREAT_ON`, re-run reachability so a detection on an internet→crown/admin path escalates to a ranked **incident** (reuses `aws_ingest` predicates; no `aws_correlate` change) |
 | `aws_edr.py` | **Runtime-sensor (EDR/CWPP) ingest** — the in-charter substitute for a runtime sensor: normalize the customer's EXISTING CrowdStrike / Falco / GuardDuty-Runtime / OCSF output → detections fold through the `aws_cdr` `THREAT_ON`/incident path; a sensor-inventory feed drives `runtime_monitored` coverage. Pure; reuses `aws_cdr`/`aws_correlate` read-only (no sensor, no `aws_correlate` edit) |
+| `aws_malware.py` | **Malware-finding ingest** — normalize the customer's EXISTING malware scan output (Amazon GuardDuty Malware Protection, ClamAV, YARA) → fold as `THREAT_ON` → reachability-ranked malware incident (`MAL-01/02/03`, incl. the malware∩DSPM cross-engine hit in a crown store). EICAR/test-signature suppression. Pure; reuses `aws_cdr`. Native scanning over file bytes stays deferred (EBS filesystem parse) |
+| `aws_dspm.py` | **DSPM read-surface** — normalize the already-collected `sensitivity` signal (Macie score / classification tags) into `data_types` (PII/PCI/PHI/…) + a tier at read time, and compute the crown-jewel data inventory + exposure + a classification-coverage gap over the STORED graph. Pure; no new scan, no file-content read, `aws_correlate` untouched |
 | `aws_forensics.py` | **Cloud-forensics timeline** — reconstruct who-did-what-when around a resource from read-only CloudTrail management events, correlated with graph / findings / detections; fail-open `FORENSIC-00` behind an injected seam |
 | `aws_wql.py` | **WQL graph query** — a typed, bounded JSON query language compiled to the frozen `aws_graph` traversal primitives (no free Gremlin / Neptune / `eval`). `parse()` is the security boundary (rejects any unknown field/op/predicate/prop → `WQLError`); `evaluate()` returns deterministic `(kind,id)`-sorted node rows. Mirrored byte-for-byte in `frontend/src/lib/wql.ts` for SAMPLE==LIVE, guarded by a cross-language parity fixture |
 | `aws_controls.py` | **Saved-query-as-Control** — pure transform of a matched WQL result into a display-only `WARN` finding (`status=WARN` → never touches the FAIL-only posture score); mirrored in `frontend/src/lib/controls.ts` |
@@ -524,6 +526,8 @@ hub control plane. `POST /accounts` (onboard → launch URL), `POST /accounts/{i
 `POST /accounts/{id}/detections/refresh`, `GET /org/incidents`;
 **runtime (EDR)** — `POST /accounts/{id}/edr/ingest` (ingest tier; sensors + detections),
 `GET /accounts/{id}/edr/coverage`, `GET /org/edr/coverage`;
+**malware** — `POST /accounts/{id}/malware/ingest` (ingest tier; GuardDuty-Malware / ClamAV / YARA);
+**data (DSPM)** — `GET /accounts/{id}/data/inventory`, `GET /org/data/inventory`;
 **forensics** — `GET /accounts/{id}/forensics/timeline`;
 **supply-chain** — `GET /accounts/{id}/sbom/{subjects,snapshots,diff}`,
 `GET /accounts/{id}/components`, `GET /accounts/{id}/license-findings`, `GET /accounts/{id}/vex`;
@@ -732,6 +736,28 @@ It substitutes for runtime *detection* and *coverage visibility*; it explicitly 
 real-time blocking, in-kernel telemetry, or DAST — it makes your EDR reachability-aware and tells
 you exactly which workloads it's blind to.
 
+### Data security (DSPM) & malware ingest
+
+Both engines ship the buildable-now, agentless surface; native scanning over file *bytes* stays
+deferred behind the pre-committed EBS-filesystem-parse seam (`aws_sidescan_fs.DissectExtractor`).
+
+- **DSPM (`aws_dspm.py`)** — OverWatch already classifies crown-jewel data stores agentlessly
+  during a scan (Amazon Macie automated scores + data-classification tags → `crown_jewel` +
+  `sensitivity`, across 13 store kinds, with `CAN_READ_DATA` reader edges). This is the **read-time
+  surface** over that signal: it normalizes the heterogeneous `sensitivity` into explicit
+  **`data_types`** (PII/PCI/PHI/FINANCIAL/SECRET) + a **`sensitivity_tier`**, and computes the
+  sensitive-data inventory + exposure + a **classification-coverage gap** (crown stores whose data
+  type is unknown — the honest "enable Macie / tag it" signal, `DSPM-GAP` WARN) — all from the
+  STORED graph, no new scan, `aws_correlate` untouched. The new props are WQL-queryable
+  (`GET /accounts/{id}/data/inventory` + the **Data Security** console screen), so
+  *"publicly exposed stores holding PII"* is a real query.
+- **Malware (`aws_malware.py`)** — ingest the customer's EXISTING malware scan output (GuardDuty
+  Malware Protection, ClamAV, YARA; EICAR-suppressed) → fold as `THREAT_ON` → reachability-ranked
+  **malware incident**: `MAL-01` (on a critical attack path), `MAL-02` (on a reachable workload),
+  **`MAL-03`** (a malicious object IN a Macie-classified crown store — the malware∩DSPM win). It
+  reuses the exact `aws_cdr` incident spine; `aws_correlate` stays byte-frozen. OverWatch running
+  its *own* YARA/ClamAV over file bytes is the piece that waits on the filesystem parse.
+
 ### Web console
 
 A **React 19 + Vite + TypeScript + Tailwind** SPA over
@@ -742,10 +768,11 @@ showing each path's gated-multiplicative score breakdown), **Findings** (unified
 deduped queue with source sub-tabs + a risk → business-impact → step-by-step
 remediation detail panel), and **Cloud Accounts** with a keyless 5-step **onboarding
 wizard** (server-minted ExternalId + CloudFormation / Org StackSet) — plus
-**Vulnerabilities**, **Runtime** (EDR sensor coverage + ranked blind-spots + runtime incidents),
-**Supply Chain**, **Inventory**, **Query** (WQL console — guided predicate builder + raw JSON +
-saved Controls), **Projects**, **Identity**, **Compliance**, **Remediation**, **Reports**, and
-**Settings → Integrations**. Every view is a
+**Vulnerabilities**, **Runtime** (EDR sensor coverage + ranked blind-spots + runtime & malware
+incidents), **Data Security** (DSPM sensitive-data inventory — data types, exposure, readers +
+classification gaps), **Supply Chain**, **Inventory**, **Query** (WQL console — guided predicate
+builder + raw JSON + saved Controls), **Projects**, **Identity**, **Compliance**, **Remediation**,
+**Reports**, and **Settings → Integrations**. Every view is a
 **shareable deep link** — scope and each open panel live in the URL, so a pasted
 `/attack-paths?scope=…&path=…` reopens exactly what you were looking at — and an
 **interactive product tour** replays five canned scenarios *over the live console*
@@ -819,6 +846,8 @@ AWS-Security-Scanner/
 ├── aws_aispm.py             # AI-SPM — AI execution-role blast-radius classifiers (privesc/reaches-crown/no-net-iso), pure
 ├── aws_cdr.py               # CDR-lite — normalize GuardDuty/ASFF/CloudTrail detections → THREAT_ON → reachability-ranked incidents, pure
 ├── aws_edr.py               # Runtime-sensor (EDR/CWPP) ingest — CrowdStrike/Falco/GuardDuty-Runtime/OCSF → detections + runtime_monitored coverage, pure
+├── aws_malware.py           # Malware-finding ingest — GuardDuty-Malware/ClamAV/YARA → THREAT_ON → MAL-01/02/03 incidents (malware∩DSPM), pure
+├── aws_dspm.py              # DSPM read-surface — normalize sensitivity → data_types/tier + crown-jewel data inventory + classification-gap, pure
 ├── aws_forensics.py         # Cloud-forensics timeline — read-only CloudTrail events correlated with graph/findings/detections, pure
 ├── aws_wql.py               # WQL — typed, bounded JSON query language compiled to the frozen aws_graph primitives (parse = security boundary), pure
 ├── aws_controls.py          # Saved-query-as-Control — matched WQL result → display-only WARN finding, pure

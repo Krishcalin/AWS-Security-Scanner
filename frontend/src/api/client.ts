@@ -11,11 +11,12 @@ import type {
   IngestedVuln, IngestDoc, IngestResult,
   SbomSubject, SbomSnapshot, SbomComponent, SbomDiffData, LicenseFinding, VexStatementRow,
   RegistryRepo, RegistryImage, CopilotAnswer, BlastRadius, Project, ProjectDetail, ControlRow,
-  EdrCoverage, OrgEdrCoverage, RuntimeIncident,
+  EdrCoverage, OrgEdrCoverage, RuntimeIncident, DataInventory, OrgDataInventory,
 } from './types'
 import { deriveCrosswalk } from '../lib/crosswalk'
 import { computeBlastRadius, cmpId } from '../lib/blast'
 import { evaluate as evalWql, type WqlResult } from '../lib/wql'
+import { applyDspm } from '../lib/dspm'
 import { controlsForAccount, rollupControls, type ControlDef } from '../lib/controls'
 import { pickCopilotAnswer } from '../lib/copilot'
 import { findingInProject, severityCounts, type ProjectMatch } from '../lib/projects'
@@ -539,6 +540,7 @@ const controlsApi = {
 // and stamps runtime_monitored onto the graph fixture (from the coverage's monitored list) so
 // the WQL endpoint-security query is correct offline too. ────────────────────────────────────
 const RUNTIME_SOURCES = new Set(['crowdstrike', 'falco', 'guardduty-runtime', 'ocsf'])  // mirror aws_edr.RUNTIME_SOURCES
+const MALWARE_SOURCES = new Set(['guardduty-malware', 'clamav', 'yara'])                // mirror aws_malware.MALWARE_SOURCES
 const _covCache: Record<string, EdrCoverage | null> = {}
 async function sampleCoverage(id: string): Promise<EdrCoverage | null> {
   if (!(id in _covCache))
@@ -566,12 +568,34 @@ const edrApi = {
       .catch(() => ({ overall: { monitored: 0, total: 0, pct: null }, accounts: [] }))
   },
   // only RUNTIME-sourced incidents belong on the Runtime screen — the shared /incidents endpoint
-  // also carries cloud (GuardDuty/ASFF/CloudTrail) incidents, which would be mislabeled here.
+  // also carries cloud (GuardDuty/ASFF/CloudTrail) + malware incidents, which are labeled elsewhere.
   runtimeIncidents: async (id: string): Promise<RuntimeIncident[]> => {
     const rows = !SAMPLE
       ? await get<RuntimeIncident[]>(`${API_BASE}/accounts/${id}/incidents`)
       : await get<RuntimeIncident[]>(`/sample/account_${id}_incidents.json`).catch(() => [])
     return rows.filter((r) => RUNTIME_SOURCES.has(r.source))
+  },
+  // malware incidents (guardduty-malware / clamav / yara) for the Runtime malware lane.
+  malwareIncidents: async (id: string): Promise<RuntimeIncident[]> => {
+    if (!SAMPLE) {
+      const rows = await get<RuntimeIncident[]>(`${API_BASE}/accounts/${id}/incidents`)
+      return rows.filter((r) => MALWARE_SOURCES.has(r.source))
+    }
+    return get<RuntimeIncident[]>(`/sample/account_${id}_malware_incidents.json`).catch(() => [])
+  },
+}
+
+// ── DSPM: sensitive-data inventory (read-only over the stored graph) ───────────
+const dataApi = {
+  dataInventory: async (id: string): Promise<DataInventory> => {
+    if (!SAMPLE) return get<DataInventory>(`${API_BASE}/accounts/${id}/data/inventory`)
+    return get<DataInventory>(`/sample/account_${id}_data_inventory.json`)
+      .catch(() => ({ total: 0, exposed: 0, unencrypted: 0, by_type: {}, by_tier: {}, stores: [], classification_gaps: [] }))
+  },
+  orgDataInventory: async (): Promise<OrgDataInventory> => {
+    if (!SAMPLE) return get<OrgDataInventory>(`${API_BASE}/org/data/inventory`)
+    return get<OrgDataInventory>('/sample/data_inventory_org.json')
+      .catch(() => ({ overall: { total: 0, exposed: 0, unencrypted: 0 }, by_type: {}, accounts: [] }))
   },
 }
 
@@ -584,6 +608,7 @@ export const api = {
   ...projectsApi,
   ...controlsApi,
   ...edrApi,
+  ...dataApi,
   copilot: (scope: string, question: string): Promise<CopilotAnswer> =>
     SAMPLE ? sampleCopilot(question)
       : post<CopilotAnswer>(scope === 'org' ? '/org/copilot' : `/accounts/${scope}/copilot`, { question }),
@@ -612,6 +637,7 @@ export const api = {
     if (!SAMPLE) return post<WqlResult>(`/accounts/${id}/graph/query`, { query })
     const g = await get<GraphFull>(`/sample/account_${id}_graph.json`)
     await stampRuntimeMonitored(id, g)   // runtime_monitored overlay (mirrors the live hub)
+    applyDspm(g)                          // data_types / sensitivity_tier overlay (mirrors the hub)
     return evalWql(query, g)
   },
   // findings — live already overlays Controls server-side; sample folds the control WARN

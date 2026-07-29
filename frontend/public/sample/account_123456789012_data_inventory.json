@@ -1,0 +1,45 @@
+{
+  "total": 2,
+  "exposed": 2,
+  "unencrypted": 1,
+  "by_type": {
+    "PII": 1,
+    "PCI": 1
+  },
+  "by_tier": {
+    "restricted": 2
+  },
+  "stores": [
+    {
+      "node_id": "arn:aws:rds:us-east-1:123456789012:db:customers-db",
+      "kind": "RDSInstance",
+      "label": "customers-db",
+      "data_types": [
+        "PII"
+      ],
+      "sensitivity_tier": "restricted",
+      "classifier": "tag",
+      "public": true,
+      "encrypted": false,
+      "reachable_from_internet": true,
+      "reader_count": 1,
+      "exposure_rank": 3
+    },
+    {
+      "node_id": "arn:aws:dynamodb:us-east-1:123456789012:table/payments-ledger",
+      "kind": "DynamoDBTable",
+      "label": "payments-ledger",
+      "data_types": [
+        "PCI"
+      ],
+      "sensitivity_tier": "restricted",
+      "classifier": "tag",
+      "public": false,
+      "encrypted": true,
+      "reachable_from_internet": true,
+      "reader_count": 1,
+      "exposure_rank": 2
+    }
+  ],
+  "classification_gaps": []
+}

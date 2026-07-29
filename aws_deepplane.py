@@ -259,8 +259,10 @@ def is_crown_jewel_by_tags(tags, extra_keys=frozenset(), extra_values=frozenset(
             return {"crown": True, "sensitivity": val,
                     "matched": (t.get("Key"), t.get("Value"))}
         if key in _DSPM_BOOLEAN_KEYS and (val in _DSPM_TRUTHY or val in sens_values):
-            return {"crown": True,
-                    "sensitivity": (val if val in sens_values else "flagged"),
+            # a data-type boolean key (pii/phi=true) carries the TYPE in the key — keep it, so
+            # DSPM can classify it (not the generic "flagged", which would drop the data type).
+            sens = val if val in sens_values else (key if key in ("pii", "phi") else "flagged")
+            return {"crown": True, "sensitivity": sens,
                     "matched": (t.get("Key"), t.get("Value"))}
     return None
 

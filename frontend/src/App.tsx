@@ -18,6 +18,7 @@ import { CategoryDashboard } from './routes/CategoryDashboard'
 import { Projects, ProjectView } from './routes/Projects'
 import { Query } from './routes/Query'
 import { Runtime } from './routes/Runtime'
+import { Data } from './routes/Data'
 import { DASHBOARDS } from './lib/dashboards'
 import { TourProvider } from './lib/tour/TourProvider'
 import { TourOverlay } from './components/tour/TourOverlay'
@@ -50,6 +51,7 @@ export default function App() {
               <Route path="/projects/:id" element={<ProjectView />} />
               <Route path="/query" element={<Query />} />
               <Route path="/runtime" element={<Runtime />} />
+              <Route path="/data" element={<Data />} />
               {DASHBOARDS.map((d) => (
                 <Route key={d.slug} path={`/${d.slug}`} element={<CategoryDashboard spec={d} />} />
               ))}
