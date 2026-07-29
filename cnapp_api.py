@@ -216,6 +216,11 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         events: Union[dict, List[dict]]              # one raw detection or a batch
         source: str = Field(min_length=1)            # guardduty | securityhub | cloudtrail
 
+    class EdrIngestReq(BaseModel):
+        vendor: str = Field(min_length=1)            # crowdstrike | falco | guardduty-runtime | ocsf
+        sensors: Optional[List[dict]] = None         # inventory feed -> coverage (runtime_monitored)
+        detections: Optional[Union[dict, List[dict]]] = None   # threat feed -> THREAT_ON -> incidents
+
     class WorkspaceReq(BaseModel):
         workspace_id: str = Field(min_length=1, max_length=64)
         name: str = ""
@@ -534,6 +539,28 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     @app.get("/org/incidents")
     def org_incidents(limit: int = 200, scope: Scope = Depends(require("viewer"))):
         return service.org_incidents(limit=limit, workspace_id=scope.workspace_id)
+
+    # ── EDR / runtime-sensor ingest + coverage (push-ingest at the machine 'ingest' tier) ──
+    @app.post("/accounts/{account_id}/edr/ingest", dependencies=[Depends(account_gate("ingest"))])
+    def edr_ingest(account_id: str, body: EdrIngestReq):
+        try:
+            return service.ingest_edr(account_id, vendor=body.vendor,
+                                      sensors=body.sensors, detections=body.detections)
+        except ValueError as e:                     # unknown vendor / cross-account ARN
+            raise HTTPException(status_code=400, detail=str(e))
+        except RuntimeError as e:                   # requires a state store
+            raise HTTPException(status_code=503, detail=str(e))
+
+    @app.get("/accounts/{account_id}/edr/coverage", dependencies=[Depends(account_gate("viewer"))])
+    def edr_coverage(account_id: str):
+        cov = service.edr_coverage(account_id)
+        if cov is None:
+            raise HTTPException(status_code=404, detail="no scan results for account")
+        return cov
+
+    @app.get("/org/edr/coverage")
+    def org_edr_coverage(scope: Scope = Depends(require("viewer"))):
+        return service.org_edr_coverage(workspace_id=scope.workspace_id)
 
     # ── cloud-forensics timeline (viewer; read-only CloudTrail, correlated) ─────
     @app.get("/accounts/{account_id}/forensics/timeline",

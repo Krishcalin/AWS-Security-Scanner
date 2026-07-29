@@ -11,6 +11,7 @@ import type {
   IngestedVuln, IngestDoc, IngestResult,
   SbomSubject, SbomSnapshot, SbomComponent, SbomDiffData, LicenseFinding, VexStatementRow,
   RegistryRepo, RegistryImage, CopilotAnswer, BlastRadius, Project, ProjectDetail, ControlRow,
+  EdrCoverage, OrgEdrCoverage, RuntimeIncident,
 } from './types'
 import { deriveCrosswalk } from '../lib/crosswalk'
 import { computeBlastRadius, cmpId } from '../lib/blast'
@@ -533,6 +534,47 @@ const controlsApi = {
   },
 }
 
+// ── Runtime / EDR sensor coverage (read-only). Sample mode reads the Python-generated
+// coverage / incident / EDR-01 fixtures (parity by construction — they ARE the service output),
+// and stamps runtime_monitored onto the graph fixture (from the coverage's monitored list) so
+// the WQL endpoint-security query is correct offline too. ────────────────────────────────────
+const RUNTIME_SOURCES = new Set(['crowdstrike', 'falco', 'guardduty-runtime', 'ocsf'])  // mirror aws_edr.RUNTIME_SOURCES
+const _covCache: Record<string, EdrCoverage | null> = {}
+async function sampleCoverage(id: string): Promise<EdrCoverage | null> {
+  if (!(id in _covCache))
+    _covCache[id] = await get<EdrCoverage>(`/sample/account_${id}_edr_coverage.json`).catch(() => null)
+  return _covCache[id]
+}
+async function sampleEdrFindings(id: string): Promise<FindingCatalogEntry[]> {
+  return get<FindingCatalogEntry[]>(`/sample/account_${id}_edr_findings.json`).catch(() => [])
+}
+// stamp runtime_monitored=true on the covered nodes (the sensor->node join was done in Python
+// and baked into coverage.monitored, so the client only sets a bool — SAMPLE==LIVE holds).
+async function stampRuntimeMonitored(id: string, g: GraphFull): Promise<void> {
+  const cov = await sampleCoverage(id)
+  const mon = new Set(cov?.monitored ?? [])
+  if (mon.size) for (const n of g.nodes) if (mon.has(n.id)) n.runtime_monitored = true
+}
+const edrApi = {
+  edrCoverage: async (id: string): Promise<EdrCoverage> => {
+    if (!SAMPLE) return get<EdrCoverage>(`${API_BASE}/accounts/${id}/edr/coverage`)
+    return (await sampleCoverage(id)) ?? { overall: { monitored: 0, total: 0, pct: null }, per_kind: {}, gaps: [] }
+  },
+  orgEdrCoverage: async (): Promise<OrgEdrCoverage> => {
+    if (!SAMPLE) return get<OrgEdrCoverage>(`${API_BASE}/org/edr/coverage`)
+    return get<OrgEdrCoverage>('/sample/edr_coverage_org.json')
+      .catch(() => ({ overall: { monitored: 0, total: 0, pct: null }, accounts: [] }))
+  },
+  // only RUNTIME-sourced incidents belong on the Runtime screen — the shared /incidents endpoint
+  // also carries cloud (GuardDuty/ASFF/CloudTrail) incidents, which would be mislabeled here.
+  runtimeIncidents: async (id: string): Promise<RuntimeIncident[]> => {
+    const rows = !SAMPLE
+      ? await get<RuntimeIncident[]>(`${API_BASE}/accounts/${id}/incidents`)
+      : await get<RuntimeIncident[]>(`/sample/account_${id}_incidents.json`).catch(() => [])
+    return rows.filter((r) => RUNTIME_SOURCES.has(r.source))
+  },
+}
+
 export const api = {
   ...connectorApi,
   ...complianceApi,
@@ -541,6 +583,7 @@ export const api = {
   ...sbomApi,
   ...projectsApi,
   ...controlsApi,
+  ...edrApi,
   copilot: (scope: string, question: string): Promise<CopilotAnswer> =>
     SAMPLE ? sampleCopilot(question)
       : post<CopilotAnswer>(scope === 'org' ? '/org/copilot' : `/accounts/${scope}/copilot`, { question }),
@@ -568,22 +611,25 @@ export const api = {
   graphQuery: async (id: string, query: unknown): Promise<WqlResult> => {
     if (!SAMPLE) return post<WqlResult>(`/accounts/${id}/graph/query`, { query })
     const g = await get<GraphFull>(`/sample/account_${id}_graph.json`)
+    await stampRuntimeMonitored(id, g)   // runtime_monitored overlay (mirrors the live hub)
     return evalWql(query, g)
   },
   // findings — live already overlays Controls server-side; sample folds the control WARN
   // entries in client-side (same controls.ts engine) so the Findings screen matches.
   findings: async (id: string): Promise<FindingCatalogEntry[]> => {
     if (!SAMPLE) return get<FindingCatalogEntry[]>(`${API_BASE}/accounts/${id}/findings`)
-    const [base, ctrl] = await Promise.all([
-      get<FindingCatalogEntry[]>(`/sample/account_${id}_findings.json`), sampleControlFindings(id)])
-    return [...base, ...ctrl]
+    const [base, ctrl, edr] = await Promise.all([
+      get<FindingCatalogEntry[]>(`/sample/account_${id}_findings.json`),
+      sampleControlFindings(id), sampleEdrFindings(id)])
+    return [...base, ...ctrl, ...edr]
   },
   orgFindings: async (): Promise<FindingCatalogEntry[]> => {
     if (!SAMPLE) return get<FindingCatalogEntry[]>(`${API_BASE}/org/findings`)
     const base = await get<FindingCatalogEntry[]>('/sample/org_findings.json')
-    const overlays = (await Promise.all(SAMPLE_ACCOUNTS.map((a) => sampleControlFindings(a)))).flat()
-    // mirror cnapp_service.org_findings: sort the merged (findings + control overlays) list by
-    // (severity, check_id) so a HIGH control WARN ranks with the HIGH findings, not at the bottom.
+    const overlays = (await Promise.all(SAMPLE_ACCOUNTS.flatMap((a) =>
+      [sampleControlFindings(a), sampleEdrFindings(a)]))).flat()
+    // mirror cnapp_service.org_findings: sort the merged (findings + control + EDR overlays) list
+    // by (severity, check_id) so a HIGH overlay ranks with the HIGH findings, not at the bottom.
     const ORD: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, '': 4 }
     return [...base, ...overlays].sort((a, b) =>
       ((ORD[a.severity] ?? 4) - (ORD[b.severity] ?? 4)) || cmpId(a.check_id, b.check_id))

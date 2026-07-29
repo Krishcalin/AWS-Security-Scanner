@@ -374,6 +374,14 @@ POSTGRES_DDL: List[str] = [
        doc_id TEXT NOT NULL, first_seen_epoch BIGINT NOT NULL, last_seen_epoch BIGINT NOT NULL,
        PRIMARY KEY(account, node_id, cve, purl_identity))""",
     "CREATE INDEX IF NOT EXISTS ix_vex_lookup ON vex_statements(account, node_id, cve)",
+    """CREATE TABLE IF NOT EXISTS edr_sensors(
+       account TEXT NOT NULL, vendor TEXT NOT NULL, sensor_key TEXT NOT NULL,
+       instance_id TEXT, resource_arn TEXT, ecs_task_arn TEXT,
+       pod_name TEXT, pod_namespace TEXT, hostname TEXT,
+       sensor_id TEXT, status TEXT, reported_last_seen TEXT,
+       first_seen_epoch BIGINT NOT NULL, last_seen_epoch BIGINT NOT NULL,
+       PRIMARY KEY(account, vendor, sensor_key))""",
+    "CREATE INDEX IF NOT EXISTS ix_edr_fresh ON edr_sensors(account, last_seen_epoch)",
 ]
 
 # Per-account advisory lock replacing sqlite's whole-DB BEGIN IMMEDIATE (different

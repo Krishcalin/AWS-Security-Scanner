@@ -326,6 +326,50 @@ export interface Project {
 }
 export interface ProjectDetail extends Project { findings: FindingCatalogEntry[] }
 
+// Runtime (EDR/CWPP) sensor coverage — GET /accounts/{id}/edr/coverage. Which workloads have a
+// runtime sensor, and the UNMONITORED ones ranked by attack-path exposure (the coverage gap).
+export interface CoverageCount { monitored: number; total: number; pct: number | null }
+export interface CoverageGap {
+  node_id: string
+  kind: string
+  label: string
+  reachable_from_internet: boolean
+  reaches_crown: boolean
+  exposure_rank: number   // 3 exposed & crown-bound · 2 crown-bound · 1 exposed · 0 isolated
+}
+export interface EdrCoverage {
+  overall: CoverageCount
+  per_kind: Record<string, CoverageCount>
+  gaps: CoverageGap[]
+  monitored?: string[]    // node ids a sensor covers (sample-mode: stamps runtime_monitored)
+}
+export interface OrgEdrCoverage {
+  overall: CoverageCount
+  accounts: (CoverageCount & { account: string; gap_count: number })[]
+}
+// A runtime detection/incident row (cnapp_service.list_incidents / list_detections).
+export interface RuntimeIncident {
+  account?: string
+  detection_id: string
+  source: string          // crowdstrike | falco | guardduty-runtime | ocsf | guardduty | ...
+  type: string
+  title: string
+  node_id: string | null
+  node_kind: string | null
+  mapping_status: string
+  severity: number | null
+  band: string | null
+  on_attack_path: boolean
+  reaches_crown: boolean
+  hits_crown: boolean
+  reachable_from_internet: boolean
+  incident: boolean
+  priority_score: number
+  priority_band: string | null
+  driving_path: string | null
+  first_seen_epoch: number | null
+}
+
 // Controls — saved-WQL-query-as-Control (GET /controls). A config-driven saved query that
 // overlays a display-only WARN finding when it matches; the roll-up says how many nodes it
 // matches across active accounts (status WARN when >0, else PASS — the control is satisfied).

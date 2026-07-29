@@ -1,0 +1,26 @@
+{
+  "overall": {
+    "monitored": 0,
+    "total": 0,
+    "pct": null
+  },
+  "per_kind": {
+    "EC2Instance": {
+      "monitored": 0,
+      "total": 0,
+      "pct": null
+    },
+    "ECSFargateTask": {
+      "monitored": 0,
+      "total": 0,
+      "pct": null
+    },
+    "KubePod": {
+      "monitored": 0,
+      "total": 0,
+      "pct": null
+    }
+  },
+  "gaps": [],
+  "monitored": []
+}

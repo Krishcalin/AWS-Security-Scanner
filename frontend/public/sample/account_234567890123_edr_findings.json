@@ -1,0 +1,25 @@
+[
+  {
+    "check_id": "EDR-01",
+    "section": "Runtime",
+    "severity": "MEDIUM",
+    "status": "WARN",
+    "compliance": {
+      "NIST 800-53": "SI-4"
+    },
+    "remediation_cmd": "Deploy your runtime/endpoint sensor to the uncovered workloads (or exclude intentionally sensor-less workloads from the baseline).",
+    "risk": "1 runtime-hostable workload(s) have no endpoint/runtime sensor reporting (1 of them internet-reachable or crown-bound) \u2014 an attacker's actions there would be invisible to your EDR.",
+    "impact": "An unmonitored workload that is internet-reachable and on a path to crown data is a runtime blind spot on your most exposed asset.",
+    "steps": [
+      "Open /accounts/234567890123/runtime for the ranked coverage gaps.",
+      "Roll out the sensor to the exposed, crown-bound workloads first.",
+      "Re-push the sensor inventory to confirm coverage."
+    ],
+    "affected": [
+      "arn:aws:ec2:us-east-1:234567890123:instance/i-0webfront01"
+    ],
+    "count": 1,
+    "distinct": 1,
+    "account": "234567890123"
+  }
+]

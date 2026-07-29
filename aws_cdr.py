@@ -233,6 +233,18 @@ def _find_node(graph, kind: str, key) -> Optional[str]:
             if (n.get("props") or {}).get("name") == key \
                     or nid.endswith(":::" + key_l) or nid == key_l:
                 return n["id"]
+    elif kind == "KubePod":
+        # runtime EDR (Falco / GuardDuty-Runtime) keys a pod by name; KubePod ids are synthetic
+        # (namespace/name-based, not ARNs). The key is 'namespace/name' when the detection knows
+        # the namespace (disambiguating same-named pods across namespaces), else the bare name.
+        for n in graph.nodes():
+            if n["kind"] != "KubePod":
+                continue
+            p = n.get("props") or {}
+            name, ns = p.get("name"), p.get("namespace")
+            nsname = f"{ns}/{name}" if ns and name else name
+            if key in (nsname, name) or n["id"].lower().endswith("/" + key_l):
+                return n["id"]
     elif kind == "IAMPrincipal":
         for n in graph.nodes():
             nid = n["id"].lower()

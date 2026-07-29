@@ -1,0 +1,35 @@
+{
+  "overall": {
+    "monitored": 0,
+    "total": 1,
+    "pct": 0.0
+  },
+  "per_kind": {
+    "EC2Instance": {
+      "monitored": 0,
+      "total": 1,
+      "pct": 0.0
+    },
+    "ECSFargateTask": {
+      "monitored": 0,
+      "total": 0,
+      "pct": null
+    },
+    "KubePod": {
+      "monitored": 0,
+      "total": 0,
+      "pct": null
+    }
+  },
+  "gaps": [
+    {
+      "node_id": "arn:aws:ec2:us-east-1:234567890123:instance/i-0webfront01",
+      "kind": "EC2Instance",
+      "label": "i-0webfront01",
+      "reachable_from_internet": true,
+      "reaches_crown": false,
+      "exposure_rank": 1
+    }
+  ],
+  "monitored": []
+}

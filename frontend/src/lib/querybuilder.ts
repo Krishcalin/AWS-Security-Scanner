@@ -17,6 +17,9 @@ export const QUICK_PREDS: QuickPred[] = [
   { key: 'reaches_crown', label: 'Reaches crown data', pred: { pred: 'reaches', target: 'crown' } },
   { key: 'public', label: 'public = true', pred: { pred: 'has_prop', field: 'public', value: true } },
   { key: 'unencrypted', label: 'encrypted = false', pred: { pred: 'prop', field: 'encrypted', op: 'eq', value: false } },
+  // runtime_monitored is populated by the EDR-ingest coverage feed (Runtime screen) — this quick
+  // predicate makes "which workloads has my endpoint sensor NOT reached" a first-class query.
+  { key: 'no_runtime_sensor', label: 'No runtime sensor', pred: { op: 'not', of: [{ pred: 'has_prop', field: 'runtime_monitored' }] } },
 ]
 
 /** Compose a WQL query from the guided builder. One predicate → bare where; many → combined by
@@ -37,6 +40,7 @@ export const QUERY_EXAMPLES: Example[] = [
   { name: 'Public buckets', query: { kind: 'S3Bucket', where: { pred: 'has_prop', field: 'public', value: true } } },
   { name: 'Internet-reachable EC2', query: { kind_in: ['EC2Instance'], where: { pred: 'reachable_from', target: 'internet' } } },
   { name: 'All crown-jewel data', query: { where: { pred: 'crown_jewel' } } },
+  { name: 'Workloads without a runtime sensor', query: { kind_in: ['EC2Instance', 'ECSFargateTask', 'KubePod'], where: { op: 'not', of: [{ pred: 'has_prop', field: 'runtime_monitored' }] } } },
 ]
 
 /** Stable pretty-print for the JSON editor (2-space, sorted-stable key order as authored). */
