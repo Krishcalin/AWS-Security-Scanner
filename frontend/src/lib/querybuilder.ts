@@ -20,6 +20,9 @@ export const QUICK_PREDS: QuickPred[] = [
   // runtime_monitored is populated by the EDR-ingest coverage feed (Runtime screen) — this quick
   // predicate makes "which workloads has my endpoint sensor NOT reached" a first-class query.
   { key: 'no_runtime_sensor', label: 'No runtime sensor', pred: { op: 'not', of: [{ pred: 'has_prop', field: 'runtime_monitored' }] } },
+  // DSPM data-classification facets (data_types populated by aws_dspm at read time).
+  { key: 'holds_pii', label: 'Holds PII', pred: { pred: 'prop', field: 'data_types', op: 'contains', value: 'PII' } },
+  { key: 'holds_pci', label: 'Holds PCI', pred: { pred: 'prop', field: 'data_types', op: 'contains', value: 'PCI' } },
 ]
 
 /** Compose a WQL query from the guided builder. One predicate → bare where; many → combined by
@@ -41,6 +44,7 @@ export const QUERY_EXAMPLES: Example[] = [
   { name: 'Internet-reachable EC2', query: { kind_in: ['EC2Instance'], where: { pred: 'reachable_from', target: 'internet' } } },
   { name: 'All crown-jewel data', query: { where: { pred: 'crown_jewel' } } },
   { name: 'Workloads without a runtime sensor', query: { kind_in: ['EC2Instance', 'ECSFargateTask', 'KubePod'], where: { op: 'not', of: [{ pred: 'has_prop', field: 'runtime_monitored' }] } } },
+  { name: 'Publicly exposed stores holding PII', query: { where: { op: 'and', of: [{ pred: 'prop', field: 'data_types', op: 'contains', value: 'PII' }, { pred: 'has_prop', field: 'public', value: true }] } } },
 ]
 
 /** Stable pretty-print for the JSON editor (2-space, sorted-stable key order as authored). */

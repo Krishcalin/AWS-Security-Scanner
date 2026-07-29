@@ -20,6 +20,7 @@ const WHERE_PROPS = new Set([
   'crown_jewel', 'DataStore', 'public', 'encrypted', 'sensitivity', 'name', 'account', 'external',
   'cidr', 'runtime_monitored', 'severity', 'kev', 'epss', 'exploit_available', 'cve',
   'reachable_service', 'conditioned', 'verified', 'scan_source', 'digest', 'region',
+  'data_types', 'sensitivity_tier', 'classifier',       // DSPM read-time enrichment (aws_dspm)
 ])
 
 export class WQLError extends Error {}

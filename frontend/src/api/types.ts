@@ -370,6 +370,36 @@ export interface RuntimeIncident {
   first_seen_epoch: number | null
 }
 
+// DSPM — sensitive-data inventory (GET /accounts/{id}/data/inventory). Each crown-jewel data
+// store with its normalized classification, exposure, and who can read it.
+export interface DataStore {
+  node_id: string
+  kind: string
+  label: string
+  data_types: string[]      // PII | PCI | PHI | FINANCIAL | SECRET | AI
+  sensitivity_tier: string  // restricted | confidential | internal | ''
+  classifier: string        // macie-auto | tag | secret | unclassified
+  public: boolean
+  encrypted: boolean
+  reachable_from_internet: boolean
+  reader_count: number
+  exposure_rank: number
+}
+export interface DataInventory {
+  total: number
+  exposed: number
+  unencrypted: number
+  by_type: Record<string, number>
+  by_tier: Record<string, number>
+  stores: DataStore[]
+  classification_gaps: DataStore[]
+}
+export interface OrgDataInventory {
+  overall: { total: number; exposed: number; unencrypted: number }
+  by_type: Record<string, number>
+  accounts: { account: string; total: number; exposed: number; unencrypted: number; gap_count: number }[]
+}
+
 // Controls — saved-WQL-query-as-Control (GET /controls). A config-driven saved query that
 // overlays a display-only WARN finding when it matches; the roll-up says how many nodes it
 // matches across active accounts (status WARN when >0, else PASS — the control is satisfied).

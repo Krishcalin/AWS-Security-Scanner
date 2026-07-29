@@ -94,8 +94,8 @@ def test_catalog_overlays_matching_control():
 
 
 def test_control_that_matches_nothing_emits_no_finding():
-    svc = _svc([CTRL_NONE], graph=_graph())
-    assert svc.get_finding_catalog(ACCT) == []      # no DynamoDB → control passes → no entry
+    svc = _svc([CTRL_NONE], graph=_graph())          # no DynamoDB → control passes → no CONTROL entry
+    assert not any(f["check_id"].startswith("CONTROL-") for f in svc.get_finding_catalog(ACCT))
 
 
 def test_bad_saved_query_is_inert_not_an_error():
@@ -108,7 +108,8 @@ def test_bad_saved_query_is_inert_not_an_error():
 
 def test_no_controls_configured_is_a_noop():
     svc = _svc([], graph=_graph(), base_findings=[{"check_id": "IAM-01", "severity": "HIGH"}])
-    assert [f["check_id"] for f in svc.get_finding_catalog(ACCT)] == ["IAM-01"]
+    ids = [f["check_id"] for f in svc.get_finding_catalog(ACCT)]
+    assert "IAM-01" in ids and not any(c.startswith("CONTROL-") for c in ids)  # no control overlay
 
 
 def test_no_scan_means_no_control_findings():

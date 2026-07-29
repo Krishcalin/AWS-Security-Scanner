@@ -28,8 +28,10 @@ import aws_correlate
 import aws_graph
 import aws_ingest
 import aws_cdr
+import aws_dspm
 import aws_edr
 import aws_forensics
+import aws_malware
 import aws_license
 import aws_sbom_diff
 import aws_sidescan
@@ -510,12 +512,13 @@ class PlatformService:
                            "sources": len(reached_by)}}
 
     def _graph_with_runtime(self, account_id: str, graph_dict: dict):
-        """Rehydrate ``graph_dict`` and stamp runtime_monitored=True on every workload a live
-        sensor covers (read-time overlay; graph_full stays the pristine native seed, aws_correlate
-        untouched). This is what makes the WQL/Control ``runtime_monitored`` prop real."""
+        """Rehydrate ``graph_dict`` and apply the READ-TIME overlays that make the enrichment
+        props WQL/Control-queryable — runtime_monitored (EDR coverage) + DSPM data_types/
+        sensitivity_tier — WITHOUT mutating graph_full (the pristine native seed) or aws_correlate."""
         g = aws_graph.SecurityGraph.from_dict(graph_dict)
         if self.state is not None:
             aws_edr.apply_runtime_monitored(g, self._edr_sensor_records(account_id), account=account_id)
+        aws_dspm.apply_dspm(g)                                # data_types / sensitivity_tier (pure)
         return g
 
     def run_wql(self, account_id: str, query: dict) -> Optional[dict]:
@@ -554,7 +557,8 @@ class PlatformService:
         latest scan — the data source for the Findings workspace + detail panel. When
         Controls are configured, their synthetic WARN entries are appended (display-only)."""
         base = list((self.results.get_latest(account_id) or {}).get("finding_catalog", []))
-        return base + self._controls_for_account(account_id) + self._edr_coverage_findings(account_id)
+        return (base + self._controls_for_account(account_id)
+                + self._edr_coverage_findings(account_id) + self._dspm_coverage_findings(account_id))
 
     # ── grounded copilot (Slice 2) ────────────────────────────────────────────
     def copilot_answer(self, account_id: str, question: str) -> Optional[dict]:
@@ -631,6 +635,7 @@ class PlatformService:
             if include_controls:
                 out.extend(self._controls_for_account(a["account_id"]))   # display-only WARN overlay
                 out.extend(self._edr_coverage_findings(a["account_id"]))   # EDR-01 coverage gap (WARN)
+                out.extend(self._dspm_coverage_findings(a["account_id"]))  # DSPM-GAP classification (WARN)
         out.sort(key=lambda e: (order.get(e.get("severity", ""), 4), e.get("check_id", "")))
         return out
 
@@ -1164,7 +1169,7 @@ class PlatformService:
     _CDR_NORMALIZERS = {"guardduty": aws_cdr.normalize_guardduty,
                         "securityhub": aws_cdr.normalize_asff,
                         "cloudtrail": aws_cdr.normalize_cloudtrail_anomaly,
-                        **aws_edr.NORMALIZERS}
+                        **aws_edr.NORMALIZERS, **aws_malware.NORMALIZERS}
 
     def ingest_detection(self, account_id: str, *, events, source: str) -> dict:
         """Fold live detection events onto the account's stored ``graph_full`` as
@@ -1201,6 +1206,16 @@ class PlatformService:
                               if v["mapping_status"] == "resolved"),
                 "incident_count": len(incidents), "incidents": incidents[:20],
                 "notes": notes, "top": state.list_cdr_detections(account_id, limit=10)}
+
+    def ingest_malware(self, account_id: str, *, source: str, events) -> dict:
+        """Ingest a malware-scan finding batch (GuardDuty Malware Protection / ClamAV / YARA) →
+        fold as THREAT_ON → reachability-rank → escalate a malware hit on a reachable/crown-bound
+        resource to an incident (MAL-xx). PUSH-only + read-only; reuses the shared detection
+        verdict path. Raises ValueError (→400) on an unknown malware source / cross-account ARN."""
+        if source not in aws_malware.MALWARE_SOURCES:
+            raise ValueError(f"unknown malware source {source!r} "
+                             f"(known: {sorted(aws_malware.MALWARE_SOURCES)})")
+        return self.ingest_detection(account_id, events=events, source=source)
 
     def list_detections(self, account_id: str, **filters) -> List[dict]:
         # Reads fail OPEN: no state store yet = nothing streamed (empty), never a 500.
@@ -1262,16 +1277,52 @@ class PlatformService:
         incidents = self.state.list_cdr_detections(account_id, incidents_only=True, limit=5000)
         if not incidents:
             return []
-        # segment runtime (EDR/CWPP) incidents from cloud-provider incidents so an EDR/Falco
-        # alert is labeled as a RUNTIME detection (EDR-02), never a GuardDuty cloud-threat.
-        cloud = [r for r in incidents if r.get("source") not in aws_edr.RUNTIME_SOURCES]
+        # segment by source class so each is labeled honestly: MALWARE (aws_malware) → MAL-xx
+        # "Malware" section, RUNTIME (aws_edr) → EDR-02 "Runtime", the rest → THREAT-ING cloud.
+        malware = [r for r in incidents if r.get("source") in aws_malware.MALWARE_SOURCES]
         runtime = [r for r in incidents if r.get("source") in aws_edr.RUNTIME_SOURCES]
+        cloud = [r for r in incidents if r.get("source") not in aws_malware.MALWARE_SOURCES
+                 and r.get("source") not in aws_edr.RUNTIME_SOURCES]
         crit = [r for r in cloud if (r.get("priority_band") or "").upper() == "CRITICAL"]
         rest = [r for r in cloud if (r.get("priority_band") or "").upper() != "CRITICAL"]
         buckets = (("THREAT-ING-KEV", "CRITICAL", crit,
                     "on a critical internet→crown attack path"),
                    ("THREAT-ING", "HIGH", rest, "on an attack path or a crown datastore"))
         out: List[dict] = []
+        if malware:
+            # MAL-03 (malware IN a crown/sensitive store — the malware∩DSPM win) > MAL-01
+            # (malware on a critical-path workload) > MAL-02 (malware on a reachable workload).
+            mal_crown = [r for r in malware if r.get("hits_crown")]
+            mal_crit = [r for r in malware if not r.get("hits_crown")
+                        and (r.get("priority_band") or "").upper() == "CRITICAL"]
+            mal_rest = [r for r in malware if not r.get("hits_crown")
+                        and (r.get("priority_band") or "").upper() != "CRITICAL"]
+            for check_id, band, rows, blurb in (
+                    ("MAL-03", "CRITICAL", mal_crown,
+                     "a malicious object detected IN a crown-jewel / sensitive-data store"),
+                    ("MAL-01", "CRITICAL", mal_crit,
+                     "malware on a workload on a critical internet→crown/admin attack path"),
+                    ("MAL-02", "HIGH", mal_rest, "confirmed malware on a reachable workload")):
+                if not rows:
+                    continue
+                out.append({
+                    "check_id": check_id, "section": "Malware", "severity": band, "status": "FAIL",
+                    "compliance": {"NIST 800-53": "SI-3"},
+                    "remediation_cmd": ("Isolate/quarantine the affected resource, snapshot it for "
+                                        "forensics, remove the malicious file, and rotate any "
+                                        "credentials it held; re-scan to confirm."),
+                    "risk": (f"{len(rows)} confirmed malware detection(s) {blurb} — an attacker "
+                             f"already has code execution on a resource that matters, fused onto "
+                             f"the attack-path graph by reachability."),
+                    "impact": "Confirmed malware on a reachable, crown-bound resource is an active "
+                              "compromise, not a hypothetical misconfiguration.",
+                    "steps": [f"Open /accounts/{account_id}/incidents (malware rows, ranked by reachability).",
+                              "Isolate the resource and snapshot it for forensics.",
+                              "Remove the malware, rotate credentials, and re-scan to confirm."],
+                    "affected": [f"{r['source']}:{str(r.get('node_id') or '').split('/')[-1]}"
+                                 for r in rows][:200],
+                    "count": len(rows), "distinct": len(rows),
+                })
         if runtime:
             r_crit = any((r.get("priority_band") or "").upper() == "CRITICAL" for r in runtime)
             out.append({
@@ -1421,6 +1472,67 @@ class PlatformService:
         return {"overall": {"monitored": mon, "total": tot,
                             "pct": round(100.0 * mon / tot, 1) if tot else None},
                 "accounts": accounts}
+
+    # ── DSPM: data inventory + classification coverage (read-time over the stored graph) ──
+    def data_inventory(self, account_id: str) -> Optional[dict]:
+        """The crown-jewel data inventory for an account: each sensitive datastore with its
+        normalized data_types / tier / encryption / public / reader-count / attack-path exposure,
+        a per-type + per-tier roll-up, and the classification-gap list. None when there is no scan
+        (→404). Read-only over the stored graph; reuses aws_correlate reachability UNCHANGED."""
+        gd = self.get_graph(account_id)
+        if gd is None:
+            return None
+        g = aws_graph.SecurityGraph.from_dict(gd)
+        return aws_dspm.compute_inventory(g, account=account_id)
+
+    def org_data_inventory(self, *, workspace_id: Optional[str] = None) -> dict:
+        """Org-wide sensitive-data roll-up, each account tagged."""
+        tot = exposed = unenc = 0
+        by_type: dict = {}
+        accounts: List[dict] = []
+        for a in self.registry.list_accounts(onboarding_status="active", workspace_id=self._scoped_ws(workspace_id)):
+            inv = self.data_inventory(a["account_id"])
+            if inv is None:
+                continue
+            tot += inv["total"]; exposed += inv["exposed"]; unenc += inv["unencrypted"]
+            for t, c in inv["by_type"].items():
+                by_type[t] = by_type.get(t, 0) + c
+            accounts.append({"account": a["account_id"], "total": inv["total"],
+                             "exposed": inv["exposed"], "unencrypted": inv["unencrypted"],
+                             "gap_count": len(inv["classification_gaps"])})
+        return {"overall": {"total": tot, "exposed": exposed, "unencrypted": unenc},
+                "by_type": by_type, "accounts": accounts}
+
+    def _dspm_coverage_findings(self, account_id: str) -> List[dict]:
+        """A synthetic WARN finding (DSPM-GAP) for crown-jewel stores whose data TYPE is unknown
+        (Macie-scored-but-untyped, or unclassified) — the honest 'enable Macie sensitive-data
+        discovery / tag the store' signal in place of a byte-level content scan (which stays gated
+        on the deferred EBS filesystem parse). Display-only (never touches the FAIL-only posture
+        score). Empty when no scan / no crown stores / every store is typed."""
+        inv = self.data_inventory(account_id)
+        if inv is None:
+            return []
+        gaps = inv.get("classification_gaps") or []
+        if not gaps:
+            return []
+        exposed = sum(1 for g in gaps if g.get("reachable_from_internet") or g.get("public"))
+        return [{
+            "check_id": "DSPM-GAP", "section": "Data", "severity": "MEDIUM", "status": "WARN",
+            "compliance": {"NIST 800-53": "RA-2"},
+            "remediation_cmd": ("Enable Amazon Macie sensitive-data discovery on these stores (or "
+                                "apply a data-classification tag) so their data type is known — a "
+                                "byte-level content scan is deferred to the EBS filesystem parse."),
+            "risk": (f"{len(gaps)} crown-jewel data store(s) hold sensitive data but their data "
+                     f"TYPE is unclassified ({exposed} of them public or internet-reachable) — you "
+                     f"can't prioritize protection for data you haven't categorized."),
+            "impact": "An unclassified, internet-reachable sensitive store is a data-breach blind "
+                      "spot: the exposure is known but the regulated-data type (PII/PCI/PHI) is not.",
+            "steps": ["Open /accounts/" + account_id + "/data for the classification gaps.",
+                      "Enable Macie (or tag the store) on the exposed stores first.",
+                      "Re-scan to confirm the data type is resolved."],
+            "affected": [g["node_id"] for g in gaps][:500],
+            "count": len(gaps), "distinct": len(gaps), "account": account_id,
+        }]
 
     # ── multi-tenancy control plane (Phase-4 Slice-1) ───────────────────────────
     def _require_workspaces(self):

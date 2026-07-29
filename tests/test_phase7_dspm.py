@@ -34,8 +34,11 @@ def test_high_availability_not_high():
 
 
 def test_boolean_key_truthy_crown():
+    # a data-type boolean key (PII/PHI=true) keeps the TYPE from the key so DSPM can classify it;
+    # a generic crownjewel=true stays "flagged" (no specific type implied).
     cj = D.is_crown_jewel_by_tags([_tag("PII", "true")])
-    assert cj and cj["crown"] and cj["sensitivity"] == "flagged"
+    assert cj and cj["crown"] and cj["sensitivity"] == "pii"
+    assert D.is_crown_jewel_by_tags([_tag("crownjewel", "true")])["sensitivity"] == "flagged"
 
 
 def test_boolean_key_false_not_crown():

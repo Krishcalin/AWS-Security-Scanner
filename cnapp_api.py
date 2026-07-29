@@ -221,6 +221,10 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         sensors: Optional[List[dict]] = None         # inventory feed -> coverage (runtime_monitored)
         detections: Optional[Union[dict, List[dict]]] = None   # threat feed -> THREAT_ON -> incidents
 
+    class MalwareIngestReq(BaseModel):
+        source: str = Field(min_length=1)            # guardduty-malware | clamav | yara
+        events: Union[dict, List[dict]]              # one malware finding or a batch
+
     class WorkspaceReq(BaseModel):
         workspace_id: str = Field(min_length=1, max_length=64)
         name: str = ""
@@ -561,6 +565,28 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     @app.get("/org/edr/coverage")
     def org_edr_coverage(scope: Scope = Depends(require("viewer"))):
         return service.org_edr_coverage(workspace_id=scope.workspace_id)
+
+    # ── malware-finding ingest (GuardDuty Malware Protection / ClamAV / YARA; ingest tier) ──
+    @app.post("/accounts/{account_id}/malware/ingest", dependencies=[Depends(account_gate("ingest"))])
+    def malware_ingest(account_id: str, body: MalwareIngestReq):
+        try:
+            return service.ingest_malware(account_id, source=body.source, events=body.events)
+        except ValueError as e:                     # unknown source / cross-account ARN
+            raise HTTPException(status_code=400, detail=str(e))
+        except RuntimeError as e:                   # requires a state store
+            raise HTTPException(status_code=503, detail=str(e))
+
+    # ── DSPM: sensitive-data inventory (read-only over the stored graph) ─────────
+    @app.get("/accounts/{account_id}/data/inventory", dependencies=[Depends(account_gate("viewer"))])
+    def data_inventory(account_id: str):
+        inv = service.data_inventory(account_id)
+        if inv is None:
+            raise HTTPException(status_code=404, detail="no scan results for account")
+        return inv
+
+    @app.get("/org/data/inventory")
+    def org_data_inventory(scope: Scope = Depends(require("viewer"))):
+        return service.org_data_inventory(workspace_id=scope.workspace_id)
 
     # ── cloud-forensics timeline (viewer; read-only CloudTrail, correlated) ─────
     @app.get("/accounts/{account_id}/forensics/timeline",

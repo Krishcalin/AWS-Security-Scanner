@@ -20,6 +20,7 @@ export const NAV_MAIN: NavItem[] = [
   { to: '/findings', label: 'Findings', icon: CircleAlert },
   { to: '/vulnerabilities', label: 'Vulnerabilities', icon: ShieldAlert },
   { to: '/runtime', label: 'Runtime', icon: Radar },
+  { to: '/data', label: 'Data Security', icon: Database },
   { to: '/supply-chain', label: 'Supply Chain', icon: PackageCheck },
   { to: '/inventory', label: 'Inventory', icon: Boxes },
   { to: '/query', label: 'Query', icon: Terminal },
@@ -37,7 +38,7 @@ export const NAV_ADMIN: NavItem[] = [
 // Risk Dashboards — named roll-ups over the finding catalog (see lib/dashboards.ts).
 export const NAV_DASHBOARDS: NavItem[] = [
   { to: '/exposure', label: 'External Exposure', icon: Globe },
-  { to: '/data-security', label: 'Data Security', icon: Database },
+  { to: '/data-security', label: 'Data Findings', icon: Database },
   { to: '/containers', label: 'Containers', icon: Container },
   { to: '/ai-security', label: 'AI Security', icon: BrainCircuit },
   { to: '/secrets', label: 'Secrets', icon: KeyRound },
