@@ -35,7 +35,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-SCHEMA_VERSION = 9   # v9: + connector_workspace (multi-tenancy: connector→workspace binding)
+SCHEMA_VERSION = 10  # v10: + edr_sensors (runtime-sensor coverage inventory → runtime_monitored)
 KEY_VERSION = 1
 
 # Caller-injected scan timestamp (one per run). epoch = arithmetic column,
@@ -379,6 +379,22 @@ CREATE TABLE IF NOT EXISTS vex_statements(       -- durable, bidirectional, subc
   doc_id TEXT NOT NULL, first_seen_epoch INTEGER NOT NULL, last_seen_epoch INTEGER NOT NULL,
   PRIMARY KEY(account, node_id, cve, purl_identity));
 CREATE INDEX IF NOT EXISTS ix_vex_lookup ON vex_statements(account, node_id, cve);
+
+-- ── runtime-sensor coverage inventory (EDR/CWPP) ────────────────────────────────
+-- Which workloads have a healthy runtime sensor RIGHT NOW (CrowdStrike / Falco /
+-- GuardDuty-Runtime / OCSF). DISTINCT from cdr_detections (a quiet, covered host fires
+-- no detection): this is the coverage feed that stamps runtime_monitored on the graph
+-- at read time and surfaces the workloads the EDR is blind to. One row per
+-- (account, vendor, sensor_key); re-reporting bumps last_seen (idempotent). Read-only
+-- on scanned targets; push-ingest only. BIGINT twins in POSTGRES_DDL.
+CREATE TABLE IF NOT EXISTS edr_sensors(
+  account TEXT NOT NULL, vendor TEXT NOT NULL, sensor_key TEXT NOT NULL,
+  instance_id TEXT, resource_arn TEXT, ecs_task_arn TEXT,
+  pod_name TEXT, pod_namespace TEXT, hostname TEXT,
+  sensor_id TEXT, status TEXT, reported_last_seen TEXT,
+  first_seen_epoch INTEGER NOT NULL, last_seen_epoch INTEGER NOT NULL,
+  PRIMARY KEY(account, vendor, sensor_key));
+CREATE INDEX IF NOT EXISTS ix_edr_fresh ON edr_sensors(account, last_seen_epoch);
 """
 
 
@@ -1088,6 +1104,43 @@ class StateStore:
             if f in r:
                 r[f] = bool(r.get(f))
         return r
+
+    # ── runtime-sensor coverage inventory (v10) ───────────────────────────────
+    _EDR_SENSOR_COLS = ["account", "vendor", "sensor_key", "instance_id", "resource_arn",
+                        "ecs_task_arn", "pod_name", "pod_namespace", "hostname", "sensor_id",
+                        "status", "reported_last_seen", "first_seen_epoch", "last_seen_epoch"]
+
+    def upsert_edr_sensor(self, account: str, sensor_key: str, vendor: str, ident: Dict,
+                          epoch: int) -> None:
+        """Upsert one 'workload has a healthy sensor' fact (PK = account + vendor +
+        sensor_key). Re-reporting bumps ``last_seen`` and preserves ``first_seen`` (MIN),
+        so a stale sensor ages out of coverage once the customer stops pushing it."""
+        first = int(epoch)
+        existing = self._be.query_one(
+            "SELECT first_seen_epoch FROM edr_sensors WHERE account=? AND vendor=? AND sensor_key=?",
+            (account, vendor, sensor_key))
+        if existing and dict(existing).get("first_seen_epoch") is not None:
+            first = min(first, int(dict(existing)["first_seen_epoch"]))
+        self._be.upsert(
+            "edr_sensors", self._EDR_SENSOR_COLS, ["account", "vendor", "sensor_key"],
+            self._EDR_SENSOR_COLS[3:],
+            (account, vendor, sensor_key, ident.get("instance_id"), ident.get("resource_arn"),
+             ident.get("ecs_task_arn"), ident.get("pod_name"), ident.get("pod_namespace"),
+             ident.get("hostname"), ident.get("sensor_id"), ident.get("status"),
+             ident.get("reported_last_seen"), first, int(epoch)))
+
+    def list_edr_sensors(self, account: str, *, fresh_since_epoch: Optional[int] = None,
+                         limit: int = 100000) -> List[Dict]:
+        """Sensor inventory rows for an account, optionally only those refreshed at or after
+        ``fresh_since_epoch`` (the freshness window — a sensor not re-reported within the
+        window is treated as gone, so coverage reflects the LIVE fleet)."""
+        sql = ["SELECT * FROM edr_sensors WHERE account=?"]
+        params: List = [account]
+        if fresh_since_epoch is not None:
+            sql.append("AND last_seen_epoch>=?"); params.append(int(fresh_since_epoch))
+        sql.append("ORDER BY last_seen_epoch DESC LIMIT ?")
+        params.append(int(limit))
+        return [dict(r) for r in self._be.query_all(" ".join(sql), tuple(params))]
 
 
 # ── module helpers ───────────────────────────────────────────────────────────

@@ -1,0 +1,30 @@
+{
+  "overall": {
+    "monitored": 1,
+    "total": 2,
+    "pct": 50.0
+  },
+  "accounts": [
+    {
+      "account": "123456789012",
+      "monitored": 1,
+      "total": 1,
+      "pct": 100.0,
+      "gap_count": 0
+    },
+    {
+      "account": "234567890123",
+      "monitored": 0,
+      "total": 1,
+      "pct": 0.0,
+      "gap_count": 1
+    },
+    {
+      "account": "345678901234",
+      "monitored": 0,
+      "total": 0,
+      "pct": null,
+      "gap_count": 0
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router'
-import { Waypoints, Gem, ShieldCheck, CircleAlert, Cloud, ArrowRight, Scissors, ShieldAlert, Flame } from 'lucide-react'
+import { Waypoints, Gem, ShieldCheck, CircleAlert, Cloud, ArrowRight, Scissors, ShieldAlert, Flame, Radar } from 'lucide-react'
 import { useScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'
 import { api } from '../api/client'
@@ -95,11 +95,13 @@ function PanelHead({ title, to, cta }: { title: string; to?: string; cta?: strin
 
 // ── ORG SCOPE ────────────────────────────────────────────────────────────────
 function OrgView() {
-  const { data, loading, error } = useFetch(() => api.orgOverview(), [])
+  const { data, loading, error } = useFetch(
+    () => Promise.all([api.orgOverview(), api.orgEdrCoverage().catch(() => null)]).then(([o, rt]) => ({ o, rt })), [])
   if (loading) return <Loader />
   if (error) return <ErrorNote msg={error} />
   if (!data) return null
-  const o: TOrg = data
+  const o: TOrg = data.o
+  const rt = data.rt
   const grade = scoreToGrade(o.org_posture_score)
   const topChoke = o.top_choke_points[0]
   const cutPct = topChoke && topChoke.total_paths ? Math.round((topChoke.paths_severed / topChoke.total_paths) * 100) : 0
@@ -127,6 +129,20 @@ function OrgView() {
           <Tile to="/accounts" icon={<Cloud size={17} />} tone="var(--info)" value={o.accounts_scanned} label="Accounts" sub="onboarded & scanning" />
         </div>
       </div>
+
+      {/* runtime coverage strip — renders only once a sensor feed exists */}
+      {rt && rt.overall.total > 0 && (() => {
+        const gaps = rt.accounts.reduce((n, a) => n + a.gap_count, 0)
+        const tone = rt.overall.pct === null ? 'var(--ink3)' : rt.overall.pct >= 90 ? 'var(--ok)' : rt.overall.pct >= 60 ? 'var(--gold)' : 'var(--crit)'
+        return (
+          <Link to="/runtime" className="flex items-center gap-3 rounded-2xl border border-line bg-panel px-5 py-3 mb-4 hover:border-accent/50 transition-all">
+            <Radar size={18} style={{ color: tone }} />
+            <span className="text-sm text-ink"><b style={{ color: tone }}>{rt.overall.pct ?? 0}%</b> runtime coverage · <b className="text-ink">{rt.overall.total - rt.overall.monitored}</b> workload{rt.overall.total - rt.overall.monitored === 1 ? '' : 's'} unwatched{gaps ? ` · ${gaps} runtime blind spot${gaps === 1 ? '' : 's'}` : ''}</span>
+            <span className="flex-1" />
+            <span className="text-accent text-xs font-semibold inline-flex items-center gap-0.5">Runtime <ArrowRight size={12} /></span>
+          </Link>
+        )
+      })()}
 
       {/* paths + chokes */}
       <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-4 mb-4">

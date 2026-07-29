@@ -505,6 +505,7 @@ Pure, dependency-injected, offline-testable:
 | `aws_copilot.py` | **Grounded-RAG copilot** — self-contained BM25 retrieval over the account's own scan (findings / paths / choke points); extractive-by-default (abstains rather than hallucinating), optional injected LLM seam |
 | `aws_aispm.py` | **AI-SPM pillar** — pure classifiers for the blast radius of an AI resource's execution role (privesc-capable / reaches-crown-data / no-network-isolation) fused onto the graph post-clobber; emits `AISPM-01..03` + the flagship `AIPATH-01` |
 | `aws_cdr.py` | **CDR-lite** — normalize GuardDuty / Security Hub ASFF / CloudTrail-anomaly detections, fold onto the stored graph as `THREAT_ON`, re-run reachability so a detection on an internet→crown/admin path escalates to a ranked **incident** (reuses `aws_ingest` predicates; no `aws_correlate` change) |
+| `aws_edr.py` | **Runtime-sensor (EDR/CWPP) ingest** — the in-charter substitute for a runtime sensor: normalize the customer's EXISTING CrowdStrike / Falco / GuardDuty-Runtime / OCSF output → detections fold through the `aws_cdr` `THREAT_ON`/incident path; a sensor-inventory feed drives `runtime_monitored` coverage. Pure; reuses `aws_cdr`/`aws_correlate` read-only (no sensor, no `aws_correlate` edit) |
 | `aws_forensics.py` | **Cloud-forensics timeline** — reconstruct who-did-what-when around a resource from read-only CloudTrail management events, correlated with graph / findings / detections; fail-open `FORENSIC-00` behind an injected seam |
 | `aws_wql.py` | **WQL graph query** — a typed, bounded JSON query language compiled to the frozen `aws_graph` traversal primitives (no free Gremlin / Neptune / `eval`). `parse()` is the security boundary (rejects any unknown field/op/predicate/prop → `WQLError`); `evaluate()` returns deterministic `(kind,id)`-sorted node rows. Mirrored byte-for-byte in `frontend/src/lib/wql.ts` for SAMPLE==LIVE, guarded by a cross-language parity fixture |
 | `aws_controls.py` | **Saved-query-as-Control** — pure transform of a matched WQL result into a display-only `WARN` finding (`status=WARN` → never touches the FAIL-only posture score); mirrored in `frontend/src/lib/controls.ts` |
@@ -521,6 +522,8 @@ hub control plane. `POST /accounts` (onboard → launch URL), `POST /accounts/{i
 **ingest** — `POST /accounts/{id}/ingest`, `GET /accounts/{id}/vulns[/{cve}]`, `GET /org/vulns`;
 **CDR** — `POST /accounts/{id}/detections`, `GET /accounts/{id}/{detections,incidents}`,
 `POST /accounts/{id}/detections/refresh`, `GET /org/incidents`;
+**runtime (EDR)** — `POST /accounts/{id}/edr/ingest` (ingest tier; sensors + detections),
+`GET /accounts/{id}/edr/coverage`, `GET /org/edr/coverage`;
 **forensics** — `GET /accounts/{id}/forensics/timeline`;
 **supply-chain** — `GET /accounts/{id}/sbom/{subjects,snapshots,diff}`,
 `GET /accounts/{id}/components`, `GET /accounts/{id}/license-findings`, `GET /accounts/{id}/vex`;
@@ -706,6 +709,29 @@ posture score stays baked at scan time) and never trigger notifications. **`GET 
 returns the org roll-up (match count per account, `WARN`/`PASS`), and the console's **Query**
 screen is a guided predicate-builder + raw-JSON editor + saved-Controls library over it.
 
+### Runtime (EDR-ingest correlator)
+
+OverWatch is agentless — it never deploys a runtime/eBPF sensor (that would break the
+zero-telemetry charter). Instead it **ingests the customer's EXISTING runtime sensor** and
+correlates it onto the attack-path graph — the in-charter substitute for runtime protection.
+Two push-ingest feeds via **`POST /accounts/{id}/edr/ingest`** (machine `ingest` tier):
+
+- **Detections** (CrowdStrike Falcon · Falco · GuardDuty Runtime Monitoring · generic OCSF 2004)
+  normalize to the shared model and fold through the `aws_cdr` `THREAT_ON` path (out of `E_PATH`,
+  so `aws_correlate` stays byte-frozen): a runtime alert on an internet→crown/admin workload
+  escalates to a ranked **incident** (`EDR-02`, its own "Runtime" section, never mislabeled as a
+  GuardDuty cloud threat).
+- **Sensor inventory** ("which workloads have a healthy sensor right now") drives a
+  **`runtime_monitored`** node prop, overlaid at read time (a side table — `graph_full` stays the
+  pristine scan seed). This powers **`GET /accounts/{id}/edr/coverage`** (monitored/total per kind
+  + the UNMONITORED workloads ranked by attack-path exposure) and the **Runtime** console screen,
+  and it finally makes the Batch-2 WQL query real: *"workloads with no endpoint sensor"* now
+  returns the true gap set (`EDR-01`, a display-only `WARN` — coverage gaps never tank posture).
+
+It substitutes for runtime *detection* and *coverage visibility*; it explicitly does **not** do
+real-time blocking, in-kernel telemetry, or DAST — it makes your EDR reachability-aware and tells
+you exactly which workloads it's blind to.
+
 ### Web console
 
 A **React 19 + Vite + TypeScript + Tailwind** SPA over
@@ -716,9 +742,10 @@ showing each path's gated-multiplicative score breakdown), **Findings** (unified
 deduped queue with source sub-tabs + a risk → business-impact → step-by-step
 remediation detail panel), and **Cloud Accounts** with a keyless 5-step **onboarding
 wizard** (server-minted ExternalId + CloudFormation / Org StackSet) — plus
-**Vulnerabilities**, **Supply Chain**, **Inventory**, **Query** (WQL console — guided
-predicate builder + raw JSON + saved Controls), **Projects**, **Identity**, **Compliance**,
-**Remediation**, **Reports**, and **Settings → Integrations**. Every view is a
+**Vulnerabilities**, **Runtime** (EDR sensor coverage + ranked blind-spots + runtime incidents),
+**Supply Chain**, **Inventory**, **Query** (WQL console — guided predicate builder + raw JSON +
+saved Controls), **Projects**, **Identity**, **Compliance**, **Remediation**, **Reports**, and
+**Settings → Integrations**. Every view is a
 **shareable deep link** — scope and each open panel live in the URL, so a pasted
 `/attack-paths?scope=…&path=…` reopens exactly what you were looking at — and an
 **interactive product tour** replays five canned scenarios *over the live console*
@@ -791,6 +818,7 @@ AWS-Security-Scanner/
 ├── aws_copilot.py           # Grounded-RAG copilot — self-contained BM25 over the scan's own corpus, extractive/abstains, pure
 ├── aws_aispm.py             # AI-SPM — AI execution-role blast-radius classifiers (privesc/reaches-crown/no-net-iso), pure
 ├── aws_cdr.py               # CDR-lite — normalize GuardDuty/ASFF/CloudTrail detections → THREAT_ON → reachability-ranked incidents, pure
+├── aws_edr.py               # Runtime-sensor (EDR/CWPP) ingest — CrowdStrike/Falco/GuardDuty-Runtime/OCSF → detections + runtime_monitored coverage, pure
 ├── aws_forensics.py         # Cloud-forensics timeline — read-only CloudTrail events correlated with graph/findings/detections, pure
 ├── aws_wql.py               # WQL — typed, bounded JSON query language compiled to the frozen aws_graph primitives (parse = security boundary), pure
 ├── aws_controls.py          # Saved-query-as-Control — matched WQL result → display-only WARN finding, pure

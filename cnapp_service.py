@@ -28,6 +28,7 @@ import aws_correlate
 import aws_graph
 import aws_ingest
 import aws_cdr
+import aws_edr
 import aws_forensics
 import aws_license
 import aws_sbom_diff
@@ -508,15 +509,25 @@ class PlatformService:
                            "admins": sum(1 for r in reaches if r["terminal"] == "admin"),
                            "sources": len(reached_by)}}
 
+    def _graph_with_runtime(self, account_id: str, graph_dict: dict):
+        """Rehydrate ``graph_dict`` and stamp runtime_monitored=True on every workload a live
+        sensor covers (read-time overlay; graph_full stays the pristine native seed, aws_correlate
+        untouched). This is what makes the WQL/Control ``runtime_monitored`` prop real."""
+        g = aws_graph.SecurityGraph.from_dict(graph_dict)
+        if self.state is not None:
+            aws_edr.apply_runtime_monitored(g, self._edr_sensor_records(account_id), account=account_id)
+        return g
+
     def run_wql(self, account_id: str, query: dict) -> Optional[dict]:
         """Run a WQL query against the account's persisted graph (read-only; on-demand — never
         stored). None when the account has no scan (→404). Raises ValueError on a malformed /
-        unsafe query (→400). Imports-and-calls aws_wql (which imports frozen aws_correlate)."""
+        unsafe query (→400). The graph is runtime_monitored-overlaid so the endpoint-security
+        queries are live. Imports-and-calls aws_wql (which imports frozen aws_correlate)."""
         gd = self.get_graph(account_id)
         if gd is None:
             return None
         import aws_wql
-        g = aws_graph.SecurityGraph.from_dict(gd)
+        g = self._graph_with_runtime(account_id, gd)
         try:
             rows = aws_wql.evaluate(query, g)
         except aws_wql.WQLError as e:
@@ -543,7 +554,7 @@ class PlatformService:
         latest scan — the data source for the Findings workspace + detail panel. When
         Controls are configured, their synthetic WARN entries are appended (display-only)."""
         base = list((self.results.get_latest(account_id) or {}).get("finding_catalog", []))
-        return base + self._controls_for_account(account_id)
+        return base + self._controls_for_account(account_id) + self._edr_coverage_findings(account_id)
 
     # ── grounded copilot (Slice 2) ────────────────────────────────────────────
     def copilot_answer(self, account_id: str, question: str) -> Optional[dict]:
@@ -619,6 +630,7 @@ class PlatformService:
                 out.append(tagged)
             if include_controls:
                 out.extend(self._controls_for_account(a["account_id"]))   # display-only WARN overlay
+                out.extend(self._edr_coverage_findings(a["account_id"]))   # EDR-01 coverage gap (WARN)
         out.sort(key=lambda e: (order.get(e.get("severity", ""), 4), e.get("check_id", "")))
         return out
 
@@ -682,7 +694,7 @@ class PlatformService:
             return []
         import aws_controls
         import aws_wql
-        g = aws_graph.SecurityGraph.from_dict(gd)
+        g = self._graph_with_runtime(account_id, gd)         # runtime_monitored-aware for EDR controls
         out: List[dict] = []
         for ctrl in self.controls:
             try:
@@ -706,7 +718,7 @@ class PlatformService:
             gd = self.get_graph(a["account_id"])
             if gd is None:
                 continue
-            g = aws_graph.SecurityGraph.from_dict(gd)
+            g = self._graph_with_runtime(a["account_id"], gd)
             for ctrl in self.controls:
                 try:
                     rows = aws_wql.evaluate(ctrl.get("query"), g)
@@ -1147,9 +1159,12 @@ class PlatformService:
         return out
 
     # ── CDR-lite: streaming detection ingest (GuardDuty / ASFF / CloudTrail) ─────
+    # The runtime-sensor (EDR/CWPP) normalizers register alongside the cloud ones, so a
+    # runtime detection flows through the IDENTICAL fold->reachability->incident path.
     _CDR_NORMALIZERS = {"guardduty": aws_cdr.normalize_guardduty,
                         "securityhub": aws_cdr.normalize_asff,
-                        "cloudtrail": aws_cdr.normalize_cloudtrail_anomaly}
+                        "cloudtrail": aws_cdr.normalize_cloudtrail_anomaly,
+                        **aws_edr.NORMALIZERS}
 
     def ingest_detection(self, account_id: str, *, events, source: str) -> dict:
         """Fold live detection events onto the account's stored ``graph_full`` as
@@ -1247,12 +1262,37 @@ class PlatformService:
         incidents = self.state.list_cdr_detections(account_id, incidents_only=True, limit=5000)
         if not incidents:
             return []
-        crit = [r for r in incidents if (r.get("priority_band") or "").upper() == "CRITICAL"]
-        rest = [r for r in incidents if (r.get("priority_band") or "").upper() != "CRITICAL"]
+        # segment runtime (EDR/CWPP) incidents from cloud-provider incidents so an EDR/Falco
+        # alert is labeled as a RUNTIME detection (EDR-02), never a GuardDuty cloud-threat.
+        cloud = [r for r in incidents if r.get("source") not in aws_edr.RUNTIME_SOURCES]
+        runtime = [r for r in incidents if r.get("source") in aws_edr.RUNTIME_SOURCES]
+        crit = [r for r in cloud if (r.get("priority_band") or "").upper() == "CRITICAL"]
+        rest = [r for r in cloud if (r.get("priority_band") or "").upper() != "CRITICAL"]
         buckets = (("THREAT-ING-KEV", "CRITICAL", crit,
                     "on a critical internet→crown attack path"),
                    ("THREAT-ING", "HIGH", rest, "on an attack path or a crown datastore"))
         out: List[dict] = []
+        if runtime:
+            r_crit = any((r.get("priority_band") or "").upper() == "CRITICAL" for r in runtime)
+            out.append({
+                "check_id": "EDR-02", "section": "Runtime",
+                "severity": "CRITICAL" if r_crit else "HIGH", "status": "FAIL",
+                "compliance": {"NIST 800-53": "SI-4"},
+                "remediation_cmd": ("Triage the runtime detection on the affected workload, "
+                                    "contain/isolate the host, and rotate any credentials it "
+                                    "held; re-scan to confirm the attack path is severed."),
+                "risk": (f"{len(runtime)} live runtime detection(s) from your endpoint sensor "
+                         f"landed on a reachable, attack-path workload — an in-progress "
+                         f"incident on a host an attacker can pivot through."),
+                "impact": "A runtime alert on an internet-reachable, crown-bound workload is an "
+                          "active incident, correlated onto the attack-path graph by reachability.",
+                "steps": [f"Open /accounts/{account_id}/incidents (runtime rows, ranked by reachability).",
+                          "Contain the affected workload and rotate its credentials.",
+                          "Re-scan to confirm the attack path is severed."],
+                "affected": [f"{r['source']}:{str(r.get('node_id') or '').split('/')[-1]}"
+                             for r in runtime][:200],
+                "count": len(runtime), "distinct": len(runtime),
+            })
         for check_id, band, rows, blurb in buckets:
             if not rows:
                 continue
@@ -1274,6 +1314,113 @@ class PlatformService:
                 "count": len(rows), "distinct": len(rows),
             })
         return out
+
+    # ── EDR / runtime-sensor ingest + coverage ──────────────────────────────────
+    _EDR_FRESH_SECONDS = 7 * 24 * 3600     # a sensor not re-reported within 7d is treated as gone
+
+    @staticmethod
+    def _sensor_key(s: dict) -> Optional[str]:
+        """A stable per-workload identity key for the coverage row (strongest first)."""
+        ns, pod = s.get("pod_namespace"), s.get("pod_name")
+        return (s.get("instance_id") or s.get("ecs_task_arn") or s.get("resource_arn")
+                or (f"{ns}/{pod}" if pod else None) or s.get("hostname") or s.get("sensor_id"))
+
+    def _edr_sensor_records(self, account_id: str) -> List:
+        """Fresh sensor inventory as aws_edr.SensorRecord[] (freshness-gated so a fleet that
+        stopped reporting ages out of coverage)."""
+        if self.state is None:
+            return []
+        fresh_since = self.clock() - self._EDR_FRESH_SECONDS
+        return [aws_edr.SensorRecord(
+                    vendor=r.get("vendor", ""), instance_id=r.get("instance_id"),
+                    resource_arn=r.get("resource_arn"), ecs_task_arn=r.get("ecs_task_arn"),
+                    pod_name=r.get("pod_name"), pod_namespace=r.get("pod_namespace"),
+                    hostname=r.get("hostname"), sensor_id=r.get("sensor_id"),
+                    status=r.get("status"), last_seen=r.get("reported_last_seen"))
+                for r in self.state.list_edr_sensors(account_id, fresh_since_epoch=fresh_since)]
+
+    def ingest_edr(self, account_id: str, *, vendor: str, sensors=None, detections=None) -> dict:
+        """Ingest a runtime-sensor push: ``sensors`` (inventory → coverage / runtime_monitored)
+        and/or ``detections`` (threats → THREAT_ON → ranked incidents, via the SHARED CDR verdict
+        path). PUSH-only + read-only on the scanned account. ``vendor`` must be a known runtime
+        source. Raises ValueError (→400) on an unknown vendor or a cross-account detection ARN."""
+        state = self._require_state()
+        if vendor not in aws_edr.RUNTIME_SOURCES:
+            raise ValueError(f"unknown runtime vendor {vendor!r} "
+                             f"(known: {sorted(aws_edr.RUNTIME_SOURCES)})")
+        now = self.clock()
+        upserted = 0
+        with state._be.transaction():
+            for s in (sensors or []):
+                if not isinstance(s, dict):
+                    continue
+                key = self._sensor_key(s)
+                if not key:
+                    continue                                # a sensor row with no identity is dropped
+                state.upsert_edr_sensor(account_id, str(key), vendor, s, now)
+                upserted += 1
+        det = (self.ingest_detection(account_id, events=detections, source=vendor)
+               if detections else {"accepted": 0, "normalized": 0, "mapped": 0, "incident_count": 0})
+        cov = self.edr_coverage(account_id) or {}
+        return {"vendor": vendor, "sensors_upserted": upserted,
+                "detections": {k: det.get(k) for k in ("accepted", "normalized", "mapped", "incident_count")},
+                "coverage": cov.get("overall")}
+
+    def _edr_coverage_findings(self, account_id: str) -> List[dict]:
+        """A synthetic WARN finding (EDR-01) for the expected-runtime workloads with no sensor
+        coverage — DISPLAY-ONLY (never touches the FAIL-only posture score). Only surfaced once
+        the customer has actually pushed a sensor feed (else EVERY workload is 'uncovered' — noise,
+        not signal). Empty when no scan / no sensors / full coverage."""
+        if self.state is None:
+            return []
+        if not self.state.list_edr_sensors(account_id, limit=1):
+            return []                                        # no sensor feed wired -> not a finding
+        cov = self.edr_coverage(account_id)
+        gaps = (cov or {}).get("gaps") or []
+        if not gaps:
+            return []
+        exposed = sum(1 for g in gaps if g.get("exposure_rank"))
+        return [{
+            "check_id": "EDR-01", "section": "Runtime", "severity": "MEDIUM", "status": "WARN",
+            "compliance": {"NIST 800-53": "SI-4"},
+            "remediation_cmd": ("Deploy your runtime/endpoint sensor to the uncovered workloads "
+                                "(or exclude intentionally sensor-less workloads from the baseline)."),
+            "risk": (f"{len(gaps)} runtime-hostable workload(s) have no endpoint/runtime sensor "
+                     f"reporting ({exposed} of them internet-reachable or crown-bound) — an "
+                     f"attacker's actions there would be invisible to your EDR."),
+            "impact": "An unmonitored workload that is internet-reachable and on a path to crown "
+                      "data is a runtime blind spot on your most exposed asset.",
+            "steps": ["Open /accounts/" + account_id + "/runtime for the ranked coverage gaps.",
+                      "Roll out the sensor to the exposed, crown-bound workloads first.",
+                      "Re-push the sensor inventory to confirm coverage."],
+            "affected": [g["node_id"] for g in gaps][:500],
+            "count": len(gaps), "distinct": len(gaps), "account": account_id,
+        }]
+
+    def edr_coverage(self, account_id: str) -> Optional[dict]:
+        """Runtime sensor-coverage for an account: overall + per-kind monitored/total/pct + the
+        UNMONITORED workloads ranked by attack-path exposure. None when there is no scan (→404).
+        Read-only; reuses aws_correlate reachability UNCHANGED."""
+        gd = self.get_graph(account_id)
+        if gd is None:
+            return None
+        g = aws_graph.SecurityGraph.from_dict(gd)
+        return aws_edr.compute_coverage(g, self._edr_sensor_records(account_id), account=account_id)
+
+    def org_edr_coverage(self, *, workspace_id: Optional[str] = None) -> dict:
+        """Org-wide runtime coverage roll-up, each account tagged (portfolio view)."""
+        mon = tot = 0
+        accounts: List[dict] = []
+        for a in self.registry.list_accounts(onboarding_status="active", workspace_id=self._scoped_ws(workspace_id)):
+            cov = self.edr_coverage(a["account_id"])
+            if cov is None:
+                continue
+            o = cov["overall"]
+            mon += o["monitored"]; tot += o["total"]
+            accounts.append({"account": a["account_id"], **o, "gap_count": len(cov["gaps"])})
+        return {"overall": {"monitored": mon, "total": tot,
+                            "pct": round(100.0 * mon / tot, 1) if tot else None},
+                "accounts": accounts}
 
     # ── multi-tenancy control plane (Phase-4 Slice-1) ───────────────────────────
     def _require_workspaces(self):
