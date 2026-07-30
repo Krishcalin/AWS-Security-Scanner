@@ -1,0 +1,34 @@
+[
+  {
+    "id": "no-public-crown-data",
+    "name": "No public crown-jewel data",
+    "severity": "CRITICAL",
+    "pack": "data-protection",
+    "description": "Crown-jewel data stores must never be reachable from the internet.",
+    "match": {
+      "graph": {
+        "kind": "S3Bucket",
+        "where": { "op": "and", "of": [
+          { "pred": "crown_jewel" },
+          { "pred": "reachable_from", "target": "internet" }
+        ] }
+      }
+    }
+  },
+  {
+    "id": "high-open-findings",
+    "name": "No open HIGH+ findings",
+    "severity": "HIGH",
+    "pack": "baseline",
+    "description": "Every HIGH or CRITICAL finding must be remediated or waived.",
+    "match": { "finding": { "severity": "HIGH", "severity_op": "gte", "status": "FAIL" } }
+  },
+  {
+    "id": "crown-inventory",
+    "name": "Crown-jewel datastore inventory",
+    "severity": "MEDIUM",
+    "pack": "data-protection",
+    "description": "Surfaces every crown-jewel data store as a policy match (an inventory rule).",
+    "match": { "graph": { "where": { "pred": "crown_jewel" } } }
+  }
+]

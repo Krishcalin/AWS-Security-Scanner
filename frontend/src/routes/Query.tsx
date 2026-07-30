@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Terminal, Play, BookOpen, ShieldCheck, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { Terminal, Play, BookOpen, ShieldCheck, AlertTriangle, CheckCircle2, FileCheck2 } from 'lucide-react'
 import { useScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'
 import { api } from '../api/client'
@@ -11,7 +11,7 @@ import {
   QUERY_KINDS, QUICK_PREDS, QUERY_EXAMPLES, composeQuery, prettyQuery,
 } from '../lib/querybuilder'
 import type { WqlResult, WqlRow } from '../lib/wql'
-import type { ControlRow } from '../api/types'
+import type { ControlRow, PolicyRow } from '../api/types'
 
 const errString = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
@@ -74,10 +74,32 @@ function ControlCard({ c, onLoad }: { c: ControlRow; onLoad: () => void }) {
   )
 }
 
+// A policy-as-code rule is a graph+finding condition (not a single WQL query), so it is a
+// read-only row here — its POLICY-xx violations show in the Findings screen.
+function PolicyCard({ p }: { p: PolicyRow }) {
+  const warn = p.status === 'WARN'
+  return (
+    <div className="rounded-xl border border-line bg-panel p-3">
+      <div className="flex items-center gap-2">
+        <span className="font-semibold text-ink text-sm flex-1 truncate" title={p.description}>{p.name}</span>
+        {p.pack && <span className="text-[10px] font-semibold rounded px-1.5 py-0.5 text-ink3" style={{ background: 'var(--panel2)' }}>{p.pack}</span>}
+        <span className="text-[11px] font-bold rounded px-1.5 py-0.5" style={{ color: sevColor(p.severity), background: 'var(--panel2)' }}>{p.severity}</span>
+      </div>
+      <div className="flex items-center gap-2 mt-2">
+        <span className="inline-flex items-center gap-1 text-[11px] font-semibold" style={{ color: warn ? 'var(--high)' : 'var(--ok)' }}>
+          {warn ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />}
+          {warn ? `${p.match_count} violation${p.match_count === 1 ? '' : 's'}` : 'Pass'}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 export function Query() {
   const { scope } = useScope()
   const init = useFetch(
-    () => Promise.all([activeAccountIds(), api.listControls()]).then(([accts, controls]) => ({ accts, controls })), [])
+    () => Promise.all([activeAccountIds(), api.listControls(), api.listPolicies()])
+      .then(([accts, controls, policies]) => ({ accts, controls, policies })), [])
 
   const [account, setAccount] = useState('')
   const [text, setText] = useState(() => prettyQuery(QUERY_EXAMPLES[0].query))
@@ -118,6 +140,7 @@ export function Query() {
   }
 
   const controls = init.data?.controls ?? []
+  const policies = init.data?.policies ?? []
   const accts = useMemo(() => init.data?.accts ?? [], [init.data])
 
   if (init.loading) return <Loader />
@@ -196,6 +219,15 @@ export function Query() {
                 </div>
               )}
             </Card>
+
+            {policies.length > 0 && (
+              <Card className="p-4">
+                <div className="text-xs font-bold uppercase tracking-wide text-ink3 mb-2 flex items-center gap-1.5"><FileCheck2 size={13} /> Policy-as-code</div>
+                <div className="flex flex-col gap-2">
+                  {policies.map((p) => <PolicyCard key={p.id} p={p} />)}
+                </div>
+              </Card>
+            )}
           </div>
 
           {/* ── main: editor + run + results ── */}

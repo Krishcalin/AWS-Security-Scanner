@@ -415,6 +415,22 @@ export interface ControlRow {
   status: 'WARN' | 'PASS'
 }
 
+// Policies — policy-as-code custom rules (GET /policies). A rule combines a graph (WQL) and/or a
+// finding-catalog (compliance-as-code) condition; a firing rule overlays a display-only WARN
+// POLICY-xx finding. The roll-up says how many items it matches (status WARN when >0, else PASS).
+export interface PolicyRow {
+  id: string
+  name: string
+  severity: string
+  section: string
+  pack: string
+  description: string
+  match: unknown
+  match_count: number
+  accounts_matched: string[]
+  status: 'WARN' | 'PASS'
+}
+
 // Mean-time-to-remediate (aws_state.mttr / GET /accounts/{id}/mttr)
 export interface MttrStat {
   resolved_count: number

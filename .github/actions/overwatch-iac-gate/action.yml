@@ -1,0 +1,48 @@
+name: "OverWatch IaC Gate"
+description: >-
+  Shift-left PR gate: run OverWatch's offline IaC (Terraform / CloudFormation) SAST on the
+  changed infrastructure code, fail the build when findings exceed a severity threshold (or a
+  policy-as-code rule fires), and post inline SARIF annotations on the offending lines. Pure
+  local static analysis — no cloud API, no OverWatch hub, no token, zero telemetry: findings go
+  to the PR via GitHub's own code-scanning channel, nothing egresses.
+branding:
+  icon: git-pull-request
+  color: blue
+inputs:
+  path:
+    description: "File or directory of Terraform / CloudFormation to scan."
+    required: false
+    default: "."
+  fail-on:
+    description: "Fail the build when any finding is at this severity or above (CRITICAL|HIGH|MEDIUM|LOW). Default HIGH."
+    required: false
+    default: "HIGH"
+  policy:
+    description: "Optional path to a policy-as-code JSON file (a policy or list); the build also fails when any policy fires."
+    required: false
+    default: ""
+  sarif-file:
+    description: "Where to write the SARIF report."
+    required: false
+    default: "overwatch-iac.sarif"
+  upload-sarif:
+    description: "Upload the SARIF to GitHub code-scanning for inline PR annotations (needs security-events: write)."
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: OverWatch IaC gate
+      shell: bash
+      env:
+        OW_PATH: ${{ inputs.path }}
+        OW_FAIL_ON: ${{ inputs.fail-on }}
+        OW_POLICY: ${{ inputs.policy }}
+        OW_SARIF: ${{ inputs.sarif-file }}
+      run: ${{ github.action_path }}/entrypoint.sh
+    # Upload even on gate failure so the annotations always land on the PR (if() { always && … }).
+    - name: Upload SARIF to code-scanning
+      if: ${{ always() && inputs.upload-sarif == 'true' && hashFiles(inputs.sarif-file) != '' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
