@@ -2295,6 +2295,62 @@ class AWSIaCScanner:
             json.dump(report, fh, indent=2)
         print(f"[+] JSON report saved to: {output_path}")
 
+    # GitHub code-scanning security-severity (0-10) + SARIF level, per severity.
+    _SARIF_SECURITY_SEVERITY = {"CRITICAL": "9.5", "HIGH": "8.0", "MEDIUM": "5.0", "LOW": "3.0", "INFO": "1.0"}
+    _SARIF_LEVEL = {"CRITICAL": "error", "HIGH": "error", "MEDIUM": "warning", "LOW": "note", "INFO": "note"}
+
+    def save_sarif(self, output_path):
+        """Write a SARIF 2.1.0 report for GitHub code-scanning PR annotations. IaC findings carry a
+        REAL file:line, so each result anchors to the offending Terraform/CFN line in the diff (a
+        CloudFormation structural finding with no line falls back to line 1 / file-level)."""
+        rules, seen = [], {}
+        for f in self.findings:
+            if f.rule_id in seen:
+                continue
+            seen[f.rule_id] = len(rules)
+            props = {"security-severity": self._SARIF_SECURITY_SEVERITY.get(f.severity, "1.0"),
+                     "category": f.category, "tags": [t for t in ("security", f.category, f.cwe) if t]}
+            rules.append({
+                "id": f.rule_id, "name": f.name,
+                "shortDescription": {"text": f.name},
+                "fullDescription": {"text": f.description or f.name},
+                "help": {"text": (f.recommendation or "")},
+                "defaultConfiguration": {"level": self._SARIF_LEVEL.get(f.severity, "note")},
+                "properties": props,
+            })
+        results = []
+        for f in self.findings:
+            line = f.line_num if isinstance(f.line_num, int) and f.line_num > 0 else 1
+            results.append({
+                "ruleId": f.rule_id, "ruleIndex": seen[f.rule_id],
+                "level": self._SARIF_LEVEL.get(f.severity, "note"),
+                "message": {"text": f"{f.name}: {f.description or ''}".strip().rstrip(':')},
+                "locations": [{"physicalLocation": {
+                    "artifactLocation": {"uri": f.file_path.replace("\\", "/")},
+                    "region": {"startLine": line}}}],
+                "partialFingerprints": {"overwatch/v1": f"{f.rule_id}:{f.file_path}:{line}"},
+            })
+        sarif = {
+            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+            "version": "2.1.0",
+            "runs": [{
+                "tool": {"driver": {
+                    "name": "OverWatch IaC Scanner", "version": str(VERSION),
+                    "informationUri": "https://github.com/Krishcalin/AWS-Security-Scanner",
+                    "rules": rules}},
+                "results": results,
+            }],
+        }
+        with open(output_path, "w") as fh:
+            json.dump(sarif, fh, indent=2)
+        print(f"[+] SARIF report saved to: {output_path}")
+
+    def gate_fails(self, fail_on):
+        """CI gate: True when any finding is at ``fail_on`` severity OR ABOVE. Uses this scanner's
+        own SEVERITY_ORDER (CRITICAL=0 most-severe), so 'fail-on HIGH' trips on CRITICAL+HIGH."""
+        threshold = self.SEVERITY_ORDER.get(fail_on, 1)
+        return any(self.SEVERITY_ORDER.get(f.severity, 4) <= threshold for f in self.findings)
+
     def save_html(self, output_path):
         counts = self.summary()
         generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2435,14 +2491,30 @@ Examples:
     parser.add_argument("target", help="File or directory containing CloudFormation templates or Terraform files")
     parser.add_argument("--json",     metavar="FILE", help="Write JSON report to FILE")
     parser.add_argument("--html",     metavar="FILE", help="Write HTML report to FILE")
+    parser.add_argument("--sarif",    metavar="FILE", help="Write a SARIF 2.1.0 report (GitHub code-scanning / PR annotations)")
     parser.add_argument(
         "--severity",
         choices=["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"],
         help="Only report findings at this severity or above",
     )
+    parser.add_argument(
+        "--fail-on",
+        choices=["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+        help="CI gate: exit 1 when any finding is at this severity or above (default: HIGH). "
+             "The scan itself is unaffected — this only controls the exit code.",
+    )
+    parser.add_argument(
+        "--policy", metavar="FILE",
+        help="Policy-as-code gate: a JSON policy (or list) evaluated over the findings; exit 1 "
+             "when any policy fires. Findings-level clauses only (there is no cloud graph offline).",
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="Show files as they are scanned")
     parser.add_argument("--version",       action="version", version=f"aws_scanner v{VERSION}")
     args = parser.parse_args()
+
+    if not os.path.exists(args.target):
+        print(f"[!] Target not found: {args.target}", file=sys.stderr)
+        sys.exit(2)                                       # usage/environment error, distinct from a gate failure
 
     if not HAS_YAML:
         print("[!] Warning: pyyaml not installed. CloudFormation YAML files will be skipped.", file=sys.stderr)
@@ -2452,21 +2524,68 @@ Examples:
     print(f"[*] Target: {args.target}\n")
 
     scanner = AWSIaCScanner(verbose=args.verbose)
-    scanner.scan_path(args.target)
+    try:
+        scanner.scan_path(args.target)
+    except Exception as e:                                # unexpected scan error -> environment exit
+        print(f"[!] Scan failed: {e}", file=sys.stderr)
+        sys.exit(2)
 
     if args.severity:
         scanner.filter_severity(args.severity)
 
     scanner.print_report()
 
-    if args.json:
-        scanner.save_json(args.json)
+    try:
+        if args.json:
+            scanner.save_json(args.json)
+        if args.html:
+            scanner.save_html(args.html)
+        if args.sarif:
+            scanner.save_sarif(args.sarif)
+    except OSError as e:                                  # unwritable report path -> env error (exit 2),
+        print(f"[!] Could not write report: {e}", file=sys.stderr)  # NEVER a gate-breach exit 1
+        sys.exit(2)
 
-    if args.html:
-        scanner.save_html(args.html)
+    # exit code: gate (default HIGH) so the CI gate + IDE both key off it. --fail-on picks the
+    # threshold; --policy adds policy-as-code gating; exit 1 on a breach, 0 when clean (exit 2
+    # above is reserved for usage/env errors).
+    fail_on = args.fail_on or "HIGH"
+    sev_fail = scanner.gate_fails(fail_on)
+    policy_hits = _evaluate_policies(scanner, args.policy) if args.policy else []
+    if policy_hits:
+        print(f"\n[gate] policy violation(s): {', '.join(policy_hits)}", file=sys.stderr)
+    if sev_fail:
+        print(f"\n[gate] findings at or above {fail_on} — failing the build (--fail-on {fail_on}).", file=sys.stderr)
+    sys.exit(1 if (sev_fail or policy_hits) else 0)
 
-    counts = scanner.summary()
-    sys.exit(1 if (counts.get("CRITICAL", 0) or counts.get("HIGH", 0)) else 0)
+
+def _evaluate_policies(scanner, policy_path):
+    """Evaluate a policy file's FINDING clauses over the IaC findings (there is no cloud graph
+    offline, so graph clauses never fire). Returns the ids of policies that fired. Reads the file
+    (exit 2 on a read error) and imports the pure-Python policy engine lazily so the base scanner
+    stays standalone."""
+    try:
+        data = json.loads(open(policy_path, encoding="utf-8").read())
+        policies = data if isinstance(data, list) else [data]
+    except Exception as e:
+        print(f"[!] --policy: cannot read {policy_path}: {e}", file=sys.stderr)
+        sys.exit(2)
+    try:
+        import aws_policy
+    except Exception as e:
+        print(f"[!] --policy requires the OverWatch policy engine (aws_policy): {e}", file=sys.stderr)
+        sys.exit(2)
+    catalog = [{"check_id": f.rule_id, "section": f.category, "severity": f.severity,
+                "status": "FAIL", "compliance": {}} for f in scanner.findings]
+    hits = []
+    for pol in policies:
+        try:
+            aws_policy.parse(pol)
+            if aws_policy.evaluate(pol, None, catalog):
+                hits.append(str(pol.get("id")))
+        except aws_policy.PolicyError:
+            continue                                       # inert policy (never crashes the gate)
+    return hits
 
 
 if __name__ == "__main__":

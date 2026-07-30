@@ -46,6 +46,11 @@ def test_committed_fixture_matches_engine():
     assert committed.get("dspm") == fresh["dspm"], (
         "dspm drift — aws_dspm.py changed but the fixture wasn't regenerated "
         "(python scripts/gen_wql_parity.py)")
+    # policy section (aws_policy is the oracle for policy.ts)
+    assert committed.get("policy_catalog") == fresh["policy_catalog"], "policy_catalog drift — regenerate the fixture"
+    assert committed.get("policies") == fresh["policies"], (
+        "policies drift — aws_policy.py changed but the fixture wasn't regenerated "
+        "(python scripts/gen_wql_parity.py)")
 
 
 def test_battery_is_comprehensive():

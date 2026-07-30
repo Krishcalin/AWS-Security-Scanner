@@ -438,6 +438,23 @@ jobs:
   `security-severity` so findings surface in the GitHub Security tab.
 - **ASFF** imports into Security Hub: `python aws_live_scanner.py --asff f.json &&
   aws securityhub batch-import-findings --findings file://f.json` (≤100/call).
+
+**Shift-left IaC gate (no cloud, no hub).** The **offline** IaC scanner
+(`aws_offline_scanner.py`) is the charter-clean PR gate — pure local static analysis, no AWS
+credentials, no network. It emits **SARIF 2.1.0 with a real `file:line`** (annotations land on the
+offending Terraform/CFN line, not a file-level note) and gates via **`--fail-on <severity>`** and
+**`--policy <file>`** (the pure-Python policy engine over the findings). The
+[`overwatch-iac-gate`](.github/actions/overwatch-iac-gate) composite Action wraps it — egress-free
+(the *opposite* of the `overwatch-image-scan` ingest action: it POSTs nothing):
+
+```yaml
+- uses: ./.overwatch/.github/actions/overwatch-iac-gate
+  with: { path: infra/, fail-on: HIGH, policy: infra/policies.json }
+```
+
+Exit codes: `0` clean · `1` gate breach (a finding ≥ threshold or a fired policy) · `2`
+usage/environment error. An [`ide/`](ide) VS Code **reference stub** runs the same offline scanner
+on the open file and shows the findings inline as diagnostics (shell-only, network-clean).
 - **Drift tracking**: `--baseline prev.json` prints only NEW and RESOLVED findings.
 
 ---
@@ -511,6 +528,7 @@ Pure, dependency-injected, offline-testable:
 | `aws_forensics.py` | **Cloud-forensics timeline** — reconstruct who-did-what-when around a resource from read-only CloudTrail management events, correlated with graph / findings / detections; fail-open `FORENSIC-00` behind an injected seam |
 | `aws_wql.py` | **WQL graph query** — a typed, bounded JSON query language compiled to the frozen `aws_graph` traversal primitives (no free Gremlin / Neptune / `eval`). `parse()` is the security boundary (rejects any unknown field/op/predicate/prop → `WQLError`); `evaluate()` returns deterministic `(kind,id)`-sorted node rows. Mirrored byte-for-byte in `frontend/src/lib/wql.ts` for SAMPLE==LIVE, guarded by a cross-language parity fixture |
 | `aws_controls.py` | **Saved-query-as-Control** — pure transform of a matched WQL result into a display-only `WARN` finding (`status=WARN` → never touches the FAIL-only posture score); mirrored in `frontend/src/lib/controls.ts` |
+| `aws_policy.py` | **Policy-as-code engine** (the in-charter Rego/OPA substitute — a Go binary would break zero-telemetry/air-gap) — a closed, typed pure-Python DSL extending Controls with a **finding-catalog predicate** (compliance-as-code: match by check_id/section/severity/compliance) + a graph clause (WQL) combined `any`/`all`; a firing rule overlays a display-only `WARN` `POLICY-xx` finding. Config-driven (`CNAPP_POLICIES`); mirrored in `frontend/src/lib/policy.ts` |
 
 ### HTTP API surface
 
@@ -519,7 +537,7 @@ hub control plane. `POST /accounts` (onboard → launch URL), `POST /accounts/{i
 `GET /accounts`, `POST /scans`, `GET /scans/{job_id}`,
 `GET /accounts/{id}/summary|issues|findings|paths|graph`, `GET /org/overview`, `GET /org/findings`;
 **graph query (WQL)** — `POST /accounts/{id}/graph/query` (typed query → matching nodes; malformed → 400),
-`GET /accounts/{id}/graph/blast-radius`, `GET /projects[/{id}]`, `GET /controls`;
+`GET /accounts/{id}/graph/blast-radius`, `GET /projects[/{id}]`, `GET /controls`, `GET /policies`;
 **copilot** — `POST /accounts/{id}/copilot`, `POST /org/copilot`;
 **ingest** — `POST /accounts/{id}/ingest`, `GET /accounts/{id}/vulns[/{cve}]`, `GET /org/vulns`;
 **CDR** — `POST /accounts/{id}/detections`, `GET /accounts/{id}/{detections,incidents}`,
@@ -713,6 +731,16 @@ posture score stays baked at scan time) and never trigger notifications. **`GET 
 returns the org roll-up (match count per account, `WARN`/`PASS`), and the console's **Query**
 screen is a guided predicate-builder + raw-JSON editor + saved-Controls library over it.
 
+**Policy-as-code** (`aws_policy.py`) is the custom-rule engine — the in-charter substitute for
+Rego/OPA (a Go binary would break the zero-telemetry / air-gap charter). A policy is a closed,
+typed JSON rule (config-driven via `CNAPP_POLICIES`) that combines a **graph** condition (a WQL
+query) and/or a **finding-catalog** condition — the new *compliance-as-code* surface: match by
+`check_id` glob / section / severity / status / `compliance` framework+control, e.g. *"every check
+mapped to PCI-DSS 3.4 must PASS"*. The two clauses combine `any`/`all`; a firing rule overlays a
+display-only `WARN` `POLICY-xx` finding (never touching the posture score). **`GET /policies`**
+returns the org roll-up, and `policy.ts` mirrors the engine for SAMPLE==LIVE. The same engine
+gates PRs offline via `aws_offline_scanner.py --policy` (see *CI/CD*).
+
 ### Runtime (EDR-ingest correlator)
 
 OverWatch is agentless — it never deploys a runtime/eBPF sensor (that would break the
@@ -851,6 +879,8 @@ AWS-Security-Scanner/
 ├── aws_forensics.py         # Cloud-forensics timeline — read-only CloudTrail events correlated with graph/findings/detections, pure
 ├── aws_wql.py               # WQL — typed, bounded JSON query language compiled to the frozen aws_graph primitives (parse = security boundary), pure
 ├── aws_controls.py          # Saved-query-as-Control — matched WQL result → display-only WARN finding, pure
+├── aws_policy.py            # Policy-as-code — pure typed DSL (compliance-as-code + graph clause) → POLICY-xx WARN, pure
+├── ide/                     # VS Code reference stub (shift-left IaC diagnostics via the offline scanner) — spec + stub, unpublished
 ├── cnapp_onboarding.py · cnapp_validate.py · cnapp_registry.py · cnapp_service.py · cnapp_worker.py · cnapp_api.py · cnapp_backend.py · cnapp_connectors.py  # Hosted platform backend
 ├── frontend/                # OverWatch web console — React 19 + Vite + TS + Tailwind SPA (Overview / Attack Paths / Findings / Cloud Accounts + onboarding wizard)
 ├── deploy/                  # CloudFormation scanner-role + Org StackSet + hub-role templates

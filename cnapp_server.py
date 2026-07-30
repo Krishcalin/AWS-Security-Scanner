@@ -22,6 +22,9 @@ Environment:
   CNAPP_CONTROLS         Controls (saved-WQL-query-as-Control) as a JSON list, or a path to a
                          JSON file — read-only, config-driven, optional. Shape:
                          [{id,name,query,severity?,section?,description?}]. Fail-safe (bad → none).
+  CNAPP_POLICIES         Policies (policy-as-code custom rules) as a JSON list, or a path to a
+                         JSON file — read-only, config-driven, optional. Shape:
+                         [{id,name,match:{op?,graph?,finding?},severity?,pack?}]. Fail-safe (bad → none).
   OVERWATCH_AIRGAP       "1" documents the sealed posture — no behavioural branch (all
                          optional seams already default off); the runbook enforces it.
 
@@ -77,6 +80,23 @@ def _load_controls():
         return []
 
 
+def _load_policies():
+    """Load read-only Policy defs (policy-as-code custom rules) from CNAPP_POLICIES — a JSON list
+    or a path to a JSON file. Fail-SAFE (mirror _load_controls): any error → no policies. Local
+    env/file read only. Shape: [{id,name,match:{op?,graph?,finding?},severity?,section?,pack?}].
+    A def must carry an id AND a dict match; the rule is fully validated (fail-safe) by the policy
+    compiler at read time."""
+    import json
+    raw = os.environ.get("CNAPP_POLICIES", "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw) if raw.startswith("[") else json.load(open(raw, encoding="utf-8"))
+        return [p for p in data if isinstance(p, dict) and p.get("id") and isinstance(p.get("match"), dict)]
+    except Exception:
+        return []
+
+
 def build_service():
     """Construct the PlatformService from env. Multi-tenant + metered; fail-closed auth
     is applied at the API layer, not here."""
@@ -106,6 +126,7 @@ def build_service():
         connectors=cnapp_connectors.ConnectorStore(be),
         projects=_load_projects(),
         controls=_load_controls(),
+        policies=_load_policies(),
     )
 
 

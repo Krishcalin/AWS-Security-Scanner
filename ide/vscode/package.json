@@ -1,0 +1,42 @@
+{
+  "name": "overwatch-iac",
+  "displayName": "OverWatch IaC (reference stub)",
+  "description": "Shift-left IaC security diagnostics — runs the OverWatch offline scanner on the open Terraform/CloudFormation file. Reference stub, not published.",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "overwatch",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Linters"],
+  "activationEvents": [
+    "onLanguage:terraform",
+    "onLanguage:yaml",
+    "onLanguage:json"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "overwatch.scanFile", "title": "OverWatch: Scan this IaC file" }
+    ],
+    "configuration": {
+      "title": "OverWatch IaC",
+      "properties": {
+        "overwatch.python": {
+          "type": "string", "default": "python3",
+          "description": "Python interpreter used to run the offline scanner."
+        },
+        "overwatch.scannerPath": {
+          "type": "string", "default": "aws_offline_scanner.py",
+          "description": "Path to aws_offline_scanner.py (defaults to the repo root / PATH)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.4.0"
+  }
+}

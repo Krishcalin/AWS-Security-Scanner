@@ -11,13 +11,14 @@ import type {
   IngestedVuln, IngestDoc, IngestResult,
   SbomSubject, SbomSnapshot, SbomComponent, SbomDiffData, LicenseFinding, VexStatementRow,
   RegistryRepo, RegistryImage, CopilotAnswer, BlastRadius, Project, ProjectDetail, ControlRow,
-  EdrCoverage, OrgEdrCoverage, RuntimeIncident, DataInventory, OrgDataInventory,
+  EdrCoverage, OrgEdrCoverage, RuntimeIncident, DataInventory, OrgDataInventory, PolicyRow,
 } from './types'
 import { deriveCrosswalk } from '../lib/crosswalk'
 import { computeBlastRadius, cmpId } from '../lib/blast'
 import { evaluate as evalWql, type WqlResult } from '../lib/wql'
 import { applyDspm } from '../lib/dspm'
 import { controlsForAccount, rollupControls, type ControlDef } from '../lib/controls'
+import { policiesForAccount, rollupPolicies, type PolicyDef } from '../lib/policy'
 import { pickCopilotAnswer } from '../lib/copilot'
 import { findingInProject, severityCounts, type ProjectMatch } from '../lib/projects'
 
@@ -535,6 +536,37 @@ const controlsApi = {
   },
 }
 
+// ── Policies (policy-as-code; read-only). Same SAMPLE discipline as Controls, but a policy
+// evaluates over each account's graph AND its REAL finding catalog, via the parity-mirrored
+// policy.ts engine. ───────────────────────────────────────────────────────────────────────────
+let _polCache: PolicyDef[] | null = null
+async function samplePolicies(): Promise<PolicyDef[]> {
+  if (_polCache === null)
+    _polCache = await get<PolicyDef[]>('/sample/policies.json').catch(() => [] as PolicyDef[])
+  return _polCache
+}
+async function _sampleAccountPolicyInputs(account: string): Promise<{ account: string; graph: GraphFull | null; catalog: FindingCatalogEntry[] }> {
+  const [graph, catalog] = await Promise.all([
+    get<GraphFull>(`/sample/account_${account}_graph.json`).catch(() => null),
+    get<FindingCatalogEntry[]>(`/sample/account_${account}_findings.json`).catch(() => [] as FindingCatalogEntry[])])
+  return { account, graph, catalog }
+}
+async function samplePolicyFindings(account: string): Promise<FindingCatalogEntry[]> {
+  const defs = await samplePolicies()
+  if (!defs.length) return []
+  const { graph, catalog } = await _sampleAccountPolicyInputs(account)
+  return policiesForAccount(defs, account, graph, catalog)
+}
+const policiesApi = {
+  listPolicies: async (): Promise<PolicyRow[]> => {
+    if (!SAMPLE) return get<PolicyRow[]>(`${API_BASE}/policies`)
+    const defs = await samplePolicies()
+    if (!defs.length) return []
+    const inputs = await Promise.all(SAMPLE_ACCOUNTS.map((a) => _sampleAccountPolicyInputs(a)))
+    return rollupPolicies(defs, inputs)
+  },
+}
+
 // ── Runtime / EDR sensor coverage (read-only). Sample mode reads the Python-generated
 // coverage / incident / EDR-01 fixtures (parity by construction — they ARE the service output),
 // and stamps runtime_monitored onto the graph fixture (from the coverage's monitored list) so
@@ -607,6 +639,7 @@ export const api = {
   ...sbomApi,
   ...projectsApi,
   ...controlsApi,
+  ...policiesApi,
   ...edrApi,
   ...dataApi,
   copilot: (scope: string, question: string): Promise<CopilotAnswer> =>
@@ -644,16 +677,16 @@ export const api = {
   // entries in client-side (same controls.ts engine) so the Findings screen matches.
   findings: async (id: string): Promise<FindingCatalogEntry[]> => {
     if (!SAMPLE) return get<FindingCatalogEntry[]>(`${API_BASE}/accounts/${id}/findings`)
-    const [base, ctrl, edr] = await Promise.all([
+    const [base, ctrl, edr, pol] = await Promise.all([
       get<FindingCatalogEntry[]>(`/sample/account_${id}_findings.json`),
-      sampleControlFindings(id), sampleEdrFindings(id)])
-    return [...base, ...ctrl, ...edr]
+      sampleControlFindings(id), sampleEdrFindings(id), samplePolicyFindings(id)])
+    return [...base, ...ctrl, ...edr, ...pol]
   },
   orgFindings: async (): Promise<FindingCatalogEntry[]> => {
     if (!SAMPLE) return get<FindingCatalogEntry[]>(`${API_BASE}/org/findings`)
     const base = await get<FindingCatalogEntry[]>('/sample/org_findings.json')
     const overlays = (await Promise.all(SAMPLE_ACCOUNTS.flatMap((a) =>
-      [sampleControlFindings(a), sampleEdrFindings(a)]))).flat()
+      [sampleControlFindings(a), sampleEdrFindings(a), samplePolicyFindings(a)]))).flat()
     // mirror cnapp_service.org_findings: sort the merged (findings + control + EDR overlays) list
     // by (severity, check_id) so a HIGH overlay ranks with the HIGH findings, not at the bottom.
     const ORD: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, '': 4 }

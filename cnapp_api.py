@@ -418,6 +418,11 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     def controls(scope: Scope = Depends(require("viewer"))):
         return service.list_controls(workspace_id=scope.workspace_id)
 
+    # ── Policies (policy-as-code custom rules; read-only org roll-up) ───────────
+    @app.get("/policies")
+    def policies(scope: Scope = Depends(require("viewer"))):
+        return service.list_policies(workspace_id=scope.workspace_id)
+
     # ── grounded copilot (viewer; answers only from the account's own scan) ────
     @app.post("/accounts/{account_id}/copilot", dependencies=[Depends(account_gate("viewer"))])
     def copilot(account_id: str, body: CopilotReq):

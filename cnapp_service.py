@@ -32,6 +32,7 @@ import aws_dspm
 import aws_edr
 import aws_forensics
 import aws_malware
+import aws_policy
 import aws_license
 import aws_sbom_diff
 import aws_sidescan
@@ -149,6 +150,7 @@ class PlatformService:
                  trail_reader: Optional[Callable] = None,
                  projects: Optional[List[dict]] = None,
                  controls: Optional[List[dict]] = None,
+                 policies: Optional[List[dict]] = None,
                  clock: Callable[[], int] = None):
         import time
         # Optional grounded-copilot LLM seam (system, question, context) -> str. None (default)
@@ -200,6 +202,12 @@ class PlatformService:
         # time → aws_correlate stays byte-frozen). No DB table (no schema churn). Fail-safe per
         # control: a bad/unsafe saved query is inert, never an error.
         self.controls = controls or []
+        # ── Policies (policy-as-code; the custom-rule engine) ─────────────────
+        # Read-only, config-driven rules ({id,name,match:{op?,graph?,finding?},...}) that combine a
+        # graph condition (WQL) and/or a finding-catalog condition (compliance-as-code). Same
+        # DISPLAY-ONLY discipline as Controls: a firing policy overlays a synthetic WARN POLICY-xx
+        # finding at read time; never re-runs scoring. Fail-safe per policy (a malformed rule is inert).
+        self.policies = policies or []
         self.clock = clock or (lambda: int(time.time()))
 
     @property
@@ -558,7 +566,8 @@ class PlatformService:
         Controls are configured, their synthetic WARN entries are appended (display-only)."""
         base = list((self.results.get_latest(account_id) or {}).get("finding_catalog", []))
         return (base + self._controls_for_account(account_id)
-                + self._edr_coverage_findings(account_id) + self._dspm_coverage_findings(account_id))
+                + self._edr_coverage_findings(account_id) + self._dspm_coverage_findings(account_id)
+                + self._policies_for_account(account_id))
 
     # ── grounded copilot (Slice 2) ────────────────────────────────────────────
     def copilot_answer(self, account_id: str, question: str) -> Optional[dict]:
@@ -636,6 +645,7 @@ class PlatformService:
                 out.extend(self._controls_for_account(a["account_id"]))   # display-only WARN overlay
                 out.extend(self._edr_coverage_findings(a["account_id"]))   # EDR-01 coverage gap (WARN)
                 out.extend(self._dspm_coverage_findings(a["account_id"]))  # DSPM-GAP classification (WARN)
+                out.extend(self._policies_for_account(a["account_id"]))    # POLICY-xx policy-as-code (WARN)
         out.sort(key=lambda e: (order.get(e.get("severity", ""), 4), e.get("check_id", "")))
         return out
 
@@ -737,6 +747,69 @@ class PlatformService:
         for ctrl in self.controls:
             slot = agg[str(ctrl.get("id"))]
             out.append({**aws_controls.control_meta(ctrl),
+                        "match_count": slot["count"], "accounts_matched": slot["accounts"],
+                        "status": "WARN" if slot["count"] else "PASS"})
+        return out
+
+    # ── Policies (policy-as-code; read-only, display-only) ──────────────────────
+    def _policies_for_account(self, account_id: str) -> List[dict]:
+        """Synthetic WARN POLICY-xx entries for every configured policy that FIRES for this account.
+        A policy combines a graph condition (WQL over the runtime/DSPM-overlaid graph) and/or a
+        finding-catalog condition (compliance-as-code) over the account's REAL scan findings (the
+        stored catalog, not the overlays). The graph is rehydrated ONCE and only when some policy
+        needs it. Read-time + display-only. Fail-safe per policy (a malformed rule is inert)."""
+        if not self.policies:
+            return []
+        p = self.results.get_latest(account_id)
+        if not p:
+            return []
+        catalog = p.get("finding_catalog", [])
+        g = None
+        gd = p.get("graph_full")
+        if gd is not None and any(aws_policy.needs_graph(pol) for pol in self.policies):
+            g = self._graph_with_runtime(account_id, gd)
+        out: List[dict] = []
+        for pol in self.policies:
+            try:
+                aws_policy.parse(pol)
+                matched = aws_policy.evaluate(pol, g, catalog)
+            except aws_policy.PolicyError:
+                continue                                    # inert policy (never crashes findings)
+            if matched:
+                out.append(aws_policy.policy_finding(pol, account_id, matched))
+        return out
+
+    def list_policies(self, *, workspace_id: Optional[str] = None) -> List[dict]:
+        """All configured policies with an org-wide roll-up: how many items each matches and in
+        which active accounts. ``status`` is WARN when a policy fires anywhere, else PASS (the
+        policy holds). Empty when no policies are configured. Read-only; scoped to a tenant."""
+        if not self.policies:
+            return []
+        agg = {str(pol.get("id")): {"count": 0, "accounts": []} for pol in self.policies}
+        need_graph = any(aws_policy.needs_graph(pol) for pol in self.policies)
+        for a in self.registry.list_accounts(onboarding_status="active", workspace_id=self._scoped_ws(workspace_id)):
+            p = self.results.get_latest(a["account_id"])
+            if not p:
+                continue
+            catalog = p.get("finding_catalog", [])
+            g = None
+            gd = p.get("graph_full")
+            if need_graph and gd is not None:
+                g = self._graph_with_runtime(a["account_id"], gd)
+            for pol in self.policies:
+                try:
+                    aws_policy.parse(pol)
+                    matched = aws_policy.evaluate(pol, g, catalog)
+                except aws_policy.PolicyError:
+                    continue
+                if matched:
+                    slot = agg[str(pol.get("id"))]
+                    slot["count"] += len(matched["nodes"]) + len(matched["findings"])
+                    slot["accounts"].append(a["account_id"])
+        out: List[dict] = []
+        for pol in self.policies:
+            slot = agg[str(pol.get("id"))]
+            out.append({**aws_policy.policy_meta(pol),
                         "match_count": slot["count"], "accounts_matched": slot["accounts"],
                         "status": "WARN" if slot["count"] else "PASS"})
         return out
