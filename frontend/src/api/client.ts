@@ -10,7 +10,8 @@ import type {
   TrendRow, DriftDigest, DigestDelivery, MttrStat,
   IngestedVuln, IngestDoc, IngestResult,
   SbomSubject, SbomSnapshot, SbomComponent, SbomDiffData, LicenseFinding, VexStatementRow,
-  RegistryRepo, RegistryImage, CopilotAnswer, BlastRadius, Project, ProjectDetail, ControlRow,
+  RegistryRepo, RegistryImage, RegistryConnectorRow, OciImageRow,
+  CopilotAnswer, BlastRadius, Project, ProjectDetail, ControlRow,
   EdrCoverage, OrgEdrCoverage, RuntimeIncident, DataInventory, OrgDataInventory, PolicyRow,
 } from './types'
 import { deriveCrosswalk } from '../lib/crosswalk'
@@ -461,6 +462,23 @@ const sbomApi = {
     if (!SAMPLE) return get<RegistryImage[]>(`${API_BASE}/accounts/${id}/registry/images${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`)
     const all = await get<RegistryImage[]>('/sample/registry_images.json').catch(() => [])
     return repo ? all.filter((im) => im.repository === repo || im.image_uri === repo) : all
+  },
+  // ── Batch 6: non-AWS registry connectors (GHCR/Docker Hub/Harbor/ACR) ──
+  registryConnectors: async (): Promise<RegistryConnectorRow[]> => {
+    if (!SAMPLE) return get<RegistryConnectorRow[]>(`${API_BASE}/registries`)
+    return get<RegistryConnectorRow[]>('/sample/registries.json').catch(() => [])
+  },
+  registryConnectorImages: async (connectorId?: string): Promise<OciImageRow[]> => {
+    if (!SAMPLE) return get<OciImageRow[]>(`${API_BASE}/registries/images${connectorId ? `?connector_id=${encodeURIComponent(connectorId)}` : ''}`)
+    const all = await get<OciImageRow[]>('/sample/registry_connector_images.json').catch(() => [])
+    return connectorId ? all.filter((i) => i.connector_id === connectorId) : all
+  },
+  // scan is an admin, live-only action (a real agentless pull). In sample mode it resolves the
+  // canned image rows so the screen is demoable without a hub.
+  scanRegistry: async (connectorId: string): Promise<{ images: OciImageRow[]; notes: string[] }> => {
+    if (!SAMPLE) return post<{ images: OciImageRow[]; notes: string[] }>(`/registries/${encodeURIComponent(connectorId)}/scan`, {})
+    const all = await get<OciImageRow[]>('/sample/registry_connector_images.json').catch(() => [])
+    return { images: all.filter((i) => i.connector_id === connectorId), notes: [] }
   },
 }
 

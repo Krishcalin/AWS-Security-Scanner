@@ -1,0 +1,40 @@
+[
+  {
+    "connector_id": "ghcr-platform",
+    "registry_type": "ghcr",
+    "host": "ghcr.io",
+    "node_id": "ghcr.io/platform-org/checkout-api@sha256:5b1e9c",
+    "repository": "platform-org/checkout-api",
+    "image_uri": "ghcr.io/platform-org/checkout-api",
+    "digest": "sha256:5b1e9c00000000000000000000000000000000000000000000000000000000",
+    "tags": ["1.14.2"],
+    "ok": true,
+    "note": "",
+    "deployed": false,
+    "scan_sources": ["oci-sidescan:ghcr"],
+    "components": 214,
+    "subject_key": "oci-sidescan:ghcr.io/platform-org/checkout-api@sha256:5b1e9c",
+    "vuln_count": 3,
+    "critical": 1,
+    "high": 1
+  },
+  {
+    "connector_id": "ghcr-platform",
+    "registry_type": "ghcr",
+    "host": "ghcr.io",
+    "node_id": "ghcr.io/platform-org/edge-proxy@sha256:a7c440",
+    "repository": "platform-org/edge-proxy",
+    "image_uri": "ghcr.io/platform-org/edge-proxy",
+    "digest": "sha256:a7c44000000000000000000000000000000000000000000000000000000000",
+    "tags": ["2.3.0"],
+    "ok": true,
+    "note": "",
+    "deployed": false,
+    "scan_sources": ["oci-sidescan:ghcr"],
+    "components": 96,
+    "subject_key": "oci-sidescan:ghcr.io/platform-org/edge-proxy@sha256:a7c440",
+    "vuln_count": 1,
+    "critical": 0,
+    "high": 1
+  }
+]

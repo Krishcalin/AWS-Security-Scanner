@@ -22,6 +22,7 @@ Every outbound connection made by OverWatch falls into exactly one of two classe
 | Seam | Kubernetes API reads for KSPM/KIEM (Layer B) | `aws_kube.default_k8s_get` (`aws_kube.py`) | operator's EKS API endpoint | **opt-in** | unused, or in-VPC EKS |
 | Seam | Container-image layer fetch (agentless image side-scan) | `aws_sidescan_image.fetch_ecr_layers` (injected `http_get`) | operator's ECR | **opt-in** | in-VPC ECR endpoint |
 | Seam | ECR **registry** layer-blob GET (Slice-5 Tier-B; the shipped default `http_get`) | `aws_layer_fetch.http_get` (`aws_layer_fetch.py`) | operator's ECR (presigned S3 URL) | **opt-in** (`--side-scan-images` + `CnappImageLayerPull` grant) | in-VPC S3/ECR endpoint |
+| Seam | **Non-AWS OCI registry** pull (GHCR / Docker Hub / Harbor / ACR — token dance + manifest + layer blob) | `aws_layer_fetch.registry_request` / `registry_blob_get` (`aws_layer_fetch.py`); pure adapters `aws_registry_oci.py` + `aws_registry_connectors.py` | operator's registry host (config) + its auth realm/blob-store (learned at runtime) | **opt-in** (a `CNAPP_REGISTRIES` connector, `enabled` + a `secretsmanager://`\|`ssm://` cred ref) | in-VPC / self-hosted registry |
 | Seam | Lambda artifact fetch | `aws_sidescan_lambda.fetch_lambda_artifact` (injected `http_get`) | operator's AWS | **opt-in** | in-VPC |
 | Seam | Grounded copilot LLM | `PlatformService(copilot_llm=…)` (`cnapp_service.py`) | operator's LLM endpoint | **`None` → offline extractive** | unused, or in-VPC model |
 | Seam | AWS Marketplace metering (optional) | `cnapp_marketplace_metering` → `marketplacemetering:MeterUsage` | AWS (metering) | **opt-in, off by default** | unused (use a contract/private-offer SKU) |
@@ -42,9 +43,24 @@ Every outbound connection made by OverWatch falls into exactly one of two classe
   system trust store, a hard per-layer **byte cap**, and a **timeout**; any deviation raises
   `LayerFetchError` so the caller fail-CLOSES the image (never a partial rootfs). Off unless
   **both** `--side-scan-images` and the opt-in `CnappImageLayerPull` grant are present.
+- **Non-AWS OCI registry pull (`aws_layer_fetch.registry_request` / `registry_blob_get`)**:
+  the SAME hardened primitive, generalized for GHCR/Docker Hub/Harbor/ACR. **HTTPS-only**,
+  TLS-verified, byte-capped, short-read fail-closed — and a **per-call host allowlist** (built
+  ONLY from the operator-configured registry host + the auth realm host read from the
+  `WWW-Authenticate` challenge; **never "any https"**). A `/v2/…/blobs/…` GET may 3xx to the
+  registry's own blob store (unknowable in advance, exactly like ECR's presigned-S3 redirect),
+  followed ONLY to an HTTPS host that is **not** an SSRF target — IMDS / cloud-metadata /
+  loopback / link-local / any private / reserved / unspecified address are refused
+  (`_is_ssrf_target`, which normalises IP-literal encodings — IPv4-mapped IPv6, integer, hex,
+  `0.0.0.0`, `::` — via `ipaddress`, so a dotted-decimal-only blocklist cannot be evaded), and the
+  `Authorization` header is stripped on any cross-host hop. There is **no hardcoded registry host**
+  in the egress file. The pull adapters (`aws_registry_oci`, `aws_registry_connectors`) are
+  **pure** — they take these seams by injection and hold no network primitive. Off unless a
+  `CNAPP_REGISTRIES` connector is configured, `enabled`, and an admin triggers the scan.
 - **Network primitives** (`urllib.request`, `ssl`, `socket`, `http.client`, …) may be
   imported by **only three files** — `aws_kube.py`, `cnapp_connectors.py`, and
-  `aws_layer_fetch.py`. Every other module is stdlib/boto3 only. (`urllib.parse` — URL
+  `aws_layer_fetch.py` (Batch 6's non-AWS registry egress reuses `aws_layer_fetch.py` — the
+  allowlist did NOT grow). Every other module is stdlib/boto3 only. (`urllib.parse` — URL
   string encoding — is not network I/O and is used freely.)
 - **Signed vuln-feed provenance (offline)**: the feed is built + signed on a *connected*
   host (`scripts/overwatch_vulndb.py`, a **vendored pure-stdlib Ed25519** — no `cryptography`

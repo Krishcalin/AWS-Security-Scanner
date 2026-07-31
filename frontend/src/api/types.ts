@@ -658,3 +658,48 @@ export interface RegistryRepo {
   vuln_count: number
   findings: { check_id: string; status: string; severity?: string; message?: string }[]
 }
+
+// ── Batch 6: non-AWS registry connectors (GHCR/Docker Hub/Harbor/ACR) ───────
+export interface RegistryConnectorRow {
+  connector_id: string
+  type: string
+  host: string
+  name: string
+  enabled: boolean
+  auth: string
+  username?: string | null
+  secret_configured: boolean
+  images: string[]
+  repositories: string[]
+  newest_n: number
+  max_image_bytes?: number | null
+  last_scan: {
+    scanned_epoch: number
+    images: number
+    ok: number
+    critical: number
+    high: number
+    notes: string[]
+  } | null
+}
+
+// One pulled non-AWS registry image (source-agnostic; mirrors RegistryImage + provenance).
+export interface OciImageRow {
+  connector_id: string
+  registry_type: string
+  host: string
+  node_id: string
+  repository: string
+  image_uri: string
+  digest: string
+  tags: string[]
+  ok: boolean
+  note: string
+  deployed: boolean
+  scan_sources: string[]
+  components: number
+  subject_key: string
+  vuln_count: number
+  critical: number
+  high: number
+}

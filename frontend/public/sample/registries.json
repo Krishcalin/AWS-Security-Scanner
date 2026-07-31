@@ -1,0 +1,54 @@
+[
+  {
+    "connector_id": "ghcr-platform",
+    "type": "ghcr",
+    "host": "ghcr.io",
+    "name": "GitHub Packages — platform org",
+    "enabled": true,
+    "auth": "token",
+    "username": null,
+    "secret_configured": true,
+    "images": ["platform-org/checkout-api:1.14.2", "platform-org/edge-proxy:2.3.0"],
+    "repositories": [],
+    "newest_n": 5,
+    "max_image_bytes": null,
+    "last_scan": {
+      "scanned_epoch": 1753848000,
+      "images": 2,
+      "ok": 2,
+      "critical": 1,
+      "high": 2,
+      "notes": []
+    }
+  },
+  {
+    "connector_id": "harbor-internal",
+    "type": "harbor",
+    "host": "harbor.corp.internal",
+    "name": "Harbor — internal builds",
+    "enabled": true,
+    "auth": "basic",
+    "username": "robot$overwatch-scanner",
+    "secret_configured": true,
+    "images": [],
+    "repositories": ["team-data/ingestor", "team-data/api"],
+    "newest_n": 3,
+    "max_image_bytes": null,
+    "last_scan": null
+  },
+  {
+    "connector_id": "dockerhub-public",
+    "type": "dockerhub",
+    "host": "registry-1.docker.io",
+    "name": "Docker Hub — public base images",
+    "enabled": false,
+    "auth": "anonymous",
+    "username": null,
+    "secret_configured": false,
+    "images": ["library/alpine:3.19"],
+    "repositories": [],
+    "newest_n": 5,
+    "max_image_bytes": null,
+    "last_scan": null
+  }
+]

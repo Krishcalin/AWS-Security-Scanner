@@ -423,6 +423,21 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     def policies(scope: Scope = Depends(require("viewer"))):
         return service.list_policies(workspace_id=scope.workspace_id)
 
+    # ── Batch 6: non-AWS registry connectors (GHCR/Docker Hub/Harbor/ACR) ───────
+    @app.get("/registries")
+    def registries(scope: Scope = Depends(require("viewer"))):
+        return service.list_registry_connectors()          # secret-masked; config-driven
+
+    @app.get("/registries/images")
+    def registry_connector_images(connector_id: Optional[str] = None,
+                                  scope: Scope = Depends(require("viewer"))):
+        return service.list_registry_connector_images(connector_id)   # cached last-scan rows
+
+    @app.post("/registries/{connector_id}/scan")
+    def scan_registry_connector(connector_id: str, scope: Scope = Depends(require("admin"))):
+        # admin-only: this triggers a LIVE agentless pull + side-scan of the operator's registry.
+        return service.scan_registry_connector(connector_id)
+
     # ── grounded copilot (viewer; answers only from the account's own scan) ────
     @app.post("/accounts/{account_id}/copilot", dependencies=[Depends(account_gate("viewer"))])
     def copilot(account_id: str, body: CopilotReq):
