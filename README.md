@@ -23,6 +23,7 @@
 ## Table of Contents
 
 - [Overview](#overview)
+- [Architecture at a glance](#architecture-at-a-glance)
 - [IaC Security Scanner (`aws_offline_scanner.py`)](#iac-security-scanner-aws_offline_scannerpy)
   - [What It Does](#what-it-does)
   - [Quick Start (IaC Scanner)](#quick-start-iac-scanner)
@@ -82,6 +83,50 @@ This repository contains **two complementary AWS security scanners**:
 Use **OverWatch** to audit a running AWS estate — CIS/compliance posture, effective-permissions CIEM, agentless
 workload vulnerabilities, and the ranked attack paths + choke points. Use the **IaC scanner** to catch
 misconfigurations in CloudFormation templates and Terraform files before deployment.
+
+---
+
+## Architecture at a glance
+
+OverWatch is a three-tier system — a React console over a fail-closed control plane over a pure, **agentless**
+scanning engine — that turns read-only AWS reads into a ranked handful of attack paths.
+
+![OverWatch logical architecture](docs/diagrams/fig1_architecture.png)
+
+*Logical architecture: React console → fail-closed control plane → pure scanning engine → read-only sources.*
+
+**The differentiator — score the path, not the finding.** A toxic combination is a *conjunction*
+(exposure × exploitability × privilege × data-path), so a missing factor collapses the score and the classic
+"high-CVSS but unexposed, no data path" false positive never surfaces.
+
+![The attack-path graph](docs/diagrams/fig4_attackpath.png)
+
+*An end-to-end attack path over traversable (solid) `E_PATH` edges; annotations (dashed) enrich nodes but are never walked as hops.*
+
+**Runtime topology.** One hardened, non-root container on a private subnet in the security VPC — reaching AWS via
+VPC endpoints and assuming read-only roles into each spoke account. No public-internet egress.
+
+![Runtime topology](docs/diagrams/fig2_topology.png)
+
+*Hub-and-spoke: VPC-endpoint egress + `sts:AssumeRole` (with ExternalId) into spoke accounts.*
+
+**The scan pipeline.** Read-only collect → graph → reachability → deep-plane → correlate; every specialized
+posture engine (eff-perm, CIEM, CWPP, KSPM/KIEM, DSPM, AI-SPM, CDR/EDR/malware ingest) reads the same graph.
+
+![Scan pipeline and engine fan-out](docs/diagrams/fig3_pipeline.png)
+
+*The pipeline and engine fan-out — annotations enrich; only `E_PATH` edges are traversed.*
+
+**Zero-telemetry by construction.** The overwhelming majority of egress is read-only `boto3` to the customer's own
+accounts; only **three** allowlisted files may open any other socket, enforced by a recursive-AST tripwire test.
+
+![Egress containment](docs/diagrams/fig5_egress.png)
+
+*Egress containment — internet / telemetry / phone-home is blocked.*
+
+> **Full detail:** the **[System Design &amp; Architecture guide](docs/OverWatch_System_Design_and_Architecture.docx)**
+> (Word — 21 chapters, 13 tables, and these five figures) is regenerable, offline, from
+> [`docs/diagrams/`](docs/diagrams/).
 
 ---
 
