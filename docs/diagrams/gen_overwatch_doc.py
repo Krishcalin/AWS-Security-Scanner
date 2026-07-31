@@ -30,12 +30,12 @@ doc = Document()
 # ── base styles ───────────────────────────────────────────────────────────────
 normal = doc.styles["Normal"]
 normal.font.name = "Calibri"
-normal.font.size = Pt(10.5)
+normal.font.size = Pt(12)
 normal.font.color.rgb = INK
 normal.paragraph_format.space_after = Pt(6)
 normal.paragraph_format.line_spacing = 1.12
 
-for lvl, size, color in [("Heading 1", 16, NAVY), ("Heading 2", 13, NAVY), ("Heading 3", 11.5, NAVY)]:
+for lvl, size, color in [("Heading 1", 18, NAVY), ("Heading 2", 14.5, NAVY), ("Heading 3", 13, NAVY)]:
     st = doc.styles[lvl]
     st.font.name = "Calibri"
     st.font.size = Pt(size)
@@ -95,7 +95,7 @@ def code(text):
         if i:
             p.add_run("\n")
         r = p.add_run(line)
-        r.font.name = "Consolas"; r.font.size = Pt(8.8); r.font.color.rgb = INK
+        r.font.name = "Consolas"; r.font.size = Pt(9.8); r.font.color.rgb = INK
     return p
 
 
@@ -117,7 +117,7 @@ def figure(png, caption, width=6.4):
     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
     doc.paragraphs[-1].paragraph_format.space_before = Pt(6)
     cap = doc.add_paragraph(); cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r = cap.add_run(caption); r.italic = True; r.font.size = Pt(9); r.font.color.rgb = SUBTLE
+    r = cap.add_run(caption); r.italic = True; r.font.size = Pt(10); r.font.color.rgb = SUBTLE
     cap.paragraph_format.space_after = Pt(12)
 
 
@@ -130,7 +130,7 @@ def table(headers, rows, widths=None):
         cell = hdr[i]
         cell.paragraphs[0].text = ""
         r = cell.paragraphs[0].add_run(htext); r.bold = True
-        r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF); r.font.size = Pt(9.5)
+        r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF); r.font.size = Pt(10.5)
         _shade(cell.paragraphs[0], TABLE_HDR_FILL)
         tcPr = cell._tc.get_or_add_tcPr()
         shd = OxmlElement("w:shd"); shd.set(qn("w:val"), "clear")
@@ -140,7 +140,7 @@ def table(headers, rows, widths=None):
         cells = t.add_row().cells
         for i, val in enumerate(row):
             cells[i].paragraphs[0].text = ""
-            r = cells[i].paragraphs[0].add_run(str(val)); r.font.size = Pt(9)
+            r = cells[i].paragraphs[0].add_run(str(val)); r.font.size = Pt(10.5)
     if widths:
         for i, w in enumerate(widths):
             for row in t.rows:
