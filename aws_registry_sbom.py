@@ -144,18 +144,38 @@ def scan_registry_image(ecr, repo: str, repo_uri: str, image_detail: dict, *,
     except Exception as e:                            # denial / unexpected — never a partial scan
         n.append(f"{repo}@{digest[:19]} layer pull denied/unavailable: {e}")
         return _fail(f"denied: {e}")
+    return scan_pulled_layers(
+        layers, repo=repo, repo_uri=repo_uri, digest=digest, tags=tags, node_id=node_id,
+        feed=feed, epss=epss, kev=kev, exploits=exploits, max_image_bytes=max_image_bytes,
+        do_secrets=do_secrets, notes=n)
+
+
+def scan_pulled_layers(layers: List[bytes], *, repo: str, repo_uri: str, digest: str,
+                       tags: List[str], node_id: str, feed, epss: Mapping[str, float],
+                       kev: AbstractSet[str], exploits: AbstractSet[str] = frozenset(),
+                       max_image_bytes: Optional[int] = None, do_secrets: bool = True,
+                       notes: Optional[List[str]] = None) -> RegistryImageResult:
+    """The REGISTRY-AGNOSTIC half of an image scan: reconstruct the rootfs from already-pulled
+    ``layers`` and run the OSV side-scan. FAIL-CLOSED on a partial rootfs (a dropped/corrupt layer
+    would yield a false-clean/false-alarm). Shared by the ECR path (``scan_registry_image``) and
+    the non-AWS OCI path (``aws_registry_oci``) so their fail-closed contract can never diverge."""
+    n = notes if notes is not None else []
+
+    def _fail(note):
+        return RegistryImageResult(digest, tags, node_id, False, None, [], None, note)
+
     if not layers:
         n.append(f"{repo}@{digest[:19]} has no scannable linux layers")
         return _fail("no-layers")
-    # post-fetch byte bound: caps an unknown/under-reported imageSizeInBytes at the actual
-    # reconstructed size (defense in depth over the per-layer http_get cap).
+    # post-fetch byte bound: caps an unknown/under-reported image size at the actual reconstructed
+    # size (defense in depth over the per-layer http_get cap).
     total = sum(len(b) for b in layers)
     if max_image_bytes and total > max_image_bytes:
         n.append(f"{repo}@{digest[:19]} pulled bytes exceed size cap — skipped")
         return _fail("oversized")
-    # FAIL-CLOSED on a partial rootfs: if any WHOLE layer failed to open (corrupt blob) or
-    # the entry cap was hit, the merged filesystem is incomplete -> a missing package DB would
-    # read as a false-clean scan. Drop the image rather than scan a partial rootfs.
+    # FAIL-CLOSED on a partial rootfs: if any WHOLE layer failed to open (corrupt blob) or the
+    # entry cap was hit, the merged filesystem is incomplete -> a missing package DB would read as
+    # a false-clean scan. Drop the image rather than scan a partial rootfs.
     stats: dict = {}
     ext = aws_sidescan.ImageLayerExtractor(layers, notes=n, stats=stats)
     if stats.get("dropped_layers") or stats.get("truncated"):

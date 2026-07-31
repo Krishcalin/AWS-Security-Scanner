@@ -19,6 +19,7 @@ import { Projects, ProjectView } from './routes/Projects'
 import { Query } from './routes/Query'
 import { Runtime } from './routes/Runtime'
 import { Data } from './routes/Data'
+import { Registries } from './routes/Registries'
 import { DASHBOARDS } from './lib/dashboards'
 import { TourProvider } from './lib/tour/TourProvider'
 import { TourOverlay } from './components/tour/TourOverlay'
@@ -40,6 +41,7 @@ export default function App() {
               <Route path="/findings" element={<Findings />} />
               <Route path="/vulnerabilities" element={<Vulnerabilities />} />
             <Route path="/supply-chain" element={<SupplyChain />} />
+              <Route path="/registries" element={<Registries />} />
               <Route path="/inventory" element={<Inventory />} />
               <Route path="/identity" element={<Identity />} />
               <Route path="/compliance" element={<Compliance />} />

@@ -33,6 +33,7 @@ import aws_edr
 import aws_forensics
 import aws_malware
 import aws_policy
+import aws_registry_connectors
 import aws_license
 import aws_sbom_diff
 import aws_sidescan
@@ -151,6 +152,9 @@ class PlatformService:
                  projects: Optional[List[dict]] = None,
                  controls: Optional[List[dict]] = None,
                  policies: Optional[List[dict]] = None,
+                 registry_connectors: Optional[List[dict]] = None,
+                 registry_request: Optional[Callable] = None,
+                 registry_blob_get: Optional[Callable] = None,
                  clock: Callable[[], int] = None):
         import time
         # Optional grounded-copilot LLM seam (system, question, context) -> str. None (default)
@@ -208,6 +212,17 @@ class PlatformService:
         # DISPLAY-ONLY discipline as Controls: a firing policy overlays a synthetic WARN POLICY-xx
         # finding at read time; never re-runs scoring. Fail-safe per policy (a malformed rule is inert).
         self.policies = policies or []
+        # ── Non-AWS registry connectors (Batch 6) ─────────────────────────────
+        # Operator-declared GHCR/Docker Hub/Harbor/ACR registries to agentlessly pull + side-scan,
+        # reusing the SAME SBOM/OSV engine as ECR. Config-driven (no DB schema — like Controls/
+        # Policies/Projects). The pull's egress lives ENTIRELY in aws_layer_fetch (the sole
+        # allowlisted file); the two seams below default-bind to it lazily so tests inject fakes and
+        # never touch a socket. Results are cached in-memory (last scan), never fed to the posture
+        # score or the frozen attack-path graph.
+        self.registry_connectors = aws_registry_connectors.load_connectors(registry_connectors or [])
+        self._registry_request = registry_request
+        self._registry_blob_get = registry_blob_get
+        self._registry_scan_cache: Dict[str, dict] = {}
         self.clock = clock or (lambda: int(time.time()))
 
     @property
@@ -1125,6 +1140,83 @@ class PlatformService:
         for rn, d in sorted(repos.items()):
             d["findings"] = posture.get(rn, [])
             out.append(d)
+        return out
+
+    # ── Batch 6: non-AWS registry connectors (org-level, config-driven, no schema) ──
+    def _get_registry_connector(self, connector_id: str):
+        for rc in self.registry_connectors:
+            if rc.connector_id == connector_id:
+                return rc
+        return None
+
+    @property
+    def registry_request(self):
+        """The Registry v2 control seam (token/manifest). Lazily bound to aws_layer_fetch (the sole
+        allowlisted egress file) so offline tests inject a fake and never import it."""
+        if self._registry_request is None:
+            import aws_layer_fetch
+            self._registry_request = aws_layer_fetch.registry_request
+        return self._registry_request
+
+    @property
+    def registry_blob_get(self):
+        """The Registry v2 layer-blob seam. Lazily bound to aws_layer_fetch (SSRF-guarded redirect)."""
+        if self._registry_blob_get is None:
+            import aws_layer_fetch
+            self._registry_blob_get = aws_layer_fetch.registry_blob_get
+        return self._registry_blob_get
+
+    def list_registry_connectors(self) -> List[dict]:
+        """The declared non-AWS registries (SECRET-MASKED), each annotated with its last-scan
+        summary from the in-memory cache. Read-only + config-driven — no network, no scan."""
+        out = []
+        for rc in self.registry_connectors:
+            row = aws_registry_connectors.mask_connector(rc)
+            cached = self._registry_scan_cache.get(rc.connector_id)
+            row["last_scan"] = (
+                {"scanned_epoch": cached["scanned_epoch"], "images": len(cached["images"]),
+                 "ok": sum(1 for im in cached["images"] if im["ok"]),
+                 "critical": sum(im["critical"] for im in cached["images"]),
+                 "high": sum(im["high"] for im in cached["images"]),
+                 "notes": cached["notes"][:20]}
+                if cached else None)
+            out.append(row)
+        return out
+
+    def scan_registry_connector(self, connector_id: str, *, request=None, blob_get=None) -> dict:
+        """Agentlessly pull + side-scan every image an ENABLED connector declares/enumerates,
+        reusing the shared SBOM/OSV engine. The only impure registry entrypoint: it binds the real
+        egress seams (or injected fakes) + the existing secret_reader + the same vuln bundle the
+        native side-scan uses. Results are cached (last scan) and returned as source-agnostic image
+        rows. NEVER touches posture/attack-path (aws_correlate stays frozen). A disabled/unknown
+        connector returns an empty result rather than an error (safe-by-default)."""
+        rc = self._get_registry_connector(connector_id)
+        if rc is None or not rc.enabled:
+            return {"connector_id": connector_id, "images": [], "notes": [
+                "unknown connector" if rc is None else "connector disabled"], "scanned_epoch": self.clock()}
+        bundle = self._vuln_bundle()
+        feed = self._osv_feed(bundle)
+        notes: List[str] = []
+        results = aws_registry_connectors.scan_connector(
+            rc, request=(request or self.registry_request),
+            blob_get=(blob_get or self.registry_blob_get),
+            secret_reader=self.secret_reader, feed=feed, epss=bundle["epss"],
+            kev=bundle["kev"], exploits=bundle["exploits"], notes=notes)
+        images = [aws_registry_connectors.registry_image_view(rc, ref, res) for ref, res in results]
+        entry = {"connector_id": connector_id, "images": images, "notes": notes,
+                 "scanned_epoch": self.clock()}
+        self._registry_scan_cache[connector_id] = entry
+        return entry
+
+    def list_registry_connector_images(self, connector_id: Optional[str] = None) -> List[dict]:
+        """The cached image rows from the last connector scan(s). Read-only — returns [] until a
+        scan has been triggered (never blocks on a live pull)."""
+        cids = [connector_id] if connector_id else [rc.connector_id for rc in self.registry_connectors]
+        out: List[dict] = []
+        for cid in cids:
+            cached = self._registry_scan_cache.get(cid)
+            if cached:
+                out.extend(cached["images"])
         return out
 
     def sbom_diff(self, account_id: str, from_id: Optional[str] = None,

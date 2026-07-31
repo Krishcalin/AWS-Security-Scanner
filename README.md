@@ -529,6 +529,8 @@ Pure, dependency-injected, offline-testable:
 | `aws_wql.py` | **WQL graph query** — a typed, bounded JSON query language compiled to the frozen `aws_graph` traversal primitives (no free Gremlin / Neptune / `eval`). `parse()` is the security boundary (rejects any unknown field/op/predicate/prop → `WQLError`); `evaluate()` returns deterministic `(kind,id)`-sorted node rows. Mirrored byte-for-byte in `frontend/src/lib/wql.ts` for SAMPLE==LIVE, guarded by a cross-language parity fixture |
 | `aws_controls.py` | **Saved-query-as-Control** — pure transform of a matched WQL result into a display-only `WARN` finding (`status=WARN` → never touches the FAIL-only posture score); mirrored in `frontend/src/lib/controls.ts` |
 | `aws_policy.py` | **Policy-as-code engine** (the in-charter Rego/OPA substitute — a Go binary would break zero-telemetry/air-gap) — a closed, typed pure-Python DSL extending Controls with a **finding-catalog predicate** (compliance-as-code: match by check_id/section/severity/compliance) + a graph clause (WQL) combined `any`/`all`; a firing rule overlays a display-only `WARN` `POLICY-xx` finding. Config-driven (`CNAPP_POLICIES`); mirrored in `frontend/src/lib/policy.ts` |
+| `aws_registry_oci.py` | **Non-AWS OCI registry pull adapter** — pure Docker Registry v2 client (parse-ref / WWW-Authenticate Bearer dance / manifest + manifest-list / tag enumeration / layer-blob pull) driven entirely by injected `aws_layer_fetch` seams; fail-**closed** on a partial rootfs (zstd/undecodable/truncated/over-budget); covers GHCR / Docker Hub / Harbor / ACR |
+| `aws_registry_connectors.py` | **Registry-connector config layer** — parse/validate `CNAPP_REGISTRIES`, resolve a `secretsmanager://`/`ssm://` secret-ref to credentials transiently, host-qualify + host-consistency-guard refs, orchestrate enumerate→pull→side-scan, and mask the secret out of API views. Pure |
 
 ### HTTP API surface
 
@@ -549,6 +551,8 @@ hub control plane. `POST /accounts` (onboard → launch URL), `POST /accounts/{i
 **forensics** — `GET /accounts/{id}/forensics/timeline`;
 **supply-chain** — `GET /accounts/{id}/sbom/{subjects,snapshots,diff}`,
 `GET /accounts/{id}/components`, `GET /accounts/{id}/license-findings`, `GET /accounts/{id}/vex`;
+**non-AWS registries** — `GET /registries` (secret-masked), `GET /registries/images` (cached rows),
+`POST /registries/{id}/scan` (admin — a live agentless pull + side-scan);
 **connectors** — `POST/GET /connectors`, `PUT/DELETE /connectors/{id}`,
 `POST /connectors/{id}/{enable,rotate-secret,test}`, `.../rules` CRUD,
 `POST /connectors/rules/preview` (dry-run), `POST /accounts/{id}/notify`,
@@ -688,6 +692,28 @@ diffable snapshots; a **registry-only** image (not deployed) carries `HAS_VULN` 
 an attack path — it ranks shift-left, never a false CRITICAL (`aws_correlate.py` stays frozen).
 Read routes `GET /accounts/{id}/registry/{repos,images}`; a **Registry** tab on the Supply Chain
 screen (deployed vs registry-only, scan-source chips, a "not reachable" label).
+
+**Non-AWS registry connectors (GHCR / Docker Hub / Harbor / ACR).** The same agentless pull +
+own-SBOM→OSV pipeline extends to a customer's non-AWS OCI registries. An operator declares a
+connector in `CNAPP_REGISTRIES` (`[{connector_id,type,host?,auth?,username?,secret_ref?,images?,
+repositories?}]`, JSON or file path; disabled-by-default; a credential is a `secretsmanager://` /
+`ssm://` **reference**, never plaintext) and `aws_registry_oci.py` speaks the standard Docker
+Registry v2 **Bearer-realm token dance** — one adapter covers GHCR, Docker Hub, Harbor, and ACR
+(including ACR's service-principal, which authenticates as plain Basic), so there is no
+per-registry auth code; GCR / Artifact Registry is deferred (its OAuth needs RS256 signing, absent
+from the pure-Python air-gap wheelhouse). The pull reuses the SAME hardened egress file
+(`aws_layer_fetch.registry_request` / `registry_blob_get`) — so the zero-telemetry allowlist does
+**not** grow — under a **per-call host allowlist** (the config host + the auth realm learned at
+runtime; never "any https"); a blob 3xx is followed only to a non-SSRF-target HTTPS host
+(IMDS / cloud-metadata / loopback / any private address refused, IP-literal encodings normalised),
+and the `Authorization` header is stripped on any cross-host hop. Pulled images run through the
+registry-agnostic `scan_pulled_layers` (shared with ECR, so the fail-closed-on-partial-rootfs
+contract can't diverge — a zstd/undecodable/truncated layer set fails **closed**, never a false
+clean), and a host-consistency guard refuses any ref that resolves off the connector's host so a
+credential can never travel to a third-party registry. Results are **display-only** (never posture
+or the frozen attack-path graph). Routes `GET /registries`, `GET /registries/images`,
+`POST /registries/{id}/scan` (admin); a **Registries** console screen (`aws_registry_connectors.py`
+config layer; `frontend/src/routes/Registries.tsx`).
 
 ### Shared Postgres state
 

@@ -25,6 +25,11 @@ Environment:
   CNAPP_POLICIES         Policies (policy-as-code custom rules) as a JSON list, or a path to a
                          JSON file — read-only, config-driven, optional. Shape:
                          [{id,name,match:{op?,graph?,finding?},severity?,pack?}]. Fail-safe (bad → none).
+  CNAPP_REGISTRIES       Non-AWS registry connectors (GHCR/Docker Hub/Harbor/ACR) to agentlessly
+                         pull + side-scan, as a JSON list or a path to a JSON file — config-driven,
+                         optional, disabled-by-default. Shape: [{connector_id,type,host?,auth?,
+                         username?,secret_ref?,images?,repositories?}]. Fail-safe (bad → none); a
+                         secret is a secretsmanager://|ssm:// REF, never plaintext.
   OVERWATCH_AIRGAP       "1" documents the sealed posture — no behavioural branch (all
                          optional seams already default off); the runbook enforces it.
 
@@ -97,6 +102,23 @@ def _load_policies():
         return []
 
 
+def _load_registry_connectors():
+    """Load non-AWS registry connector defs (Batch 6) from CNAPP_REGISTRIES — a JSON list or a path
+    to a JSON file. Fail-SAFE (mirror _load_policies): any error → no connectors. Local env/file
+    read only. Shape: [{connector_id,type,host?,auth?,username?,secret_ref?,images?,repositories?}].
+    Each entry is fully validated (and fail-safe per-entry) by aws_registry_connectors.parse at
+    service init; a malformed entry is simply dropped and never pulls."""
+    import json
+    raw = os.environ.get("CNAPP_REGISTRIES", "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw) if raw.startswith("[") else json.load(open(raw, encoding="utf-8"))
+        return [c for c in data if isinstance(c, dict)]
+    except Exception:
+        return []
+
+
 def build_service():
     """Construct the PlatformService from env. Multi-tenant + metered; fail-closed auth
     is applied at the API layer, not here."""
@@ -127,6 +149,7 @@ def build_service():
         projects=_load_projects(),
         controls=_load_controls(),
         policies=_load_policies(),
+        registry_connectors=_load_registry_connectors(),
     )
 
 
