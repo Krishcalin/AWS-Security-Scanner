@@ -238,7 +238,7 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 - **CI/CD gating** -- `--fail-on CRITICAL|HIGH|MEDIUM|LOW` for pipeline pass/fail control
 - **Scan diff** -- `--baseline prev.json` surfaces only what's *new* or *resolved* since a previous run (superseded by `--state` DB-backed lifecycle when both are given)
 - **Evidence collection** -- CSV/JSON artefact files saved per check
-- **1128 unit tests** -- full test suite with mock boto3, no AWS credentials needed (incl. exposure, deep-plane, attack-path-scoring, Phase-5 effective-permissions/state/CIEM, Phase-6 side-scan version-comparator/OSV-matching/EBS-block-plane/backend-export, Phase-7 remediation/code-to-cloud false-positive/false-negative catalogs, and the detailed finding write-ups / `finding_catalog` rendering; a regression test backs every defect the adversarial-verification passes found)
+- **2169 backend tests** -- full test suite with mock boto3, no AWS credentials needed (incl. the hosted CNAPP platform and the coverage-close batches — WQL/Controls · policy-as-code · EDR/malware/DSPM ingest · non-AWS OCI registry — alongside exposure, deep-plane, attack-path-scoring, Phase-5 effective-permissions/state/CIEM, Phase-6 side-scan version-comparator/OSV-matching/EBS-block-plane/backend-export, Phase-7 remediation/code-to-cloud false-positive/false-negative catalogs, and the detailed finding write-ups / `finding_catalog` rendering; a regression test backs every defect the adversarial-verification passes found)
 
 ### Prerequisites (Live Scanner)
 
@@ -876,7 +876,7 @@ cd frontend && npm install && npm run dev     # http://localhost:5173  (sample d
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC Security Scanner (CloudFormation + Terraform, no credentials)
-├── aws_live_scanner.py      # Live Audit Scanner v2.26.0 (44 sections, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem, sidescan, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, least-priv, AI-SPM)
+├── aws_live_scanner.py      # Live Audit Scanner v2.35.0 (44 sections, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, least-priv, AI-SPM, CDR, forensics, copilot, vuln-ingest, supply-chain, registry)
 ├── aws_remediate.py         # Remediation engine — prioritized plan + remediation-as-code + exports, pure (read-only)
 ├── aws_codetocloud.py       # Code-to-cloud — IaC index + tiered T1–T5 matcher (TF/CFN → finding source), pure
 ├── aws_graph_neptune_loader.py # Neptune live loader — bulk-load/openCypher runners (mock-tested), pure builders
