@@ -46,7 +46,13 @@ services:
       # the ws-default workspace.
       CNAPP_DB_URL: postgresql://overwatch:overwatch-local-only@db:5432/overwatch
       CNAPP_STATIC_DIR: /app/frontend/dist
-      OVERWATCH_LOCAL_DEV: "1"          # the local launcher refuses to start without this
+      OVERWATCH_LOCAL_DEV: "1"          # only used by the no-login smoke entrypoint
+      # First administrator, applied ONCE against an empty user table and ignored
+      # thereafter (cnapp_authn.bootstrap_admin). There is no default credential and
+      # nothing is printed to the log. Change these before you use this anywhere but
+      # a laptop.
+      OVERWATCH_BOOTSTRAP_USER: admin
+      OVERWATCH_BOOTSTRAP_PASSWORD: overwatch-local-admin
     ports:
       - "127.0.0.1:8080:8080"           # host-only; see header
     depends_on:

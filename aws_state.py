@@ -35,7 +35,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-SCHEMA_VERSION = 10  # v10: + edr_sensors (runtime-sensor coverage inventory → runtime_monitored)
+SCHEMA_VERSION = 11  # v11: + app_user/app_session (local authn; authz still workspace_members)
 KEY_VERSION = 1
 
 # Caller-injected scan timestamp (one per run). epoch = arithmetic column,
@@ -328,6 +328,34 @@ CREATE INDEX IF NOT EXISTS ix_connws_ws ON connector_workspace(workspace_id);
 
 CREATE TABLE IF NOT EXISTS platform_admins(
   principal TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
+
+-- ── v11: local authentication (authn only; authz stays workspace_members ──────
+-- `app_user.username` IS the `principal` string used by workspace_members and
+-- platform_admins, deliberately: a login must not introduce a second identity
+-- concept that has to be kept in step with the directory that already decides what
+-- a caller may do.
+--
+-- app_session stores the SHA-256 FINGERPRINT of the bearer token, never the token.
+-- A dump of this table — a backup, a support export, a read-only SQL grant — then
+-- yields nothing anyone can present as a live session. Same reasoning as a password
+-- hash, applied to the credential that is actually sent on every request.
+CREATE TABLE IF NOT EXISTS app_user(
+  username TEXT PRIMARY KEY,
+  password_hash TEXT NOT NULL,
+  display_name TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled')),
+  must_change_password INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  last_login_at INTEGER);
+
+CREATE TABLE IF NOT EXISTS app_session(
+  fingerprint TEXT PRIMARY KEY,
+  username TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_session_user ON app_session(username);
+CREATE INDEX IF NOT EXISTS ix_session_exp  ON app_session(expires_at);
 
 -- ── usage metering ledger (append-only, exactly-once via UNIQUE) ──────────────
 -- Billable dimension = accounts under management (account.active gauge, one row per

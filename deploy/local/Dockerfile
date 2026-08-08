@@ -37,7 +37,13 @@ COPY deploy/local/local_server.py ./local_server.py
 RUN useradd -r -u 10001 overwatch && mkdir -p /data && chown -R overwatch:overwatch /data /app
 USER overwatch
 EXPOSE 8080
-# local_server, NOT cnapp_server: the shipped factory is fail-closed (every route
-# 403) until a real IdP dependency is injected, which a laptop does not have.
-CMD ["uvicorn", "local_server:create_app", "--factory", \
+# The BUILT-IN local-authn provider: a real sign-in page backed by app_user /
+# app_session, not a permissive hook. Every request still needs a valid session and
+# an unauthenticated one resolves to an empty Principal, which is deny-all — so the
+# fail-closed posture of `create_app_from_env` is preserved, this just adds a way to
+# obtain a session.
+#
+# `local_server.py` (unauthenticated superadmin, no login) stays in the image for a
+# no-login smoke test, but it is deliberately NOT the default any more.
+CMD ["uvicorn", "cnapp_server:create_app_with_local_auth", "--factory", \
      "--host", "0.0.0.0", "--port", "8080"]

@@ -861,7 +861,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
 
 
 def create_hosted_app(service, *, static_dir: Optional[str] = None, current_role=lambda: "",
-                      current_principal=None):
+                      current_principal=None, configure_api=None):
     """Production single-deployable: the JSON API under ``/api`` and (if the React
     build exists) the SPA at ``/`` with a history-API fallback so client-side deep
     links resolve to index.html. The pure API stays reachable/testable via
@@ -873,16 +873,37 @@ def create_hosted_app(service, *, static_dir: Optional[str] = None, current_role
     from starlette.responses import FileResponse
 
     api = create_app(service, current_role=current_role, current_principal=current_principal)
+    # Optional hook to add routes to the API sub-app BEFORE it is mounted — used by
+    # the local-authn provider to put /api/auth/* alongside the rest of the API.
+    # A callback rather than a router argument so this file stays ignorant of what
+    # authentication scheme (if any) a deployment chose.
+    if configure_api is not None:
+        configure_api(api)
     root = FastAPI(title="OverWatch CNAPP", version="1.0.0")
     root.mount("/api", api)
 
     if static_dir and os.path.isdir(static_dir):
         index = os.path.join(static_dir, "index.html")
 
+        from starlette.exceptions import HTTPException as _StarletteHTTPException
+
         class _SPAStatics(StaticFiles):
-            # a missing asset that is a client-side route -> serve index.html
+            # A missing asset that is a client-side route -> serve index.html.
+            #
+            # BOTH paths are handled on purpose. Starlette's StaticFiles RAISES
+            # HTTPException(404) rather than returning a 404 response, so checking
+            # only the returned status meant the fallback never once fired: every
+            # deep link into the hosted console (/findings, /login, a shared URL
+            # from the deep-link feature) 404'd, and the bug was invisible because
+            # "/" is served directly and in-process tests exercise the API sub-app
+            # rather than this mount.
             async def get_response(self, path, scope):
-                resp = await super().get_response(path, scope)
+                try:
+                    resp = await super().get_response(path, scope)
+                except _StarletteHTTPException as exc:
+                    if exc.status_code == 404 and os.path.isfile(index):
+                        return FileResponse(index)
+                    raise
                 if resp.status_code == 404 and os.path.isfile(index):
                     return FileResponse(index)
                 return resp

@@ -1,4 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router'
+import Login from './routes/Login'
+import AuthGate from './components/AuthGate'
 import { ScopeProvider } from './state/scope'
 import { AppShell } from './components/AppShell'
 import { Overview } from './routes/Overview'
@@ -35,7 +37,8 @@ export default function App() {
       <ScopeProvider>
         <TourProvider>
           <Routes>
-            <Route element={<AppShell />}>
+            <Route path="/login" element={<Login />} />
+            <Route element={<AuthGate><AppShell /></AuthGate>}>
               <Route path="/" element={<Overview />} />
               <Route path="/attack-paths" element={<AttackPaths />} />
               <Route path="/findings" element={<Findings />} />

@@ -1,0 +1,249 @@
+"""
+Local authentication store — users and sessions over the existing Backend.
+
+`aws_authn` owns the cryptography and knows nothing about storage; this module owns
+the storage and knows nothing about HTTP. The HTTP layer (`cnapp_api`) turns a
+resolved username into a `Principal` using the directory that already exists —
+`workspace_members` and `platform_admins` — so logging in adds an identity check and
+changes NOTHING about what any identity is permitted to do.
+
+────────────────────────────────────────────────────────────────────────────────
+WHY LOGIN IS A PROVIDER, NOT A REPLACEMENT FOR THE IdP HOOK
+────────────────────────────────────────────────────────────────────────────────
+`cnapp_server.create_app_from_env` leaves `current_principal` unset and every route
+403s, with the instruction that a real deployment MUST inject a hook mapping the
+authenticated caller to a Principal. This module is one such hook — the built-in one,
+for a self-hosted install with no IdP in front of it. The contract is unchanged: an
+operator who fronts OverWatch with their own IdP injects theirs instead and never
+creates a local user.
+
+That is why local auth is not wired into `create_app_from_env` by default. The
+fail-closed posture holds; `create_app_with_local_auth` is an explicit opt-in.
+
+────────────────────────────────────────────────────────────────────────────────
+THE BOOTSTRAP PROBLEM, AND WHY THERE IS NO DEFAULT PASSWORD
+────────────────────────────────────────────────────────────────────────────────
+A fresh database has no users, and a console nobody can log into is useless. The two
+common answers are both wrong:
+
+  * A well-known default (`admin`/`admin`) is a published credential on every
+    install that forgets to change it, which is most of them.
+  * Auto-generating one and printing it to stdout puts a live credential in
+    container logs, which are aggregated, shipped and retained.
+
+So the first administrator comes from `OVERWATCH_BOOTSTRAP_USER` /
+`OVERWATCH_BOOTSTRAP_PASSWORD`, applied ONCE against an empty user table and
+ignored entirely thereafter. The operator chooses the secret, it never appears in a
+log line, and re-running with the variables still set cannot silently reset a
+password that has since been changed.
+"""
+from __future__ import annotations
+
+import os
+import time
+from typing import Any, Dict, List, Optional
+
+import aws_authn
+
+#: How long a session survives without being re-issued. Twelve hours is a working
+#: day: long enough not to interrupt an investigation, short enough that a forgotten
+#: browser on a shared machine is not a standing grant.
+SESSION_TTL_SECONDS = 12 * 3600
+
+#: Sessions are extended on use, but never past this from first issue, so a
+#: continuously-active session still forces a fresh authentication eventually.
+SESSION_ABSOLUTE_MAX_SECONDS = 7 * 24 * 3600
+
+
+class AuthError(Exception):
+    """Authentication failed. Deliberately carries no detail about WHY."""
+
+
+class UserStore:
+    """Users and sessions. All timestamps are integer epoch seconds, matching every
+    other table in this schema."""
+
+    def __init__(self, backend, *, now=None):
+        self._be = backend
+        self._now = now or (lambda: int(time.time()))
+
+    # ── users ────────────────────────────────────────────────────────────────
+    def create_user(self, username: str, password: str, *, display_name: str = "",
+                    must_change_password: bool = False) -> Dict[str, Any]:
+        username = (username or "").strip().lower()
+        if not username:
+            raise ValueError("username is required")
+        aws_authn.check_password_policy(password)
+        now = self._now()
+        self._be.upsert(
+            "app_user",
+            ["username", "password_hash", "display_name", "status",
+             "must_change_password", "created_at", "updated_at", "last_login_at"],
+            ["username"],
+            ["password_hash", "display_name", "must_change_password", "updated_at"],
+            (username, aws_authn.hash_password(password), display_name or username,
+             "active", 1 if must_change_password else 0, now, now, None))
+        return self.get_user(username)
+
+    def get_user(self, username: str) -> Optional[Dict[str, Any]]:
+        row = self._be.query_one(
+            "SELECT username, password_hash, display_name, status, "
+            "must_change_password, created_at, updated_at, last_login_at "
+            "FROM app_user WHERE username=?", ((username or "").strip().lower(),))
+        return dict(row) if row else None
+
+    def list_users(self) -> List[Dict[str, Any]]:
+        return [{k: v for k, v in dict(r).items() if k != "password_hash"}
+                for r in self._be.query_all(
+                    "SELECT username, display_name, status, must_change_password, "
+                    "created_at, updated_at, last_login_at FROM app_user "
+                    "ORDER BY username")]
+
+    def user_count(self) -> int:
+        row = self._be.query_one("SELECT COUNT(*) AS n FROM app_user")
+        return int(dict(row)["n"]) if row else 0
+
+    def set_password(self, username: str, password: str, *,
+                     revoke_sessions: bool = True) -> None:
+        """Change a password and, by default, kill every existing session for it.
+
+        REVOKING THE OTHER SESSIONS IS THE POINT. A password is usually changed
+        because it may be known to someone else; leaving that someone else's session
+        alive makes the change theatre. The caller's own browser re-authenticates,
+        which is a small cost for the guarantee.
+        """
+        aws_authn.check_password_policy(password)
+        self._be.execute(
+            "UPDATE app_user SET password_hash=?, must_change_password=0, updated_at=? "
+            "WHERE username=?",
+            (aws_authn.hash_password(password), self._now(),
+             (username or "").strip().lower()))
+        if revoke_sessions:
+            self.close_all_sessions(username)
+
+    def set_status(self, username: str, status: str) -> None:
+        if status not in ("active", "disabled"):
+            raise ValueError(f"invalid status {status!r}")
+        self._be.execute("UPDATE app_user SET status=?, updated_at=? WHERE username=?",
+                         (status, self._now(), (username or "").strip().lower()))
+        if status == "disabled":
+            # Disabling an account that keeps a live session disables nothing.
+            self.close_all_sessions(username)
+
+    # ── authentication ───────────────────────────────────────────────────────
+    def authenticate(self, username: str, password: str) -> str:
+        """Verify a credential and open a session. Returns the bearer token.
+
+        Every failure raises the SAME `AuthError` with the same message. A distinct
+        "no such user" reply is a username oracle: it turns a login form into a
+        directory an attacker can enumerate before they start guessing passwords.
+        """
+        user = self.get_user(username)
+        if user is None or user.get("status") != "active":
+            # Still burn the work factor. Returning early on an unknown user makes
+            # "does this account exist" measurable on a stopwatch even when the
+            # RESPONSE is identical.
+            aws_authn.verify_password(password or "", aws_authn.hash_password("x" * 16))
+            raise AuthError("invalid username or password")
+        if not aws_authn.verify_password(password or "", user["password_hash"]):
+            raise AuthError("invalid username or password")
+
+        now = self._now()
+        if aws_authn.needs_rehash(user["password_hash"]):
+            # Free upgrade on a correct password: raising PBKDF2_ITERATIONS later
+            # would otherwise only ever protect accounts created after the change.
+            self._be.execute(
+                "UPDATE app_user SET password_hash=?, updated_at=? WHERE username=?",
+                (aws_authn.hash_password(password), now, user["username"]))
+        self._be.execute("UPDATE app_user SET last_login_at=? WHERE username=?",
+                         (now, user["username"]))
+        return self.open_session(user["username"])
+
+    # ── sessions ─────────────────────────────────────────────────────────────
+    def open_session(self, username: str, *, ttl: int = SESSION_TTL_SECONDS) -> str:
+        token = aws_authn.new_session_token()
+        now = self._now()
+        self._be.upsert(
+            "app_session",
+            ["fingerprint", "username", "created_at", "expires_at", "last_seen_at"],
+            ["fingerprint"], ["expires_at", "last_seen_at"],
+            (aws_authn.token_fingerprint(token), (username or "").strip().lower(),
+             now, now + int(ttl), now))
+        return token
+
+    def resolve_session(self, token: str) -> Optional[str]:
+        """Username for a live session token, or None. Extends the sliding window.
+
+        The lookup is BY FINGERPRINT, so the presented token is never compared
+        against stored material in the database — there is no stored material to
+        compare it against.
+        """
+        if not token:
+            return None
+        now = self._now()
+        row = self._be.query_one(
+            "SELECT s.username AS username, s.expires_at AS expires_at, "
+            "s.created_at AS created_at, u.status AS status "
+            "FROM app_session s JOIN app_user u ON u.username = s.username "
+            "WHERE s.fingerprint=?", (aws_authn.token_fingerprint(token),))
+        if row is None:
+            return None
+        rec = dict(row)
+        if rec.get("status") != "active":
+            return None                       # disabled mid-session ⇒ dead immediately
+        if int(rec["expires_at"]) <= now:
+            return None
+        if now - int(rec["created_at"]) > SESSION_ABSOLUTE_MAX_SECONDS:
+            return None                       # sliding window cannot outrun this
+        self._be.execute(
+            "UPDATE app_session SET last_seen_at=?, expires_at=? WHERE fingerprint=?",
+            (now, now + SESSION_TTL_SECONDS, aws_authn.token_fingerprint(token)))
+        return rec["username"]
+
+    def close_session(self, token: str) -> None:
+        self._be.execute("DELETE FROM app_session WHERE fingerprint=?",
+                         (aws_authn.token_fingerprint(token or ""),))
+
+    def close_all_sessions(self, username: str) -> None:
+        self._be.execute("DELETE FROM app_session WHERE username=?",
+                         ((username or "").strip().lower(),))
+
+    def purge_expired(self) -> int:
+        """Housekeeping. Expired rows are already refused by `resolve_session`, so
+        this is hygiene rather than a security control."""
+        now = self._now()
+        self._be.execute("DELETE FROM app_session WHERE expires_at <= ?", (now,))
+        return 0
+
+
+def bootstrap_admin(store: UserStore, workspaces=None, *,
+                    env: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Create the first administrator from the environment, ONCE, on an empty table.
+
+    Returns the username created, or None when it did not apply — which is the normal
+    case on every start after the first. Never logs the password. See the module
+    docstring for why there is no default credential and nothing is printed.
+    """
+    env = env if env is not None else os.environ
+    username = (env.get("OVERWATCH_BOOTSTRAP_USER") or "").strip().lower()
+    password = env.get("OVERWATCH_BOOTSTRAP_PASSWORD") or ""
+    if not username or not password:
+        return None
+    if store.user_count() > 0:
+        # Deliberately NOT an upsert. If this ran on a populated table, leaving the
+        # variables set in a manifest would silently reset the admin password on
+        # every restart — and would hand it back to anyone who had once seen them.
+        return None
+    try:
+        aws_authn.check_password_policy(password)
+    except aws_authn.WeakPassword:
+        return None
+    store.create_user(username, password, display_name=username)
+    if workspaces is not None:
+        # The first user is a platform admin: superadmin acts as admin in every
+        # workspace, so a single-tenant install needs no membership rows at all.
+        try:
+            workspaces.add_platform_admin(username, now_epoch=int(time.time()))
+        except Exception:
+            pass                              # a directory hiccup must not block login
+    return username

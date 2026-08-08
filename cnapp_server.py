@@ -135,7 +135,7 @@ def build_service():
     # reentrant lock serializes every access (mirrors AccountRegistry.open).
     be = cnapp_backend.backend_for(db_url, check_same_thread=False)   # connect + migrate + seed
     reg = cnapp_registry.AccountRegistry(be)
-    return cnapp_service.PlatformService(
+    svc = cnapp_service.PlatformService(
         registry=reg,
         results=cnapp_service.InMemoryResultStore(),       # in-memory; a re-scan repopulates
         hub_role_arn=os.environ.get("CNAPP_HUB_ROLE_ARN", ""),
@@ -151,6 +151,12 @@ def build_service():
         policies=_load_policies(),
         registry_connectors=_load_registry_connectors(),
     )
+    # The one Backend this service was built on. Exposed so an auth provider (or any
+    # other add-on store) shares this connection/pool instead of opening a second one
+    # against the same database — two pools would double the connection count and,
+    # on sqlite, contend for the same file lock.
+    svc.backend = be
+    return svc
 
 
 def create_app_from_env(*, service=None, current_principal=None):
@@ -163,6 +169,47 @@ def create_app_from_env(*, service=None, current_principal=None):
         os.path.dirname(os.path.abspath(__file__)), "frontend", "dist"))
     return cnapp_api.create_hosted_app(svc, static_dir=static_dir,
                                        current_principal=current_principal)
+
+
+def create_app_with_local_auth(*, service=None):
+    """The hosted app with the BUILT-IN local authentication provider wired in.
+
+    `create_app_from_env` above stays fail-closed and unchanged. This is a second,
+    explicit entrypoint for a self-hosted install with no IdP in front of it:
+
+        uvicorn cnapp_server:create_app_with_local_auth --factory
+
+    It is not a "permissive hook" in the sense the module docstring warns about —
+    every request must present a valid session cookie, and an unauthenticated one
+    still resolves to an empty Principal, which is deny-all. What it adds is a way
+    to OBTAIN that session. An operator who authenticates at their own edge keeps
+    using `create_app_from_env` and injects their IdP dependency instead.
+
+    The first administrator comes from OVERWATCH_BOOTSTRAP_USER /
+    OVERWATCH_BOOTSTRAP_PASSWORD, applied once against an empty user table. There is
+    no default credential and nothing is printed — see cnapp_authn.bootstrap_admin.
+    """
+    import cnapp_api
+    import cnapp_authn
+    import cnapp_authn_api
+    import cnapp_workspace
+
+    svc = service if service is not None else build_service()
+    backend = getattr(svc, "backend", None)
+    if backend is None:                       # a caller-supplied service (tests)
+        raise RuntimeError("service was built without an exposed backend; "
+                           "pass one built by build_service()")
+    store = cnapp_authn.UserStore(backend)
+    workspaces = svc.workspaces if getattr(svc, "workspaces", None) is not None         else cnapp_workspace.WorkspaceStore(backend)
+    cnapp_authn.bootstrap_admin(store, workspaces)
+
+    static_dir = os.environ.get("CNAPP_STATIC_DIR", os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "frontend", "dist"))
+    return cnapp_api.create_hosted_app(
+        svc, static_dir=static_dir,
+        current_principal=cnapp_authn_api.session_principal_dependency(store, workspaces),
+        configure_api=lambda api: cnapp_authn_api.add_auth_routes(api, store, workspaces),
+    )
 
 
 if __name__ == "__main__":                                 # pragma: no cover - manual run
