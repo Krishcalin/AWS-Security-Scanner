@@ -136,10 +136,28 @@ def _host_ok(host):
             or host in ("", "...") or host.startswith(("127.", "localhost")))
 
 
+#: XML namespace URIs are IDENTIFIERS, not endpoints — nothing dereferences them, and
+#: an SVG without its namespace does not render. Matched on the FULL URI rather than
+#: the host, so `www.w3.org` remains forbidden as an egress target while
+#: `http://www.w3.org/2000/svg` is understood for what it is.
+#:
+#: The distinction has to live here rather than in _ALLOWED_HOSTS: putting w3.org
+#: there would assert "we may connect to this", which is exactly the claim this test
+#: exists to prevent anyone making by accident.
+_XML_NAMESPACES = (
+    "http://www.w3.org/2000/svg",            # aws_qr.to_svg
+    "http://www.w3.org/1999/xhtml",
+    "http://www.w3.org/XML/1998/namespace",
+)
+
+
 def test_no_hardcoded_foreign_egress_host():
     found = {}
     for f in _app_modules():
-        for m in re.finditer(r"https?://([A-Za-z0-9._\-]+)", _src(f)):
+        src = _src(f)
+        for m in re.finditer(r"https?://([A-Za-z0-9._\-]+)[^\s\"'<>)]*", src):
+            if m.group(0).rstrip("\"'") in _XML_NAMESPACES:
+                continue
             found.setdefault(m.group(1), os.path.basename(f))
     foreign = {h: v for h, v in found.items() if not _host_ok(h)}
     assert foreign == {}, (f"hardcoded non-AWS/non-connector host(s): {foreign} — if this is a "

@@ -121,20 +121,14 @@ def verify(secret: str, code: str, *, when: Optional[float] = None,
 def provisioning_uri(secret: str, account: str, *, issuer: str = "OverWatch") -> str:
     """The `otpauth://` URI an authenticator app consumes.
 
-    NO QR IMAGE IS GENERATED, and that is a considered choice rather than an
-    oversight. Encoding a QR correctly means Reed-Solomon over GF(256), mask
-    selection and format-information bits; a subtly wrong encoder produces a symbol
-    that scans as nonsense, and it cannot be verified here because there is no
-    decoder in the wheelhouse to check it against. Shipping an unverifiable image
-    that users must trust for enrolment is worse than showing them the two things
-    that always work:
+    `aws_qr.to_svg` renders this as a scannable QR. Two fallbacks are offered
+    alongside it and are not redundant: this URI is a LINK, so tapping it on a phone
+    opens the authenticator directly with nothing to scan, and the secret itself
+    works through "enter a setup key" when a camera is unavailable or the screen is
+    being shared.
 
-      * this URI, which is a link — tapping it on a phone opens the authenticator
-        directly, no scanning involved;
-      * the secret itself, which every app accepts through "enter a setup key".
-
-    And because enrolment is not active until the user has typed back a working
-    code, a failed transcription can never lock anyone out — it just does not enrol.
+    Because enrolment is not active until the user has typed back a working code, a
+    failed scan or transcription can never lock anyone out — it just does not enrol.
     """
     label = quote(f"{issuer}:{account}", safe="")
     return (f"otpauth://totp/{label}?secret={secret}"

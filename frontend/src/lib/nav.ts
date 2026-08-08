@@ -2,7 +2,7 @@ import {
   LayoutDashboard, Waypoints, CircleAlert, ShieldAlert, Boxes, KeyRound,
   ShieldCheck, Wrench, FileText, Cloud, Settings2, PackageCheck,
   Globe, Database, Container, BrainCircuit, UserRoundMinus, FolderKanban, Terminal, Radar,
-  Server,
+  Server, ShieldUser,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -35,6 +35,10 @@ export const NAV_MAIN: NavItem[] = [
 export const NAV_ADMIN: NavItem[] = [
   { to: '/accounts', label: 'Cloud Accounts', icon: Cloud },
   { to: '/settings', label: 'Settings', icon: Settings2 },
+  // Your own account's second factor. A route with no nav entry is a route nobody
+  // finds: /security shipped reachable only by typing the URL, so two-factor could
+  // never be enrolled — which made it look like the whole feature was unwired.
+  { to: '/security', label: 'My Security', icon: ShieldUser },
 ]
 
 // Risk Dashboards — named roll-ups over the finding catalog (see lib/dashboards.ts).

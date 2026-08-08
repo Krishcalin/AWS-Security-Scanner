@@ -92,7 +92,15 @@ export async function changePassword(
 
 // ── second-factor enrolment (all require a session) ─────────────────────────
 export interface TotpStatus { enabled: boolean; recovery_codes_left: number }
-export interface TotpEnrolment { secret: string; formatted_secret: string; uri: string }
+export interface TotpEnrolment {
+  secret: string
+  formatted_secret: string
+  uri: string
+  /** Server-rendered SVG. Safe to inline: the encoder emits only <rect> elements
+   *  at numeric coordinates, so no part of the URI (which contains the username)
+   *  ever reaches the markup. */
+  qr_svg: string
+}
 
 export async function totpStatus(): Promise<TotpStatus> {
   const r = await fetch(`${API_BASE}/auth/totp/status`)

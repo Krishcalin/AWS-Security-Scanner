@@ -133,3 +133,6 @@ body {
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.92rem; }
 .sec-btn-danger { background:var(--crit); }
 .sec-btn-danger:hover:not(:disabled) { background:var(--crit); filter:brightness(.92); }
+.sec-qr { margin:0 0 1rem; display:flex; justify-content:center;
+  background:#fff; border:1px solid var(--line); border-radius:8px; padding:.75rem; }
+.sec-qr svg { max-width:14rem; height:auto; }

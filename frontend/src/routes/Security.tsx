@@ -8,13 +8,10 @@ import {
  * Your account's second factor: enrol, see how many recovery codes are left, or
  * turn it off.
  *
- * WHY THERE IS NO QR IMAGE. Encoding a QR correctly means Reed-Solomon over
- * GF(256), mask selection and format bits, and there is no decoder in this project
- * to verify the result against — a subtly wrong encoder produces a symbol that
- * scans as nonsense, and the user experiences that as "enrolment is broken". So the
- * two things that always work are offered instead: the `otpauth://` link, which
- * opens the authenticator directly when this page is viewed on a phone, and the
- * setup key, which every app accepts through "enter a key manually".
+ * THREE WAYS IN, because one is never enough in practice. Scan the QR with a phone
+ * camera; tap the `otpauth://` link if you are reading this ON the phone (nothing to
+ * scan); or type the setup key if the camera is unavailable or the screen is being
+ * shared. All three carry the same secret.
  *
  * Because enrolment is not active until a generated code has been typed back, a bad
  * transcription cannot lock anyone out — it simply fails to enrol.
@@ -112,12 +109,19 @@ export default function Security() {
         <section className="sec-card">
           <h2 className="sec-h2">Add it to your authenticator</h2>
           <p className="sec-p">
-            Works with Microsoft Authenticator, Google Authenticator, Authy, 1Password
-            — anything that speaks the standard. Either tap the link (on a phone) or
-            add the key by hand.
+            Scan this with Microsoft Authenticator, Google Authenticator, Authy,
+            1Password — anything that speaks the standard.
           </p>
-          <p className="sec-p"><a className="sec-link" href={enrol.uri}>Open in authenticator app</a></p>
-          <p className="sec-p">Setup key:</p>
+          {enrol.qr_svg && (
+            <div className="sec-qr"
+                 /* Safe: the encoder emits only <rect> at numeric coordinates, so
+                    nothing from the URI reaches the markup. */
+                 dangerouslySetInnerHTML={{ __html: enrol.qr_svg }} />
+          )}
+          <p className="sec-p">
+            On a phone already? <a className="sec-link" href={enrol.uri}>Open in your authenticator app</a>
+          </p>
+          <p className="sec-p">Or enter this setup key by hand:</p>
           <p className="sec-secret"><code>{enrol.formatted_secret}</code></p>
           <form className="sec-form" onSubmit={confirm}>
             <p className="sec-p">

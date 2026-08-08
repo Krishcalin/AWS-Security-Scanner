@@ -8,6 +8,7 @@ import { SCENARIOS } from './scenarios'
 const ROUTES = new Set([
   '/', '/attack-paths', '/findings', '/vulnerabilities', '/inventory', '/identity',
   '/compliance', '/remediation', '/reports', '/accounts', '/settings',
+  '/security',
 ])
 
 export function validateScenarios(): string[] {

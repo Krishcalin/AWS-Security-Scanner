@@ -44,6 +44,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 import aws_authn
+import aws_qr
 import aws_totp
 
 #: How long a session survives without being re-issued. Twelve hours is a working
@@ -207,9 +208,18 @@ class UserStore:
              "created_at", "updated_at"],
             ["username"], ["secret", "enabled", "last_counter", "updated_at"],
             (username, secret, 0, -1, None, now, now))
+        uri = aws_totp.provisioning_uri(secret, username)
+        # The QR carries no attacker-controlled text: `to_svg` emits only <rect>
+        # elements at numeric coordinates, so the URI (which contains the username)
+        # never reaches the markup. That is what makes it safe for the console to
+        # inline.
+        try:
+            qr = aws_qr.to_svg(uri)
+        except Exception:
+            qr = ""                       # a QR failure must not block enrolment
         return {"secret": secret,
                 "formatted_secret": aws_totp.format_secret(secret),
-                "uri": aws_totp.provisioning_uri(secret, username)}
+                "uri": uri, "qr_svg": qr}
 
     def confirm_totp_enrolment(self, username, code):
         """Verify a code from the pending secret, switch the factor on, and return
