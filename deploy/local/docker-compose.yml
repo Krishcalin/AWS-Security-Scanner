@@ -1,0 +1,58 @@
+# OverWatch — local two-container stack (app + Postgres) for Docker Desktop.
+#
+#     docker compose -f deploy/local/docker-compose.yml up --build
+#     open http://127.0.0.1:8080
+#
+# DEVELOPMENT ONLY. The app container runs `deploy/local/local_server.py`, which
+# authenticates every request as an unauthenticated superadmin. Both published
+# ports are therefore bound to 127.0.0.1 EXPLICITLY rather than the compose default
+# of 0.0.0.0 — the default would put an admin console with no login on every
+# interface the laptop is attached to, including hotel and conference wifi.
+
+name: overwatch-local
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: overwatch-db
+    environment:
+      POSTGRES_USER: overwatch
+      POSTGRES_PASSWORD: overwatch-local-only
+      POSTGRES_DB: overwatch
+    ports:
+      - "127.0.0.1:5432:5432"          # host-only; see header
+    volumes:
+      - overwatch-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # The app runs migrations on connect, so it must not start until Postgres is
+      # actually accepting queries. `depends_on: service_started` is not enough —
+      # the container is up long before the server is ready, and the app would take
+      # the StateBackendUnavailable path and exit.
+      test: ["CMD-SHELL", "pg_isready -U overwatch -d overwatch"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  app:
+    build:
+      context: ../..                    # repo root: the image copies *.py, compliance/, frontend/dist/
+      dockerfile: deploy/local/Dockerfile
+    container_name: overwatch-app
+    environment:
+      # postgresql:// selects PostgresBackend in aws_state_dialect.parse_state_url;
+      # cnapp_backend.backend_for then connects, migrates to SCHEMA_VERSION and seeds
+      # the ws-default workspace.
+      CNAPP_DB_URL: postgresql://overwatch:overwatch-local-only@db:5432/overwatch
+      CNAPP_STATIC_DIR: /app/frontend/dist
+      OVERWATCH_LOCAL_DEV: "1"          # the local launcher refuses to start without this
+    ports:
+      - "127.0.0.1:8080:8080"           # host-only; see header
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  overwatch-pgdata:
