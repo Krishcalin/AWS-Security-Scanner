@@ -44,7 +44,12 @@ export function Sidebar() {
         <div className="mt-4 mb-1 px-3 text-[10px] font-semibold uppercase tracking-wider text-ink3">Risk Dashboards</div>
         {NAV_DASHBOARDS.map((i) => <Row key={i.to} item={i} />)}
         <div className="mt-4 mb-1 px-3 text-[10px] font-semibold uppercase tracking-wider text-ink3">Manage</div>
-        {NAV_ADMIN.map((i) => <Row key={i.to} item={i} />)}
+        {/* "My Security" is a SESSION screen: in sample mode there is no session, so
+            it would offer 2FA enrolment for a user who does not exist — and it does
+            call /api/auth/*, which an offline demo must never do. Filtered here
+            rather than inside the route so the dead entry is not even shown. */}
+        {NAV_ADMIN.filter((i) => DATA_MODE === 'live' || i.to !== '/security')
+                  .map((i) => <Row key={i.to} item={i} />)}
       </nav>
 
       <div className="p-3 border-t border-line flex items-center justify-between text-[11px] text-ink3 font-mono">

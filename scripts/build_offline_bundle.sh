@@ -19,9 +19,19 @@ rm -rf wheelhouse && mkdir -p wheelhouse
 pip download -r requirements.txt -d wheelhouse \
     --platform "${ARCH}" --python-version "${PYV}" --only-binary=:all:
 
-echo ">> [2/5] ensuring the React SPA is built (needs npm; connected host only)"
-if [ -d frontend ] && [ ! -f frontend/dist/index.html ]; then
-    ( cd frontend && npm ci && npm run build )
+echo ">> [2/5] building the React SPA in LIVE mode (needs npm; connected host only)"
+# VITE_DATA_SOURCE IS NOT OPTIONAL HERE. frontend/src/api/client.ts defaults to
+# 'sample', which reads static fixtures and never calls the API — so a bundle built
+# without this ships a console that shows three demo accounts, never asks who you
+# are, and does not contain the sign-in, user menu or logout code AT ALL. The hub
+# image serves a real backend; it must be built live.
+#
+# And it is rebuilt UNCONDITIONALLY. This used to skip when frontend/dist/index.html
+# already existed, which made the mode of the shipped image depend on whatever the
+# build host happened to have lying around: the same commit produced an
+# authenticated product on one machine and an auth-less demo on another.
+if [ -d frontend ]; then
+    ( cd frontend && npm ci && VITE_DATA_SOURCE=live npm run build )
 fi
 [ -f frontend/dist/index.html ] || { echo "!! frontend/dist missing and could not be built"; exit 1; }
 

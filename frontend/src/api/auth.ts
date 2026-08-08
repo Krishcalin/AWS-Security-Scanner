@@ -68,8 +68,29 @@ export async function login(
   return (await r.json()) as Me
 }
 
+/** Ends the session SERVER-SIDE (the cookie clear is a consequence, not the point).
+ *
+ *  THROWS ON A NON-2xx, not just on a transport failure. This was fire-and-forget,
+ *  which made a 500 from `close_session` — the store is a database, and a database
+ *  can be down — indistinguishable from a clean sign-out. The session then survives
+ *  its full window while the user is looking at a login form, and a caller that
+ *  cannot tell the two apart cannot tell the user the truth about what happened.
+ *
+ *  IT ALWAYS SETTLES. `fetch` has no default timeout, and a backend that accepts the
+ *  connection and then stalls (one held lock in the session store is enough) neither
+ *  resolves nor rejects. A caller that awaits this before leaving would then sit on
+ *  "Signing out…" forever — stranded on the console it was told to leave. The bound
+ *  lives here rather than in the caller so the guarantee holds for every caller.
+ *
+ *  keepalive, so the request survives the unload that follows a sign-out. A normal
+ *  fetch is cancelled when the document goes away, which on a merely SLOW backend
+ *  would abort the very request that kills the session — the worst outcome available,
+ *  because it is indistinguishable from success. */
 export async function logout(): Promise<void> {
-  await fetch(`${API_BASE}/auth/logout`, { method: 'POST' })
+  const r = await fetch(`${API_BASE}/auth/logout`, {
+    method: 'POST', keepalive: true, signal: AbortSignal.timeout(5000),
+  })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
 }
 
 /** Change a password with CREDENTIALS rather than a session, so the form can live

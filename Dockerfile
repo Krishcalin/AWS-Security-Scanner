@@ -30,6 +30,11 @@ COPY --from=deps /usr/local/bin /usr/local/bin
 # build context via .dockerignore even though it is git-ignored)
 COPY *.py ./
 COPY compliance/ ./compliance/
+# The prebuilt SPA. It MUST have been built with VITE_DATA_SOURCE=live:
+# frontend/src/api/client.ts defaults to 'sample', and a sample bundle has the
+# sign-in, user-menu and logout code tree-shaken out entirely — the image would
+# serve static fixtures and never ask who anyone is.
+# scripts/build_offline_bundle.sh does this for you.
 COPY frontend/dist/ ./frontend/dist/
 # non-root user + a writable /data for the sqlite file and the mounted vuln bundle
 RUN useradd -r -u 10001 overwatch && mkdir -p /data && chown -R overwatch:overwatch /data /app

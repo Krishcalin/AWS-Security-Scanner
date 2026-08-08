@@ -30,6 +30,11 @@ COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.
 COPY --from=deps /usr/local/bin /usr/local/bin
 COPY *.py ./
 COPY compliance/ ./compliance/
+# The PREBUILT SPA. It must have been built with VITE_DATA_SOURCE=live, or the
+# console silently runs on static fixtures: no sign-in, no user menu, no logout —
+# client.ts defaults to 'sample'. scripts/build_offline_bundle.sh does this; if you
+# build the SPA by hand, so must you:
+#     cd frontend && VITE_DATA_SOURCE=live npm run build
 COPY frontend/dist/ ./frontend/dist/
 COPY deploy/local/local_server.py ./local_server.py
 # Non-root, matching the production image. /data is unused on the Postgres path but
