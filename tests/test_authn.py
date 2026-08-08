@@ -223,11 +223,23 @@ def test_a_bad_login_says_nothing_useful():
         assert r.json()["detail"] == "invalid username or password"
 
 
-def test_changing_your_password_requires_the_current_one():
-    """A live session is not sufficient. An unattended browser would otherwise be
-    enough to lock the real owner out permanently."""
+def test_changing_a_password_requires_the_current_one():
+    """The route is CREDENTIAL-based, not session-based, so the form can live on the
+    sign-in screen — the usual reason to change a password is that you were handed a
+    temporary one and cannot get in with it yet. The check is unchanged: a live
+    session was never what protected this, since an unattended browser would have
+    been enough to lock the real owner out permanently."""
     c = _client()
-    c.post("/api/auth/login", json={"username": "admin", "password": GOOD})
     assert c.post("/api/auth/password",
-                  json={"current_password": "not-it",
-                        "new_password": "a-new-long-password"}).status_code == 403
+                  json={"username": "admin", "current_password": "not-it",
+                        "new_password": "a-new-long-password"}).status_code == 401
+
+
+def test_changing_a_password_works_without_a_session():
+    c = _client()
+    assert c.post("/api/auth/password",
+                  json={"username": "admin", "current_password": GOOD,
+                        "new_password": "a-new-long-password"}).status_code == 200
+    assert c.post("/api/auth/login",
+                  json={"username": "admin",
+                        "password": "a-new-long-password"}).status_code == 200

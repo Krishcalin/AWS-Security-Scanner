@@ -44,6 +44,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 import aws_authn
+import aws_totp
 
 #: How long a session survives without being re-issued. Twelve hours is a working
 #: day: long enough not to interrupt an investigation, short enough that a forgotten
@@ -57,6 +58,15 @@ SESSION_ABSOLUTE_MAX_SECONDS = 7 * 24 * 3600
 
 class AuthError(Exception):
     """Authentication failed. Deliberately carries no detail about WHY."""
+
+
+class SecondFactorRequired(Exception):
+    """The password was correct and a TOTP code is still needed.
+
+    A DISTINCT exception because this one IS safe to disclose: by the time it is
+    raised the password has already been proven, so it tells nothing to anyone who
+    could not already log in. `AuthError` stays undifferentiated.
+    """
 
 
 class UserStore:
@@ -131,7 +141,8 @@ class UserStore:
             self.close_all_sessions(username)
 
     # ── authentication ───────────────────────────────────────────────────────
-    def authenticate(self, username: str, password: str) -> str:
+    def authenticate(self, username: str, password: str, *,
+                     totp_code: str = "") -> str:
         """Verify a credential and open a session. Returns the bearer token.
 
         Every failure raises the SAME `AuthError` with the same message. A distinct
@@ -148,6 +159,15 @@ class UserStore:
         if not aws_authn.verify_password(password or "", user["password_hash"]):
             raise AuthError("invalid username or password")
 
+        # Password proven. If a second factor is enrolled it must be satisfied
+        # BEFORE any session exists -- an early session would be a complete
+        # login that merely looks unfinished to the UI.
+        if self.totp_enabled(user["username"]):
+            if not totp_code:
+                raise SecondFactorRequired(user["username"])
+            if not self.verify_totp(user["username"], totp_code):
+                raise AuthError("invalid username or password")
+
         now = self._now()
         if aws_authn.needs_rehash(user["password_hash"]):
             # Free upgrade on a correct password: raising PBKDF2_ITERATIONS later
@@ -158,6 +178,107 @@ class UserStore:
         self._be.execute("UPDATE app_user SET last_login_at=? WHERE username=?",
                          (now, user["username"]))
         return self.open_session(user["username"])
+
+    # -- second factor (TOTP) ------------------------------------------------
+    def totp_state(self, username):
+        row = self._be.query_one(
+            "SELECT username, secret, enabled, last_counter, enrolled_at "
+            "FROM app_totp WHERE username=?", ((username or "").strip().lower(),))
+        return dict(row) if row else None
+
+    def totp_enabled(self, username) -> bool:
+        st = self.totp_state(username)
+        return bool(st and st.get("enabled"))
+
+    def begin_totp_enrolment(self, username):
+        """Mint a secret and return it with its provisioning URI. NOT yet active.
+
+        Enrolment is two-step on purpose: this hands out a secret, and `confirm`
+        only switches the factor on once the user has typed back a code it
+        generates. A one-step enable locks out anyone whose transcription was wrong
+        or whose phone clock is skewed -- and the person most likely to be hit is the
+        first administrator, who has nobody to ask for a reset.
+        """
+        username = (username or "").strip().lower()
+        secret, now = aws_totp.new_secret(), self._now()
+        self._be.upsert(
+            "app_totp",
+            ["username", "secret", "enabled", "last_counter", "enrolled_at",
+             "created_at", "updated_at"],
+            ["username"], ["secret", "enabled", "last_counter", "updated_at"],
+            (username, secret, 0, -1, None, now, now))
+        return {"secret": secret,
+                "formatted_secret": aws_totp.format_secret(secret),
+                "uri": aws_totp.provisioning_uri(secret, username)}
+
+    def confirm_totp_enrolment(self, username, code):
+        """Verify a code from the pending secret, switch the factor on, and return
+        freshly-minted recovery codes. They are shown ONCE -- only fingerprints are
+        stored, so they can never be re-displayed, only replaced."""
+        st = self.totp_state(username)
+        if st is None:
+            raise AuthError("no enrolment in progress")
+        counter = aws_totp.verify(st["secret"], code,
+                                  after_counter=int(st.get("last_counter", -1)))
+        if counter is None:
+            raise AuthError("that code is not valid")
+        now = self._now()
+        self._be.execute(
+            "UPDATE app_totp SET enabled=1, last_counter=?, enrolled_at=?, updated_at=? "
+            "WHERE username=?", (counter, now, now, (username or "").strip().lower()))
+        return self.reset_recovery_codes(username)
+
+    def verify_totp(self, username, code) -> bool:
+        """Check a code AND consume its counter, so it cannot be replayed. Falls
+        back to a recovery code. Both paths are single-use -- that is exactly what
+        `last_counter` and `used_at` are for."""
+        st = self.totp_state(username)
+        if not st or not st.get("enabled"):
+            return False
+        counter = aws_totp.verify(st["secret"], code,
+                                  after_counter=int(st.get("last_counter", -1)))
+        if counter is not None:
+            self._be.execute(
+                "UPDATE app_totp SET last_counter=?, updated_at=? WHERE username=?",
+                (counter, self._now(), st["username"]))
+            return True
+        return self._consume_recovery_code(username, code)
+
+    def disable_totp(self, username) -> None:
+        username = (username or "").strip().lower()
+        self._be.execute("DELETE FROM app_totp WHERE username=?", (username,))
+        self._be.execute("DELETE FROM app_recovery_code WHERE username=?", (username,))
+
+    # -- recovery codes ------------------------------------------------------
+    def reset_recovery_codes(self, username):
+        username = (username or "").strip().lower()
+        self._be.execute("DELETE FROM app_recovery_code WHERE username=?", (username,))
+        codes, now = aws_totp.new_recovery_codes(), self._now()
+        for code in codes:
+            self._be.upsert(
+                "app_recovery_code",
+                ["fingerprint", "username", "used_at", "created_at"],
+                ["fingerprint"], [],
+                (aws_totp.recovery_fingerprint(code), username, None, now))
+        return codes
+
+    def unused_recovery_code_count(self, username) -> int:
+        row = self._be.query_one(
+            "SELECT COUNT(*) AS n FROM app_recovery_code "
+            "WHERE username=? AND used_at IS NULL",
+            ((username or "").strip().lower(),))
+        return int(dict(row)["n"]) if row else 0
+
+    def _consume_recovery_code(self, username, code) -> bool:
+        row = self._be.query_one(
+            "SELECT fingerprint FROM app_recovery_code "
+            "WHERE username=? AND fingerprint=? AND used_at IS NULL",
+            ((username or "").strip().lower(), aws_totp.recovery_fingerprint(code)))
+        if row is None:
+            return False
+        self._be.execute("UPDATE app_recovery_code SET used_at=? WHERE fingerprint=?",
+                         (self._now(), dict(row)["fingerprint"]))
+        return True
 
     # ── sessions ─────────────────────────────────────────────────────────────
     def open_session(self, username: str, *, ttl: int = SESSION_TTL_SECONDS) -> str:

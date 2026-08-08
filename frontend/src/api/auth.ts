@@ -27,25 +27,44 @@ export async function me(): Promise<Me | null> {
   return (await r.json()) as Me
 }
 
-/** Throws with the server's message on failure. That message is deliberately the
- *  same for a wrong password and an unknown user — do not "improve" it here, the
- *  distinction is a username oracle. */
-export async function login(username: string, password: string): Promise<Me> {
+/** Thrown when the password was right and a 6-digit code is still needed. A
+ *  distinct type, not a message match: the UI has to branch on this, and matching
+ *  on prose breaks the moment the wording changes. */
+export class TotpRequired extends Error {
+  constructor(message = 'Enter the 6-digit code from your authenticator app.') {
+    super(message)
+    this.name = 'TotpRequired'
+  }
+}
+
+/** Reads the server's error body, distinguishing "needs a second factor" from a
+ *  real failure. The failure message is deliberately identical for a wrong password
+ *  and an unknown user — do not "improve" it here, the distinction is a username
+ *  oracle. A wrong CODE lands there too, on purpose: "password right, code wrong"
+ *  would confirm a guessed password. */
+async function authError(r: Response, fallback: string): Promise<Error> {
+  try {
+    const body = await r.json()
+    const d = body?.detail
+    if (d && typeof d === 'object' && d.error === 'totp_required') {
+      return new TotpRequired(typeof d.message === 'string' ? d.message : undefined)
+    }
+    if (typeof d === 'string') return new Error(d)
+  } catch {
+    /* a non-JSON error body is still a failure */
+  }
+  return new Error(fallback)
+}
+
+export async function login(
+  username: string, password: string, totpCode?: string,
+): Promise<Me> {
   const r = await fetch(`${API_BASE}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, totp_code: totpCode ?? '' }),
   })
-  if (!r.ok) {
-    let detail = 'Sign-in failed'
-    try {
-      const body = await r.json()
-      if (body && typeof body.detail === 'string') detail = body.detail
-    } catch {
-      /* a non-JSON error body is still a failed sign-in */
-    }
-    throw new Error(detail)
-  }
+  if (!r.ok) throw await authError(r, 'Sign-in failed')
   return (await r.json()) as Me
 }
 
@@ -53,20 +72,57 @@ export async function logout(): Promise<void> {
   await fetch(`${API_BASE}/auth/logout`, { method: 'POST' })
 }
 
+/** Change a password with CREDENTIALS rather than a session, so the form can live
+ *  on the sign-in screen — the usual reason to change a password is that you were
+ *  handed a temporary one and cannot get in with it yet. Throws TotpRequired when a
+ *  second factor is enrolled and no code was supplied. */
 export async function changePassword(
-  currentPassword: string, newPassword: string,
+  username: string, currentPassword: string, newPassword: string, totpCode?: string,
 ): Promise<void> {
   const r = await fetch(`${API_BASE}/auth/password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    body: JSON.stringify({
+      username, current_password: currentPassword,
+      new_password: newPassword, totp_code: totpCode ?? '',
+    }),
   })
-  if (!r.ok) {
-    let detail = 'Could not change the password'
-    try {
-      const body = await r.json()
-      if (body && typeof body.detail === 'string') detail = body.detail
-    } catch { /* keep the generic message */ }
-    throw new Error(detail)
-  }
+  if (!r.ok) throw await authError(r, 'Could not change the password')
+}
+
+// ── second-factor enrolment (all require a session) ─────────────────────────
+export interface TotpStatus { enabled: boolean; recovery_codes_left: number }
+export interface TotpEnrolment { secret: string; formatted_secret: string; uri: string }
+
+export async function totpStatus(): Promise<TotpStatus> {
+  const r = await fetch(`${API_BASE}/auth/totp/status`)
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+  return (await r.json()) as TotpStatus
+}
+
+export async function totpBegin(): Promise<TotpEnrolment> {
+  const r = await fetch(`${API_BASE}/auth/totp/begin`, { method: 'POST' })
+  if (!r.ok) throw await authError(r, 'Could not start enrolment')
+  return (await r.json()) as TotpEnrolment
+}
+
+/** Returns the recovery codes, which are shown ONCE — only fingerprints are stored
+ *  server-side, so they can never be redisplayed, only regenerated. */
+export async function totpConfirm(totpCode: string): Promise<string[]> {
+  const r = await fetch(`${API_BASE}/auth/totp/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ totp_code: totpCode }),
+  })
+  if (!r.ok) throw await authError(r, 'That code is not valid')
+  return ((await r.json()).recovery_codes ?? []) as string[]
+}
+
+export async function totpDisable(password: string, totpCode: string): Promise<void> {
+  const r = await fetch(`${API_BASE}/auth/totp/disable`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ password, totp_code: totpCode }),
+  })
+  if (!r.ok) throw await authError(r, 'Could not turn off two-factor authentication')
 }

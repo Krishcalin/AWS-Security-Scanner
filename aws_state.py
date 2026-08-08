@@ -35,7 +35,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-SCHEMA_VERSION = 11  # v11: + app_user/app_session (local authn; authz still workspace_members)
+SCHEMA_VERSION = 12  # v12: + app_totp/app_recovery_code (TOTP second factor)
 KEY_VERSION = 1
 
 # Caller-injected scan timestamp (one per run). epoch = arithmetic column,
@@ -356,6 +356,37 @@ CREATE TABLE IF NOT EXISTS app_session(
   last_seen_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS ix_session_user ON app_session(username);
 CREATE INDEX IF NOT EXISTS ix_session_exp  ON app_session(expires_at);
+
+-- ── v12: TOTP second factor ──────────────────────────────────────────────────
+-- SEPARATE TABLES, not columns on app_user, deliberately. `migrate()` replays the
+-- DDL with CREATE TABLE IF NOT EXISTS, which adds tables to an existing database
+-- but never adds a COLUMN to one that already exists — so bolting these onto
+-- app_user would work on a fresh install and silently do nothing on an upgrade.
+-- A new table needs no ALTER machinery and keeps the second factor separable from
+-- the credential, which is also the better model: disabling 2FA is a DELETE.
+--
+-- last_counter is the replay guard. A TOTP code stays valid for its whole time
+-- step, so without recording the counter that was accepted, the same six digits
+-- work again for up to 90 seconds — long enough for someone who read them over a
+-- shoulder.
+CREATE TABLE IF NOT EXISTS app_totp(
+  username TEXT PRIMARY KEY,
+  secret TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  last_counter INTEGER NOT NULL DEFAULT -1,
+  enrolled_at INTEGER,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+
+-- Single-use fallbacks for a lost or wiped phone. Stored as SHA-256 fingerprints,
+-- like session tokens and for the same reason. Without these, losing the phone
+-- locks the account permanently — and for the FIRST administrator there is nobody
+-- to ask for a reset.
+CREATE TABLE IF NOT EXISTS app_recovery_code(
+  fingerprint TEXT PRIMARY KEY,
+  username TEXT NOT NULL,
+  used_at INTEGER,
+  created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_recovery_user ON app_recovery_code(username);
 
 -- ── usage metering ledger (append-only, exactly-once via UNIQUE) ──────────────
 -- Billable dimension = accounts under management (account.active gauge, one row per

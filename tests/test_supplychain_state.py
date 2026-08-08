@@ -27,13 +27,13 @@ def _tables_in(text):
 
 
 def test_schema_version_is_current():
-    assert aws_state.SCHEMA_VERSION == 11
+    assert aws_state.SCHEMA_VERSION == 12
 
 
 def test_migration_creates_supply_chain_tables():
     s = _store()
     assert SUPPLY_TABLES <= _sqlite_tables(s._be)
-    assert s._be.raw.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert s._be.raw.execute("PRAGMA user_version").fetchone()[0] == 12
 
 
 def test_sqlite_postgres_twin_parity():

@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router'
 import Login from './routes/Login'
 import AuthGate from './components/AuthGate'
+import Security from './routes/Security'
 import { ScopeProvider } from './state/scope'
 import { AppShell } from './components/AppShell'
 import { Overview } from './routes/Overview'
@@ -52,6 +53,7 @@ export default function App() {
               <Route path="/reports" element={<Reports />} />
               <Route path="/accounts" element={<CloudAccounts />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/security" element={<Security />} />
               <Route path="/projects" element={<Projects />} />
               <Route path="/projects/:id" element={<ProjectView />} />
               <Route path="/query" element={<Query />} />

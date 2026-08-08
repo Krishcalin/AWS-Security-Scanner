@@ -80,11 +80,22 @@ def add_auth_routes(api, store, workspaces):
     def login(request: Request, response: Response, body: dict = Body(...)):
         try:
             token = store.authenticate(str(body.get("username") or ""),
-                                       str(body.get("password") or ""))
+                                       str(body.get("password") or ""),
+                                       totp_code=str(body.get("totp_code") or ""))
+        except cnapp_authn.SecondFactorRequired:
+            # A DIFFERENT reply, and safe to give: the password has already been
+            # proven correct, so this discloses nothing to anyone who could not
+            # already log in. 401 (not 200) because no session exists yet — a 200
+            # here would let a careless client treat a half-finished login as done.
+            raise HTTPException(status_code=401, detail={
+                "error": "totp_required",
+                "message": "Enter the 6-digit code from your authenticator app."})
         except cnapp_authn.AuthError:
             # 401 with the store's single undifferentiated message. Never echo the
             # username back: a reflected value is one more thing a login page can be
-            # tricked into rendering.
+            # tricked into rendering. A WRONG TOTP CODE lands here too, deliberately
+            # — "password right, code wrong" would confirm the password to someone
+            # who has only guessed it.
             raise HTTPException(status_code=401,
                                 detail="invalid username or password")
         response.set_cookie(
@@ -123,22 +134,94 @@ def add_auth_routes(api, store, workspaces):
                 "is_superadmin": p.is_superadmin, "memberships": p.memberships}
 
     @api.post("/auth/password")
-    def change_password(cookie: Optional[str] = Header(default=None, alias="Cookie"),
-                        body: dict = Body(...)):
-        """Change your OWN password. Requires the current one — a live session is not
-        sufficient, because an unattended browser would otherwise be enough to lock
-        the real owner out permanently."""
+    def change_password(body: dict = Body(...)):
+        """Change a password using CREDENTIALS, not a session.
+
+        Deliberately not session-authenticated, because the change-password form
+        lives on the sign-in screen: the common reason to change a password is that
+        you have been handed a temporary one and cannot get in with it yet. Asking
+        for a session first would make the feature unreachable exactly when it is
+        needed.
+
+        The security is unchanged either way — the caller proves the CURRENT
+        password and, where enrolled, the second factor. A live session was never
+        the thing protecting this: an unattended browser would have been enough to
+        lock the real owner out permanently.
+        """
+        username = str(body.get("username") or "")
+        try:
+            # Full re-authentication, second factor included. This is the whole
+            # check; everything below it is bookkeeping.
+            store.authenticate(username, str(body.get("current_password") or ""),
+                               totp_code=str(body.get("totp_code") or ""))
+        except cnapp_authn.SecondFactorRequired:
+            raise HTTPException(status_code=401, detail={
+                "error": "totp_required",
+                "message": "Enter the 6-digit code from your authenticator app."})
+        except cnapp_authn.AuthError:
+            raise HTTPException(status_code=401,
+                                detail="invalid username or password")
+        try:
+            store.set_password(username, str(body.get("new_password") or ""))
+        except aws_authn.WeakPassword as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        # set_password revoked every session for this user, including the one that
+        # authenticate() just opened. That is the point — see UserStore.set_password.
+        return {"ok": True, "reauthenticate": True}
+
+    # ── second-factor enrolment (authenticated) ──────────────────────────────
+    @api.get("/auth/totp/status")
+    def totp_status(cookie: Optional[str] = Header(default=None, alias="Cookie")):
+        p = _principal(cookie)
+        if not p.subject:
+            raise HTTPException(status_code=401, detail="not authenticated")
+        return {"enabled": store.totp_enabled(p.subject),
+                "recovery_codes_left": store.unused_recovery_code_count(p.subject)}
+
+    @api.post("/auth/totp/begin")
+    def totp_begin(cookie: Optional[str] = Header(default=None, alias="Cookie")):
+        """Mint a pending secret. The factor is NOT active until /confirm succeeds,
+        so a mistyped secret or a skewed phone clock cannot lock anyone out."""
+        p = _principal(cookie)
+        if not p.subject:
+            raise HTTPException(status_code=401, detail="not authenticated")
+        if store.totp_enabled(p.subject):
+            raise HTTPException(status_code=409, detail="already enrolled")
+        return store.begin_totp_enrolment(p.subject)
+
+    @api.post("/auth/totp/confirm")
+    def totp_confirm(cookie: Optional[str] = Header(default=None, alias="Cookie"),
+                     body: dict = Body(...)):
+        """Prove the app is generating matching codes, then switch the factor on and
+        return recovery codes. They are shown ONCE — only fingerprints are stored, so
+        they cannot be redisplayed, only regenerated."""
         p = _principal(cookie)
         if not p.subject:
             raise HTTPException(status_code=401, detail="not authenticated")
         try:
-            store.authenticate(p.subject, str(body.get("current_password") or ""))
-        except cnapp_authn.AuthError:
-            raise HTTPException(status_code=403, detail="current password is incorrect")
-        try:
-            store.set_password(p.subject, str(body.get("new_password") or ""))
-        except aws_authn.WeakPassword as exc:
+            codes = store.confirm_totp_enrolment(p.subject,
+                                                 str(body.get("totp_code") or ""))
+        except cnapp_authn.AuthError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        # set_password revoked every session INCLUDING this one, on purpose: see
-        # UserStore.set_password. The client is expected to send the user to /login.
-        return {"ok": True, "reauthenticate": True}
+        return {"enabled": True, "recovery_codes": codes}
+
+    @api.post("/auth/totp/disable")
+    def totp_disable(cookie: Optional[str] = Header(default=None, alias="Cookie"),
+                     body: dict = Body(...)):
+        """Turning the second factor OFF re-proves BOTH factors.
+
+        A live session is not enough. Removing 2FA from a borrowed unlocked browser
+        would otherwise be trivial, and it is the one action that makes every future
+        login weaker.
+        """
+        p = _principal(cookie)
+        if not p.subject:
+            raise HTTPException(status_code=401, detail="not authenticated")
+        try:
+            store.authenticate(p.subject, str(body.get("password") or ""),
+                               totp_code=str(body.get("totp_code") or ""))
+        except (cnapp_authn.AuthError, cnapp_authn.SecondFactorRequired):
+            raise HTTPException(status_code=403,
+                                detail="password and current code are required")
+        store.disable_totp(p.subject)
+        return {"enabled": False}

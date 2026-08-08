@@ -102,3 +102,34 @@ body {
 }
 
 .auth-checking { min-height:100vh; background:var(--canvas); }
+
+/* Sign-in: secondary actions and the notice line (distinct from the error line —
+   "we need one more thing" is not a failure and must not be styled like one). */
+.login-link { margin-top:.55rem; padding:.4rem; border:0; background:none;
+  color:var(--accent); font-size:.82rem; cursor:pointer; text-align:center; }
+.login-link:hover { text-decoration:underline; }
+.login-notice { margin:.7rem 0 0; font-size:.82rem; color:var(--ink2);
+  background:var(--accentdim); border:1px solid var(--accent); border-radius:6px;
+  padding:.45rem .6rem; }
+.login-hint { color:var(--ink3); font-weight:400; }
+
+/* Security / second-factor enrolment */
+.sec-page { max-width:42rem; padding:1.5rem; }
+.sec-h1 { margin:0 0 .3rem; font-size:1.4rem; font-weight:650; color:var(--ink); }
+.sec-h2 { margin:0 0 .5rem; font-size:1rem; font-weight:600; color:var(--ink); }
+.sec-sub { margin:0 0 1.3rem; font-size:.86rem; color:var(--ink2); }
+.sec-card { border:1px solid var(--line); border-radius:10px; padding:1.1rem;
+  background:var(--panel); margin-bottom:1.1rem; }
+.sec-card-warn { border-color:var(--gold); background:var(--goldbg); }
+.sec-p { margin:0 0 .75rem; font-size:.86rem; line-height:1.55; color:var(--ink2); }
+.sec-form { display:flex; flex-direction:column; gap:.5rem; margin-top:.4rem; }
+.sec-link { color:var(--accent); font-size:.9rem; word-break:break-all; }
+.sec-secret { margin:0 0 .9rem; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:1rem; letter-spacing:.04em; color:var(--ink);
+  background:var(--panel2); border:1px solid var(--line); border-radius:7px;
+  padding:.55rem .7rem; word-break:break-all; }
+.sec-codes { display:grid; grid-template-columns:repeat(auto-fill,minmax(9rem,1fr));
+  gap:.4rem; list-style:none; padding:0; margin:0 0 1rem;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.92rem; }
+.sec-btn-danger { background:var(--crit); }
+.sec-btn-danger:hover:not(:disabled) { background:var(--crit); filter:brightness(.92); }
