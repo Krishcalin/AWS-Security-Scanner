@@ -26,7 +26,9 @@ scanner fuses their results onto the attack-path graph in the DATA section
 from __future__ import annotations
 
 from fnmatch import fnmatch
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+
+import aws_effperm
 
 
 # Identity actions that let a principal escalate toward administrative control.
@@ -58,6 +60,31 @@ def _unscoped(resources) -> bool:
     return any(p == "*" for p in (resources or set()))
 
 
+def _privesc_grants(statements: List[dict]) -> List[Tuple[str, str]]:
+    """Every ``(action, reason)`` the identity statements grant on an unscoped
+    resource, in the order ``role_privesc_capable`` would have reported them.
+
+    A bare ``*`` on ``*`` expands to the whole of ``AI_PRIVESC_ACTIONS`` rather than
+    to a single synthetic action, because a ceiling that neutralises one escalation
+    route has NOT neutralised administrative access — the other routes must each be
+    tested against it before the capability can be called gone."""
+    out: List[Tuple[str, str]] = []
+    for st in statements or []:
+        if st.get("effect") != "Allow":
+            continue
+        acts = st.get("actions", set())
+        if not _unscoped(st.get("resources", set())):
+            continue
+        if "*" in acts:
+            reason = "grants * on * (full administrative access)"
+            out.extend((a, reason) for a in AI_PRIVESC_ACTIONS)
+            continue
+        for pa in AI_PRIVESC_ACTIONS:
+            if _actions_match(acts, pa):
+                out.append((pa, f"grants {pa} on an unscoped (*) resource"))
+    return out
+
+
 def role_privesc_capable(statements: List[dict]) -> Optional[str]:
     """Return a short reason string if the role's *identity* statements let it
     escalate privilege — a full ``*`` on ``*`` (administrative), or a known
@@ -66,19 +93,49 @@ def role_privesc_capable(statements: List[dict]) -> Optional[str]:
     This is a posture SIGNAL, not an authorization decision: a broad Allow that a
     narrow Deny might claw back is still surfaced (conservative, matching the
     existing WARN-on-broad intent of AGT-02/BDR-05). Deny/Condition are not
-    modelled; the caller treats the result as "worth a human's attention"."""
-    for st in statements or []:
-        if st.get("effect") != "Allow":
-            continue
-        acts = st.get("actions", set())
-        if not _unscoped(st.get("resources", set())):
-            continue
-        if "*" in acts:
-            return "grants * on * (full administrative access)"
-        for pa in AI_PRIVESC_ACTIONS:
-            if _actions_match(acts, pa):
-                return f"grants {pa} on an unscoped (*) resource"
-    return None
+    modelled; the caller treats the result as "worth a human's attention".
+
+    Prefer :func:`role_privesc_effective` where a permission boundary or SCP context
+    is available — this function deliberately ignores both."""
+    hits = _privesc_grants(statements)
+    return hits[0][1] if hits else None
+
+
+def role_privesc_effective(
+    statements: List[dict],
+    boundary: Optional[List[dict]] = None,
+    scp_levels: Optional[List] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """``(verdict, reason)`` for the role's escalation capability AFTER the
+    permission-boundary and SCP ceiling are applied.
+
+    ``verdict`` is :data:`aws_effperm.KEEP` (survives unconditionally),
+    :data:`aws_effperm.CONDITIONED` (survives only under a Condition), or ``None``
+    (the ceiling provably neutralises every escalation route this role had).
+
+    WHY THIS EXISTS. ``role_privesc_capable`` reads identity statements alone: no
+    permission boundary, no SCP, no explicit Deny, no Condition. Enterprises put
+    boundaries on AI execution roles *precisely because* those roles are new and
+    unproven — so the raw signal over-reports on exactly the accounts most likely to
+    be evaluating the product, and it contradicts the CIEM verdict OverWatch already
+    computes for the very same role. Two parts of one product disagreeing about one
+    role is worse than either answer alone.
+
+    The fail-open guarantee is inherited from :func:`aws_effperm.pivot_effective`:
+    with no boundary and no SCP levels this can never return ``None``, so an account
+    whose ceiling we cannot read keeps the old, conservative behaviour."""
+    hits = _privesc_grants(statements)
+    if not hits:
+        return None, None
+    reason = hits[0][1]
+    best: Optional[str] = None
+    for action, _ in hits:
+        v = aws_effperm.pivot_effective(action, statements, boundary, scp_levels)
+        if v == aws_effperm.KEEP:
+            return aws_effperm.KEEP, reason
+        if v == aws_effperm.CONDITIONED:
+            best = aws_effperm.CONDITIONED
+    return best, reason
 
 
 def role_reaches_crown(graph, role_arn: str) -> Optional[str]:

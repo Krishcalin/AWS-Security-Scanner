@@ -575,6 +575,18 @@ COMPLIANCE_MAP = {
     "SM-05": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "SM-06": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SM-07": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    # Bedrock (NIST from the frozen 38-control universe: AU-2/CM-6/SC-28/SC-7/AC-6)
+    "BDR-01": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "BDR-02": {"PCI-DSS": "6.4.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "CM-6"},
+    "BDR-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "BDR-04": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "BDR-05": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    # Bedrock Agents
+    "AGT-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "AGT-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "AGT-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "AGT-04": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "AGT-05": {"PCI-DSS": "6.4.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "CM-6"},
     # AI-SPM pillar (NIST reused from the frozen 38-control universe: AC-6/AC-3/SC-7)
     "AISPM-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "AISPM-02": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
@@ -875,6 +887,16 @@ REMEDIATION_MAP = {
     "SM-05": "Restrict Studio egress to the VPC (deploy interface VPC endpoints first, else apps lose connectivity): aws sagemaker update-domain --domain-id <DOMAIN_ID> --app-network-access-type VpcOnly",
     "SM-06": "KMS key is immutable on an existing domain — recreate with a CMK: aws sagemaker create-domain --domain-name <NAME> --auth-mode IAM --vpc-id <VPC> --subnet-ids <SUBNET_IDS> --kms-key-id <KMS_KEY_ARN> --default-user-settings file://user-settings.json",
     "SM-07": "KmsKeyId is immutable on an endpoint-config — create a new config with a CMK then repoint the endpoint: aws sagemaker create-endpoint-config --endpoint-config-name <NEW_CFG> --kms-key-id <KMS_KEY_ARN> --production-variants file://variants.json ; aws sagemaker update-endpoint --endpoint-name <EP> --endpoint-config-name <NEW_CFG>",
+    "BDR-01": "Turn on model invocation logging so LLM calls leave an audit trail: aws bedrock put-model-invocation-logging-configuration --logging-config '{\"cloudWatchConfig\":{\"logGroupName\":\"/aws/bedrock/modelinvocations\",\"roleArn\":\"<LOGGING_ROLE_ARN>\"},\"textDataDeliveryEnabled\":true}'",
+    "BDR-02": "Create a guardrail and attach it to every model invocation path: aws bedrock create-guardrail --name prod-guardrail --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\"}]}'",
+    "BDR-03": "Re-create the custom model under a customer-managed KMS key (the key is set at creation and cannot be changed in place): aws bedrock create-model-customization-job --custom-model-kms-key-id <CMK_ARN> --job-name <JOB> --custom-model-name <MODEL> --role-arn <ROLE_ARN> --base-model-identifier <BASE> --training-data-config '{\"s3Uri\":\"s3://<BUCKET>/train/\"}' --output-data-config '{\"s3Uri\":\"s3://<BUCKET>/out/\"}'",
+    "BDR-04": "Keep Bedrock traffic off the public internet with an interface endpoint: aws ec2 create-vpc-endpoint --vpc-id <VPC_ID> --vpc-endpoint-type Interface --service-name com.amazonaws.<REGION>.bedrock-runtime --subnet-ids <SUBNET_IDS> --security-group-ids <SG_ID> --private-dns-enabled",
+    "BDR-05": "Replace the wildcard Bedrock grant with least privilege scoped to the models actually used: aws iam put-role-policy --role-name <ROLE> --policy-name bedrock-least-priv --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"bedrock:InvokeModel\"],\"Resource\":\"arn:aws:bedrock:<REGION>::foundation-model/<MODEL_ID>\"}]}'",
+    "AGT-01": "Encrypt the agent's resources under a customer-managed key: aws bedrock-agent update-agent --agent-id <AGENT_ID> --agent-name <NAME> --agent-resource-role-arn <ROLE_ARN> --foundation-model <MODEL_ID> --customer-encryption-key-arn <CMK_ARN>",
+    "AGT-02": "Scope the agent execution role to the exact models, knowledge bases and Lambdas it needs: aws iam put-role-policy --role-name <AGENT_ROLE> --policy-name agent-least-priv --policy-document file://scoped.json",
+    "AGT-03": "Set a customer-managed key on the knowledge base and its data sources: aws bedrock-agent update-knowledge-base --knowledge-base-id <KB_ID> --name <NAME> --role-arn <ROLE_ARN> --knowledge-base-configuration file://kb-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}'",
+    "AGT-04": "Restrict the action-group Lambda so only this agent can invoke it, and scope the function's own role: aws lambda add-permission --function-name <FN> --statement-id bedrock-agent --action lambda:InvokeFunction --principal bedrock.amazonaws.com --source-arn <AGENT_ALIAS_ARN>",
+    "AGT-05": "Attach a guardrail to the agent and shorten its idle session TTL: aws bedrock-agent update-agent --agent-id <AGENT_ID> --agent-name <NAME> --agent-resource-role-arn <ROLE_ARN> --foundation-model <MODEL_ID> --guardrail-configuration '{\"guardrailIdentifier\":\"<GUARDRAIL_ID>\",\"guardrailVersion\":\"DRAFT\"}' --idle-session-ttl-in-seconds 600",
     "AISPM-01": "Scope the AI execution role to least privilege — drop admin/privesc grants (iam:PassRole/*, *:*): aws iam put-role-policy --role-name <AI_EXEC_ROLE> --policy-name aispm-least-priv --policy-document file://scoped.json",
     "AISPM-02": "Restrict the AI execution role's data reach to only the buckets/tables the model needs (remove wildcard s3:GetObject/* grants): aws iam put-role-policy --role-name <AI_EXEC_ROLE> --policy-name aispm-data-scope --policy-document file://data-scope.json",
     "AISPM-03": "Isolate the AI resource on a private VPC subnet and disable direct internet egress: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --subnet-id <SUBNET> ; for a Studio domain: aws sagemaker update-domain --domain-id <DOMAIN_ID> --app-network-access-type VpcOnly",
@@ -1780,6 +1802,9 @@ class AWSLiveScanner:
         # Note this is NOT the _replay_*_edges pattern: those are merge-idempotent
         # because add_edge merges; findings append to a list and do not.
         self._aispm_collected = False
+        # One coverage note per scan, not one per AI section — three identical
+        # notes would be noise, and noise is how a true note gets skipped.
+        self._aispm_region_noted = False
 
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
@@ -5099,6 +5124,7 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     def _check_bedrock(self):
         self._section_header("BEDROCK")
+        self._aispm_region_coverage_note()
         try:
             bedrock = self._client("bedrock")
         except Exception as e:
@@ -5351,6 +5377,7 @@ class AWSLiveScanner:
 
     def _check_bedrock_agents(self):
         self._section_header("BEDROCK_AGENTS")
+        self._aispm_region_coverage_note()
         try:
             ba = self._client("bedrock-agent")
         except Exception as e:
@@ -7711,6 +7738,7 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     def _check_sagemaker(self):
         self._section_header("SAGEMAKER")
+        self._aispm_region_coverage_note()
         sm = self._client("sagemaker")
 
         # SM-01..04 — notebook instances. Do NOT early-return: SM-05/06 (Studio domains) and
@@ -10331,6 +10359,51 @@ class AWSLiveScanner:
         self._dspm_timestream(g, roles)
         self._dspm_opensearch(g, roles)
 
+    # AI sections that enumerate REGIONAL resources. Scanned from one region, each
+    # sees only that region's estate — and reports success either way.
+    _AI_REGIONAL_SECTIONS = ("BEDROCK", "BEDROCK_AGENTS", "SAGEMAKER")
+
+    def _aispm_region_coverage_note(self):
+        """Emit AISPM-00 naming the regions this scan did not examine.
+
+        Runs ONCE, and — this is the point — runs even when no AI resources were
+        found, because that is exactly the case it exists for. An account running
+        Bedrock in us-west-2, scanned from us-east-1 without --all-regions, gets a
+        clean AI report today. Not an empty one: a clean one. Nothing in it invites
+        the reader to check whether the scanner looked in the right place.
+
+        Skipped entirely under --all-regions, where the sweep is genuinely complete.
+        """
+        if self._aispm_region_noted or self.all_regions_scan:
+            return
+        ran = [x for x in self._AI_REGIONAL_SECTIONS if x in self.sections]
+        if not ran:
+            return
+        self._aispm_region_noted = True
+
+        regions = self._get_all_regions()
+        others = sorted(r for r in regions if r != self.region)
+        which = ", ".join(ran)
+        if others:
+            shown = ", ".join(others[:8])
+            more = f" (+{len(others) - 8} more)" if len(others) > 8 else ""
+            self._add("INFO", "AISPM-00", "DATA", "aispm",
+                      f"AI coverage is REGIONAL and this scan examined {self.region} "
+                      f"only: {which} were not run in {len(others)} other enabled "
+                      f"region(s) — {shown}{more}. A clean AI result here is not "
+                      f"evidence that no AI resources exist elsewhere; re-run with "
+                      f"--all-regions for a complete AI picture | aispm")
+        else:
+            # _get_all_regions falls back to [self.region] when describe_regions is
+            # denied, so an empty `others` cannot be distinguished from a genuine
+            # single-region account. Say so rather than pick one and be wrong.
+            self._add("INFO", "AISPM-00", "DATA", "aispm",
+                      f"AI coverage is REGIONAL and this scan examined {self.region} "
+                      f"only ({which}). No other enabled region was returned by "
+                      f"describe_regions — either this account is single-region or "
+                      f"the region list could not be read, and those two cases are "
+                      f"not distinguishable here | aispm")
+
     # ── AI-SPM: fuse AI execution-role blast radius onto the graph (post-clobber) ──
     def _collect_aispm(self, g):
         """AI-SPM pillar. For each AI resource stashed pre-clobber (SageMaker
@@ -10359,14 +10432,20 @@ class AWSLiveScanner:
                       "Could not enumerate IAM principals — AI execution-role posture "
                       "left unevaluated (no phantom pass)")
             principals = {}
+        # Resolved ONCE for the whole pass: the SCP ceiling is account-wide, and
+        # re-deriving it per resource would be the same answer at N times the cost.
+        try:
+            scp = self._get_scp_context()
+        except Exception:
+            scp = None          # unreadable org -> fail open, exactly like CIEM
         for res in self._aispm_resources:
             try:
-                self._aispm_emit(g, res, principals)
+                self._aispm_emit(g, res, principals, scp_levels=scp)
             except Exception as e:
                 self._add("INFO", "AISPM-00", "DATA", res.get("name", "ai"),
                           f"AI-SPM evaluation error for {res.get('name')}: {e}")
 
-    def _aispm_emit(self, g, res, principals):
+    def _aispm_emit(self, g, res, principals, scp_levels=None):
         """Emit one AI resource's node + HAS_ROLE anchor + AISPM findings. Static
         w.r.t. AWS (operates only on the stashed dict + cached principals + graph)."""
         name = res.get("name", "ai")
@@ -10399,14 +10478,28 @@ class AWSLiveScanner:
                           f"AI execution role {role_arn.split('/')[-1]} not enumerable — role "
                           f"posture for {name} left unevaluated | {name}")
             else:
-                privesc = aws_aispm.role_privesc_capable(prin.get("statements", []))
+                # Ceiling-aware: a boundary/SCP that provably neutralises every
+                # escalation route means this role is NOT privesc-capable, whatever
+                # its identity policy says. Fail-open — an unreadable ceiling keeps
+                # the old conservative verdict.
+                verdict, reason = aws_aispm.role_privesc_effective(
+                    prin.get("statements", []), prin.get("boundary"), scp_levels)
                 crown = aws_aispm.role_reaches_crown(g, role_arn)
                 rolename = role_arn.split("/")[-1]
-                if privesc:
+                if verdict == aws_effperm.KEEP:
+                    privesc = reason
                     self._add("FAIL", "AISPM-01", "DATA", name,
                               f"AI execution role {rolename} for {name} is privilege-escalation "
                               f"capable: {privesc} — compromise of the model/agent inherits it "
                               f"| {name}")
+                elif verdict == aws_effperm.CONDITIONED:
+                    # Survives only under a Condition. Worth a human's attention,
+                    # not worth a CRITICAL fused path — so it does NOT set `privesc`
+                    # and therefore cannot itself raise AIPATH-01.
+                    self._add("WARN", "AISPM-01", "DATA", name,
+                              f"AI execution role {rolename} for {name} {reason}, but the "
+                              f"permission boundary / SCP allows it only under a Condition — "
+                              f"escalation is possible if the Condition is met | {name}")
                 if crown:
                     self._add("FAIL", "AISPM-02", "DATA", name,
                               f"AI execution role {rolename} for {name} can read crown-jewel data "
