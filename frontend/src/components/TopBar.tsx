@@ -134,7 +134,7 @@ function UserMenu() {
   return (
     <div className="relative">
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => { setOpen((o) => !o); setTick((t) => t + 1) }}
         // Named explicitly because the visible name is hidden below `lg`, which
         // leaves the avatar's single initial as the button's ENTIRE accessible name
         // — "K, button". `title` does not rescue that: it is only a fallback for a

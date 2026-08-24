@@ -38,6 +38,9 @@ export const NAV_ADMIN: NavItem[] = [
   // Your own account's second factor. A route with no nav entry is a route nobody
   // finds: /security shipped reachable only by typing the URL, so two-factor could
   // never be enrolled — which made it look like the whole feature was unwired.
+  // Beside My Security because both answer "who may do what here" —
+  // one about your own account, one about everybody's.
+  { to: '/roles', label: 'Roles & Access', icon: ShieldCheck },
   { to: '/security', label: 'My Security', icon: ShieldUser },
 ]
 
