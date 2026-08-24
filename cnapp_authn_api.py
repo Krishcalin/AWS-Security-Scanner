@@ -38,6 +38,8 @@ import cnapp_authn
 # looks like a client bug, not an import-scope bug, which is why it is worth a note.
 from fastapi import Body, Header, HTTPException, Request, Response
 
+import cnapp_workspace
+import time
 from cnapp_api import Principal
 
 SESSION_COOKIE = "overwatch_session"
@@ -75,6 +77,165 @@ def add_auth_routes(api, store, workspaces):
         return Principal(subject=username,
                          memberships=workspaces.principal_memberships(username),
                          is_superadmin=workspaces.is_platform_admin(username))
+
+
+    # ── user administration ──────────────────────────────────────────────────
+    # THE PIECE THAT MAKES THE RBAC USABLE. Before this, a role could be granted
+    # to a principal string and that principal had no way to sign in: there was
+    # no endpoint that created a local user at all, and bootstrap_admin runs
+    # once against an empty table. Authorisation was complete and identity was
+    # a dead end.
+    #
+    # AUTHORISED BY WORKSPACE ADMIN, NOT PLATFORM ADMIN. A workspace admin has
+    # to be able to onboard their own colleagues or the role model is decorative
+    # — but usernames are INSTANCE-WIDE while workspaces are not, so the
+    # dangerous move is creating a username that already belongs to somebody
+    # else's tenant. `create_new_user` refuses that outright rather than
+    # upserting, which is what `create_user` would have done: silently resetting
+    # another workspace's user's password.
+
+    def _require_ws_admin(cookie: Optional[str], workspace_id: str) -> Principal:
+        principal = _principal(cookie)
+        if not principal.subject:
+            raise HTTPException(status_code=401, detail="not signed in")
+        if not (principal.is_superadmin
+                or principal.role_in(workspace_id) == "admin"):
+            raise HTTPException(status_code=403,
+                                detail="requires workspace admin")
+        return principal
+
+    @api.get("/auth/users")
+    def list_users(cookie: Optional[str] = Header(default=None, alias="Cookie"),
+                   workspace_id: str = "ws-default"):
+        """Local accounts, with the role each holds in this workspace.
+
+        Joined here rather than left to the console: a user list without roles
+        and a role list without accounts are the two halves that did not meet,
+        and showing them apart is how somebody grants a role to a principal who
+        cannot sign in.
+        """
+        _require_ws_admin(cookie, workspace_id)
+        roles = {}
+        for member in workspaces.list_members(workspace_id):
+            roles[str(member.get("principal", "")).lower()] = member.get("role")
+        out = []
+        for user in store.list_users():
+            row = dict(user)
+            row["role"] = roles.get(str(user.get("username", "")).lower())
+            out.append(row)
+        return out
+
+    @api.post("/auth/users", status_code=201)
+    def create_user(response: Response,
+                    cookie: Optional[str] = Header(default=None, alias="Cookie"),
+                    body: dict = Body(...)):
+        """Create a local account AND grant it a role, in one operation.
+
+        ONE OPERATION ON PURPOSE. Two calls can half-succeed, and both halves
+        fail badly on their own: an account with no role can sign in and see
+        nothing, and a role with no account is an authorisation grant to
+        somebody who cannot arrive. `add "Priya as an analyst"` is one act, so
+        it is one endpoint.
+
+        The password is GENERATED and returned exactly once. It is never stored
+        in the clear and never logged, and the account carries
+        must_change_password so it is not the user's own account until they
+        have changed it.
+        """
+        workspace_id = str(body.get("workspace_id") or "ws-default").strip()
+        actor = _require_ws_admin(cookie, workspace_id)
+
+        username = str(body.get("username") or "").strip().lower()
+        role = str(body.get("role") or "auditor").strip()
+        display_name = str(body.get("display_name") or "").strip()
+        if not username:
+            raise HTTPException(status_code=400, detail="a username is required")
+        if role not in cnapp_workspace.ASSIGNABLE_ROLES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown role {role!r}; expected one of "
+                       f"{', '.join(cnapp_workspace.ASSIGNABLE_ROLES)}")
+
+        password = cnapp_authn.issue_initial_password()
+        try:
+            store.create_new_user(username, password, display_name=display_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+        try:
+            workspaces.add_member(workspace_id, username, role=role,
+                                  added_by=actor.subject,
+                                  now_epoch=int(time.time()))
+        except Exception as exc:                              # noqa: BLE001
+            # ROLL THE ACCOUNT BACK. There is no transaction spanning the two
+            # stores, and the half-state is the worse one: an account with no
+            # role can sign in and see nothing, and the operator's obvious
+            # retry then hits the duplicate-username refusal and reads as a
+            # different fault entirely. Undoing leaves them where they started.
+            try:
+                store.delete_user(username)
+            except Exception:                                 # noqa: BLE001
+                raise HTTPException(
+                    status_code=500,
+                    detail=(f"the account {username!r} was created, the {role} "
+                            f"role could not be granted ({exc}), AND the "
+                            f"account could not be removed. Grant the role "
+                            f"from Roles & Access, or disable the account."))
+            raise HTTPException(
+                status_code=500,
+                detail=(f"the {role} role could not be granted ({exc}); "
+                        f"the account {username!r} was rolled back with it. "
+                        f"Nothing was created."))
+        return {"username": username, "role": role,
+                "workspace_id": workspace_id,
+                "password": password,
+                "must_change_password": True,
+                "note": ("This password is shown once and is not recoverable. "
+                         "The account is locked to the change form until its "
+                         "owner picks their own.")}
+
+    @api.post("/auth/users/{username}/status")
+    def set_user_status(username: str,
+                        cookie: Optional[str] = Header(default=None, alias="Cookie"),
+                        body: dict = Body(...)):
+        """Enable or disable an account. Disabling closes its sessions."""
+        workspace_id = str(body.get("workspace_id") or "ws-default").strip()
+        actor = _require_ws_admin(cookie, workspace_id)
+        status = str(body.get("status") or "").strip()
+        if status not in ("active", "disabled"):
+            raise HTTPException(status_code=400,
+                                detail="status must be active or disabled")
+        if username.strip().lower() == actor.subject and status == "disabled":
+            # The API would allow it. The result is an administrator who cannot
+            # sign in to undo it.
+            raise HTTPException(status_code=400,
+                                detail="you cannot disable your own account")
+        if store.get_user(username) is None:
+            raise HTTPException(status_code=404, detail="no such user")
+        store.set_status(username, status)
+        return {"username": username.strip().lower(), "status": status}
+
+    @api.post("/auth/users/{username}/password")
+    def reset_user_password(username: str,
+                            cookie: Optional[str] = Header(default=None, alias="Cookie"),
+                            body: dict = Body(default=None)):
+        """Issue a new one-time password. Every session for it is revoked.
+
+        Revoking is the point: a password is reset because it may be known to
+        somebody else, and leaving that somebody's session alive makes the reset
+        theatre.
+        """
+        workspace_id = str((body or {}).get("workspace_id") or "ws-default").strip()
+        _require_ws_admin(cookie, workspace_id)
+        if store.get_user(username) is None:
+            raise HTTPException(status_code=404, detail="no such user")
+        password = cnapp_authn.issue_initial_password()
+        store.set_password(username, password)
+        # set_password clears must_change_password, so put it back: this is a
+        # credential an administrator has seen.
+        store.require_password_change(username)
+        return {"username": username.strip().lower(), "password": password,
+                "must_change_password": True}
 
     @api.post("/auth/login")
     def login(request: Request, response: Response, body: dict = Body(...)):

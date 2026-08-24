@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { ShieldCheck, UserPlus, Trash2, Info } from 'lucide-react'
+import { ShieldCheck, UserPlus, Trash2, Info, KeyRound, UserCog } from 'lucide-react'
 import { me as fetchMe, type Me } from '../api/auth'
 import {
-  addMember, listMembers, listRoles, removeMember,
-  type Member, type RoleCatalogue,
+  addMember, createUser, listMembers, listRoles, listUsers, removeMember,
+  resetUserPassword, setUserStatus,
+  type AppUser, type CreatedUser, type Member, type RoleCatalogue,
 } from '../api/roles'
 import { Card, Loader, Empty, Chip } from '../components/ui'
 
@@ -57,6 +58,12 @@ export default function Roles() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [users, setUsers] = useState<AppUser[] | null>(null)
+  const [newUser, setNewUser] = useState({ username: '', display: '', role: 'auditor' })
+  // Shown ONCE. Held in state rather than refetched because it does not exist
+  // anywhere to refetch from — only the hash is stored.
+  const [issued, setIssued] = useState<
+    CreatedUser | { username: string; password: string } | null>(null)
 
   useEffect(() => {
     fetchMe().then(m => {
@@ -69,8 +76,11 @@ export default function Roles() {
 
   function refresh(ws: string) {
     if (!ws) return
-    setMembers(null); setError('')
+    setMembers(null); setUsers(null); setError('')
     listMembers(ws).then(setMembers).catch(e => setError(String(e.message ?? e)))
+    // A non-admin cannot list accounts. That is not an error worth shouting
+    // about on a screen they are allowed to read the rest of.
+    listUsers(ws).then(setUsers).catch(() => setUsers([]))
   }
   useEffect(() => { refresh(workspace) }, [workspace])
 
@@ -105,6 +115,43 @@ export default function Roles() {
     } finally {
       setBusy(false)
     }
+  }
+
+  async function addPerson(e: React.FormEvent) {
+    e.preventDefault()
+    const who = newUser.username.trim()
+    if (!who) { setError('A username is required.'); return }
+    setBusy(true); setError(''); setNotice(''); setIssued(null)
+    try {
+      const created = await createUser(workspace, who, newUser.role, newUser.display.trim())
+      setIssued(created)
+      setNewUser({ username: '', display: '', role: 'auditor' })
+      refresh(workspace)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'the account could not be created')
+    } finally { setBusy(false) }
+  }
+
+  async function toggleStatus(user: AppUser) {
+    setBusy(true); setError(''); setNotice(''); setIssued(null)
+    const next = user.status === 'active' ? 'disabled' : 'active'
+    try {
+      await setUserStatus(workspace, user.username, next)
+      setNotice(`${user.username} is now ${next}.`)
+      refresh(workspace)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'the status could not be changed')
+    } finally { setBusy(false) }
+  }
+
+  async function resetPassword(user: AppUser) {
+    setBusy(true); setError(''); setNotice(''); setIssued(null)
+    try {
+      setIssued(await resetUserPassword(workspace, user.username))
+      refresh(workspace)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'the password could not be reset')
+    } finally { setBusy(false) }
   }
 
   const workspaces = Object.keys(me?.memberships ?? {})
@@ -160,7 +207,55 @@ export default function Roles() {
       )}
 
       <Card>
-        <div className="card-title"><UserPlus size={13} className="inline -mt-0.5 mr-1" />Grant a role</div>
+        <div className="card-title"><UserCog size={13} className="inline -mt-0.5 mr-1" />Add a person</div>
+        <p className="lede">
+          Creates the account and grants the role in one step. Two steps can
+          half-succeed, and an account with no role signs in to an empty console.
+        </p>
+        <form onSubmit={addPerson} className="lookup-form">
+          <input className="lookup-input" value={newUser.username} disabled={!isAdmin}
+                 placeholder="priya@acme.example" aria-label="Username"
+                 autoComplete="off" spellCheck={false}
+                 onChange={e => setNewUser(u => ({ ...u, username: e.target.value }))} />
+          <input className="lookup-input" style={{ maxWidth: '12rem' }}
+                 value={newUser.display} disabled={!isAdmin}
+                 placeholder="Display name" aria-label="Display name"
+                 autoComplete="off"
+                 onChange={e => setNewUser(u => ({ ...u, display: e.target.value }))} />
+          <select className="lookup-input" style={{ maxWidth: '10rem' }}
+                  value={newUser.role} disabled={!isAdmin}
+                  aria-label="Role for the new account"
+                  onChange={e => setNewUser(u => ({ ...u, role: e.target.value }))}>
+            {(catalogue?.roles ?? []).map(r => (
+              <option key={r.role} value={r.role}>{r.role}</option>
+            ))}
+          </select>
+          <button className="btn btn-primary" disabled={!isAdmin || busy}>
+            {busy ? 'Working…' : 'Create'}
+          </button>
+        </form>
+      </Card>
+
+      {/* THE ONE-TIME PASSWORD. Its own prominent block because it exists
+          nowhere else — only the hash is stored — and a credential rendered as
+          a toast is a credential somebody loses. */}
+      {issued && (
+        <Card>
+          <div className="card-title">
+            <KeyRound size={13} className="inline -mt-0.5 mr-1" />
+            One-time password for {issued.username}
+          </div>
+          <div className="secret-box"><span className="secret-key mono">{issued.password}</span></div>
+          <div className="gap-why">
+            Shown once and not recoverable. The account is locked to the change
+            form until its owner picks their own password. Copy it now.
+          </div>
+          <button className="btn" onClick={() => setIssued(null)}>Done</button>
+        </Card>
+      )}
+
+      <Card>
+        <div className="card-title"><UserPlus size={13} className="inline -mt-0.5 mr-1" />Grant a role to an existing principal</div>
         <form onSubmit={grant} className="lookup-form">
           <input className="lookup-input" value={principal} disabled={!isAdmin}
                  placeholder="someone@example.com"
@@ -232,6 +327,60 @@ export default function Roles() {
           </div>
         )}
       </div>
+      {users !== null && users.length > 0 && (
+        <div className="table-card">
+          <div className="card-title">Local accounts</div>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr><th>Account</th><th>Role here</th><th>Status</th><th>Last sign-in</th><th></th></tr>
+              </thead>
+              <tbody>
+                {users.map(u => {
+                  const isMe = u.username === me?.username
+                  return (
+                    <tr key={u.username}>
+                      <td className="mono">
+                        {u.username}
+                        {isMe && <span className="text-ink2"> (you)</span>}
+                        {Boolean(u.must_change_password) && (
+                          <span className="text-ink2"> · must change password</span>
+                        )}
+                      </td>
+                      <td>
+                        {/* No role here is a real state worth seeing: the
+                            account exists and can sign in to nothing. */}
+                        {u.role
+                          ? <RoleChip role={u.role} />
+                          : <span className="text-ink2">no role in this workspace</span>}
+                      </td>
+                      <td className="text-ink2">{u.status}</td>
+                      <td className="text-ink2">
+                        {u.last_login_at
+                          ? new Date(u.last_login_at * 1000).toLocaleDateString()
+                          : 'never'}
+                      </td>
+                      <td>
+                        <button className="btn" disabled={!isAdmin || busy}
+                                onClick={() => resetPassword(u)}>
+                          Reset password
+                        </button>
+                        {' '}
+                        <button className="btn"
+                                disabled={!isAdmin || busy || (isMe && u.status === 'active')}
+                                title={isMe ? 'You cannot disable your own account' : ''}
+                                onClick={() => toggleStatus(u)}>
+                          {u.status === 'active' ? 'Disable' : 'Enable'}
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

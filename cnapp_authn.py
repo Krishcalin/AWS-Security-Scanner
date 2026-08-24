@@ -96,6 +96,31 @@ class UserStore:
              "active", 1 if must_change_password else 0, now, now, None))
         return self.get_user(username)
 
+    def create_new_user(self, username: str, password: str, *,
+                        display_name: str = "") -> Dict[str, Any]:
+        """Create a user that does not exist yet. REFUSES to overwrite one.
+
+        WHY THIS EXISTS BESIDE `create_user`. That one is an UPSERT keyed on
+        username, and usernames are instance-wide while workspaces are not — so
+        a workspace admin "creating" a username that already belongs to another
+        workspace's user would silently RESET THAT USER'S PASSWORD and hand
+        control of their account across a tenant boundary.
+
+        Bootstrapping still wants the upsert (`create_user` is called once
+        against an empty table), so it is left alone. Everything reachable from
+        an API uses this.
+        """
+        username = (username or "").strip().lower()
+        if not username:
+            raise ValueError("username is required")
+        if self.get_user(username) is not None:
+            raise ValueError(
+                f"{username!r} already exists on this instance. Usernames are "
+                "instance-wide; grant that user a role instead of recreating "
+                "them.")
+        return self.create_user(username, password, display_name=display_name,
+                                must_change_password=True)
+
     def get_user(self, username: str) -> Optional[Dict[str, Any]]:
         row = self._be.query_one(
             "SELECT username, password_hash, display_name, status, "
@@ -131,6 +156,31 @@ class UserStore:
              (username or "").strip().lower()))
         if revoke_sessions:
             self.close_all_sessions(username)
+
+    def delete_user(self, username: str) -> None:
+        """Remove an account and its sessions.
+
+        Exists for ONE caller: rolling back a create whose role grant failed.
+        Deliberately not exposed as an endpoint — disabling is the reversible
+        operation an administrator wants, and a delete that removes the audit
+        trail of who existed is not something a UI should offer casually.
+        """
+        username = (username or "").strip().lower()
+        self.close_all_sessions(username)
+        self._be.execute("DELETE FROM app_user WHERE username=?", (username,))
+
+    def require_password_change(self, username: str) -> None:
+        """Mark an account as holding a credential somebody else has seen.
+
+        `set_password` CLEARS must_change_password, which is right when the
+        owner set it and wrong when an administrator did. Rather than give
+        set_password a flag every caller has to remember, the administrative
+        path sets it back explicitly.
+        """
+        self._be.execute(
+            "UPDATE app_user SET must_change_password=1, updated_at=? "
+            "WHERE username=?",
+            (self._now(), (username or "").strip().lower()))
 
     def set_status(self, username: str, status: str) -> None:
         if status not in ("active", "disabled"):
@@ -345,6 +395,29 @@ class UserStore:
         now = self._now()
         self._be.execute("DELETE FROM app_session WHERE expires_at <= ?", (now,))
         return 0
+
+
+#: Groups of five from an unambiguous alphabet — no O/0, no l/1/I. A credential
+#: an administrator reads aloud or copies out of a terminal should not fail on a
+#: character nobody can tell apart.
+_PW_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
+
+
+def issue_initial_password(groups: int = 4, group_len: int = 5) -> str:
+    """A one-time credential for a new account.
+
+    GENERATED, NEVER CHOSEN BY THE ADMINISTRATOR. An administrator picking
+    passwords picks a house pattern, and a house pattern means every account on
+    the instance shares a guessable prefix. It is still a credential somebody
+    else has seen, which is why every account created with it carries
+    `must_change_password` and is not the user's own account until they have
+    changed it.
+    """
+    import secrets
+
+    return "-".join("".join(secrets.choice(_PW_ALPHABET)
+                            for _ in range(group_len))
+                    for _ in range(groups))
 
 
 def bootstrap_admin(store: UserStore, workspaces=None, *,
