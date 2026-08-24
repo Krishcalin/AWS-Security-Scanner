@@ -319,7 +319,8 @@ POSTGRES_DDL: List[str] = [
     """CREATE TABLE IF NOT EXISTS workspace_members(
        workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id),
        principal TEXT NOT NULL,
-       role TEXT NOT NULL DEFAULT 'viewer' CHECK(role IN ('viewer','admin')),
+       role TEXT NOT NULL DEFAULT 'auditor'
+       CHECK(role IN ('auditor','viewer','ingest','analyst','admin')),
        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','invited','disabled')),
        added_by TEXT, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL,
        PRIMARY KEY(workspace_id, principal))""",
@@ -422,6 +423,62 @@ POSTGRES_DDL: List[str] = [
        scan_id TEXT, updated_at BIGINT NOT NULL)""",
 ]
 
+
+# ── constraint upgrades (v14) ────────────────────────────────────────────────
+# `CREATE TABLE IF NOT EXISTS` is a no-op on a table that already exists, so a
+# widened CHECK reaches a FRESH database and no existing one. That is exactly
+# how the `ingest` tier came to be grantable in code and impossible in the
+# database — ranked in cnapp_api, allowed by cnapp_workspace, rejected by a
+# constraint written before it existed.
+#
+# So widening a CHECK needs a real statement, and it must be idempotent because
+# `migrate()` runs on every open.
+POSTGRES_ALTERS: List[str] = [
+    "ALTER TABLE workspace_members DROP CONSTRAINT IF EXISTS "
+    "workspace_members_role_check",
+    "ALTER TABLE workspace_members ADD CONSTRAINT workspace_members_role_check "
+    "CHECK (role IN ('auditor','viewer','ingest','analyst','admin'))",
+]
+
+#: SQLite cannot drop a CHECK constraint, so the table is rebuilt: create the
+#: replacement, copy, drop, rename — the sequence SQLite's own documentation
+#: prescribes. Guarded by a probe (see `sqlite_needs_role_upgrade`) so it runs
+#: once rather than on every open.
+SQLITE_ROLE_REBUILD: List[str] = [
+    """CREATE TABLE workspace_members__v14(
+       workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id),
+       principal TEXT NOT NULL,
+       role TEXT NOT NULL DEFAULT 'auditor'
+         CHECK(role IN ('auditor','viewer','ingest','analyst','admin')),
+       status TEXT NOT NULL DEFAULT 'active'
+         CHECK(status IN ('active','invited','disabled')),
+       added_by TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+       PRIMARY KEY(workspace_id, principal))""",
+    """INSERT INTO workspace_members__v14
+       SELECT workspace_id, principal, role, status, added_by, created_at,
+              updated_at FROM workspace_members""",
+    "DROP TABLE workspace_members",
+    "ALTER TABLE workspace_members__v14 RENAME TO workspace_members",
+    "CREATE INDEX IF NOT EXISTS ix_wsmem_principal "
+    "ON workspace_members(principal)",
+]
+
+
+def sqlite_needs_role_upgrade(conn) -> bool:
+    """True when the live table still carries the two-role CHECK.
+
+    Read from the stored schema rather than from a version number: a database
+    stamped v14 by a partially-applied migration would otherwise be skipped
+    forever, and the symptom — a role that cannot be granted — is silent.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' "
+        "AND name='workspace_members'").fetchone()
+    if not row or not row[0]:
+        return False                       # table not created yet; DDL covers it
+    return "'analyst'" not in row[0]
+
+
 # Per-account advisory lock replacing sqlite's whole-DB BEGIN IMMEDIATE (different
 # accounts scan in parallel — strictly better than sqlite).
 PG_ADVISORY_LOCK = "SELECT pg_advisory_xact_lock(%s, hashtext(%s))"
@@ -434,6 +491,10 @@ class PostgresDialect:
 
     def ddl(self) -> List[str]:
         return list(POSTGRES_DDL)
+
+    def alters(self) -> List[str]:
+        """Idempotent statements run after the DDL. See POSTGRES_ALTERS."""
+        return list(POSTGRES_ALTERS)
 
     def convert(self, sql: str) -> str:
         return qmark_to_pyformat(sql)
@@ -451,6 +512,11 @@ class SqliteDialect:
     def ddl(self) -> List[str]:
         import aws_state
         return [s.strip() for s in aws_state._DDL.split(";") if s.strip()]
+
+    def alters(self) -> List[str]:
+        """SQLite's upgrades are conditional, so they are applied by the
+        backend rather than returned blindly. See sqlite_needs_role_upgrade."""
+        return []
 
     def convert(self, sql: str) -> str:
         return sql

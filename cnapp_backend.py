@@ -248,11 +248,21 @@ class SqliteBackend(Backend):
 
     def migrate(self) -> None:
         import aws_state
+        import aws_state_dialect
         # single-threaded at startup — use the one connection directly.
         ver = self.raw.execute("PRAGMA user_version").fetchone()[0]
         if ver < aws_state.SCHEMA_VERSION:
             self.raw.executescript(aws_state._DDL)
             self.raw.execute(f"PRAGMA user_version={aws_state.SCHEMA_VERSION}")
+            self.raw.commit()
+        # v14: widen workspace_members.role. Checked on EVERY open and keyed on
+        # the stored schema rather than the version stamp — CREATE TABLE IF NOT
+        # EXISTS never touches an existing table, so a database created before
+        # v14 keeps its old CHECK however it is stamped, and the symptom is a
+        # role that silently cannot be granted.
+        if aws_state_dialect.sqlite_needs_role_upgrade(self.raw):
+            for stmt in aws_state_dialect.SQLITE_ROLE_REBUILD:
+                self.raw.execute(stmt)
             self.raw.commit()
 
 
@@ -322,6 +332,11 @@ class PostgresBackend(Backend):
         import aws_state
         with self._conn() as c:                  # one connection for the whole migration
             for stmt in self.dialect.ddl():      # POSTGRES_DDL, all IF NOT EXISTS
+                c.execute(stmt)
+            # Idempotent constraint upgrades. A widened CHECK cannot reach an
+            # existing table through CREATE TABLE IF NOT EXISTS — see
+            # POSTGRES_ALTERS for the bug that taught us.
+            for stmt in getattr(self.dialect, "alters", list)():
                 c.execute(stmt)
             row = c.execute(
                 "SELECT COALESCE(MAX(version),0) FROM schema_migrations").fetchone()

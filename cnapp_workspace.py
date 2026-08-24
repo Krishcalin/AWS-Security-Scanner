@@ -17,7 +17,56 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-_ROLES = ("viewer", "ingest", "admin")   # ingest = below-admin CI/CD machine tier
+# ── roles ────────────────────────────────────────────────────────────────────
+# FOUR TIERS, STRICTLY ORDERED. Each is a superset of the one below, which is
+# what makes a single rank comparison a sound authorisation test — a role that
+# could do something a lower role cannot NOT do would need a capability set
+# instead, and every check in cnapp_api.py would have to change shape.
+#
+#   auditor   read-only. Sees everything in the workspace, changes nothing.
+#   ingest    auditor + POST an SBOM/scan document. A CI/CD MACHINE tier, so a
+#             leaked pipeline token cannot onboard or scan.
+#   analyst   ingest + operate the product: run scans, refresh vulns and
+#             detections, preview digests. Cannot change what the product is
+#             POINTED AT or where its findings are SENT.
+#   admin     analyst + configuration and outbound: onboard/validate accounts,
+#             set schedules, create delivery connectors, send notifications,
+#             and grant roles — including admin.
+#
+# `viewer` is the ORIGINAL name for auditor and is still accepted and still
+# stored, because rows written before this exist and rewriting a live
+# authorisation column is not a migration worth risking. `normalise_role` maps
+# it; `ROLE_RANK` ranks both identically.
+AUDITOR, INGEST, ANALYST, ADMIN = "auditor", "ingest", "analyst", "admin"
+LEGACY_VIEWER = "viewer"
+
+#: Accepted on write. `viewer` is kept for compatibility, not offered.
+_ROLES = (AUDITOR, LEGACY_VIEWER, INGEST, ANALYST, ADMIN)
+
+#: What an operator may CHOOSE. `viewer` is deliberately absent: it is an alias
+#: nobody should be creating new rows with.
+ASSIGNABLE_ROLES = (AUDITOR, INGEST, ANALYST, ADMIN)
+
+ROLE_RANK = {AUDITOR: 1, LEGACY_VIEWER: 1, INGEST: 2, ANALYST: 3, ADMIN: 4}
+
+ROLE_DESCRIPTIONS = {
+    AUDITOR: "Read-only. Sees every finding, path and report; changes nothing.",
+    INGEST: ("Machine tier for CI/CD. Reads, and may POST an SBOM or scan "
+             "document. Cannot onboard accounts or start scans."),
+    ANALYST: ("Operates the product: runs scans, refreshes vulnerabilities and "
+              "detections. Cannot change what is scanned or where findings go."),
+    ADMIN: ("Full control of the workspace, including granting roles and "
+            "creating other admins."),
+}
+
+
+def normalise_role(role: str) -> str:
+    """`viewer` -> `auditor`; everything else unchanged.
+
+    Applied on READ so the console and the API speak one vocabulary, while the
+    database keeps whatever was written to it.
+    """
+    return AUDITOR if role == LEGACY_VIEWER else role
 _WS_STATUS = ("active", "suspended", "archived")
 _MEMBER_STATUS = ("active", "invited", "disabled")
 

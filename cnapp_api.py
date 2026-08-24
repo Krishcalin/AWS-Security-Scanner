@@ -14,6 +14,8 @@ raises a clear error rather than breaking test collection of the pure backend.
 """
 
 from dataclasses import dataclass, field
+
+import cnapp_workspace
 from typing import Dict, List, Optional, Union
 # NOTE: deliberately NO `from __future__ import annotations` here — with PEP 563
 # the route annotations become strings and FastAPI's get_type_hints cannot resolve
@@ -30,10 +32,19 @@ except Exception as _e:                              # pragma: no cover - deploy
 
 
 # ── RBAC ──────────────────────────────────────────────────────────────────────
-# `ingest` is a below-admin tier for CI/CD machine tokens: it can POST an SBOM/scan to
-# /ingest but CANNOT onboard/delete accounts or run scans (those stay admin) — so a
-# leaked CI token can't compromise the account. viewer < ingest < admin.
-_ROLE_RANK = {"viewer": 1, "ingest": 2, "admin": 3}
+# auditor < ingest < analyst < admin. The vocabulary and the rank live in
+# cnapp_workspace so the store that WRITES a role and the gate that READS it
+# cannot disagree — they did before: `ingest` was ranked here and allowed by the
+# store while the table's CHECK constraint rejected it, so the tier was
+# grantable in code and impossible in the database.
+#
+# The boundary that matters most is analyst/admin, and it is not "read vs
+# write": an analyst runs scans and refreshes findings, which costs compute and
+# changes nothing outside. Admin owns the two things that reach beyond the
+# workspace — what the product is POINTED AT (onboarding, schedules) and where
+# its findings are SENT (delivery connectors, notifications) — because a leaked
+# analyst credential must not be able to exfiltrate findings to a webhook.
+_ROLE_RANK = dict(cnapp_workspace.ROLE_RANK)
 DEFAULT_WORKSPACE = "ws-default"
 
 
@@ -288,11 +299,11 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     # ── inventory (viewer) ────────────────────────────────────────────────────
     @app.get("/accounts")
     def list_accounts(onboarding_status: Optional[str] = None, health: Optional[str] = None,
-                      scope: Scope = Depends(require("viewer"))):
+                      scope: Scope = Depends(require("auditor"))):
         return service.list_accounts(onboarding_status=onboarding_status, health=health,
                                      workspace_id=scope.workspace_id)
 
-    @app.get("/accounts/{account_id}", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}", dependencies=[Depends(account_gate("auditor"))])
     def get_account(account_id: str):
         a = service.get_account(account_id)
         if not a:
@@ -301,13 +312,17 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
 
     # ── scanning (admin) ──────────────────────────────────────────────────────
     @app.post("/scans", status_code=202)
-    def trigger_scan(body: ScanReq, scope: Scope = Depends(require("admin"))):
+    # ANALYST, not admin: running a scan is the core operate-the-product action.
+    # It costs compute and reads the accounts already onboarded — it cannot add
+    # an account, change a schedule, or send a finding anywhere. Those stay
+    # admin, which is where the analyst/admin line actually falls.
+    def trigger_scan(body: ScanReq, scope: Scope = Depends(require("analyst"))):
         return {"job_ids": service.trigger_scan(
             body.account_ids, all=body.all, workspace_id=scope.workspace_id,
             is_superadmin=scope.principal.is_superadmin)}
 
     @app.get("/scans/{job_id}")
-    def get_scan(job_id: str, scope: Scope = Depends(require("viewer"))):
+    def get_scan(job_id: str, scope: Scope = Depends(require("auditor"))):
         # a scan job is account-scoped (carries account_id); isolate on its owner and
         # 404 (existence-hiding) when the job is unknown OR belongs to another tenant
         j = service.get_scan_job(job_id)
@@ -333,34 +348,34 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    @app.get("/accounts/{account_id}/trend", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/trend", dependencies=[Depends(account_gate("auditor"))])
     def trend(account_id: str):
         return service.get_trend(account_id)
 
-    @app.get("/accounts/{account_id}/mttr", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/mttr", dependencies=[Depends(account_gate("auditor"))])
     def mttr(account_id: str):
         return service.get_mttr(account_id)
 
-    @app.get("/accounts/{account_id}/drift", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/drift", dependencies=[Depends(account_gate("auditor"))])
     def drift(account_id: str):
         return service.get_drift(account_id)
 
     # ── results (viewer) ──────────────────────────────────────────────────────
-    @app.get("/accounts/{account_id}/issues", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/issues", dependencies=[Depends(account_gate("auditor"))])
     def issues(account_id: str, severity: Optional[str] = None,
                status: Optional[str] = None):
         return service.get_issues(account_id, severity=severity, status=status)
 
-    @app.get("/accounts/{account_id}/paths", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/paths", dependencies=[Depends(account_gate("auditor"))])
     def paths(account_id: str):
         return service.get_paths(account_id)
 
-    @app.get("/accounts/{account_id}/graph", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/graph", dependencies=[Depends(account_gate("auditor"))])
     def graph(account_id: str):
         return service.get_graph(account_id)
 
     @app.post("/accounts/{account_id}/graph/query",
-              dependencies=[Depends(account_gate("viewer"))])
+              dependencies=[Depends(account_gate("auditor"))])
     def graph_query(account_id: str, body: WqlReq):
         # read-only WQL over the persisted graph; a malformed/unsafe query → 400, no scan → 404
         try:
@@ -372,7 +387,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         return r
 
     @app.get("/accounts/{account_id}/graph/blast-radius",
-             dependencies=[Depends(account_gate("viewer"))])
+             dependencies=[Depends(account_gate("auditor"))])
     def blast_radius(account_id: str, node: str = Query(min_length=1),
                      max_hops: int = Query(8, ge=1, le=12)):
         # read-only reverse+forward reachability over the persisted graph; the node is
@@ -382,32 +397,32 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
             raise HTTPException(status_code=404, detail="no scan results for account")
         return r
 
-    @app.get("/accounts/{account_id}/summary", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/summary", dependencies=[Depends(account_gate("auditor"))])
     def account_summary(account_id: str):
         s = service.get_account_summary(account_id)
         if not s:
             raise HTTPException(status_code=404, detail="no scan results for account")
         return s
 
-    @app.get("/accounts/{account_id}/findings", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/findings", dependencies=[Depends(account_gate("auditor"))])
     def findings(account_id: str):
         return service.get_finding_catalog(account_id)
 
     @app.get("/org/overview")
-    def org_overview(scope: Scope = Depends(require("viewer"))):
+    def org_overview(scope: Scope = Depends(require("auditor"))):
         return service.org_overview(workspace_id=scope.workspace_id)
 
     @app.get("/org/findings")
-    def org_findings(scope: Scope = Depends(require("viewer"))):
+    def org_findings(scope: Scope = Depends(require("auditor"))):
         return service.org_findings(workspace_id=scope.workspace_id)
 
     # ── Projects (LBI/MBI/HBI business-impact grouping; read-only roll-up) ──────
     @app.get("/projects")
-    def projects(scope: Scope = Depends(require("viewer"))):
+    def projects(scope: Scope = Depends(require("auditor"))):
         return service.list_projects(workspace_id=scope.workspace_id)
 
     @app.get("/projects/{project_id}")
-    def project_detail(project_id: str, scope: Scope = Depends(require("viewer"))):
+    def project_detail(project_id: str, scope: Scope = Depends(require("auditor"))):
         p = service.project_summary(project_id, workspace_id=scope.workspace_id)
         if p is None:
             raise HTTPException(status_code=404, detail="project not found")
@@ -415,22 +430,22 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
 
     # ── Controls (saved-WQL-query-as-Control; read-only org roll-up) ────────────
     @app.get("/controls")
-    def controls(scope: Scope = Depends(require("viewer"))):
+    def controls(scope: Scope = Depends(require("auditor"))):
         return service.list_controls(workspace_id=scope.workspace_id)
 
     # ── Policies (policy-as-code custom rules; read-only org roll-up) ───────────
     @app.get("/policies")
-    def policies(scope: Scope = Depends(require("viewer"))):
+    def policies(scope: Scope = Depends(require("auditor"))):
         return service.list_policies(workspace_id=scope.workspace_id)
 
     # ── Batch 6: non-AWS registry connectors (GHCR/Docker Hub/Harbor/ACR) ───────
     @app.get("/registries")
-    def registries(scope: Scope = Depends(require("viewer"))):
+    def registries(scope: Scope = Depends(require("auditor"))):
         return service.list_registry_connectors()          # secret-masked; config-driven
 
     @app.get("/registries/images")
     def registry_connector_images(connector_id: Optional[str] = None,
-                                  scope: Scope = Depends(require("viewer"))):
+                                  scope: Scope = Depends(require("auditor"))):
         return service.list_registry_connector_images(connector_id)   # cached last-scan rows
 
     @app.post("/registries/{connector_id}/scan")
@@ -439,7 +454,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         return service.scan_registry_connector(connector_id)
 
     # ── grounded copilot (viewer; answers only from the account's own scan) ────
-    @app.post("/accounts/{account_id}/copilot", dependencies=[Depends(account_gate("viewer"))])
+    @app.post("/accounts/{account_id}/copilot", dependencies=[Depends(account_gate("auditor"))])
     def copilot(account_id: str, body: CopilotReq):
         a = service.copilot_answer(account_id, body.question)
         if a is None:
@@ -447,7 +462,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         return a
 
     @app.post("/org/copilot")
-    def org_copilot(body: CopilotReq, scope: Scope = Depends(require("viewer"))):
+    def org_copilot(body: CopilotReq, scope: Scope = Depends(require("auditor"))):
         return service.org_copilot_answer(body.question, workspace_id=scope.workspace_id)
 
     # ── external-vuln ingest + reachability-ranked inventory ──────────────────
@@ -462,7 +477,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         except RuntimeError as e:                   # ingest requires a state store
             raise HTTPException(status_code=503, detail=str(e))
 
-    @app.get("/accounts/{account_id}/vulns", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/vulns", dependencies=[Depends(account_gate("auditor"))])
     def vulns(account_id: str, min_band: Optional[str] = None, kev: Optional[bool] = None,
               on_path: Optional[bool] = None, source: Optional[str] = None,
               node: Optional[str] = None, include_suppressed: bool = True,
@@ -471,27 +486,27 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
             account_id, min_band=min_band, kev=kev, on_path=on_path, source=source,
             node=node, include_suppressed=include_suppressed, sort=sort, limit=limit)
 
-    @app.get("/accounts/{account_id}/vulns/{cve}", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/vulns/{cve}", dependencies=[Depends(account_gate("auditor"))])
     def vuln_detail(account_id: str, cve: str):
         rows = service.get_vuln(account_id, cve)
         if not rows:
             raise HTTPException(status_code=404, detail="no ingested rows for this CVE")
         return rows
 
-    @app.get("/accounts/{account_id}/ingest/docs", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/ingest/docs", dependencies=[Depends(account_gate("auditor"))])
     def ingest_docs(account_id: str, limit: int = 200):
         return service.list_ingest_docs(account_id, limit)
 
     # ── supply chain: SBOM subjects / snapshots / diff / components / license ────
-    @app.get("/accounts/{account_id}/sbom/subjects", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/sbom/subjects", dependencies=[Depends(account_gate("auditor"))])
     def sbom_subjects(account_id: str):
         return service.list_sbom_subjects(account_id)
 
-    @app.get("/accounts/{account_id}/sbom/snapshots", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/sbom/snapshots", dependencies=[Depends(account_gate("auditor"))])
     def sbom_snapshots(account_id: str, subject: Optional[str] = None):
         return service.list_sbom_snapshots(account_id, subject=subject)
 
-    @app.get("/accounts/{account_id}/sbom/diff", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/sbom/diff", dependencies=[Depends(account_gate("auditor"))])
     def sbom_diff(account_id: str, from_id: Optional[str] = Query(default=None, alias="from"),
                   to_id: Optional[str] = Query(default=None, alias="to"),
                   subject: Optional[str] = None):
@@ -500,28 +515,28 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
             raise HTTPException(status_code=404, detail="need two comparable snapshots of one subject")
         return d
 
-    @app.get("/accounts/{account_id}/components", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/components", dependencies=[Depends(account_gate("auditor"))])
     def components(account_id: str, snapshot: Optional[str] = None, license: Optional[str] = None):
         return service.list_sbom_components(account_id, snapshot=snapshot, license=license)
 
-    @app.get("/accounts/{account_id}/license-findings", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/license-findings", dependencies=[Depends(account_gate("auditor"))])
     def license_findings(account_id: str):
         return service.list_license_findings(account_id)
 
-    @app.get("/accounts/{account_id}/vex", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/vex", dependencies=[Depends(account_gate("auditor"))])
     def vex_statements(account_id: str):
         return service.list_vex_statements(account_id)
 
     # ── Slice-5: agentless ECR registry views ────────────────────────────────
-    @app.get("/accounts/{account_id}/registry/repos", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/registry/repos", dependencies=[Depends(account_gate("auditor"))])
     def registry_repos(account_id: str):
         return service.list_registry_repos(account_id)
 
-    @app.get("/accounts/{account_id}/registry/images", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/registry/images", dependencies=[Depends(account_gate("auditor"))])
     def registry_images(account_id: str, repo: Optional[str] = None):
         return service.list_registry_images(account_id, repo=repo)
 
-    @app.post("/accounts/{account_id}/vulns/refresh", dependencies=[Depends(account_gate("admin"))])
+    @app.post("/accounts/{account_id}/vulns/refresh", dependencies=[Depends(account_gate("analyst"))])
     def vulns_refresh(account_id: str):
         try:
             return service.refresh_vuln_reachability(account_id)
@@ -531,12 +546,12 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     @app.get("/org/vulns")
     def org_vulns(min_band: Optional[str] = None, kev: Optional[bool] = None,
                   on_path: Optional[bool] = None, limit: int = 2000,
-                  scope: Scope = Depends(require("viewer"))):
+                  scope: Scope = Depends(require("auditor"))):
         return service.org_vulns(min_band=min_band, kev=kev, on_path=on_path, limit=limit,
                                  workspace_id=scope.workspace_id)
 
     # ── CDR-lite: streaming detection ingest + reachability-ranked incidents ────
-    @app.post("/accounts/{account_id}/detections", dependencies=[Depends(account_gate("admin"))])
+    @app.post("/accounts/{account_id}/detections", dependencies=[Depends(account_gate("analyst"))])
     def detections_ingest(account_id: str, body: DetectionReq):
         try:
             return service.ingest_detection(account_id, events=body.events, source=body.source)
@@ -545,23 +560,23 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         except RuntimeError as e:                   # detection ingest requires a state store
             raise HTTPException(status_code=503, detail=str(e))
 
-    @app.get("/accounts/{account_id}/detections", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/detections", dependencies=[Depends(account_gate("auditor"))])
     def detections_list(account_id: str, source: Optional[str] = None,
                         incidents_only: bool = False, limit: int = 2000):
         return service.list_detections(account_id, source=source,
                                        incidents_only=incidents_only, limit=limit)
 
-    @app.get("/accounts/{account_id}/incidents", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/incidents", dependencies=[Depends(account_gate("auditor"))])
     def incidents_list(account_id: str, limit: int = 200):
         return service.list_incidents(account_id, limit=limit)
 
     @app.post("/accounts/{account_id}/detections/refresh",
-              dependencies=[Depends(account_gate("admin"))])
+              dependencies=[Depends(account_gate("analyst"))])
     def detections_refresh(account_id: str):
         return service.refresh_detection_escalation(account_id)
 
     @app.get("/org/incidents")
-    def org_incidents(limit: int = 200, scope: Scope = Depends(require("viewer"))):
+    def org_incidents(limit: int = 200, scope: Scope = Depends(require("auditor"))):
         return service.org_incidents(limit=limit, workspace_id=scope.workspace_id)
 
     # ── EDR / runtime-sensor ingest + coverage (push-ingest at the machine 'ingest' tier) ──
@@ -575,7 +590,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         except RuntimeError as e:                   # requires a state store
             raise HTTPException(status_code=503, detail=str(e))
 
-    @app.get("/accounts/{account_id}/edr/coverage", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/edr/coverage", dependencies=[Depends(account_gate("auditor"))])
     def edr_coverage(account_id: str):
         cov = service.edr_coverage(account_id)
         if cov is None:
@@ -583,7 +598,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         return cov
 
     @app.get("/org/edr/coverage")
-    def org_edr_coverage(scope: Scope = Depends(require("viewer"))):
+    def org_edr_coverage(scope: Scope = Depends(require("auditor"))):
         return service.org_edr_coverage(workspace_id=scope.workspace_id)
 
     # ── malware-finding ingest (GuardDuty Malware Protection / ClamAV / YARA; ingest tier) ──
@@ -597,7 +612,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
             raise HTTPException(status_code=503, detail=str(e))
 
     # ── DSPM: sensitive-data inventory (read-only over the stored graph) ─────────
-    @app.get("/accounts/{account_id}/data/inventory", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/data/inventory", dependencies=[Depends(account_gate("auditor"))])
     def data_inventory(account_id: str):
         inv = service.data_inventory(account_id)
         if inv is None:
@@ -605,25 +620,25 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         return inv
 
     @app.get("/org/data/inventory")
-    def org_data_inventory(scope: Scope = Depends(require("viewer"))):
+    def org_data_inventory(scope: Scope = Depends(require("auditor"))):
         return service.org_data_inventory(workspace_id=scope.workspace_id)
 
     # ── cloud-forensics timeline (viewer; read-only CloudTrail, correlated) ─────
     @app.get("/accounts/{account_id}/forensics/timeline",
-             dependencies=[Depends(account_gate("viewer"))])
+             dependencies=[Depends(account_gate("auditor"))])
     def forensics_timeline(account_id: str, resource: str, limit: int = 200):
         return service.forensics_timeline(account_id, resource, limit=limit)
 
     # ── compliance breadth (viewer; reference data + derived scorecards) ───────
-    @app.get("/compliance/frameworks", dependencies=[Depends(require("viewer"))])
+    @app.get("/compliance/frameworks", dependencies=[Depends(require("auditor"))])
     def compliance_frameworks():
         return service.list_compliance_frameworks()
 
-    @app.get("/compliance/crosswalk", dependencies=[Depends(require("viewer"))])
+    @app.get("/compliance/crosswalk", dependencies=[Depends(require("auditor"))])
     def compliance_crosswalk(framework: Optional[str] = None):
         return service.get_crosswalk(framework)
 
-    @app.get("/accounts/{account_id}/compliance", dependencies=[Depends(account_gate("viewer"))])
+    @app.get("/accounts/{account_id}/compliance", dependencies=[Depends(account_gate("auditor"))])
     def account_compliance(account_id: str, min_confidence: Optional[str] = None,
                            frameworks: Optional[str] = None):
         fw = [f for f in frameworks.split(",") if f] if frameworks else None
@@ -634,7 +649,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
 
     @app.get("/org/compliance")
     def org_compliance(min_confidence: Optional[str] = None,
-                       scope: Scope = Depends(require("viewer"))):
+                       scope: Scope = Depends(require("auditor"))):
         return service.org_compliance(min_confidence=min_confidence,
                                       workspace_id=scope.workspace_id)
 
@@ -654,7 +669,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
             raise HTTPException(status_code=400, detail=str(e))
 
     @app.get("/connectors")
-    def list_connectors(scope: Scope = Depends(require("viewer"))):
+    def list_connectors(scope: Scope = Depends(require("auditor"))):
         return service.list_connectors(workspace_id=scope.workspace_id)
 
     @app.get("/connectors/{connector_id}", dependencies=[Depends(connector_gate("viewer"))])
@@ -747,7 +762,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
 
     @app.get("/notifications")
     def notifications(account: Optional[str] = None, status: Optional[str] = None,
-                      scope: Scope = Depends(require("viewer"))):
+                      scope: Scope = Depends(require("auditor"))):
         return service.list_deliveries(None, account=account, status=status,
                                        workspace_id=scope.workspace_id)
 
@@ -759,11 +774,11 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
 
     @app.get("/digests")
     def digests(account: Optional[str] = None, status: Optional[str] = None,
-                scope: Scope = Depends(require("viewer"))):
+                scope: Scope = Depends(require("auditor"))):
         return service.list_digests(None, account=account, status=status,
                                     workspace_id=scope.workspace_id)
 
-    @app.post("/accounts/{account_id}/digest/preview", dependencies=[Depends(account_gate("admin"))])
+    @app.post("/accounts/{account_id}/digest/preview", dependencies=[Depends(account_gate("analyst"))])
     def digest_preview(account_id: str):
         d = service.preview_digest(account_id)
         if d is None:
@@ -807,6 +822,31 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
             service.delete_workspace(ws_id)
         except (ValueError, RuntimeError) as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+    @app.get("/roles")
+    def roles(_: Principal = Depends(require("auditor"))):
+        """The assignable roles, ranked, each with what it can do.
+
+        SERVED RATHER THAN HARD-CODED IN THE CONSOLE, so a role added here
+        cannot be missing from the picker an administrator uses to grant it —
+        and so the description a user is shown is the one the gate enforces.
+
+        `viewer` is absent: it is the original name for `auditor`, still
+        accepted on write and still stored where it already exists, but not
+        something new grants should use.
+        """
+        return {
+            "roles": [
+                {"role": r, "rank": cnapp_workspace.ROLE_RANK[r],
+                 "description": cnapp_workspace.ROLE_DESCRIPTIONS[r]}
+                for r in cnapp_workspace.ASSIGNABLE_ROLES
+            ],
+            "legacy_aliases": {cnapp_workspace.LEGACY_VIEWER:
+                               cnapp_workspace.AUDITOR},
+            "note": ("Strictly ordered: each role can do everything the one "
+                     "below it can. Admin is the only role that can grant "
+                     "roles, including admin."),
+        }
 
     @app.get("/workspaces/{ws_id}/members")
     def list_members(ws_id: str, _=Depends(ws_admin_gate)):

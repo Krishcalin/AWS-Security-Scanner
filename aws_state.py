@@ -35,7 +35,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-SCHEMA_VERSION = 13  # v13: + scan_results (scan payloads survive a hub restart)
+SCHEMA_VERSION = 14  # v14: four-tier RBAC (auditor/ingest/analyst/admin)
 KEY_VERSION = 1
 
 # Caller-injected scan timestamp (one per run). epoch = arithmetic column,
@@ -305,7 +305,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ix_ws_slug ON workspaces(slug);
 CREATE TABLE IF NOT EXISTS workspace_members(
   workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id),
   principal TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'viewer' CHECK(role IN ('viewer','admin')),
+  role TEXT NOT NULL DEFAULT 'auditor'
+       CHECK(role IN ('auditor','viewer','ingest','analyst','admin')),
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','invited','disabled')),
   added_by TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
   PRIMARY KEY(workspace_id, principal));
