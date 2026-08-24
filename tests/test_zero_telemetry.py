@@ -6,6 +6,15 @@ pointed at the operator's OWN resources (see NETWORK.md). This test locks that i
 fails the moment someone adds a telemetry SDK, a network primitive outside the two
 allowlisted files, a hardcoded non-AWS/non-connector egress host, or loosens the SSRF/
 TLS guards. Pure stdlib + pytest; reads source, touches no network.
+
+Sections A-E are about EGRESS: what OverWatch sends. Section F is about INGEST: what
+OverWatch is allowed to absorb in the first place. That distinction was invisible
+while every ingest source was a config API, and it stops being invisible the moment
+an AI detection plane exists, because the interesting fields in that plane are the
+customer's prompts. A guard that only watches the exit is satisfied by a product that
+reads prompt text into its own graph and then hands it to a customer-configured Jira
+connector -- egress the operator asked for, carrying content they never agreed to
+share. Sections A-E would pass that build green. Section F is why they no longer do.
 """
 import ast
 import glob
@@ -217,3 +226,201 @@ def test_registry_egress_guard_pinned():
     for m in re.finditer(r'"([a-z0-9\-]+\.(?:io|com|net|azurecr\.io))"', src):
         host = m.group(1)
         assert host.endswith("amazonaws.com"), f"unexpected host literal in egress file: {host!r}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# F. INGEST-side containment — what may ENTER the product
+#
+# Sections A-E prove OverWatch does not phone home. They say nothing about what it
+# absorbs. These assertions are the other half: the ingest plane may take STRUCTURE
+# and IDENTIFIERS off a third-party event, never model conversation content, and it
+# must do so field-by-field so that a reviewer reading a diff can see every field
+# that just entered the product.
+#
+# On the deliberate narrowness of _CONTENT_KEYS: it names keys that can only be
+# conversation payloads. It does NOT include "text", "message" or "content", which
+# the spec suggested, because aws_ingest.py:190 reads SARIF `text`/`markdown` (a
+# scanner's own finding description) and normalize_falco reads `output` (a rule
+# message) -- both legitimate, both pre-existing. A denylist that fires on correct
+# code is a denylist someone deletes, and a deleted tripwire protects nothing. The
+# general case is caught structurally instead, by F2: content cannot arrive under
+# ANY key name if evidence dicts must be written out key by key.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Every module that turns a THIRD-PARTY payload into something OverWatch stores.
+_INGEST_MODULES = ("aws_cdr.py", "aws_edr.py", "aws_ingest.py")
+
+# Keys whose value is model input/output. Reading one of these is reading a prompt.
+_CONTENT_KEYS = frozenset({
+    "prompt", "prompts", "completion", "completions",
+    "input_body", "output_body", "inputbodyjson", "outputbodyjson",
+    "inputbody", "outputbody", "prompttext", "completiontext",
+    "model_input", "model_output", "modelinput", "modeloutput",
+    "invocationinput", "invocationoutput", "inputtext", "outputtext",
+    "messages", "arguments", "tool_input", "toolinput",
+    "systemprompt", "system_prompt", "user_message", "assistant_message",
+})
+
+# Helpers a normalizer may route an evidence dict through. Each must take a dict
+# LITERAL as its first argument, so the fields are still written out one by one.
+_EVIDENCE_WRAPPERS = ("_wrap_identity",)
+
+
+def _ingest_sources():
+    for name in _INGEST_MODULES:
+        path = os.path.join(ROOT, name)
+        if os.path.isfile(path):
+            yield name, _src(path)
+
+
+def _dict_keys_read(src):
+    """Every string literal used to pull a value out of a mapping: obj.get("K"),
+    obj["K"], and the keys of dict literals the module builds."""
+    tree = ast.parse(src)
+    keys = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get" and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)):
+            keys.add(node.args[0].value)
+        elif (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant)
+                and isinstance(node.slice.value, str)):
+            keys.add(node.slice.value)
+        elif isinstance(node, ast.Dict):
+            for k in node.keys:
+                if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                    keys.add(k.value)
+    return keys
+
+
+def content_keys_in(src):
+    """The model-content keys a source touches. Public: the poisoned fixture calls it."""
+    return {k for k in _dict_keys_read(src) if k.lower().replace("-", "_") in _CONTENT_KEYS
+            or k.lower() in _CONTENT_KEYS}
+
+
+def _dict_is_written_out(node):
+    """True iff a dict literal names every key — no ``**other`` laundering a payload."""
+    return isinstance(node, ast.Dict) and all(k is not None for k in node.keys)
+
+
+def evidence_violations_in(src):
+    """Every `evidence=` argument that is not written out field by field.
+
+    Returns a list of human-readable violations. Public: the poisoned fixture and the
+    real modules are both checked through this one function, so the guard and the
+    proof that the guard works cannot drift apart."""
+    tree = ast.parse(src)
+    bad = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg != "evidence":
+                continue
+            v = kw.value
+            if _dict_is_written_out(v):
+                continue
+            if (isinstance(v, ast.Call) and isinstance(v.func, ast.Name)
+                    and v.func.id in _EVIDENCE_WRAPPERS
+                    and v.args and _dict_is_written_out(v.args[0])):
+                continue
+            bad.append(f"line {getattr(v, 'lineno', '?')}: "
+                       f"evidence={ast.dump(v)[:80]}")
+    return bad
+
+
+def _annotated_fields(src, class_name):
+    """The annotated field names of a dataclass, read statically."""
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            return [b.target.id for b in node.body
+                    if isinstance(b, ast.AnnAssign) and isinstance(b.target, ast.Name)]
+    raise AssertionError(f"{class_name} not found")
+
+
+# ── F1. the ingest plane never reads model conversation content ──────────────
+def test_no_ingest_module_reads_model_conversation_content():
+    """A normalizer that reads a prompt has already made OverWatch a processor of
+    the customer's model traffic, whatever it does with the value afterwards."""
+    offenders = {}
+    for name, src in _ingest_sources():
+        found = content_keys_in(src)
+        if found:
+            offenders[name] = sorted(found)
+    assert not offenders, (
+        f"ingest modules read model conversation content: {offenders}. "
+        "OverWatch is sold on reading CONFIG, not data. If this is deliberate it "
+        "needs the FLOW-00 shape (separate opt-in policy, off by default, "
+        "resource-scoped, failing open to a numbered note) and an explicit entry "
+        "here — not a silent key read.")
+
+
+# ── F2. evidence is written out field by field, never splatted ───────────────
+def test_evidence_dicts_are_written_out_not_splatted():
+    """`evidence` is a free-form dict on NormalizedDetection, which makes it the one
+    place arbitrary third-party payload can enter without changing a signature.
+    Requiring a literal means every field that enters is visible in the diff."""
+    offenders = {}
+    for name, src in _ingest_sources():
+        bad = evidence_violations_in(src)
+        if bad:
+            offenders[name] = bad
+    assert not offenders, (
+        f"evidence dict built from an unenumerated source: {offenders}. "
+        "Write the fields out by name so a reviewer can see what enters.")
+
+
+# ── F3/F4. the two contracts that carry data onward are closed sets ──────────
+def test_normalized_detection_is_a_closed_set_of_fields():
+    """Adding a content-bearing field to the ingest contract must be a conscious
+    diff against this list, not an incidental one."""
+    fields = _annotated_fields(_src(os.path.join(ROOT, "aws_cdr.py")),
+                               "NormalizedDetection")
+    assert fields == ["id", "source", "type", "title", "severity", "band",
+                      "node_kind", "node_key", "resource_arn", "first_seen",
+                      "evidence"], (
+        f"NormalizedDetection fields changed: {fields}. If a field was added, "
+        "confirm it cannot carry model input/output, then update this list.")
+
+
+def test_enriched_finding_is_a_closed_set_of_fields():
+    """The connector plane is where an ingest leak becomes a headline: it is the only
+    surface that sends finding content to a third party the operator configured."""
+    fields = _annotated_fields(_src(os.path.join(ROOT, "cnapp_connectors.py")),
+                               "EnrichedFinding")
+    assert fields == ["check_id", "section", "severity", "status", "compliance",
+                      "remediation_cmd", "risk", "impact", "steps", "affected",
+                      "count", "distinct", "account", "on_attack_path"], (
+        f"EnrichedFinding fields changed: {fields}. Everything here is rendered into "
+        "Jira/Slack/PagerDuty/Splunk payloads. A field added here leaves the estate.")
+
+
+# ── F5. the tripwire is PROVEN to fire ───────────────────────────────────────
+_POISONED = os.path.join(ROOT, "tests", "fixtures", "poisoned_normalizer.py")
+
+
+def test_the_poisoned_fixture_exists():
+    assert os.path.isfile(_POISONED), (
+        "the fixture that proves Section F fires has been deleted; without it these "
+        "assertions have never been observed to reject anything")
+
+
+def test_f1_rejects_the_poisoned_fixture():
+    found = content_keys_in(_src(_POISONED))
+    assert "prompt" in found and "outputBodyJson" in found, (
+        f"F1 did not catch the deliberately poisoned normalizer (saw {sorted(found)})")
+
+
+def test_f2_rejects_the_poisoned_fixture():
+    bad = evidence_violations_in(_src(_POISONED))
+    assert len(bad) >= 2, (
+        f"F2 must reject BOTH the splatted dict and the bare raw event, got {bad}")
+
+
+def test_the_poisoned_fixture_is_not_shipped():
+    """It lives under tests/ and must never be reachable from application code."""
+    assert _POISONED not in _app_modules()
+    for path in _app_modules():
+        assert "poisoned_normalizer" not in _src(path), f"{path} imports the fixture"
