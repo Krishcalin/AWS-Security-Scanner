@@ -181,7 +181,7 @@ def build(rng: random.Random) -> Dict[str, List[tuple]]:
     rows: Dict[str, List[tuple]] = {
         "workspaces": [], "workspace_members": [], "workspace_accounts": [],
         "accounts": [], "scans": [], "findings": [], "finding_events": [],
-        "ingested_vulns": [],
+        "ingested_vulns": [], "scan_results": [],
     }
 
     for org_index, profile in enumerate(PROFILES):
@@ -301,6 +301,209 @@ def _account_history(rng, rows, catalogue, profile, account_id, regions,
             f"DEMO-{getattr(scanner, 'VERSION', '2.35.0')}"))
 
     _account_vulns(rng, rows, profile, account_id, now, weight)
+
+    # THE SCAN PAYLOAD. Everything above lands in tables; the console's
+    # Findings / Overview / Attack Paths / Inventory / Compliance screens read
+    # a payload instead, through ResultStore. Seeding one without the other is
+    # exactly why those tabs were empty while Cloud Accounts and
+    # Vulnerabilities were not.
+    #
+    # Derived from the findings already generated for this account, so the two
+    # layers cannot disagree about what was found.
+    mine = [r for r in rows["findings"] if r[0] == account_id]
+    rows["scan_results"].append(
+        _payload_row(rng, profile, account_id, mine, rows["scans"], now))
+
+
+def _payload_row(rng, profile, account_id, findings, all_scans, now):
+    """One `scan_results` row: (account_id, payload_json, scan_id, updated_at)."""
+    latest = [s for s in all_scans if s[1] == account_id]
+    last = latest[-1] if latest else None
+    score = last[5] if last else 50.0
+    grade = last[6] if last else "C"
+    scan_id = last[0] if last else f"scan-demo-{account_id}-0"
+
+    catalog = _finding_catalog(findings)
+    counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    for row in findings:
+        if row[10] == "open" and row[8] in counts:
+            counts[row[8]] += 1
+    paths = _attack_paths(rng, profile, account_id, counts)
+
+    payload = {
+        "account": account_id,
+        "region": "multi",
+        "posture_score": score,
+        "posture_grade": grade,
+        "scan_id": scan_id,
+        "summary": {"FAIL": sum(counts.values()), "PASS": rng.randint(180, 260),
+                    "WARN": rng.randint(4, 30), "INFO": rng.randint(2, 15)},
+        "severity_counts": counts,
+        "finding_catalog": catalog,
+        "results": catalog,
+        "attack_paths": paths,
+        "choke_points": _choke_points(paths),
+        "graph": _graph(account_id, paths),
+        "graph_full": _graph(account_id, paths),
+        "compliance": _compliance(counts),
+        "compliance_scorecard": _compliance(counts),
+        "resource": {},
+        "remediation_cmd": {},
+        "demo": True,
+    }
+    return (account_id, json.dumps(payload), scan_id, now)
+
+
+def _finding_catalog(findings):
+    """The deduped, severity-ranked catalog the Findings screen renders.
+
+    Grouped by check id with the affected resources collected, which is the
+    shape `serialize_scanner` produces — one card per check, not one per
+    resource.
+    """
+    try:
+        import aws_finding_detail as detail
+        import aws_live_scanner as scanner
+        remediation = getattr(scanner, "REMEDIATION_MAP", {})
+        compliance_map = getattr(scanner, "COMPLIANCE_MAP", {})
+    except Exception:                                         # noqa: BLE001
+        detail, remediation, compliance_map = None, {}, {}
+
+    grouped = {}
+    for row in findings:
+        if row[10] != "open":
+            continue
+        check_id, section, resource, severity = row[4], row[5], row[6], row[8]
+        entry = grouped.setdefault(check_id, {
+            "check_id": check_id, "section": section, "severity": severity,
+            "status": "FAIL", "affected": [], "count": 0, "distinct": 0,
+            "compliance": dict(compliance_map.get(check_id) or {}),
+            "remediation_cmd": remediation.get(check_id, ""),
+        })
+        entry["affected"].append(resource)
+        entry["count"] += 1
+
+    order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+    out = []
+    for entry in grouped.values():
+        entry["distinct"] = len(set(entry["affected"]))
+        entry["affected"] = sorted(set(entry["affected"]))[:25]
+        if detail is not None:
+            info = detail.FINDING_DETAIL.get(entry["check_id"]) or {}
+            entry["risk"] = info.get("risk", "")
+            entry["impact"] = info.get("impact", "")
+            entry["steps"] = list(info.get("steps", []) or [])
+        out.append(entry)
+    out.sort(key=lambda e: (order.get(e["severity"], 9), e["check_id"]))
+    return out
+
+
+def _attack_paths(rng, profile, account_id, counts):
+    """Toxic-combination paths, in the shape the Attack Paths screen renders.
+
+    Count scales with the estate's criticals, so the org seeded to look bad is
+    the org whose graph is busy — a demo where every tenant shows three paths
+    demonstrates nothing.
+    """
+    wanted = min(9, max(0, counts.get("CRITICAL", 0) // 2))
+    terminals = (("data", "rds", "customers-db"), ("data", "s3", "finance-exports"),
+                 ("admin", "iam", "OrgAdminRole"), ("data", "dynamodb", "patients"))
+    out = []
+    for i in range(wanted):
+        kind, service, name = terminals[i % len(terminals)]
+        terminal = f"arn:aws:{service}:us-east-1:{account_id}:{name}"
+        host = f"i-demo{rng.randint(10000, 99999)}"
+        nodes = ["internet", f"ec2/{host}",
+                 f"role/arn:aws:iam::{account_id}:role/app-role", terminal]
+        kev = rng.random() < profile.kev_rate * 2
+        score = min(100, 55 + (20 if kev else 0) + rng.randint(0, 20))
+        out.append({
+            "entry": "internet", "terminal": terminal, "terminal_kind": kind,
+            "nodes": nodes,
+            "edges": [[nodes[i], nodes[i + 1]] for i in range(len(nodes) - 1)],
+            "score": score,
+            "severity": "CRITICAL" if score >= 80 else "HIGH",
+            "conditioned": False, "vuln_pivot": kev, "kev": kev,
+            "active_threat": kev and rng.random() < 0.4,
+            "direct_public_crown": False, "hard_floor_applied": kev,
+            "factors": {"exposure": 0.9, "exploitability": 1.0 if kev else 0.6,
+                        "privilege": 0.6, "impact": 1.0, "reach": 0.85},
+            "driving_findings": ["ATTACK-01"] + (["VULN-02"] if kev else []),
+            "rationale": (f"score {score} = exposure 0.90 x exploit "
+                          f"{'1.00' if kev else '0.60'} x impact 1.00"),
+        })
+    out.sort(key=lambda p: -p["score"])
+    return out
+
+
+def _choke_points(paths):
+    """Nodes that appear on more than one path — the fix-one-break-many list."""
+    seen = {}
+    for path in paths:
+        for node in path["nodes"][1:-1]:
+            entry = seen.setdefault(node, {"node": node, "paths": 0,
+                                           "max_score": 0})
+            entry["paths"] += 1
+            entry["max_score"] = max(entry["max_score"], path["score"])
+    out = [v for v in seen.values() if v["paths"] > 1]
+    out.sort(key=lambda c: (-c["paths"], -c["max_score"]))
+    return out
+
+
+def _graph(account_id, paths):
+    """The property graph the Attack Paths screen draws.
+
+    Built FROM the paths rather than beside them, so every edge the graph
+    renders is one a path actually traverses. A graph generated independently
+    would show nodes no path uses, which looks like a rendering bug.
+    """
+    nodes, edges, seen = [], [], set()
+
+    def add(node_id):
+        if node_id in seen:
+            return
+        seen.add(node_id)
+        if node_id == "internet":
+            nodes.append({"id": "internet", "kind": "InternetSource",
+                          "cidr": "0.0.0.0/0"})
+            return
+        prefix = node_id.split("/", 1)[0]
+        kind = {"ec2": "EC2Instance", "role": "IamRole",
+                "lb": "LoadBalancer"}.get(prefix)
+        if kind is None:
+            kind = ("RDSInstance" if ":rds:" in node_id else
+                    "S3Bucket" if ":s3:" in node_id else
+                    "DynamoTable" if ":dynamodb:" in node_id else
+                    "IamRole" if ":iam:" in node_id else "Resource")
+        nodes.append({"id": node_id, "kind": kind, "account": account_id})
+
+    for path in paths:
+        for node in path["nodes"]:
+            add(node)
+        for source, target in path["edges"]:
+            key = (source, target)
+            if key in seen:
+                continue
+            seen.add(key)
+            edges.append({"source": source, "target": target,
+                          "basis": "demo-seed", "ports": "443"})
+    return {"directed": True, "multigraph": False,
+            "nodes": nodes, "edges": edges}
+
+
+def _compliance(counts):
+    """A scorecard per framework. Derived from the same open counts, so it
+    moves with the estate rather than being an unrelated number."""
+    failed = sum(counts.values())
+    out = {}
+    for framework, total in (("CIS", 62), ("PCI-DSS", 48), ("HIPAA", 34),
+                             ("SOC2", 41), ("NIST", 38)):
+        bad = min(total, failed // 3)
+        out[framework] = {
+            "passed": total - bad, "failed": bad, "total": total,
+            "percent": round(100.0 * (total - bad) / total, 1),
+        }
+    return out
 
 
 #: Real package/CVE pairs so the vulnerability screens show something a viewer
@@ -433,6 +636,11 @@ _INSERTS = {
     "finding_events": ("INSERT INTO finding_events(account,finding_key,scan_id,"
                        "ts_epoch,from_status,to_status,severity,note)"
                        " VALUES(%s,%s,%s,%s,%s,%s,%s,%s)"),
+    "scan_results": ("INSERT INTO scan_results(account_id,payload_json,scan_id,"
+                     "updated_at) VALUES(%s,%s,%s,%s)"
+                     " ON CONFLICT (account_id) DO UPDATE SET"
+                     " payload_json=EXCLUDED.payload_json,"
+                     " scan_id=EXCLUDED.scan_id, updated_at=EXCLUDED.updated_at"),
     "ingested_vulns": ("INSERT INTO ingested_vulns(account,node_id,cve,node_kind,"
                        "package,installed_version,fixed_version,severity,cvss_base,"
                        "epss,kev,exploit_available,sources_json,suppressed,"
@@ -448,7 +656,8 @@ _INSERTS = {
 #: Insert order is FK order. workspace_accounts references both accounts and
 #: workspaces, so it cannot lead.
 _ORDER = ("workspaces", "workspace_members", "accounts", "workspace_accounts",
-          "scans", "findings", "finding_events", "ingested_vulns")
+          "scans", "findings", "finding_events", "ingested_vulns",
+          "scan_results")
 
 
 def real_account_count(conn) -> int:
@@ -458,22 +667,42 @@ def real_account_count(conn) -> int:
         return int(cur.fetchone()[0])
 
 
+#: Every table that must be cleared before `accounts` and `workspaces` can be,
+#: in delete order. Two of these were missing on the first attempt and purge
+#: failed with a ForeignKeyViolation against `scan_jobs` — a row the APP had
+#: created by scheduling a scan against a seeded account.
+#:
+#: `tests/test_seed_demo_data.py` asserts this list covers every foreign key
+#: pointing at accounts or workspaces, so a table added later fails a test
+#: rather than breaking purge on somebody's machine.
+ACCOUNT_CHILDREN = (
+    ("finding_events", "account"),
+    ("findings", "account"),
+    ("ingested_vulns", "account"),
+    ("scans", "account"),
+    ("scan_results", "account_id"),
+    # The app writes these itself once it starts scheduling scans against a
+    # seeded account. Nothing in this script creates them.
+    ("scan_jobs", "account_id"),
+    ("workspace_accounts", "account_id"),
+    ("accounts", "account_id"),
+)
+
+WORKSPACE_CHILDREN = ("connector_workspace", "workspace_members")
+
+
 def purge(conn) -> Dict[str, int]:
     """Delete exactly the demo rows. Children first — these are real FKs."""
     like = DEMO_ACCOUNT_PREFIX + "%"
     removed: Dict[str, int] = {}
     with conn.cursor() as cur:
-        for table, column in (("finding_events", "account"),
-                              ("findings", "account"),
-                              ("ingested_vulns", "account"),
-                              ("scans", "account"),
-                              ("workspace_accounts", "account_id"),
-                              ("accounts", "account_id")):
+        for table, column in ACCOUNT_CHILDREN:
             cur.execute(f"DELETE FROM {table} WHERE {column} LIKE %s", (like,))
             removed[table] = cur.rowcount
-        cur.execute("DELETE FROM workspace_members WHERE workspace_id LIKE %s",
-                    ("ws-demo-%",))
-        removed["workspace_members"] = cur.rowcount
+        for table in WORKSPACE_CHILDREN:
+            cur.execute(f"DELETE FROM {table} WHERE workspace_id LIKE %s",
+                        ("ws-demo-%",))
+            removed[table] = cur.rowcount
         cur.execute("DELETE FROM workspaces WHERE slug LIKE %s",
                     (DEMO_SLUG_PREFIX + "%",))
         removed["workspaces"] = cur.rowcount

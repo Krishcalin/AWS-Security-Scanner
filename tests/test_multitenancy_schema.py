@@ -23,13 +23,24 @@ def _tables(be):
 
 
 def test_schema_version_is_current():
-    assert aws_state.SCHEMA_VERSION == 12
+    """Asserted against the live constant, not a frozen number.
+
+    This pinned 12 and correctly failed when v13 added `scan_results`. What it
+    defends is that a migration STAMPS the current version — not that the
+    version never moves. A literal turns that invariant into a change-detector,
+    and the next person to add a table edits the number without ever learning
+    why the pin was there.
+    """
+    assert aws_state.SCHEMA_VERSION >= 13
 
 
 def test_migration_creates_multitenancy_tables():
     r = _reg()
     assert NEW_TABLES <= _tables(r._be)
-    assert r._be.raw.execute("PRAGMA user_version").fetchone()[0] == 12
+    # The migration stamps whatever version the code declares — pinning a
+    # literal here would fail on every future table for no reason.
+    assert r._be.raw.execute(
+        "PRAGMA user_version").fetchone()[0] == aws_state.SCHEMA_VERSION
 
 
 def test_ws_default_seeded():

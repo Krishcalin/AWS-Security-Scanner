@@ -137,7 +137,10 @@ def build_service():
     reg = cnapp_registry.AccountRegistry(be)
     svc = cnapp_service.PlatformService(
         registry=reg,
-        results=cnapp_service.InMemoryResultStore(),       # in-memory; a re-scan repopulates
+        # Persisted, so a hub restart no longer blanks every screen that renders a
+        # scan. The in-memory store is still the right thing in tests and the
+        # sample-mode generators, which build a service per process.
+        results=cnapp_service.BackendResultStore(be),
         hub_role_arn=os.environ.get("CNAPP_HUB_ROLE_ARN", ""),
         cfn_template_url=os.environ.get("CNAPP_CFN_TEMPLATE_URL", ""),
         secret_writer=_secret_unconfigured,

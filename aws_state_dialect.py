@@ -415,6 +415,11 @@ POSTGRES_DDL: List[str] = [
        first_seen_epoch BIGINT NOT NULL, last_seen_epoch BIGINT NOT NULL,
        PRIMARY KEY(account, vendor, sensor_key))""",
     "CREATE INDEX IF NOT EXISTS ix_edr_fresh ON edr_sensors(account, last_seen_epoch)",
+    # v13: the latest scan payload per account. Twin of the sqlite DDL — see
+    # aws_state.py for why this is one row per account rather than per scan.
+    """CREATE TABLE IF NOT EXISTS scan_results(
+       account_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL,
+       scan_id TEXT, updated_at BIGINT NOT NULL)""",
 ]
 
 # Per-account advisory lock replacing sqlite's whole-DB BEGIN IMMEDIATE (different

@@ -18,7 +18,9 @@ Production defaults wire to boto3 lazily; tests inject fakes and never import it
 
 from __future__ import annotations
 
+import json
 import secrets
+import time
 from collections import namedtuple
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol
@@ -86,6 +88,65 @@ class InMemoryResultStore:
 
     def list_latest(self) -> List[dict]:
         return list(self._latest.values())
+
+
+class BackendResultStore:
+    """The scan payload store, persisted through the hub backend.
+
+    WHY THIS EXISTS. `InMemoryResultStore` kept the payload in a process
+    dictionary, so a hub restart blanked every screen that renders a scan —
+    Findings, Overview, Attack Paths, Inventory, Identity, Compliance,
+    Remediation, Reports — until the next scan ran. Cloud Accounts and
+    Vulnerabilities kept working because they read tables directly, and that
+    asymmetry is what made the fault read as "some tabs are broken" rather than
+    "results are not persisted".
+
+    The interface is `ResultStore` unchanged, so this is a wiring swap in
+    `cnapp_server.py` and nothing else has to know.
+
+    ONE ROW PER ACCOUNT. Exactly what the in-memory store did — `get_latest` was
+    always the only read. Retaining every historical payload is a different
+    feature with a different storage answer, and `scans` already carries the
+    per-scan history the trend and MTTR screens use.
+    """
+
+    def __init__(self, backend) -> None:
+        self._be = backend
+
+    def put(self, account_id: str, payload: dict) -> None:
+        self._be.upsert(
+            "scan_results",
+            cols=("account_id", "payload_json", "scan_id", "updated_at"),
+            conflict_cols=("account_id",),
+            update_cols=("payload_json", "scan_id", "updated_at"),
+            params=(str(account_id), json.dumps(payload, default=str),
+                    str((payload or {}).get("scan_id") or ""),
+                    int(time.time())))
+
+    def get_latest(self, account_id: str) -> Optional[dict]:
+        row = self._be.query_one(
+            "SELECT payload_json FROM scan_results WHERE account_id=?",
+            (str(account_id),))
+        if not row:
+            return None
+        try:
+            return json.loads(row[0])
+        except (TypeError, ValueError):
+            # A row that will not parse is a corrupt payload, and returning {}
+            # would render as "this account has nothing" — which is the exact
+            # confusion this class was written to end. None means "no result",
+            # which every caller already handles.
+            return None
+
+    def list_latest(self) -> List[dict]:
+        out: List[dict] = []
+        for row in self._be.query_all(
+                "SELECT payload_json FROM scan_results ORDER BY account_id"):
+            try:
+                out.append(json.loads(row[0]))
+            except (TypeError, ValueError):
+                continue
+        return out
 
 
 # ── serialization: mirror save_json's field expressions, return a dict ────────

@@ -213,3 +213,121 @@ def test_workspace_accounts_is_inserted_after_both_its_parents():
     order = list(seed._ORDER)
     assert order.index("workspace_accounts") > order.index("accounts")
     assert order.index("workspace_accounts") > order.index("workspaces")
+
+
+# ── the scan payload: the layer the empty tabs were missing ─────────────────
+# Findings, Overview, Attack Paths, Inventory, Compliance and Remediation all
+# read a scan PAYLOAD through ResultStore, not the findings table. Seeding the
+# table without the payload is exactly why those tabs were blank while Cloud
+# Accounts and Vulnerabilities were not.
+
+def test_every_account_gets_a_scan_payload(rows):
+    assert len(rows["scan_results"]) == len(rows["accounts"])
+
+
+def test_the_payload_carries_what_the_screens_read(rows):
+    payload = json.loads(rows["scan_results"][0][1])
+    for key in ("finding_catalog", "attack_paths", "choke_points", "graph",
+                "summary", "compliance", "posture_score", "posture_grade"):
+        assert key in payload, key
+
+
+def test_the_catalog_is_grouped_by_check_not_by_resource(rows):
+    """`serialize_scanner` produces one card per check with its affected
+    resources collected. One card per resource would render a Findings screen
+    no real scan can reproduce."""
+    payload = json.loads(rows["scan_results"][0][1])
+    ids = [c["check_id"] for c in payload["finding_catalog"]]
+    assert ids and len(ids) == len(set(ids))
+
+
+def test_the_catalog_agrees_with_the_findings_table(rows):
+    """The two layers describe the same scan. If they diverge, the Findings
+    screen and the drift/MTTR tiles disagree about what was found — and both
+    look authoritative."""
+    by_account = {}
+    for row in rows["findings"]:
+        if row[10] == "open":
+            by_account.setdefault(row[0], set()).add(row[4])
+
+    for account_id, _payload_json, _scan, _ts in rows["scan_results"]:
+        payload = json.loads(_payload_json)
+        catalog = {c["check_id"] for c in payload["finding_catalog"]}
+        assert catalog == by_account.get(account_id, set()), account_id
+
+
+def test_the_payload_severity_counts_match_its_own_catalog(rows):
+    for _a, payload_json, _s, _t in rows["scan_results"]:
+        payload = json.loads(payload_json)
+        counted = {}
+        for card in payload["finding_catalog"]:
+            counted[card["severity"]] = counted.get(card["severity"], 0) + card["count"]
+        for severity, total in payload["severity_counts"].items():
+            assert counted.get(severity, 0) == total, severity
+
+
+def test_graph_edges_only_reference_nodes_the_graph_declares(rows):
+    """A graph built beside the paths rather than from them shows edges into
+    nodes that do not exist, which renders as a broken diagram."""
+    for _a, payload_json, _s, _t in rows["scan_results"]:
+        graph = json.loads(payload_json)["graph"]
+        declared = {n["id"] for n in graph["nodes"]}
+        for edge in graph["edges"]:
+            assert edge["source"] in declared and edge["target"] in declared
+
+
+def test_a_choke_point_is_on_more_than_one_path(rows):
+    """A node on a single path is not a choke point — fixing it breaks one
+    path, which is just a finding."""
+    for _a, payload_json, _s, _t in rows["scan_results"]:
+        payload = json.loads(payload_json)
+        for choke in payload["choke_points"]:
+            assert choke["paths"] > 1
+
+
+def test_the_worst_org_has_the_busiest_graph(rows):
+    """Path count scales with criticals, so the org seeded to look bad is the
+    one whose Attack Paths screen has something on it."""
+    by_alias = {r[0]: r[1] for r in rows["accounts"]}
+    paths = {}
+    for account_id, payload_json, _s, _t in rows["scan_results"]:
+        org = by_alias[account_id].split("-")[0]
+        paths[org] = paths.get(org, 0) + len(json.loads(payload_json)["attack_paths"])
+    assert paths.get("atlas", 0) > paths.get("harbor", 0)
+
+
+# ── purge has to cover every foreign key, not just the ones we hit ──────────
+def test_purge_covers_every_child_of_accounts_and_workspaces():
+    """THE BUG THIS CATCHES ALREADY HAPPENED. `scan_jobs` references accounts
+    and was missing from the purge list, so purge died with a
+    ForeignKeyViolation — against rows the APP had created by scheduling a
+    scan on a seeded account.
+
+    Derived from the DDL rather than restated, so a table added later fails
+    here instead of on somebody's machine mid-demo.
+    """
+    import aws_state_dialect
+
+    covered = {t for t, _ in seed.ACCOUNT_CHILDREN} | set(seed.WORKSPACE_CHILDREN)
+    ddl = "\n".join(aws_state_dialect.POSTGRES_DDL)
+
+    missing = []
+    for statement in aws_state_dialect.POSTGRES_DDL:
+        if "CREATE TABLE" not in statement:
+            continue
+        name = statement.split("CREATE TABLE IF NOT EXISTS", 1)[-1].split("(")[0].strip()
+        if not name or name in covered:
+            continue
+        # Does this table point at accounts or workspaces?
+        if ("REFERENCES accounts(" in statement
+                or "REFERENCES workspaces(" in statement):
+            missing.append(name)
+    assert missing == [], f"purge would fail on: {missing}"
+
+
+def test_accounts_is_deleted_last_among_its_children():
+    """Children first, or the delete violates the very keys it is clearing."""
+    order = [t for t, _ in seed.ACCOUNT_CHILDREN]
+    assert order[-1] == "accounts"
+    assert order.index("workspace_accounts") < order.index("accounts")
+    assert order.index("scan_jobs") < order.index("accounts")

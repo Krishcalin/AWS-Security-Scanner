@@ -35,7 +35,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-SCHEMA_VERSION = 12  # v12: + app_totp/app_recovery_code (TOTP second factor)
+SCHEMA_VERSION = 13  # v13: + scan_results (scan payloads survive a hub restart)
 KEY_VERSION = 1
 
 # Caller-injected scan timestamp (one per run). epoch = arithmetic column,
@@ -454,6 +454,27 @@ CREATE TABLE IF NOT EXISTS edr_sensors(
   first_seen_epoch INTEGER NOT NULL, last_seen_epoch INTEGER NOT NULL,
   PRIMARY KEY(account, vendor, sensor_key));
 CREATE INDEX IF NOT EXISTS ix_edr_fresh ON edr_sensors(account, last_seen_epoch);
+
+-- v13: the LATEST scan payload per account.
+--
+-- Before this the payload lived only in an InMemoryResultStore, so every screen
+-- that renders a scan — Findings, Overview, Attack Paths, Inventory, Identity,
+-- Compliance, Remediation, Reports — went blank when the hub restarted and
+-- stayed blank until the next scan. Cloud Accounts and Vulnerabilities kept
+-- working, because those two read tables, which is exactly the asymmetry that
+-- made the bug hard to see.
+--
+-- ONE ROW PER ACCOUNT, not per scan. That matches what the in-memory store
+-- always did (`get_latest`), and keeping every historical payload is a
+-- different feature with a different storage answer — `scans` already holds the
+-- per-scan history that the trend and MTTR screens need.
+CREATE TABLE IF NOT EXISTS scan_results(
+    account_id   TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    scan_id      TEXT,
+    updated_at   INTEGER NOT NULL
+);
+
 """
 
 
