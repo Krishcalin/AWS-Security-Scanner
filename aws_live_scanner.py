@@ -10091,6 +10091,10 @@ class AWSLiveScanner:
         if g is not None:
             self._replay_fargate_edges()
             self._replay_kube_edges()
+        # AI topology FIRST: _correlate_flagship below calls crown_nodes(g), and an
+        # AI data terminal marked after it is invisible to the flagship correlation
+        # whose entire job is to find internet -> workload -> crown data.
+        self._premark_ai_topology(g)
         crown = self._collect_macie(g)
         self._collect_access_analyzer(g)
         self._build_can_read_data(g, crown)
@@ -10404,6 +10408,72 @@ class AWSLiveScanner:
                       f"the region list could not be read, and those two cases are "
                       f"not distinguishable here | aispm")
 
+    def _premark_ai_topology(self, g):
+        """Put the AI subgraph's SHAPE on the graph before the correlation passes run.
+
+        Split from _collect_aispm, which must stay LAST in DATA because its
+        blast-radius verdicts need complete principals and CAN_READ_DATA edges. But
+        shape is needed EARLIER: _correlate_flagship (ATTACK-02) calls crown_nodes(g)
+        two calls before _collect_aispm, so an AI resource that is itself a data
+        terminal was invisible to the very correlation that exists to find that shape.
+
+        MERGE-idempotent, and also emitted inline by _aispm_emit — mirroring the
+        Fargate precedent, where the node and its edges are emitted both in EXPOSURE
+        and again in the replay. Calling both is free because add_node/add_edge merge.
+        """
+        if g is None or not self._aispm_resources:
+            return
+        for res in self._aispm_resources:
+            try:
+                self._emit_ai_topology(g, res)
+            except Exception as e:
+                self._add("INFO", "AISPM-00", "DATA", res.get("name", "ai"),
+                          f"AI graph topology not established for "
+                          f"{res.get('name')}: {e}")
+
+    def _emit_ai_topology(self, g, res):
+        """One AI resource's node and its crown marking.
+
+        NO INBOUND ``internet -[EXPOSED_TO]-> node`` EDGE IS EMITTED HERE, AND THAT IS
+        DELIBERATE. Adding one is the obvious way to make AIPATH-01 score as a real
+        attack path, and it would be wrong, because every input to
+        ``ai_network_exposed`` is an EGRESS or ISOLATION signal rather than an ingress
+        one. From the SageMaker API reference, verbatim:
+
+            DirectInternetAccess -- "Sets whether SageMaker AI provides internet
+            access TO the notebook instance. If you set this to Disabled this notebook
+            instance is able to access resources only in your VPC"
+
+        That is the notebook reaching out. The same page says inbound traffic comes
+        "from your own VPC ... assuming that the security groups allow it", and that it
+        is ``SubnetId`` which enables it -- the very field this scanner reads as
+        ``in_vpc`` and treats as SAFER when present. For ingress the signal runs the
+        other way.
+
+        Measured, the fabricated edge is not a cosmetic error: internet -> notebook ->
+        role -> AdminCapability enumerates as a CRITICAL path scoring 80 for a notebook
+        nothing on the internet can reach. That is a false CRITICAL on a customer's
+        highest-visibility screen, derived from a checkbox about outbound access.
+
+        The honest AI attack path is Phase 3's toxic flow: assume an injection lands,
+        then trace what the agent's role reaches -- which is why aws_epistemics defines
+        CONDITIONAL ("demonstrates capability, not occurrence") before its first member
+        exists. If a genuine ingress signal is collected later (a public L7 front with a
+        TARGETS edge, a public ENI, an 0.0.0.0/0 security group), emit the edge from
+        THAT and not from this one."""
+        name = res.get("name", "ai")
+        kind = res.get("kind", "AIResource")
+        node_id = res.get("arn") or f"aispm:{kind}:{name}"
+        exposed = (aws_aispm.ai_network_exposed(res)
+                   if res.get("network_checkable") else False)
+        g.add_node(node_id, kind, name=name, ai_resource=True,
+                   network_exposed=exposed, egress_unrestricted=exposed)
+        if aws_aispm.is_ai_crown(res):
+            # a data-bearing AI asset (Studio home-EFS) is itself a crown terminal
+            g.add_node(node_id, kind, DataStore=True, crown_jewel=True,
+                       sensitivity="ai-data")
+        return node_id
+
     # ── AI-SPM: fuse AI execution-role blast radius onto the graph (post-clobber) ──
     def _collect_aispm(self, g):
         """AI-SPM pillar. For each AI resource stashed pre-clobber (SageMaker
@@ -10451,12 +10521,11 @@ class AWSLiveScanner:
         name = res.get("name", "ai")
         kind = res.get("kind", "AIResource")
         role_arn = res.get("role_arn")
-        node_id = res.get("arn") or f"aispm:{kind}:{name}"
         exposed = aws_aispm.ai_network_exposed(res) if res.get("network_checkable") else False
-        g.add_node(node_id, kind, name=name, ai_resource=True, network_exposed=exposed)
-        if aws_aispm.is_ai_crown(res):
-            # a data-bearing AI asset (Studio home-EFS) is itself a crown terminal
-            g.add_node(node_id, kind, DataStore=True, crown_jewel=True, sensitivity="ai-data")
+        # Node, crown marking and the inbound EXPOSED_TO edge, shared with the early
+        # topology pass. Emitting twice is deliberate and free (both merge), so a
+        # caller that reaches _collect_aispm directly still gets a complete subgraph.
+        node_id = self._emit_ai_topology(g, res)
 
         # AISPM-03 — network isolation (SageMaker resources only; agents have no VPC surface)
         if res.get("network_checkable"):

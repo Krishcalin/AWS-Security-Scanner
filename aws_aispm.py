@@ -174,6 +174,22 @@ def ai_network_exposed(resource: dict) -> bool:
     return False
 
 
+def ai_exposure_basis(resource: dict) -> Optional[str]:
+    """WHY the resource counts as exposed, for the ``basis`` prop on the EXPOSED_TO
+    edge. Mirrors :func:`ai_network_exposed` clause for clause, so the edge can never
+    claim an exposure the classifier did not find — a reader can then tell a notebook
+    with direct internet egress from a Studio domain with public egress from a
+    resource simply never attached to a VPC, which are three different fixes."""
+    net = (resource or {}).get("network") or {}
+    if net.get("direct_internet") is True:
+        return "sagemaker-direct-internet"
+    if net.get("public_egress") is True:
+        return "sagemaker-public-egress"
+    if net.get("in_vpc") is False:
+        return "not-vpc-attached"
+    return None
+
+
 def is_ai_crown(resource: dict) -> bool:
     """A data-bearing AI asset worth protecting as a crown terminal (its storage
     holds notebooks/source/cached credentials or training data) — flagged
