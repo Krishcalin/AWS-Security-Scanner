@@ -100,9 +100,33 @@ function UserMenu() {
   useEffect(() => {
     if (DATA_MODE !== 'live') return
     let cancelled = false
-    me().then((u) => { if (!cancelled && u) setUser(u) })
-        .catch(() => { /* AuthGate owns the redirect; keep the last good identity */ })
-    return () => { cancelled = true }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let attempt = 0
+
+    // THE RETRY CANNOT LIVE ON THE MENU. Opening it refreshes a stale label, but
+    // it is unreachable in the one case that matters: this component renders
+    // NOTHING while `user` is null, so the toggle that would trigger the retry
+    // does not exist precisely when a retry is needed. A failure not retried
+    // here is therefore permanent for the life of the tab, and the only Log out
+    // control never comes back.
+    const load = () => {
+      me().then((u) => { if (!cancelled && u) setUser(u) })
+          .catch(() => {
+            if (cancelled || attempt >= 5) return   // AuthGate owns a real 401
+            timer = setTimeout(load, Math.min(30_000, 1000 * 2 ** attempt++))
+          })
+    }
+    load()
+
+    // Returning to a tab that failed while it was hidden should not require a
+    // reload to get the control back.
+    const onFocus = () => { attempt = 0; load() }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      window.removeEventListener('focus', onFocus)
+    }
   }, [tick])
 
   if (DATA_MODE !== 'live' || !user) return null
