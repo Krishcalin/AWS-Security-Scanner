@@ -182,11 +182,27 @@ def test_a_vuln_that_reaches_a_crown_jewel_is_on_a_path(rows):
 # ── determinism ─────────────────────────────────────────────────────────────
 def test_two_builds_produce_the_same_hub():
     """A demo that changes between rehearsal and delivery is worse than one
-    that is obviously canned."""
-    first = seed.build(random.Random(seed.RANDOM_SEED))
-    second = seed.build(random.Random(seed.RANDOM_SEED))
+    that is obviously canned.
+
+    The clock is pinned because it is an INPUT to the build, not incidental to it:
+    every account row embeds `now`. Reading it twice made this test fail roughly
+    whenever the two builds landed either side of a second boundary — a flake that
+    teaches people a red suite means 'run it again'."""
+    fixed_now = 1_760_000_000
+    first = seed.build(random.Random(seed.RANDOM_SEED), now=fixed_now)
+    second = seed.build(random.Random(seed.RANDOM_SEED), now=fixed_now)
     assert first["accounts"] == second["accounts"]
     assert len(first["findings"]) == len(second["findings"])
+    assert first == second, "the whole hub must be reproducible, not just accounts"
+
+
+def test_the_clock_is_an_input_not_an_ambient_read():
+    """The property the test above depends on. If build() goes back to reading
+    time.time() unconditionally, this fails rather than the determinism test
+    failing intermittently and being re-run until green."""
+    a = seed.build(random.Random(seed.RANDOM_SEED), now=1_700_000_000)
+    b = seed.build(random.Random(seed.RANDOM_SEED), now=1_800_000_000)
+    assert a["accounts"] != b["accounts"], "now= is being ignored"
 
 
 def test_building_touches_no_database(monkeypatch):
