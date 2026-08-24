@@ -252,7 +252,12 @@ def test_the_catalog_agrees_with_the_findings_table(rows):
 
     for account_id, _payload_json, _scan, _ts in rows["scan_results"]:
         payload = json.loads(_payload_json)
-        catalog = {c["check_id"] for c in payload["finding_catalog"]}
+        # CIEM cards are DISPLAY-ONLY, exactly as the real service's
+        # get_finding_catalog appends controls / EDR / DSPM coverage entries
+        # that have no findings-table row either. They feed the Excessive
+        # Access dashboard and are excluded from this comparison on purpose.
+        catalog = {c["check_id"] for c in payload["finding_catalog"]
+                   if not c["check_id"].startswith("CIEM-")}
         assert catalog == by_account.get(account_id, set()), account_id
 
 
@@ -261,6 +266,8 @@ def test_the_payload_severity_counts_match_its_own_catalog(rows):
         payload = json.loads(payload_json)
         counted = {}
         for card in payload["finding_catalog"]:
+            if card["check_id"].startswith("CIEM-"):
+                continue          # display-only; see the note above
             counted[card["severity"]] = counted.get(card["severity"], 0) + card["count"]
         for severity, total in payload["severity_counts"].items():
             assert counted.get(severity, 0) == total, severity
@@ -429,3 +436,70 @@ def test_a_failed_control_traces_to_a_failing_check(rows):
                 tagged.setdefault(framework, set()).add(control)
         for framework, card in payload["compliance"].items():
             assert set(card["failed_controls"]) == tagged.get(framework, set())
+
+
+def test_the_excessive_access_dashboard_has_a_feed(rows):
+    """`Excessive Access` filters the catalog on the CIEM- prefix. Those checks
+    are emitted at runtime by aws_unused.py and are absent from FINDING_DETAIL
+    and CHECK_SEVERITY, so a seeder drawing only from that catalogue produces
+    none — which is exactly why the dashboard was empty."""
+    for _a, payload_json, _s, _t in rows["scan_results"]:
+        payload = json.loads(payload_json)
+        ciem = [c for c in payload["finding_catalog"]
+                if c["check_id"].startswith("CIEM-")]
+        assert ciem, "no CIEM cards — Excessive Access would be empty"
+        for card in ciem:
+            assert card["affected"] and card["severity"] == "LOW"
+
+
+def test_identity_can_find_principals_and_their_edges(rows):
+    """`Identity.tsx` filters nodes on kind IAMRole/IAMUser and reads edge
+    kinds. The first graph emitted `IamRole` and edges with no `kind` at all,
+    so the screen rendered nothing and looked like an empty estate."""
+    for _a, payload_json, _s, _t in rows["scan_results"]:
+        graph = json.loads(payload_json)["graph_full"]
+        roles = [n for n in graph["nodes"] if n["kind"] in ("IAMRole", "IAMUser")]
+        assert roles
+        assert all("kind" in e for e in graph["edges"])
+        kinds = {e["kind"] for e in graph["edges"]}
+        assert {"CAN_PRIVESC_TO", "CAN_READ_DATA"} <= kinds
+
+
+def test_data_security_has_classified_crown_jewels(rows):
+    """`aws_dspm.compute_inventory` selects crowns on the `crown_jewel` prop
+    and counts CAN_READ_DATA edges into each."""
+    import aws_dspm
+    import aws_graph
+
+    for account_id, payload_json, _s, _t in rows["scan_results"]:
+        graph = aws_graph.SecurityGraph.from_dict(
+            json.loads(payload_json)["graph_full"])
+        inventory = aws_dspm.compute_inventory(graph, account=account_id)
+        assert inventory["stores"], account_id
+        # One store is deliberately left unclassified: the gap list is the
+        # honest half of that screen and a demo with no gaps hides it.
+        assert inventory["classification_gaps"]
+
+
+def test_supply_chain_has_two_snapshots_per_subject(rows):
+    """The Supply Chain headline is the DIFF between builds. One snapshot per
+    subject renders an inventory, which is a different screen."""
+    by_subject = {}
+    for row in rows["sbom_snapshots"]:
+        by_subject.setdefault((row[1], row[3]), []).append(row[0])
+    assert by_subject
+    assert all(len(v) >= 2 for v in by_subject.values())
+
+
+def test_every_sbom_component_belongs_to_a_seeded_snapshot(rows):
+    """`sbom_components.snapshot_id` is a real foreign key."""
+    snapshots = {row[0] for row in rows["sbom_snapshots"]}
+    for row in rows["sbom_components"]:
+        assert row[0] in snapshots
+
+
+def test_the_licence_corpus_is_not_uniformly_permissive(rows):
+    """A licence-policy screen where everything is MIT has nothing to decide."""
+    categories = {row[9] for row in rows["sbom_components"]}
+    assert "permissive" in categories
+    assert categories & {"strong-copyleft", "commercial-unfriendly"}

@@ -182,6 +182,8 @@ def build(rng: random.Random) -> Dict[str, List[tuple]]:
         "workspaces": [], "workspace_members": [], "workspace_accounts": [],
         "accounts": [], "scans": [], "findings": [], "finding_events": [],
         "ingested_vulns": [], "scan_results": [],
+        "sbom_snapshots": [], "sbom_components": [], "sbom_snapshot_cves": [],
+        "vex_statements": [],
     }
 
     for org_index, profile in enumerate(PROFILES):
@@ -301,6 +303,7 @@ def _account_history(rng, rows, catalogue, profile, account_id, regions,
             f"DEMO-{getattr(scanner, 'VERSION', '2.35.0')}"))
 
     _account_vulns(rng, rows, profile, account_id, now, weight)
+    _account_sbom(rng, rows, profile, account_id, now, weight)
 
     # THE SCAN PAYLOAD. Everything above lands in tables; the console's
     # Findings / Overview / Attack Paths / Inventory / Compliance screens read
@@ -312,10 +315,74 @@ def _account_history(rng, rows, catalogue, profile, account_id, regions,
     # layers cannot disagree about what was found.
     mine = [r for r in rows["findings"] if r[0] == account_id]
     rows["scan_results"].append(
-        _payload_row(rng, profile, account_id, mine, rows["scans"], now))
+        _payload_row(rng, profile, account_id, mine, rows["scans"], now, weight))
 
 
-def _payload_row(rng, profile, account_id, findings, all_scans, now):
+#: (name, version, ecosystem, spdx licence, category). Categories are what the
+#: licence-policy screen groups on; a corpus that is all permissive shows a
+#: policy screen with nothing to decide, so copyleft and a commercial-unfriendly
+#: entry are both represented.
+_COMPONENTS = (
+    ("express", "4.18.2", "npm", "MIT", "permissive"),
+    ("lodash", "4.17.21", "npm", "MIT", "permissive"),
+    ("requests", "2.31.0", "pypi", "Apache-2.0", "permissive"),
+    ("urllib3", "1.26.18", "pypi", "MIT", "permissive"),
+    ("openssl", "3.0.11", "deb", "Apache-2.0", "permissive"),
+    ("glibc", "2.35", "deb", "LGPL-2.1-only", "weak-copyleft"),
+    ("readline", "8.1.2", "deb", "GPL-3.0-only", "strong-copyleft"),
+    ("mongodb-driver", "4.9.1", "maven", "SSPL-1.0", "commercial-unfriendly"),
+    ("spring-core", "5.3.20", "maven", "Apache-2.0", "permissive"),
+    ("golang.org/x/net", "0.17.0", "golang", "BSD-3-Clause", "permissive"),
+    ("busybox", "1.36.1", "apk", "GPL-2.0-only", "strong-copyleft"),
+    ("zlib", "1.2.13", "deb", "Zlib", "permissive"),
+)
+
+
+def _account_sbom(rng, rows, profile, account_id, now, weight):
+    """SBOM snapshots, their components, and a few VEX statements.
+
+    TWO SNAPSHOTS PER SUBJECT, dated apart, because the Supply Chain screen's
+    headline is the DIFF — what entered and left between builds. One snapshot
+    renders a component list, which is an inventory rather than a supply chain.
+    """
+    subjects = max(1, int(round(rng.randint(1, 3) * weight)))
+    for index in range(subjects):
+        repo = ("api", "worker", "batch")[index % 3]
+        node_id = (f"arn:aws:ecr:us-east-1:{account_id}:repository/{repo}")
+        subject_key = f"{repo}:latest"
+
+        previous = None
+        for age_days, tag in ((21, "prev"), (2, "curr")):
+            snapshot_id = f"sbom-demo-{account_id}-{repo}-{tag}"
+            picked = rng.sample(_COMPONENTS, rng.randint(7, len(_COMPONENTS)))
+            rows["sbom_snapshots"].append((
+                snapshot_id, account_id, node_id, subject_key,
+                "cyclonedx", "syft", len(picked),
+                now - age_days * 86400))
+            for name, version, ecosystem, spdx, category in picked:
+                purl = f"pkg:{ecosystem}/{name}@{version}"
+                rows["sbom_components"].append((
+                    snapshot_id, purl, name, version, ecosystem, "demo-seed",
+                    purl, spdx, spdx, category))
+            # A CVE attached to the snapshot, so the diff can show one FIXED.
+            if tag == "prev" or rng.random() < 0.6:
+                rows["sbom_snapshot_cves"].append((
+                    snapshot_id, "CVE-2023-38545",
+                    "pkg:deb/curl@7.81.0", "7.88.1"))
+            previous = snapshot_id
+
+        # VEX: the whole point is a CVE somebody has ASSESSED, so the screen can
+        # show a suppressed finding with a justification rather than a raw list.
+        if previous and rng.random() < 0.7:
+            rows["vex_statements"].append((
+                account_id, node_id, "CVE-2023-38545",
+                "pkg:deb/curl@7.81.0", "not_affected",
+                "vulnerable_code_not_in_execute_path", "openvex",
+                f"vex-demo-{account_id}-{repo}",
+                now - 10 * 86400, now))
+
+
+def _payload_row(rng, profile, account_id, findings, all_scans, now, weight=1.0):
     """One `scan_results` row: (account_id, payload_json, scan_id, updated_at)."""
     latest = [s for s in all_scans if s[1] == account_id]
     last = latest[-1] if latest else None
@@ -323,13 +390,18 @@ def _payload_row(rng, profile, account_id, findings, all_scans, now):
     grade = last[6] if last else "C"
     scan_id = last[0] if last else f"scan-demo-{account_id}-0"
 
-    catalog = _finding_catalog(findings)
+    catalog = _finding_catalog(findings) + _ciem_cards(rng, account_id, weight)
     counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
     for row in findings:
         if row[10] == "open" and row[8] in counts:
             counts[row[8]] += 1
     paths = _attack_paths(rng, profile, account_id, counts)
-    failing_checks = sorted({c["check_id"] for c in catalog})
+    # CIEM cards are display-only additions to the catalog: they carry no
+    # compliance tags and have no row in the findings table, so they are
+    # excluded from the scorecard input rather than silently widening it.
+    failing_checks = sorted({c["check_id"] for c in catalog
+                             if not c["check_id"].startswith("CIEM-")})
+    graph = _graph(rng, account_id, paths, profile)
 
     payload = {
         "account": account_id,
@@ -344,8 +416,8 @@ def _payload_row(rng, profile, account_id, findings, all_scans, now):
         "results": catalog,
         "attack_paths": paths,
         "choke_points": _choke_points(paths),
-        "graph": _graph(account_id, paths),
-        "graph_full": _graph(account_id, paths),
+        "graph": graph,
+        "graph_full": graph,
         "compliance": _compliance(failing_checks),
         "compliance_scorecard": _compliance(failing_checks),
         "resource": {},
@@ -353,6 +425,49 @@ def _payload_row(rng, profile, account_id, findings, all_scans, now):
         "demo": True,
     }
     return (account_id, json.dumps(payload), scan_id, now)
+
+
+#: `Excessive Access` filters the finding catalog on the `CIEM-` prefix
+#: (frontend/src/lib/dashboards.ts). Those checks are emitted at runtime by
+#: `aws_unused.py` and are NOT in FINDING_DETAIL or CHECK_SEVERITY, so a seeder
+#: drawing only from that catalogue can never produce one — which is why the
+#: dashboard was empty. Severity and wording follow aws_unused.py.
+CIEM_CHECKS = (
+    ("CIEM-01", "LOW", "CIEM",
+     "Right-sizing candidate — granted permissions appear unused. "
+     "Source: access-analyzer. Review before removal (not auto-deleted)"),
+    ("CIEM-02", "LOW", "CIEM",
+     "Principal has been dormant beyond the review window — no recorded "
+     "service activity. Review before removal (not auto-deleted)"),
+)
+
+
+def _ciem_cards(rng, account_id, weight):
+    """The Excessive Access feed: over-privileged and dormant principals.
+
+    Read-only right-sizing candidates, never deletions — `aws_unused.py` is
+    explicit that these are reviewed before removal, and the demo should not
+    imply the product deletes anything.
+    """
+    out = []
+    for check_id, severity, section, message in CIEM_CHECKS:
+        count = max(1, int(round(rng.randint(2, 9) * weight)))
+        affected = [f"arn:aws:iam::{account_id}:role/demo-role-{rng.randint(1000, 9999)}"
+                    for _ in range(count)]
+        out.append({
+            "check_id": check_id, "section": section, "severity": severity,
+            "status": "FAIL", "compliance": {}, "remediation_cmd": "",
+            "affected": sorted(set(affected)), "count": count,
+            "distinct": len(set(affected)),
+            "risk": message,
+            "impact": ("Unused grants widen the blast radius of any compromise "
+                       "of this principal without adding capability anybody "
+                       "uses."),
+            "steps": ["Review the unused services and actions listed.",
+                      "Generate a right-sized policy and apply it in staging.",
+                      "Re-scan to confirm the grant narrowed."],
+        })
+    return out
 
 
 def _finding_catalog(findings):
@@ -484,43 +599,122 @@ def _choke_points(paths):
     return out
 
 
-def _graph(account_id, paths):
-    """The property graph the Attack Paths screen draws.
+#: Node kinds the console and the engines actually recognise. Getting the CASE
+#: wrong is silent: `Identity.tsx` filters on `kind === 'IAMRole'`, so a node
+#: emitted as `IamRole` renders nothing and looks like an empty estate.
+KIND_INTERNET = "InternetSource"
+KIND_ROLE = "IAMRole"
+KIND_INSTANCE = "EC2Instance"
+KIND_BUCKET = "S3Bucket"
+KIND_DB = "RDSInstance"
 
-    Built FROM the paths rather than beside them, so every edge the graph
-    renders is one a path actually traverses. A graph generated independently
-    would show nodes no path uses, which looks like a rendering bug.
+#: Edge kinds from `aws_correlate.E_PATH`. An edge without a `kind` is invisible
+#: to every consumer — `SecurityGraph.to_dict` writes `{**props, source, target,
+#: kind}`, and the first version of this omitted `kind` entirely, which is why
+#: Identity and Data Security were blank while Attack Paths was not.
+E_EXPOSED = "EXPOSED_TO"
+E_HAS_ROLE = "HAS_ROLE"
+E_ASSUME = "CAN_ASSUME"
+E_PRIVESC = "CAN_PRIVESC_TO"
+E_READ = "CAN_READ_DATA"
+
+
+def _graph(rng, account_id, paths, profile):
+    """The security graph the engines read, in `SecurityGraph.to_dict` shape.
+
+    NODES carry their props merged at the top level; EDGES carry `kind`. Three
+    consumers depend on that and each fails differently when it is wrong:
+
+      * `Identity.tsx`  filters nodes on kind IAMRole/IAMUser and reads edge
+        kinds CAN_PRIVESC_TO / CAN_ASSUME / CAN_READ_DATA / EXPOSED_TO.
+      * `aws_dspm.compute_inventory` reads `crown_jewel` off node props and
+        counts CAN_READ_DATA edges into each crown.
+      * `aws_correlate.crown_nodes` selects on the `crown_jewel` prop alone.
+
+    Built around the paths so the graph and the Attack Paths screen agree, then
+    extended with the identity and data structure those two engines need — a
+    path alone has no roles that can escalate and no store anybody reads.
     """
-    nodes, edges, seen = [], [], set()
+    nodes, edges, seen_nodes, seen_edges = [], [], set(), set()
 
-    def add(node_id):
-        if node_id in seen:
-            return
-        seen.add(node_id)
-        if node_id == "internet":
-            nodes.append({"id": "internet", "kind": "InternetSource",
-                          "cidr": "0.0.0.0/0"})
-            return
-        prefix = node_id.split("/", 1)[0]
-        kind = {"ec2": "EC2Instance", "role": "IamRole",
-                "lb": "LoadBalancer"}.get(prefix)
-        if kind is None:
-            kind = ("RDSInstance" if ":rds:" in node_id else
-                    "S3Bucket" if ":s3:" in node_id else
-                    "DynamoTable" if ":dynamodb:" in node_id else
-                    "IamRole" if ":iam:" in node_id else "Resource")
-        nodes.append({"id": node_id, "kind": kind, "account": account_id})
+    def node(node_id, kind, **props):
+        if node_id in seen_nodes:
+            return node_id
+        seen_nodes.add(node_id)
+        nodes.append({**props, "id": node_id, "kind": kind})
+        return node_id
 
-    for path in paths:
-        for node in path["nodes"]:
-            add(node)
-        for source, target in path["edges"]:
-            key = (source, target)
-            if key in seen:
-                continue
-            seen.add(key)
-            edges.append({"source": source, "target": target,
-                          "basis": "demo-seed", "ports": "443"})
+    def edge(source, target, kind, **props):
+        key = (source, target, kind)
+        if key in seen_edges:
+            return
+        seen_edges.add(key)
+        edges.append({**props, "source": source, "target": target, "kind": kind})
+
+    node("internet", KIND_INTERNET, cidr="0.0.0.0/0")
+
+    # ── the crown jewels, classified so DSPM has something to say ───────────
+    # `sensitivity` is what `aws_dspm.classify` reads: a number is a Macie
+    # score, a string is a tag. Both are seeded so the Data screen shows both
+    # provenances — and one store is left UNCLASSIFIED on purpose, because the
+    # classification-gap list is the honest half of that screen and a demo
+    # where nothing is missing hides it.
+    stores = [
+        (f"arn:aws:s3:::{account_id}-customer-exports", KIND_BUCKET,
+         {"crown_jewel": True, "sensitivity": "pii", "encrypted": True,
+          "public": False}),
+        (f"arn:aws:rds:us-east-1:{account_id}:db:payments", KIND_DB,
+         {"crown_jewel": True, "sensitivity": 88, "encrypted": True,
+          "public": False}),
+        (f"arn:aws:s3:::{account_id}-analytics-raw", KIND_BUCKET,
+         {"crown_jewel": True, "encrypted": False,
+          "public": profile.exposed_rate > 0.3}),
+    ]
+    for store_id, kind, props in stores:
+        node(store_id, kind, **props)
+
+    # ── identities ──────────────────────────────────────────────────────────
+    roles = []
+    for name, escalates, reads in (("app-role", False, True),
+                                   ("ci-deploy-role", True, True),
+                                   ("analytics-reader", False, True),
+                                   ("break-glass-admin", True, False)):
+        role_id = f"arn:aws:iam::{account_id}:role/{name}"
+        node(role_id, KIND_ROLE, name=name, account=account_id)
+        roles.append((role_id, escalates, reads))
+
+    admin = f"arn:aws:iam::{account_id}:role/OrganizationAdmin"
+    node(admin, KIND_ROLE, name="OrganizationAdmin", account=account_id,
+         admin=True)
+
+    # A role CAN be directly EXPOSED_TO in a real graph — checked against the
+    # shipped sample fixtures rather than assumed, because Identity.tsx counts
+    # "internet-exposed" principals on exactly that edge and inventing one that
+    # real scans never produce would demo a category that does not exist.
+    if roles and profile.exposed_rate > 0.15:
+        edge("internet", roles[0][0], E_EXPOSED,
+             basis="role trusted by a public service endpoint")
+
+    for role_id, escalates, reads in roles:
+        if escalates:
+            edge(role_id, admin, E_PRIVESC, basis="iam:PassRole + sts:AssumeRole")
+            edge(role_id, admin, E_ASSUME, basis="trust policy")
+        if reads:
+            # Only some roles read every store — a demo where every principal
+            # reads everything makes the reader count meaningless.
+            for store_id, _kind, _props in stores[:2 if reads else 0]:
+                edge(role_id, store_id, E_READ, basis="s3:GetObject")
+
+    # ── the workloads the paths run through, wired to identity ──────────────
+    for index, path in enumerate(paths):
+        host = f"i-demo{rng.randint(10000, 99999)}"
+        instance = node(f"arn:aws:ec2:us-east-1:{account_id}:instance/{host}",
+                        KIND_INSTANCE, name=host, account=account_id)
+        edge("internet", instance, E_EXPOSED, ports="22,443",
+             basis="0.0.0.0/0 security group")
+        role_id = roles[index % len(roles)][0]
+        edge(instance, role_id, E_HAS_ROLE, basis="instance profile")
+
     return {"directed": True, "multigraph": False,
             "nodes": nodes, "edges": edges}
 
@@ -693,6 +887,25 @@ _INSERTS = {
     "finding_events": ("INSERT INTO finding_events(account,finding_key,scan_id,"
                        "ts_epoch,from_status,to_status,severity,note)"
                        " VALUES(%s,%s,%s,%s,%s,%s,%s,%s)"),
+    "sbom_snapshots": ("INSERT INTO sbom_snapshots(snapshot_id,account,node_id,"
+                       "subject_key,source_format,source_tool,component_count,"
+                       "ingested_epoch) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)"
+                       " ON CONFLICT (snapshot_id) DO NOTHING"),
+    "sbom_components": ("INSERT INTO sbom_components(snapshot_id,purl_identity,"
+                        "name,version,ecosystem,origin,purl,license_raw,"
+                        "license_spdx,license_category)"
+                        " VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                        " ON CONFLICT (snapshot_id,purl_identity) DO NOTHING"),
+    "sbom_snapshot_cves": ("INSERT INTO sbom_snapshot_cves(snapshot_id,cve,"
+                           "purl_identity,fixed_version) VALUES(%s,%s,%s,%s)"
+                           " ON CONFLICT (snapshot_id,cve,purl_identity)"
+                           " DO NOTHING"),
+    "vex_statements": ("INSERT INTO vex_statements(account,node_id,cve,"
+                       "purl_identity,status,justification,vex_format,doc_id,"
+                       "first_seen_epoch,last_seen_epoch)"
+                       " VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                       " ON CONFLICT (account,node_id,cve,purl_identity)"
+                       " DO NOTHING"),
     "scan_results": ("INSERT INTO scan_results(account_id,payload_json,scan_id,"
                      "updated_at) VALUES(%s,%s,%s,%s)"
                      " ON CONFLICT (account_id) DO UPDATE SET"
@@ -714,7 +927,8 @@ _INSERTS = {
 #: workspaces, so it cannot lead.
 _ORDER = ("workspaces", "workspace_members", "accounts", "workspace_accounts",
           "scans", "findings", "finding_events", "ingested_vulns",
-          "scan_results")
+          "scan_results", "sbom_snapshots", "sbom_components",
+          "sbom_snapshot_cves", "vex_statements")
 
 
 def real_account_count(conn) -> int:
@@ -738,6 +952,11 @@ ACCOUNT_CHILDREN = (
     ("ingested_vulns", "account"),
     ("scans", "account"),
     ("scan_results", "account_id"),
+    ("vex_statements", "account"),
+    # sbom_components and sbom_snapshot_cves are ON DELETE CASCADE from
+    # sbom_snapshots, so clearing the parent is enough — and doing it by
+    # account is what keeps a real tenant's SBOMs untouched.
+    ("sbom_snapshots", "account"),
     # The app writes these itself once it starts scheduling scans against a
     # seeded account. Nothing in this script creates them.
     ("scan_jobs", "account_id"),
