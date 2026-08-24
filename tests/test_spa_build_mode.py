@@ -68,3 +68,53 @@ def test_the_dockerfiles_say_the_prebuilt_spa_must_be_live():
         assert "VITE_DATA_SOURCE=live" in src, (
             f"{name} copies a prebuilt frontend/dist but never says it must be "
             f"built with VITE_DATA_SOURCE=live")
+
+
+# ── caching: the one file that must never be cached ─────────────────────────
+def test_index_html_is_never_cached_and_hashed_assets_are(tmp_path):
+    """A SPA's index.html is the ONLY pointer to its content-hashed bundle, so
+    it must be revalidated every time and the bundle may be cached forever.
+
+    Served with no Cache-Control at all, index.html falls to the browser's
+    HEURISTIC freshness rule — roughly a tenth of the time since Last-Modified,
+    with no request to the server. A console updated minutes after it was last
+    opened then keeps loading the PREVIOUS bundle, and a feature that shipped is
+    simply absent: no error, nothing in the log, and a served /assets/*.js that
+    demonstrably contains the new code.
+
+    That is not hypothetical. It is how the Roles & Access nav entry came to be
+    missing from a console whose bundle already had it.
+    """
+    from fastapi.testclient import TestClient
+
+    import cnapp_api
+
+    static = tmp_path / "dist"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text(
+        "<!doctype html><script src=/assets/index-abc.js></script>",
+        encoding="utf-8")
+    (static / "assets" / "index-abc.js").write_text("console.log(1)",
+                                                    encoding="utf-8")
+
+    # A bare stub: the static-serving path never touches the service, and
+    # building a real one here would test the wrong thing slowly.
+    class _StubService:
+        pass
+
+    app = cnapp_api.create_hosted_app(_StubService(), static_dir=str(static))
+    client = TestClient(app)
+
+    root = client.get("/")
+    assert root.status_code == 200
+    assert "no-store" in root.headers.get("cache-control", "")
+
+    # A client-side deep link resolves to index.html and must not be cached
+    # either — otherwise the fallback re-introduces exactly the same staleness.
+    deep = client.get("/roles")
+    assert deep.status_code == 200
+    assert "no-store" in deep.headers.get("cache-control", "")
+
+    asset = client.get("/assets/index-abc.js")
+    assert asset.status_code == 200
+    assert "immutable" in asset.headers.get("cache-control", "")

@@ -35,12 +35,12 @@ export const NAV_MAIN: NavItem[] = [
 export const NAV_ADMIN: NavItem[] = [
   { to: '/accounts', label: 'Cloud Accounts', icon: Cloud },
   { to: '/settings', label: 'Settings', icon: Settings2 },
+  // Beside My Security because both answer "who may do what here" — one about
+  // everybody's access, one about your own.
+  { to: '/roles', label: 'Roles & Access', icon: ShieldCheck },
   // Your own account's second factor. A route with no nav entry is a route nobody
   // finds: /security shipped reachable only by typing the URL, so two-factor could
   // never be enrolled — which made it look like the whole feature was unwired.
-  // Beside My Security because both answer "who may do what here" —
-  // one about your own account, one about everybody's.
-  { to: '/roles', label: 'Roles & Access', icon: ShieldCheck },
   { to: '/security', label: 'My Security', icon: ShieldUser },
 ]
 

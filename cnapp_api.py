@@ -927,6 +927,27 @@ def create_hosted_app(service, *, static_dir: Optional[str] = None, current_role
 
         from starlette.exceptions import HTTPException as _StarletteHTTPException
 
+        # index.html MUST NOT BE CACHED, and every hashed asset SHOULD BE.
+        #
+        # The bundle filename carries a content hash, so a new build produces a
+        # new name — which makes the assets safe to cache forever and makes
+        # index.html the ONE file that must always be revalidated, because it is
+        # the only thing that names them.
+        #
+        # Served without a Cache-Control header, index.html falls to the
+        # browser's HEURISTIC freshness rule: roughly a tenth of the time since
+        # Last-Modified, with no request to the server. A console updated
+        # minutes after it was last opened therefore keeps loading the PREVIOUS
+        # bundle, and a feature that shipped is simply absent — with no error,
+        # nothing in the log, and a served bundle that demonstrably contains the
+        # new code. That is exactly how the Roles & Access entry came to be
+        # missing from a console whose /assets/*.js already had it.
+        NO_STORE = "no-store, no-cache, must-revalidate"
+        IMMUTABLE = "public, max-age=31536000, immutable"
+
+        def _index_response():
+            return FileResponse(index, headers={"Cache-Control": NO_STORE})
+
         class _SPAStatics(StaticFiles):
             # A missing asset that is a client-side route -> serve index.html.
             #
@@ -942,10 +963,26 @@ def create_hosted_app(service, *, static_dir: Optional[str] = None, current_role
                     resp = await super().get_response(path, scope)
                 except _StarletteHTTPException as exc:
                     if exc.status_code == 404 and os.path.isfile(index):
-                        return FileResponse(index)
+                        return _index_response()
                     raise
                 if resp.status_code == 404 and os.path.isfile(index):
-                    return FileResponse(index)
+                    return _index_response()
+                # `html=True` serves index.html for a directory request, so the
+                # no-store rule has to be applied by PATH as well — otherwise "/"
+                # itself, the most-requested URL in the console, is the one that
+                # stays cacheable.
+                #
+                # SEPARATOR NORMALISED FIRST. StaticFiles builds this with
+                # os.path, so on Windows it arrives as `assets\index-abc.js`
+                # and a `startswith("assets/")` test silently never matches —
+                # the container (Linux) would cache correctly while a developer
+                # running the same console locally got no headers at all, which
+                # is the kind of difference nobody goes looking for.
+                path = str(path).replace("\\", "/")
+                if path in ("", ".", "index.html") or path.endswith("/index.html"):
+                    resp.headers["Cache-Control"] = NO_STORE
+                elif resp.status_code == 200 and path.startswith("assets/"):
+                    resp.headers["Cache-Control"] = IMMUTABLE
                 return resp
 
         root.mount("/", _SPAStatics(directory=static_dir, html=True), name="spa")
