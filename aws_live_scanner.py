@@ -1770,6 +1770,16 @@ class AWSLiveScanner:
         # data_bearing) and fused onto the graph in DATA#42 (_collect_aispm) — post-clobber, where
         # principals + CAN_READ_DATA edges are complete. No AWS re-fetch, no aws_correlate change.
         self._aispm_resources: List[dict] = []
+        # Consume-once latch for _collect_aispm. DATA is NOT in GLOBAL_SECTIONS, so
+        # with --all-regions it runs once PER REGION; the stash is filled earlier by
+        # BEDROCK_AGENTS (idx 17) and SAGEMAKER (idx 33), which sweep every region
+        # before DATA (idx 42) starts. Without this latch each DATA region re-emits
+        # the COMPLETE accumulated set, and compute_risk_score charges every
+        # duplicate FAIL again (CRITICAL=15) — one AIPATH-01 across 17 regions
+        # subtracts 255 and floors the WHOLE account's posture score at 0.
+        # Note this is NOT the _replay_*_edges pattern: those are merge-idempotent
+        # because add_edge merges; findings append to a list and do not.
+        self._aispm_collected = False
 
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
@@ -5122,8 +5132,18 @@ class AWSLiveScanner:
                               "Invocation logging config present but "
                               "no destination (CW/S3) configured")
         except Exception as e:
-            self._add("WARN", "BDR-01", "BEDROCK", "bedrock",
-                      f"Bedrock may not be available in this region: {e}")
+            # A DENIED read is not an ABSENT service. Reporting AccessDenied as
+            # "may not be available in this region" tells the operator the account
+            # has no Bedrock when in fact we were refused — the one failure mode
+            # that looks like a clean result. INFO carries no severity weight, so
+            # an un-evaluated check never penalises the score either.
+            if self._is_access_denied(e):
+                self._add("INFO", "BDR-01", "BEDROCK", "bedrock",
+                          "Model invocation logging NOT evaluated — missing permission "
+                          "bedrock:GetModelInvocationLoggingConfiguration (no phantom pass)")
+            else:
+                self._add("WARN", "BDR-01", "BEDROCK", "bedrock",
+                          f"Bedrock may not be available in this region: {e}")
 
         # BDR-02 — Guardrails configured
         self._log("BDR-02: Bedrock — Guardrails configured")
@@ -5244,6 +5264,91 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 16: AWS BEDROCK AGENT CORE
     # ══════════════════════════════════════════════════════════════════════════
+    def _check_bedrock_knowledge_bases(self, ba):
+        """AGT-03 — Bedrock Knowledge Base encryption + data-source encryption.
+
+        HOISTED out of ``for a in agents:``. Knowledge Bases are account-level, not
+        agent-level, so nesting this produced one duplicate finding set PER AGENT —
+        and, worse, it sat behind the ``if not agents: return`` early exit, so an
+        account doing pure RAG (knowledge bases, no agents) was scanned as if it had
+        no AI footprint at all. Runs before the agent enumeration so neither an
+        empty agent list nor a failed ``list_agents`` can hide it.
+
+        Guards are PER ITEM on purpose: ``bedrock:GetKnowledgeBase`` is not granted
+        by SecurityAudit, so a single denial would otherwise abort the whole sweep
+        at the first knowledge base and report nothing for the rest.
+        """
+        try:
+            kbs = ba.list_knowledge_bases().get("knowledgeBaseSummaries", [])
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._add("INFO", "AGT-03", "BEDROCK_AGENTS", "bedrock-agent",
+                          "Knowledge Bases NOT evaluated — missing permission "
+                          "bedrock:ListKnowledgeBases (no phantom pass)")
+            else:
+                self._add("WARN", "AGT-03", "BEDROCK_AGENTS", "bedrock-agent", str(e))
+            return
+
+        if not kbs:
+            self._add("INFO", "AGT-03", "BEDROCK_AGENTS", "bedrock-agent",
+                      "No Bedrock Knowledge Bases found")
+            return
+
+        for kb in kbs:
+            kbid   = kb["knowledgeBaseId"]
+            kbname = kb.get("name", kbid)
+            try:
+                kb_detail = ba.get_knowledge_base(
+                    knowledgeBaseId=kbid
+                )["knowledgeBase"]
+                kms_kb = kb_detail.get(
+                    "serverSideEncryptionConfiguration", {}
+                ).get("kmsKeyArn", "")
+                if kms_kb:
+                    self._add("PASS", "AGT-03", "BEDROCK_AGENTS", kbname,
+                              f"KB '{kbname}' KMS=SET "
+                              f"Status={kb.get('status', 'N/A')}")
+                else:
+                    self._add("WARN", "AGT-03", "BEDROCK_AGENTS", kbname,
+                              f"KB '{kbname}' KMS=AWS-managed "
+                              f"Status={kb.get('status', 'N/A')}")
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._add("INFO", "AGT-03", "BEDROCK_AGENTS", kbname,
+                              f"KB '{kbname}' encryption NOT evaluated — missing "
+                              "permission bedrock:GetKnowledgeBase")
+                else:
+                    self._add("WARN", "AGT-03", "BEDROCK_AGENTS", kbname, str(e))
+
+            try:
+                sources = ba.list_data_sources(
+                    knowledgeBaseId=kbid
+                ).get("dataSourceSummaries", [])
+            except Exception as e:
+                self._add("INFO", "AGT-03", "BEDROCK_AGENTS", kbname,
+                          f"Data sources for '{kbname}' NOT evaluated: {e}")
+                continue
+
+            for ds in sources:
+                dsid   = ds["dataSourceId"]
+                dsname = ds.get("name", dsid)
+                try:
+                    ds_detail = ba.get_data_source(
+                        knowledgeBaseId=kbid, dataSourceId=dsid
+                    )["dataSource"]
+                    ds_kms = ds_detail.get(
+                        "serverSideEncryptionConfiguration", {}
+                    ).get("kmsKeyArn", "")
+                    if ds_kms:
+                        self._add("PASS", "AGT-03", "BEDROCK_AGENTS", dsname,
+                                  f"DataSource '{dsname}' KMS=SET")
+                    else:
+                        self._add("WARN", "AGT-03", "BEDROCK_AGENTS", dsname,
+                                  f"DataSource '{dsname}' KMS=not set")
+                except Exception as e:
+                    self._add("INFO", "AGT-03", "BEDROCK_AGENTS", dsname,
+                              f"DataSource '{dsname}' NOT evaluated: {e}")
+
     def _check_bedrock_agents(self):
         self._section_header("BEDROCK_AGENTS")
         try:
@@ -5253,11 +5358,21 @@ class AWSLiveScanner:
                       f"Bedrock Agent client error: {e}")
             return
 
+        # Knowledge Bases FIRST: they are account-level, they are the entire AI
+        # surface of a RAG-only account, and nothing about them depends on an agent
+        # existing or on list_agents succeeding.
+        self._check_bedrock_knowledge_bases(ba)
+
         try:
             agents = ba.list_agents().get("agentSummaries", [])
         except Exception as e:
-            self._add("WARN", "AGT-01", "BEDROCK_AGENTS", "bedrock-agent",
-                      f"Bedrock Agents may not be available in this region: {e}")
+            if self._is_access_denied(e):
+                self._add("INFO", "AGT-01", "BEDROCK_AGENTS", "bedrock-agent",
+                          "Bedrock Agents NOT evaluated — missing permission "
+                          "bedrock:ListAgents (no phantom pass)")
+            else:
+                self._add("WARN", "AGT-01", "BEDROCK_AGENTS", "bedrock-agent",
+                          f"Bedrock Agents may not be available in this region: {e}")
             return
 
         if not agents:
@@ -5338,53 +5453,6 @@ class AWSLiveScanner:
                     self._add("WARN", "AGT-02", "BEDROCK_AGENTS", aname,
                               f"Could not audit role for '{aname}': {e}")
 
-            # AGT-03 — Knowledge Bases encryption and data sources
-            try:
-                kbs = ba.list_knowledge_bases().get(
-                    "knowledgeBaseSummaries", []
-                )
-                if not kbs:
-                    self._add("INFO", "AGT-03", "BEDROCK_AGENTS", aname,
-                              "No Bedrock Knowledge Bases found")
-                for kb in kbs:
-                    kbid      = kb["knowledgeBaseId"]
-                    kbname    = kb.get("name", kbid)
-                    kb_detail = ba.get_knowledge_base(
-                        knowledgeBaseId=kbid
-                    )["knowledgeBase"]
-                    kms_kb = kb_detail.get(
-                        "serverSideEncryptionConfiguration", {}
-                    ).get("kmsKeyArn", "")
-                    if kms_kb:
-                        self._add("PASS", "AGT-03", "BEDROCK_AGENTS", kbname,
-                                  f"KB '{kbname}' KMS=SET "
-                                  f"Status={kb.get('status', 'N/A')}")
-                    else:
-                        self._add("WARN", "AGT-03", "BEDROCK_AGENTS", kbname,
-                                  f"KB '{kbname}' KMS=AWS-managed "
-                                  f"Status={kb.get('status', 'N/A')}")
-                    sources = ba.list_data_sources(
-                        knowledgeBaseId=kbid
-                    ).get("dataSourceSummaries", [])
-                    for ds in sources:
-                        dsid      = ds["dataSourceId"]
-                        dsname    = ds.get("name", dsid)
-                        ds_detail = ba.get_data_source(
-                            knowledgeBaseId=kbid, dataSourceId=dsid
-                        )["dataSource"]
-                        ds_kms = ds_detail.get(
-                            "serverSideEncryptionConfiguration", {}
-                        ).get("kmsKeyArn", "")
-                        if ds_kms:
-                            self._add("PASS", "AGT-03", "BEDROCK_AGENTS",
-                                      dsname,
-                                      f"DataSource '{dsname}' KMS=SET")
-                        else:
-                            self._add("WARN", "AGT-03", "BEDROCK_AGENTS",
-                                      dsname,
-                                      f"DataSource '{dsname}' KMS=not set")
-            except Exception as e:
-                self._add("WARN", "AGT-03", "BEDROCK_AGENTS", aname, str(e))
 
             # AGT-04 — Action Group Lambda security
             try:
@@ -10278,8 +10346,9 @@ class AWSLiveScanner:
         prop-based crown_nodes -> NO aws_correlate change. Fail-open: an
         unresolvable principal fetch or per-resource error -> AISPM-00 INFO, never a
         phantom PASS."""
-        if g is None or not self._aispm_resources:
+        if g is None or not self._aispm_resources or self._aispm_collected:
             return
+        self._aispm_collected = True
         try:
             principals = {(p.get("arn") or "").lower(): p
                           for p in self._get_iam_principals()}
