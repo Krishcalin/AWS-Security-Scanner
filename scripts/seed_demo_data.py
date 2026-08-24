@@ -329,6 +329,7 @@ def _payload_row(rng, profile, account_id, findings, all_scans, now):
         if row[10] == "open" and row[8] in counts:
             counts[row[8]] += 1
     paths = _attack_paths(rng, profile, account_id, counts)
+    failing_checks = sorted({c["check_id"] for c in catalog})
 
     payload = {
         "account": account_id,
@@ -345,8 +346,8 @@ def _payload_row(rng, profile, account_id, findings, all_scans, now):
         "choke_points": _choke_points(paths),
         "graph": _graph(account_id, paths),
         "graph_full": _graph(account_id, paths),
-        "compliance": _compliance(counts),
-        "compliance_scorecard": _compliance(counts),
+        "compliance": _compliance(failing_checks),
+        "compliance_scorecard": _compliance(failing_checks),
         "resource": {},
         "remediation_cmd": {},
         "demo": True,
@@ -437,16 +438,49 @@ def _attack_paths(rng, profile, account_id, counts):
 
 
 def _choke_points(paths):
-    """Nodes that appear on more than one path — the fix-one-break-many list."""
+    """Nodes that sever more than one path — the fix-one-break-many list.
+
+    THE FIELD NAMES ARE THE FRONTEND'S, not invented. An earlier version of
+    this emitted `{node, paths, max_score}` and the console had no idea what to
+    render; `ChokePoint` in frontend/src/api/types.ts declares node_id,
+    node_kind, label, paths_severed, total_paths, weighted_score,
+    targets_fully_blocked, is_true_choke and remediation_hint.
+    `tests/test_seed_demo_data.py` now reads that file and checks the payload
+    against it, because guessing this twice was enough.
+    """
+    total = len(paths)
     seen = {}
     for path in paths:
+        # Ends excluded: 'internet' is not a thing you can remediate, and the
+        # terminal IS the crown jewel rather than the way in to it.
         for node in path["nodes"][1:-1]:
-            entry = seen.setdefault(node, {"node": node, "paths": 0,
-                                           "max_score": 0})
-            entry["paths"] += 1
-            entry["max_score"] = max(entry["max_score"], path["score"])
-    out = [v for v in seen.values() if v["paths"] > 1]
-    out.sort(key=lambda c: (-c["paths"], -c["max_score"]))
+            entry = seen.setdefault(node, {"node_id": node, "severed": 0,
+                                           "score": 0, "targets": set()})
+            entry["severed"] += 1
+            entry["score"] = max(entry["score"], path["score"])
+            entry["targets"].add(path["terminal"])
+
+    out = []
+    for entry in seen.values():
+        if entry["severed"] < 2:
+            continue
+        node_id = entry["node_id"]
+        kind = ("IamRole" if node_id.startswith("role/") else
+                "EC2Instance" if node_id.startswith("ec2/") else "Resource")
+        out.append({
+            "node_id": node_id,
+            "node_kind": kind,
+            "label": node_id.split("/")[-1],
+            "paths_severed": entry["severed"],
+            "total_paths": total,
+            "weighted_score": entry["score"],
+            "targets_fully_blocked": sorted(entry["targets"]),
+            "is_true_choke": entry["severed"] == total,
+            "remediation_hint": (
+                "Remove the public ingress or narrow the role's policy — "
+                "either break severs every path through this node."),
+        })
+    out.sort(key=lambda c: (-c["paths_severed"], -c["weighted_score"]))
     return out
 
 
@@ -491,19 +525,42 @@ def _graph(account_id, paths):
             "nodes": nodes, "edges": edges}
 
 
-def _compliance(counts):
-    """A scorecard per framework. Derived from the same open counts, so it
-    moves with the estate rather than being an unrelated number."""
-    failed = sum(counts.values())
-    out = {}
-    for framework, total in (("CIS", 62), ("PCI-DSS", 48), ("HIPAA", 34),
-                             ("SOC2", 41), ("NIST", 38)):
-        bad = min(total, failed // 3)
-        out[framework] = {
-            "passed": total - bad, "failed": bad, "total": total,
-            "percent": round(100.0 * (total - bad) / total, 1),
-        }
-    return out
+class _Result:
+    """The two fields `compliance_scorecard` reads off a scan result.
+
+    A stand-in rather than a real `Result`: the seeder has check ids, not a
+    scanned estate, and the scorecard only ever touches `.status` and
+    `.compliance`.
+    """
+
+    __slots__ = ("status", "compliance")
+
+    def __init__(self, status: str, compliance: dict) -> None:
+        self.status, self.compliance = status, compliance
+
+
+def _compliance(check_ids):
+    """The per-framework control rollup, built by the PRODUCT'S OWN function.
+
+    The first version of this invented its own shape — `{passed, failed, total,
+    percent}` — and the Compliance screen died on `r.failed_controls is not
+    iterable`, because the real card carries `controls_total`,
+    `controls_passed`, `controls_failed`, `pass_rate` and a LIST of failed
+    control ids.
+
+    Calling `compliance_scorecard` rather than reproducing its output means the
+    demo cannot drift from it again: the control universe comes from
+    COMPLIANCE_MAP exactly as a real scan's does, and a control is failed
+    because a seeded check that references it failed.
+    """
+    import aws_live_scanner as scanner
+
+    results = []
+    for check_id in check_ids:
+        tags = scanner.COMPLIANCE_MAP.get(check_id)
+        if tags:
+            results.append(_Result("FAIL", dict(tags)))
+    return scanner.compliance_scorecard(results)
 
 
 #: Real package/CVE pairs so the vulnerability screens show something a viewer

@@ -282,7 +282,7 @@ def test_a_choke_point_is_on_more_than_one_path(rows):
     for _a, payload_json, _s, _t in rows["scan_results"]:
         payload = json.loads(payload_json)
         for choke in payload["choke_points"]:
-            assert choke["paths"] > 1
+            assert choke["paths_severed"] > 1
 
 
 def test_the_worst_org_has_the_busiest_graph(rows):
@@ -331,3 +331,101 @@ def test_accounts_is_deleted_last_among_its_children():
     assert order[-1] == "accounts"
     assert order.index("workspace_accounts") < order.index("accounts")
     assert order.index("scan_jobs") < order.index("accounts")
+
+
+# ── the payload must match the console's DECLARED types ─────────────────────
+# Written after guessing a shape wrong twice. The Compliance screen died on
+# "r.failed_controls is not iterable" because _compliance invented
+# {passed, failed, total, percent}; choke_points had the same fault and would
+# have died next. Both are now read FROM frontend/src/api/types.ts, so the
+# next mismatch fails here rather than in a browser.
+
+import re  # noqa: E402
+
+TYPES_TS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "frontend", "src", "api", "types.ts")
+
+
+def _required_fields(interface: str) -> set:
+    """Non-optional field names the console declares for one interface."""
+    with open(TYPES_TS, encoding="utf-8") as handle:
+        source = handle.read()
+    match = re.search(r"export interface " + interface + r"\s*\{(.*?)\n\}",
+                      source, re.S)
+    assert match, f"{interface} not found in types.ts"
+    fields = set()
+    for line in match.group(1).split("\n"):
+        line = line.split("//")[0].strip()
+        found = re.match(r"([A-Za-z_][A-Za-z0-9_]*)(\??)\s*:", line)
+        if found and not found.group(2):        # skip optional (name?: T)
+            fields.add(found.group(1))
+    return fields
+
+
+def _payloads(rows):
+    return [json.loads(r[1]) for r in rows["scan_results"]]
+
+
+def test_attack_paths_carry_every_declared_field(rows):
+    required = _required_fields("AttackPath")
+    for payload in _payloads(rows):
+        for path in payload["attack_paths"]:
+            missing = required - set(path)
+            assert not missing, missing
+
+
+def test_choke_points_carry_every_declared_field(rows):
+    """THE SECOND SHAPE THIS CAUGHT. Emitting {node, paths, max_score} left the
+    console with nothing it recognised."""
+    required = _required_fields("ChokePoint")
+    seen_any = False
+    for payload in _payloads(rows):
+        for choke in payload["choke_points"]:
+            seen_any = True
+            missing = required - set(choke)
+            assert not missing, missing
+    assert seen_any, "no choke points seeded — the check proved nothing"
+
+
+def test_compliance_cards_carry_every_declared_field(rows):
+    """THE ONE THAT REACHED A BROWSER: 'r.failed_controls is not iterable'."""
+    required = _required_fields("ComplianceFramework")
+    for payload in _payloads(rows):
+        for framework, card in payload["compliance"].items():
+            missing = required - set(card)
+            assert not missing, f"{framework}: {missing}"
+            assert isinstance(card["failed_controls"], list)
+
+
+def test_compliance_is_built_by_the_products_own_scorecard(rows):
+    """Not reproduced from its output. The control universe has to come from
+    COMPLIANCE_MAP exactly as a real scan's does, or the demo shows totals no
+    scan can produce."""
+    import aws_live_scanner as scanner
+
+    universe = {f: set() for f in scanner.COMPLIANCE_FRAMEWORKS}
+    for tags in scanner.COMPLIANCE_MAP.values():
+        for framework, control in (tags or {}).items():
+            if framework in universe and control:
+                universe[framework].add(control)
+
+    for payload in _payloads(rows):
+        for framework, card in payload["compliance"].items():
+            assert card["controls_total"] == len(universe[framework]), framework
+            assert set(card["failed_controls"]) <= universe[framework]
+
+
+def test_a_failed_control_traces_to_a_failing_check(rows):
+    """A control is failed BECAUSE a check that references it failed. A
+    scorecard that moves independently of the findings is a number nobody can
+    justify when asked."""
+    import aws_live_scanner as scanner
+
+    for payload in _payloads(rows):
+        tagged = {}
+        for card in payload["finding_catalog"]:
+            for framework, control in (scanner.COMPLIANCE_MAP.get(
+                    card["check_id"]) or {}).items():
+                tagged.setdefault(framework, set()).add(control)
+        for framework, card in payload["compliance"].items():
+            assert set(card["failed_controls"]) == tagged.get(framework, set())
