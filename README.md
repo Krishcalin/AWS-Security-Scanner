@@ -399,7 +399,7 @@ options:
 | **CloudFront** | CFN-01 to 05 | HTTPS-only, TLS version, WAF, access logging, origin protocol |
 | **Route 53** | R53-01 to 05 | Query logging, DNSSEC, transfer lock, health checks, DNS firewall |
 | **Bedrock** | BDR-01 to 05 | Model logging, guardrails, KMS encryption, VPC endpoint, IAM least privilege |
-| **Bedrock Agents** | AGT-01 to 05 | Agent KMS encryption, execution role, KB security, Lambda security, prompt injection |
+| **Bedrock Agents** | AGT-01 to 05 | Agent KMS encryption, execution role, KB security, Lambda security, guardrail attached |
 | **Lambda** | LMB-01 to 05 | Public access, VPC config, plaintext secrets in env vars, deprecated runtimes, concurrency |
 | **EKS** | EKS-01 to 08 | Public API endpoint, control plane logging, secrets encryption, version, security groups, worker-node SSH, EKS-Fargate profile boundary, **authentication mode** |
 | **KSPM** | KSPM-00 to 07 | **Agentless CIS-EKS (K8s side)** — anonymous RBAC bindings, wildcard/cluster-admin RBAC, default-SA automount, Pod Security Admission, default-deny NetworkPolicy, privileged/host pods (fail-open when the K8s API is unreachable) |

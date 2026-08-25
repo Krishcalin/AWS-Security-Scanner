@@ -170,14 +170,19 @@ def _pick(rng: random.Random, catalogue, severity: str, want: int):
     return [rng.choice(pool) for _ in range(want)]
 
 
-def build(rng: random.Random) -> Dict[str, List[tuple]]:
+def build(rng: random.Random, now: int = None) -> Dict[str, List[tuple]]:
     """Every row this seeder will write, as plain tuples. No database access.
 
     Built in full before anything is written so `--dry-run` reports exactly
     what a real run would do, rather than an estimate of it.
+
+    `now` is an INPUT, not an ambient read, because every account row embeds it and
+    the seeder is required to be reproducible: two builds from the same seed must
+    produce the same hub, and they cannot if the two runs straddle a second boundary.
+    Defaults to the wall clock so ordinary use is unchanged.
     """
     catalogue = _catalogue()
-    now = int(time.time())
+    now = int(time.time()) if now is None else int(now)
     rows: Dict[str, List[tuple]] = {
         "workspaces": [], "workspace_members": [], "workspace_accounts": [],
         "accounts": [], "scans": [], "findings": [], "finding_events": [],

@@ -24,8 +24,11 @@ check available, and it is the thing that actually drifted.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
+
+import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "scripts", "build_offline_bundle.sh")
@@ -118,3 +121,61 @@ def test_index_html_is_never_cached_and_hashed_assets_are(tmp_path):
     asset = client.get("/assets/index-abc.js")
     assert asset.status_code == 200
     assert "immutable" in asset.headers.get("cache-control", "")
+
+
+# ---------------------------------------------------------------------------
+# THE ARTIFACT, NOT THE INSTRUCTIONS FOR BUILDING IT.
+#
+# Every test above reads a shell script and a Dockerfile comment. Both said the
+# right thing while the console shipped in SAMPLE mode for a whole release: the
+# guard covers the documented path, and `npm run build` run by hand walks
+# straight past it. The failure is silent and total - fixtures instead of the
+# API, no login, and no Log out control anywhere, because UserMenu returns null
+# outside live mode - and the running product looks fine until somebody notices
+# an entire control is gone.
+#
+# So check what is actually on disk, in the directory the images COPY.
+# ---------------------------------------------------------------------------
+DIST = os.path.join(ROOT, "frontend", "dist")
+
+
+def _shipped_build_info():
+    """The build stamp, or None when no SPA has been built here."""
+    if not os.path.isfile(os.path.join(DIST, "index.html")):
+        return None                       # nothing built; nothing to ship
+    stamp = os.path.join(DIST, "build-info.json")
+    assert os.path.isfile(stamp), (
+        "frontend/dist exists but has no build-info.json, so the data mode of "
+        "the bundle the images COPY cannot be determined. Rebuild with:\n"
+        "    cd frontend && VITE_DATA_SOURCE=live npm run build")
+    with open(stamp, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def test_the_shipped_bundle_is_stamped_with_its_data_mode():
+    """Without the stamp the artifact is unidentifiable and this cannot be
+    checked at all - which is how it went unnoticed."""
+    info = _shipped_build_info()
+    if info is None:
+        pytest.skip("no SPA built in this checkout")
+    assert "data_mode" in info
+
+
+def test_the_shipped_bundle_is_a_live_build_not_the_sample_demo():
+    info = _shipped_build_info()
+    if info is None:
+        pytest.skip("no SPA built in this checkout")
+    assert info["data_mode"] == "live", (
+        f"frontend/dist was built in {info['data_mode']!r} mode. That bundle "
+        "serves fixtures and contains no authentication UI - there is no login "
+        "and no Log out control. Rebuild with:\n"
+        "    cd frontend && VITE_DATA_SOURCE=live npm run build")
+
+
+def test_the_build_stamp_is_emitted_by_the_vite_config_not_the_shell_script():
+    """A stamp written by build_offline_bundle.sh would be absent from exactly
+    the hand-run build it exists to catch."""
+    with open(os.path.join(ROOT, "frontend", "vite.config.ts"), encoding="utf-8") as fh:
+        cfg = fh.read()
+    assert "build-info.json" in cfg
+    assert "VITE_DATA_SOURCE" in cfg

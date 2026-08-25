@@ -26,6 +26,32 @@ describe('findingInDashboard matcher', () => {
   it('rejects an unrelated finding', () => {
     expect(findingInDashboard({ check_id: 'IAM-01', section: 'IAM' }, exposure)).toBe(false)
   })
+
+  // AISPM findings carry section 'DATA', so a bare section fallback put the SAME
+  // risk on two dashboards at once: AI Security (by prefix) and Data Security (by
+  // section). Double-counted in every tile that sums them.
+  it('does NOT render an AISPM finding on Data Security as well', () => {
+    const f = { check_id: 'AISPM-01', section: 'DATA' }
+    expect(findingInDashboard(f, dashboardBySlug('ai-security')!)).toBe(true)
+    expect(findingInDashboard(f, dashboardBySlug('data-security')!)).toBe(false)
+  })
+  it('does NOT render an AIPATH finding on Data Security as well', () => {
+    const f = { check_id: 'AIPATH-01', section: 'DATA' }
+    expect(findingInDashboard(f, dashboardBySlug('ai-security')!)).toBe(true)
+    expect(findingInDashboard(f, dashboardBySlug('data-security')!)).toBe(false)
+  })
+  // A genuine DSPM finding must still land on Data Security by prefix.
+  it('still renders a real DSPM finding on Data Security', () => {
+    expect(findingInDashboard({ check_id: 'DSPM-02', section: 'DATA' },
+      dashboardBySlug('data-security')!)).toBe(true)
+  })
+  // FARGATE- is deliberately claimed by TWO dashboards. Narrowing the fallback
+  // must not disturb a prefix that two specs legitimately share.
+  it('keeps a deliberately shared prefix on both dashboards', () => {
+    const f = { check_id: 'FARGATE-02', section: 'EXPOSURE' }
+    expect(findingInDashboard(f, dashboardBySlug('exposure')!)).toBe(true)
+    expect(findingInDashboard(f, dashboardBySlug('containers')!)).toBe(true)
+  })
 })
 
 describe('dashboard specs are well-formed', () => {

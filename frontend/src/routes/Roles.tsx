@@ -192,21 +192,32 @@ export default function Roles() {
           Who belongs to a workspace, and what each of them may do. Only an
           administrator can grant a role — including another administrator.
         </p>
+        {/* Both children below are conditional, so on the common case - one
+            workspace, viewed by an admin - this row has nothing in it, and an
+            empty flex row still spends its mt-3 as a gap under the paragraph. */}
+        {(workspaces.length > 1 || (meKnown && !isAdmin)) && (
         <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-ink3">
-          {workspaces.length > 1 ? (
-            <select className={INPUT} value={workspace} aria-label="Workspace"
-                    onChange={e => setWorkspace(e.target.value)}>
-              {workspaces.map(w => (
-                <option key={w} value={w}>{w} — you are {me?.memberships[w]}</option>
-              ))}
-            </select>
-          ) : (
-            <span className="font-mono rounded-md border border-line px-2 py-1">{workspace}</span>
+          {/* Shown only when there is a CHOICE to make. A single-workspace
+              install rendered its internal id - "ws-default" - as a bare chip
+              with no label, in the position a control occupies, which reads as
+              a setting the reader is expected to understand and act on. It is
+              neither: it is a database key, and there is nothing to pick. */}
+          {workspaces.length > 1 && (
+            <label className="flex items-center gap-2">
+              <span>Workspace</span>
+              <select className={INPUT} value={workspace} aria-label="Workspace"
+                      onChange={e => setWorkspace(e.target.value)}>
+                {workspaces.map(w => (
+                  <option key={w} value={w}>{w} — you are {me?.memberships[w]}</option>
+                ))}
+              </select>
+            </label>
           )}
           {meKnown && !isAdmin && (
             <span>You are {myRole || 'not a member'} here, so these controls are read-only.</span>
           )}
         </div>
+        )}
       </Card>
 
       {catalogue && (
@@ -295,7 +306,9 @@ export default function Roles() {
       )}
 
       <Card className="p-5">
-        <Title icon={<Users size={15} className="text-ink3" />}>Members of {workspace}</Title>
+        <Title icon={<Users size={15} className="text-ink3" />}>
+          {workspaces.length > 1 ? `Members of ${workspace}` : 'Members'}
+        </Title>
         {members === null && <Loader />}
         {members !== null && members.length === 0 && (
           <Empty>Nobody is a member of this workspace yet.</Empty>

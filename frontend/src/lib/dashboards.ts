@@ -52,6 +52,13 @@ export const DASHBOARDS: DashboardSpec[] = [
 export function findingInDashboard(e: { check_id: string; section: string }, spec: DashboardSpec): boolean {
   const c = (e.check_id || '').toUpperCase()
   if (spec.prefixes.some((p) => c.startsWith(p))) return true
+  // A check_id claimed by SOME dashboard's prefix belongs to that dashboard, and the
+  // section fallback must not also drag it onto another. AISPM-* findings carry
+  // section 'DATA', so without this they rendered on BOTH AI Security (by prefix)
+  // and Data Security (by section) — one risk, counted and shown twice.
+  // Only the FALLBACK is narrowed: a prefix claimed by two dashboards on purpose
+  // (FARGATE- is on both Exposure and Containers) still matches both, above.
+  if (DASHBOARDS.some((d) => d !== spec && d.prefixes.some((p) => c.startsWith(p)))) return false
   const s = (e.section || '').toUpperCase()
   return !!spec.sections && spec.sections.includes(s)
 }
