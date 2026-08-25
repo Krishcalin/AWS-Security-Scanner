@@ -2791,6 +2791,139 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
         ],
     },
+    "VEC-01": {
+        "risk": "This OpenSearch Serverless VECTORSEARCH collection is reachable from the public internet. A VECTORSEARCH collection is a retrieval-augmented agent's corpus - the embedded form of whatever documents the organization pointed it at - which is why OverWatch treats it differently from a SEARCH or TIMESERIES collection and does not report those here. Be precise about what this finding claims: network access decides who can REACH the endpoint, and the data access policy decides who can read it. Those are separate controls and this is the first of the two. What makes it worth a HIGH on its own is that reaching the endpoint is the precondition for everything else, and a corpus endpoint on the public internet is one an attacker can enumerate, fingerprint and attack at leisure. One reading that trips people: a public rule in ANY policy matching this collection wins, and setting AllowFromPublic alongside SourceVPCEs makes the service ignore the VPC endpoints entirely, so a policy that looks private can be overridden by another that matches the same name pattern. This check reads configuration only. Whether the stored embeddings encode sensitive material is not a question this scan asks - answering it would mean reading the corpus, which is the escalation decision D2 declined, and a security product that ingests the documents it audits has become a second copy of the thing at risk.",
+        "impact": "The corpus endpoint is exposed to the internet, where it can be found and probed by anyone; whether it yields data depends on the data access policy (VEC-02).",
+        "steps": [
+            "Find EVERY policy that matches this collection, not just the obvious one: aws opensearchserverless list-security-policies --type network",
+            "Set AllowFromPublic to false and reach the collection through a VPC endpoint: update-security-policy with SourceVPCEs set to your OpenSearch Serverless-managed endpoint.",
+            "If a Bedrock knowledge base uses this collection, add SourceServices with bedrock.amazonaws.com rather than opening the network - that is the documented private path and OverWatch recognises it as correct.",
+            "Check the Dashboards endpoint separately. It is a different door to the same data, and a policy can open one without the other.",
+            "Then check VEC-02: closing the network without narrowing the data access policy still leaves the corpus readable by every principal the policy names.",
+        ],
+    },
+    "VEC-02": {
+        "risk": "A data access policy on this vector collection grants a wildcard principal. In OpenSearch Serverless the data access policy is the control that actually decides retrieval - the reference is explicit that even with public network access, data access policies still control who can read and write. So this is the READ gate, and a wildcard on it means every principal the network admits can pull back the corpus. What makes that materially worse than an over-broad policy on an ordinary datastore is what a RAG corpus is: not one document but the embedded form of a whole document set, retrievable by semantic similarity, which means an attacker does not need to know what to ask for. They can ask for anything and get the nearest thing you hold. This check reads configuration only. Whether the stored embeddings encode sensitive material is not a question this scan asks - answering it would mean reading the corpus, which is the escalation decision D2 declined, and a security product that ingests the documents it audits has become a second copy of the thing at risk.",
+        "impact": "Any principal the network admits can retrieve from the organization's document corpus by similarity, without needing to know what it contains.",
+        "steps": [
+            "List the data access policies and find the wildcard: aws opensearchserverless list-access-policies --type data",
+            "Replace the wildcard Principal with the exact role ARNs that need retrieval - typically the Bedrock knowledge-base service role and the application role, and nothing else.",
+            "Grant the narrowest permission set the workload needs; read and write are separate, and an ingestion role rarely needs both on the same index.",
+            "Re-check after the change: OverWatch reports the principals it found, so the next scan shows the narrowed set rather than requiring you to assert it.",
+        ],
+    },
+    "VEC-03": {
+        "risk": "Both gates are open on this collection: it is reachable from the public internet AND its data access policy grants a wildcard principal. This finding exists as its own check, rather than as a note on the other two, because the composition is a different claim from either half. OverWatch will not assert that a corpus is retrievable from the internet on the strength of a network policy alone - the reference is clear that network access is not data access - and it will not assert it from a broad data policy alone either, because an unreachable endpoint is not exploitable. Only when both have been separately established does the composition hold, which is the same gating ATT&CK-02 applies before it will claim a data terminal. That is why this is the CRITICAL and the halves are not. This check reads configuration only. Whether the stored embeddings encode sensitive material is not a question this scan asks - answering it would mean reading the corpus, which is the escalation decision D2 declined, and a security product that ingests the documents it audits has become a second copy of the thing at risk.",
+        "impact": "The organization's document corpus is retrievable by anyone who locates the endpoint, with no further access required.",
+        "steps": [
+            "Treat this as live exposure and close the READ gate first: it takes effect immediately, while a network policy change has to propagate.",
+            "aws opensearchserverless list-access-policies --type data, then update-access-policy with Principal narrowed to the exact roles.",
+            "Then close the reach gate per VEC-01 - set AllowFromPublic false across every matching network policy.",
+            "Review CloudTrail for aoss data-plane access while both gates were open. OverWatch reads configuration only and cannot tell you whether anyone used this.",
+            "Consider rotating anything the corpus embeds that is itself a credential - embeddings are derived from the source documents, and the source documents are what was exposed.",
+        ],
+    },
+    "VEC-04": {
+        "risk": "This vector collection is encrypted with an AWS-owned key rather than a customer-managed one. As with AGC-07's token vault and AMEM-02's agent memory, this is a custody question rather than an encryption one - the data is encrypted either way. What a customer-managed key gives you is a set of levers: revoke access to everything the key protects by disabling one key, see every decrypt in CloudTrail under a key policy you own, and narrow who may decrypt at all. It matters here because of what the collection holds - the organization's documents in embedded form - and because the containment question in an incident is whether you can cut access to the corpus quickly. With an AWS-owned key that question has no answer. This check reads configuration only. Whether the stored embeddings encode sensitive material is not a question this scan asks - answering it would mean reading the corpus, which is the escalation decision D2 declined, and a security product that ingests the documents it audits has become a second copy of the thing at risk.",
+        "impact": "There is no key you can disable to cut access to the corpus, and no decrypt trail under a policy you control.",
+        "steps": [
+            "The encryption key is set by an encryption-type security policy and applies at collection creation; it cannot be changed on an existing collection.",
+            "Create the policy first: aws opensearchserverless create-security-policy --name <POLICY> --type encryption --policy with KmsARN set to your key ARN and a Resource pattern matching the collection name.",
+            "Recreate the collection so the policy applies, then re-ingest the corpus.",
+            "Scope the key policy to the roles that actually use the collection rather than leaving it account-wide - a key is only a lever if it is narrower than the account.",
+        ],
+    },
+    "VEC-05": {
+        "risk": "This S3 Vectors bucket's resource policy grants a wildcard principal. S3 Vectors is the other place a RAG corpus lives, and the exposure is the same class as a public S3 bucket (S3-09) with the same consequence one layer up: the object here is not a file but a set of embeddings, retrievable by similarity search. An attacker who can query it does not need to know what documents you hold - similarity retrieval will surface the nearest match to whatever they ask. Note this is reported apart from a cross-account grant (VEC-06), because a named external account is frequently a partner integration somebody set up on purpose while a wildcard almost never is. This check reads configuration only. Whether the stored embeddings encode sensitive material is not a question this scan asks - answering it would mean reading the corpus, which is the escalation decision D2 declined, and a security product that ingests the documents it audits has become a second copy of the thing at risk.",
+        "impact": "The RAG corpus is exposed to any principal on the internet that can reach the S3 Vectors endpoint.",
+        "steps": [
+            "Read the policy: aws s3vectors get-vector-bucket-policy --vector-bucket-name <BUCKET>",
+            "Replace the wildcard with the specific roles that need the corpus, then aws s3vectors put-vector-bucket-policy --vector-bucket-name <BUCKET> --policy file://policy.json",
+            "Check whether an aws:PrincipalOrgID or aws:SourceArn condition is the right narrowing if the grant needs to stay broad in principal but bounded in origin.",
+            "Review CloudTrail for s3vectors data-plane calls against this bucket while the policy was open.",
+        ],
+    },
+    "VEC-06": {
+        "risk": "This S3 Vectors bucket's policy grants one or more named external accounts. Unlike a wildcard (VEC-05), a named account is frequently deliberate - a partner integration, a shared analytics account, a second environment - which is why OverWatch reports it separately and at a lower severity rather than collapsing both into 'public'. Putting a CRITICAL on a working partner integration is how a scanner teaches people to ignore its findings. What is worth confirming is that each external principal is a sharing decision somebody actually made, that it is scoped to a role rather than the account root, and that whoever owns that account knows they are holding a copy of your document corpus in embedded form. This check reads configuration only. Whether the stored embeddings encode sensitive material is not a question this scan asks - answering it would mean reading the corpus, which is the escalation decision D2 declined, and a security product that ingests the documents it audits has become a second copy of the thing at risk.",
+        "impact": "An external account can retrieve from the corpus; whether that is intended is a question only the operator can answer.",
+        "steps": [
+            "Confirm each external principal against your own record of intended sharing. The finding names them.",
+            "Scope each grant to a specific role rather than the account root - :root means every principal in that account, present and future.",
+            "Add a condition narrowing origin where possible, such as aws:SourceArn or aws:PrincipalOrgID.",
+            "If a grant is no longer needed, remove it: get-vector-bucket-policy, edit, put-vector-bucket-policy.",
+        ],
+    },
+    "VEC-07": {
+        "risk": "This S3 Vectors bucket is not encrypted with a customer-managed KMS key. Two values both fail this check and it is worth knowing why: sseType AES256 is SSE-S3, which is an AWS-owned key, and sseType aws:kms WITHOUT a kmsKeyArn is still an AWS-managed key rather than one of yours. Neither gives you a key you can disable, a decrypt trail under your own key policy, or the ability to narrow who decrypts. The custody argument is the same one AGC-07, AMEM-02 and VEC-04 make, and it applies here for the same reason: this bucket holds the organization's documents in embedded form, and containment means being able to cut access to them. This check reads configuration only. Whether the stored embeddings encode sensitive material is not a question this scan asks - answering it would mean reading the corpus, which is the escalation decision D2 declined, and a security product that ingests the documents it audits has become a second copy of the thing at risk.",
+        "impact": "There is no key you can disable to cut access to the corpus, and no decrypt trail under a policy you control.",
+        "steps": [
+            "Encryption is set at bucket creation: aws s3vectors create-vector-bucket --vector-bucket-name <BUCKET> --encryption-configuration sseType=aws:kms,kmsKeyArn=<KEY_ARN>",
+            "Both parts are required - sseType aws:kms with no kmsKeyArn leaves you on an AWS-managed key and this check will still fail.",
+            "Scope the key policy to the roles that use the bucket rather than leaving it account-wide.",
+            "Enable rotation on the key: aws kms enable-key-rotation --key-id <KEY_ID>",
+        ],
+    },
+    "AILOG-01": {
+        "risk": "The S3 bucket receiving Bedrock model invocation logs is publicly accessible. Read what that bucket contains: with textDataDeliveryEnabled, Bedrock writes every prompt your users send and every completion your models return. That is user input and model output together - support tickets, code, contracts, whatever people paste into an assistant - accumulating in one place. This finding is the second half of BDR-01's own advice. BDR-01 is right that invocation logging should be on; it is the only control in the AI pillar that produces evidence after an incident. But turning it on CREATES a crown jewel, and until this check existed nothing asked whether that crown jewel was locked. Note what OverWatch does not claim: it reports the bucket is reachable, not that anyone read it. The access logs answer that, and they are where an incident response starts. OverWatch reads the logging CONFIGURATION and never the logs themselves - what the prompts say is not a question this scan asks, because a scanner that read them to check them would be a second copy of the problem (decisions D2 and D8).",
+        "impact": "Every prompt and completion the account has produced since logging was enabled is readable by anyone.",
+        "steps": [
+            "Block public access first, then investigate: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+            "Read and fix the bucket policy: aws s3api get-bucket-policy --bucket <BUCKET>, remove any wildcard principal, then put-bucket-policy.",
+            "Treat this as a disclosure until proven otherwise. Check S3 server access logs or CloudTrail data events for GetObject on the bucket, and note that if data events were never enabled you cannot rule it out (AILOG-04).",
+            "Scope what future logs contain: the four delivery switches are independent, so if you only need metrics you can turn textDataDeliveryEnabled off and keep the audit trail of WHO invoked WHAT.",
+            "Check the large-payload overflow bucket too. A CloudWatch destination spills oversized payloads into a separate S3 bucket, and that one receives the biggest prompts - the pasted documents.",
+        ],
+    },
+    "AILOG-02": {
+        "risk": "The destination receiving model invocation logs is not encrypted with a customer-managed key. As with AGC-07's token vault, AMEM-02's agent memory and VEC-04's corpus, this is a custody question rather than an encryption one - the data is encrypted either way. A customer-managed key is what gives you levers: disable one key and access to the whole prompt history stops, see every decrypt in CloudTrail under a key policy you own, and narrow who may decrypt at all. It matters here as much as anywhere in the account, because this destination holds the raw text of what people asked an AI system and what it told them. OverWatch reads the logging CONFIGURATION and never the logs themselves - what the prompts say is not a question this scan asks, because a scanner that read them to check them would be a second copy of the problem (decisions D2 and D8).",
+        "impact": "There is no key you can disable to cut access to the prompt history, and no decrypt trail under a policy you control.",
+        "steps": [
+            "For an S3 destination: aws s3api put-bucket-encryption --bucket <BUCKET> --server-side-encryption-configuration with SSEAlgorithm aws:kms and KMSMasterKeyID set to your key ARN.",
+            "For a CloudWatch destination: aws logs associate-kms-key --log-group-name <GROUP> --kms-key-id <KEY_ARN>",
+            "Scope the key policy to the roles that legitimately read the logs rather than leaving it account-wide - a key is only a lever if it is narrower than the account.",
+            "Enable rotation: aws kms enable-key-rotation --key-id <KEY_ID>",
+        ],
+    },
+    "AILOG-03": {
+        "risk": "The CloudWatch log group receiving model invocation logs has no retention policy, so every prompt and completion is kept indefinitely. Prompt logs are genuinely evidence - they are what lets you reconstruct an incident - and this finding is not an argument for deleting them. It is an argument for choosing a number. An indefinite log of everything anyone ever asked an AI system is simultaneously an audit trail and a growing liability: it is discoverable, it is a target, and its value as evidence decays long before its sensitivity does. The right retention period depends on what you need to be able to reconstruct and what your regulator requires; what is wrong is not having decided. OverWatch reads the logging CONFIGURATION and never the logs themselves - what the prompts say is not a question this scan asks, because a scanner that read them to check them would be a second copy of the problem (decisions D2 and D8).",
+        "impact": "The prompt history grows without bound, increasing both the blast radius of any exposure and the scope of any legal discovery.",
+        "steps": [
+            "Choose a period from what you need to reconstruct, then set it: aws logs put-retention-policy --log-group-name <GROUP> --retention-in-days 90",
+            "For an S3 destination, add a lifecycle rule: aws s3api put-bucket-lifecycle-configuration --bucket <BUCKET> --lifecycle-configuration file://lifecycle.json",
+            "If a longer period is required for compliance, keep it - but pair it with AILOG-02 so the archive is on a key you control.",
+            "Consider whether you need the payloads at all for the full period. The delivery switches are independent, so metadata-only logging preserves the who/what/when after the payloads age out.",
+        ],
+    },
+    "AILOG-04": {
+        "risk": "No CloudTrail trail records AWS::Bedrock::Model data events, so the account has no record of who invoked which model, with which identity, from where. This is the difference between 'we log data events' and 'we can answer the question'. LOG-08 checks whether a trail records data events at all, and an account passes it comfortably while logging only S3 object activity - which tells you nothing about model invocation. Two consequences follow. First, AITHR-01's LLMjacking detection depends on exactly this signal: a stolen credential invoking models across regions is visible in data events and invisible without them. Second, after any AI incident the first question is which identity called the model and when, and with no data events the honest answer is that it cannot be reconstructed. One implementation note that catches people: Bedrock data events require ADVANCED event selectors. Basic selectors accept only DynamoDB, Lambda and S3 object types, so a trail configured with basic selectors can never carry Bedrock activity however many data events it logs. OverWatch reads the logging CONFIGURATION and never the logs themselves - what the prompts say is not a question this scan asks, because a scanner that read them to check them would be a second copy of the problem (decisions D2 and D8).",
+        "impact": "Model invocations cannot be attributed to an identity, which removes both LLMjacking detection and post-incident reconstruction.",
+        "steps": [
+            "Add an advanced event selector: aws cloudtrail put-event-selectors --trail-name <TRAIL> --advanced-event-selectors with a FieldSelector on eventCategory Equals Data and resources.type Equals AWS::Bedrock::Model",
+            "Do not try to express this with basic selectors - they do not accept Bedrock resource types at all.",
+            "Data events are billed per event and model invocation can be high volume. Price it before enabling account-wide, and consider a dedicated trail scoped to the AI accounts.",
+            "Once enabled, confirm delivery: aws cloudtrail get-trail-status --name <TRAIL> and check LatestDeliveryTime.",
+            "Then revisit AITHR-01 - its detection quality depends on this signal existing.",
+        ],
+    },
+    "AILOG-05": {
+        "risk": "Model invocations are recorded, but other Bedrock resource types are not covered by data events - agent aliases, knowledge bases, guardrails or sessions. This is a narrower gap than AILOG-04 and is reported as a WARN rather than a failure, because the right coverage depends on what the account actually runs and data events are billed per event. What the missing types cost you is specific: without AWS::Bedrock::KnowledgeBase you cannot see retrieval activity against the corpus, which is what an attacker exercises after a successful injection; without AWS::Bedrock::Guardrail you cannot see guardrail evaluation; without AWS::Bedrock::AgentAlias you cannot see which agent version served a request. OverWatch reads the logging CONFIGURATION and never the logs themselves - what the prompts say is not a question this scan asks, because a scanner that read them to check them would be a second copy of the problem (decisions D2 and D8).",
+        "impact": "Agent, retrieval and guardrail activity leaves no data-plane record, limiting what can be reconstructed after an incident.",
+        "steps": [
+            "Add the types whose activity you would need to reconstruct, rather than all of them: aws cloudtrail put-event-selectors --trail-name <TRAIL> --advanced-event-selectors with resources.type Equals listing the types you need.",
+            "AWS::Bedrock::KnowledgeBase is usually the highest-value addition after Model - it is the retrieval record for the corpus TFLOW-01 treats as an injection entry.",
+            "Weigh volume: agent and session events are far lower volume than model invocations, so adding them is usually cheap.",
+        ],
+    },
+    "AILOG-06": {
+        "risk": "This account runs AgentCore, and no CloudTrail data events cover its resource types - runtimes, gateways, memory, the token vault. An agent's own actions are exactly what an incident responder needs to follow after a prompt injection: which tool it called, which gateway it reached through, what it read from memory, whether it touched the credential store. Without data events on those types, the agent's behaviour is invisible at the data plane and the investigation stops at 'the agent did something'. OverWatch reports this only when it found AgentCore resources in the account, because telling an operator they are missing logs for a service they do not run is noise, and noise is how a category gets ignored. OverWatch reads the logging CONFIGURATION and never the logs themselves - what the prompts say is not a question this scan asks, because a scanner that read them to check them would be a second copy of the problem (decisions D2 and D8).",
+        "impact": "An agent's tool calls, gateway traffic, memory reads and credential access leave no data-plane record.",
+        "steps": [
+            "Add advanced event selectors for the AgentCore types you run: AWS::BedrockAgentCore::Runtime, Gateway, Memory, TokenVault, and the CodeInterpreter/Browser types if those are in use.",
+            "aws cloudtrail put-event-selectors --trail-name <TRAIL> --advanced-event-selectors with resources.type Equals listing them.",
+            "TokenVault is the highest-value one to add first: it is the store of every credential your agents hold for systems outside AWS (AGC-07), and access to it is what a compromise would need.",
+            "Pair with AGY-03 - a human confirmation gate and a data-plane record answer different halves of the same question about what an agent did.",
+        ],
+    },
     "AMEM-01": {
         "risk": "This agent has memory enabled with a retention window long enough that an instruction reaching memory keeps being read back into the model's context for that period. Agent memory is what lets a prompt injection outlive the conversation that carried it: everything else OverWatch reports about injection concerns what an agent reaches NOW, and this concerns how long it keeps reaching. There is no correct retention period - a support assistant that remembers a customer for a year may be exactly right - so this finding states the window in days rather than pronouncing on it. What it is really reporting is that a number exists which somebody should have chosen on purpose. Be clear about what this check does NOT do: it does not read memory contents. Whether anything poisoned is actually stored is a question about stored conversation, and reading that is the data-handling escalation decision D2 declined. The window is what configuration can establish.",
         "impact": "An instruction that reached memory once is presented to the model again in later sessions for the length of the window, potentially to different users where the memory is shared. A single successful injection becomes a recurring one.",

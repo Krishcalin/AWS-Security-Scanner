@@ -158,6 +158,51 @@ agent or guardrail, and that every action in the permission ledger is read-shape
 
 ---
 
+## D8 · Do we read the vectors themselves? — **NO**
+
+*Slice 4.2 audits the RAG vector store. `s3vectors` exposes `ListVectors` and
+`GetVectors`; `aoss` exposes an index API. Do we use them?*
+
+**Answer: no, and the roadmap's "boundary" label for 4.2 was wrong — not because the
+crossing is hard, but because almost nothing needs it.**
+
+The verification came first. Every security question worth asking about a RAG store
+turned out to be answerable from configuration:
+
+| Question | Answered by | Class |
+|---|---|---|
+| Is the corpus endpoint reachable from the internet? | `aoss:GetSecurityPolicy` (network) | config |
+| Who may retrieve from it? | `aoss:GetAccessPolicy` (data) | config |
+| Is it on a key the customer can revoke? | `aoss:BatchGetCollection.kmsKeyArn` | config |
+| Is the S3 Vectors bucket exposed? | `s3vectors:GetVectorBucketPolicy` | config |
+| Is that bucket on a customer key? | `s3vectors:GetVectorBucket` | config |
+| **What is actually in the corpus?** | **`GetVectors` / `ListVectors`** | **data** |
+
+Only the last row crosses, and what it returns is embeddings — vectors computed from the
+customer's documents, and partially invertible back toward them. That is the escalation
+**D2** declined for prompt text, and the argument transfers without modification: a
+security product that ingests the corpus it is auditing has become a second copy of the
+thing at risk. The blast radius of OverWatch being breached would then include the
+customer's document set.
+
+**What we do instead.** The same thing `MCP-04` does with the MCP tool list: say the
+blind spot out loud. Every `VEC-*` finding carries
+`aws_vectorstore.CONTENTS_NOT_READ` — *"this check reads configuration only and does NOT
+read the stored vectors"* — because a vector-store finding silent on contents reads as
+*contents checked, contents clean*, which is a phantom pass produced by omission rather
+than by assertion.
+
+**What this costs.** OverWatch cannot tell you whether a corpus contains regulated data,
+and cannot classify a vector store the way `DSPM-01` classifies an S3 bucket. That is a
+real gap and it is named rather than hidden. The compensating position is that
+`VEC-01/02/03` tell you who can *reach* and *read* the corpus, which is the question that
+decides whether the contents matter.
+
+**The consequence for the IAM ask.** The additive policy contains nine `aoss:` and
+`s3vectors:` actions, all `Get`/`List`/`BatchGet` of configuration. `s3vectors:GetVectors`
+and `s3vectors:ListVectors` are absent and always will be; a test asserts the module
+never names them in executable code.
+
 ## Declared non-goals
 
 Scope statements, not gaps. Each of these is something OverWatch will not build, recorded
