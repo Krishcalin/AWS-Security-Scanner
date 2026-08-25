@@ -178,6 +178,8 @@ FLOORS = {
     "test_mcp_drift.py": 16,
     "test_mcp_provenance.py": 22,
     "test_mcp_wiring.py": 24,
+    "test_modelartifact.py": 28,
+    "test_modelartifact_wiring.py": 20,
     "test_multitenancy_connectors.py": 11,
     "test_multitenancy_control_plane.py": 9,
     "test_multitenancy_isolation.py": 12,

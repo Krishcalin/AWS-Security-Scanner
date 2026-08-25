@@ -2955,6 +2955,58 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "If the VPC does not use Bedrock, this is not applicable and can be waived rather than remediated.",
         ],
     },
+    "MART-01": {
+        "risk": "The S3 bucket this model loads its artifact from is writable by a principal outside your account. Understand what that means concretely: a serialized model is not data. Python's pickle format encodes instructions, and its REDUCE opcode calls whatever callable the stream names - so loading a model artifact executes code, holding whatever credentials the loader holds. For a SageMaker endpoint that is the execution role. So an external principal with write access to this bucket has, in effect, a scheduled remote code execution inside your inference environment: they replace the object, and the next deploy runs their code. Nothing else needs to be compromised, no other control needs to fail, and no alert fires because from AWS's point of view the endpoint simply started normally. This is TFLOW-01's reasoning one layer down: TFLOW-01 says whoever can write the corpus writes what the model says, and this says whoever can write the artifact writes what the model IS. OverWatch reads the artifact's opcode stream and never unpickles it - a scanner that loaded an artifact to check whether loading it is safe would be the vulnerability itself, wearing a security label. What the model weights contain is not a question this scan asks.",
+        "impact": "An external principal can execute arbitrary code inside your inference environment with the endpoint execution role, at a time of their choosing.",
+        "steps": [
+            "Close the write grant first: aws s3api get-bucket-policy --bucket <BUCKET>, remove every external or wildcard principal holding s3:PutObject or s3:* , then put-bucket-policy.",
+            "Add the public access block: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+            "Then verify the artifact that is there NOW is the one you published - compare its ETag against your build record, and check aws s3api list-object-versions --bucket <BUCKET> --prefix <KEY> for versions you did not create.",
+            "Pin the model to a specific version (MART-02) so a future replacement cannot silently become what runs.",
+            "The durable fix is MART-05: re-serialize as safetensors. In a format that cannot execute, a writable bucket is a data-integrity problem rather than a code-execution one.",
+        ],
+    },
+    "MART-02": {
+        "risk": "This model's artifact reference carries no ETag, so it resolves at deploy time to whatever object currently sits at that S3 URI. The reference is a name, not a version. That matters because the artifact is executable: a file swapped between your review and your next deploy becomes the code that runs, and nothing in the account records that the model changed - the model configuration is byte-identical before and after. This is the rug-pull shape MCP-04 describes for federated tool servers, applied to model weights, and it is the reason MART-01 is a code-execution finding rather than a data-integrity one. Note the legacy ModelDataUrl field has no ETag at all, so a model using it is unpinned by construction rather than by omission. OverWatch reads the artifact's opcode stream and never unpickles it - a scanner that loaded an artifact to check whether loading it is safe would be the vulnerability itself, wearing a security label. What the model weights contain is not a question this scan asks.",
+        "impact": "What the endpoint executes on its next deploy is whatever is at that URI then, not what was reviewed.",
+        "steps": [
+            "Get the ETag of the artifact you actually reviewed: aws s3api head-object --bucket <BUCKET> --key <KEY>",
+            "Recreate the model with ModelDataSource.S3DataSource.ETag set to it, and S3DataType=S3Object rather than S3Prefix.",
+            "Turn on bucket versioning so the pinned version cannot be deleted out from under the reference: aws s3api put-bucket-versioning --bucket <BUCKET> --versioning-configuration Status=Enabled",
+            "If the model still uses the legacy ModelDataUrl, migrating to ModelDataSource is the only way to pin it at all.",
+        ],
+    },
+    "MART-03": {
+        "risk": "This model loads its artifact from a bucket that does not appear to belong to your account. That is frequently deliberate - a vendor model, a shared research bucket, a partner's output - which is why this is a WARN rather than a failure. What is worth confirming is what you are actually agreeing to: a model artifact is executable code, so loading one from another account is running their code in your inference environment with your execution role. The trust involved is the trust you would extend to a container image from an unfamiliar registry, and it deserves the same review. OverWatch judges ownership from the bucket name only, which is weak evidence and the reason this finding is conservative - it will not fire on a bucket carrying your own account id. OverWatch reads the artifact's opcode stream and never unpickles it - a scanner that loaded an artifact to check whether loading it is safe would be the vulnerability itself, wearing a security label. What the model weights contain is not a question this scan asks.",
+        "impact": "Code from an account you do not control runs inside your inference environment on every deploy.",
+        "steps": [
+            "Confirm the owning account is a source you intend to execute code from, and that somebody owns that relationship.",
+            "Prefer copying the artifact into a bucket you control and pinning it: aws s3 cp s3://<THEIR_BUCKET>/<KEY> s3://<YOUR_BUCKET>/<KEY> , then re-point the model.",
+            "If it must stay cross-account, pin the ETag (MART-02) so their next publish is not silently your next deploy.",
+            "Ask for the artifact in safetensors form (MART-05). A vendor who cannot supply one is asking you to execute their pickle.",
+        ],
+    },
+    "MART-04": {
+        "risk": "The static opcode scan found this artifact referencing a module and function with no legitimate reason to appear in a serialized model - the finding names them. Pickle streams reach code through GLOBAL or STACK_GLOBAL, which resolve a module attribute, and REDUCE, which calls it. A model that rebuilds tensors uses REDUCE constantly and that alone is not suspicious, which is why OverWatch separates EXECUTABLE from MALICIOUS and only reports the latter here. A reference to a process-spawning, file-opening or network function is different in kind: it is not how any serialization library rebuilds a model. Be clear about how this was determined: the artifact was NOT loaded. pickletools.genops walks the opcode stream without running it, and OverWatch never calls pickle.load - the same restraint you should apply while investigating. OverWatch reads the artifact's opcode stream and never unpickles it - a scanner that loaded an artifact to check whether loading it is safe would be the vulnerability itself, wearing a security label. What the model weights contain is not a question this scan asks.",
+        "impact": "Loading this artifact would execute the referenced call with the credentials of whatever loads it - in an endpoint, the execution role.",
+        "steps": [
+            "Do NOT load it to investigate, including in a notebook. That is the payload's delivery mechanism.",
+            "Copy it aside for offline analysis in an isolated environment: aws s3api get-object --bucket <BUCKET> --key <KEY> /tmp/artifact.bin , then inspect with python -m pickletools.",
+            "Find who wrote it: aws s3api list-object-versions --bucket <BUCKET> --prefix <KEY> , and CloudTrail data events for PutObject on that bucket if you have them (AILOG-04 reports whether you do).",
+            "Assume the endpoint execution role is compromised if a deploy has happened since the object was written, and rotate accordingly.",
+            "Rebuild the model from a source you trust and publish it as safetensors.",
+        ],
+    },
+    "MART-05": {
+        "risk": "This model's artifact is in a format that executes code when it is loaded. That is a property of the format rather than of this particular file - almost every PyTorch checkpoint, joblib dump and scikit-learn pickle is in the same position - which is why this is rated LOW and reported as context rather than as an incident. Its purpose is to make the other four findings legible: MART-01 is a remote-code-execution finding rather than a data-integrity one precisely BECAUSE the format executes, and if this model were in safetensors an externally-writable bucket would be a much smaller problem. safetensors was designed for exactly this: it stores tensors and a JSON header, has no mechanism for invoking a callable, and is a drop-in replacement for state-dict loading. Treat this finding as the durable fix for the rest of the family rather than as a defect on its own. OverWatch reads the artifact's opcode stream and never unpickles it - a scanner that loaded an artifact to check whether loading it is safe would be the vulnerability itself, wearing a security label. What the model weights contain is not a question this scan asks.",
+        "impact": "Loading the artifact can execute arbitrary code, which is what makes write access to its bucket a code-execution risk.",
+        "steps": [
+            "Re-serialize with safetensors: save_file(model.state_dict(), 'model.safetensors'), and load with safetensors.torch.load_file rather than torch.load.",
+            "Publish the new artifact and re-point the model with create-model, pinning the ETag at the same time (MART-02).",
+            "Where the format cannot change - a vendor artifact, a framework that requires pickle - the compensating controls are MART-01 (nobody external can write it) and MART-02 (it is pinned).",
+            "If you run the opt-in scan (--scan-model-artifacts), MART-04 tells you whether the current file abuses the capability; this finding tells you the capability is there either way.",
+        ],
+    },
     "AMEM-01": {
         "risk": "This agent has memory enabled with a retention window long enough that an instruction reaching memory keeps being read back into the model's context for that period. Agent memory is what lets a prompt injection outlive the conversation that carried it: everything else OverWatch reports about injection concerns what an agent reaches NOW, and this concerns how long it keeps reaching. There is no correct retention period - a support assistant that remembers a customer for a year may be exactly right - so this finding states the window in days rather than pronouncing on it. What it is really reporting is that a number exists which somebody should have chosen on purpose. Be clear about what this check does NOT do: it does not read memory contents. Whether anything poisoned is actually stored is a question about stored conversation, and reading that is the data-handling escalation decision D2 declined. The window is what configuration can establish.",
         "impact": "An instruction that reached memory once is presented to the model again in later sessions for the length of the window, potentially to different users where the memory is shared. A single successful injection becomes a recurring one.",

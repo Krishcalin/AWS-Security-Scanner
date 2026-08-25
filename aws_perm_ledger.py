@@ -288,6 +288,45 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
     # anyway so declining either one names everything it costs, which is the whole
     # contract of this table. The third-party SaaS half of shadow AI needs no action at
     # all because it is not attempted; see D9.
+    # Slice 4.6. The CONFIG half adds no action: DescribeModel was already granted for
+    # SM-09/10/11, and the bucket-policy read is the one S3-09 already performs. Only
+    # MART-04 crosses, and it crosses into the s3:GetObject action class the charter
+    # excludes -- so it ships in the FLOW-00 shape, behind its own named policy and its
+    # own flag, or it does not ship. See D10.
+    "MART-01": (
+        _req("sagemaker:DescribeModel",
+             "read ModelDataUrl and ModelDataSource.S3Uri -- WHERE the container loads "
+             "executable model code from"),
+        _req("s3:GetBucketPolicy",
+             "read who may WRITE to that bucket; whoever can is who executes code "
+             "inside the endpoint on its next deploy"),
+    ),
+    "MART-02": (
+        _req("sagemaker:DescribeModel",
+             "read ModelDataSource.ETag -- whether the artifact reference is pinned to "
+             "a version, or resolves to whatever sits at the URI at deploy time"),
+    ),
+    "MART-03": (
+        _req("sagemaker:DescribeModel",
+             "read the artifact URI's bucket, to tell an in-account artifact from one "
+             "loaded out of somebody else's account"),
+    ),
+    # MART-04 has NO entry here, deliberately. It needs s3:GetObject, which crosses the
+    # read-only-of-CONFIG line by action class -- and this table feeds the ALWAYS-ON
+    # additive policy, which is the ask an operator approves once and forgets. Putting
+    # a content read there would smuggle the crossing into the default grant.
+    #
+    # The guard caught this: test_the_additive_policy_contains_only_read_actions names
+    # s3:GetObject and logs:StartQuery explicitly as belonging to "the separate opt-in
+    # blocks". VPC flow logs set that precedent in FLOW-00 and MART-04 follows it --
+    # the action is documented in deploy/cnapp-scanner-role.yaml as its own named
+    # policy, granted only by an operator who ran --scan-model-artifacts on purpose.
+    # See D10.
+    "MART-05": (
+        _req("sagemaker:DescribeModel",
+             "read the artifact URI's suffix, which is enough to say the format can "
+             "execute on load without reading a byte of it"),
+    ),
     "SHAI-01": (
         _req("cloudtrail:LookupEvents",
              "read AI resource CREATION events -- who stood up an agent, a knowledge "

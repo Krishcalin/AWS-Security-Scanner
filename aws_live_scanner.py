@@ -85,6 +85,7 @@ import aws_cdr
 import aws_mcp
 import aws_perm_ledger
 import aws_sagemaker
+import aws_modelartifact
 import aws_shadowai
 import aws_ailog
 import aws_evidence
@@ -454,6 +455,20 @@ CHECK_SEVERITY = {
     # group about, a region may be a legitimate expansion, and a VPC without a Bedrock
     # endpoint may simply not use Bedrock. They are questions the operator has not
     # answered, and rating a question as CRITICAL is how a category gets ignored.
+    # Slice 4.6 -- the model artifact as executable code. MART-01 is CRITICAL and
+    # earns it: a serialized model is not data, pickle REDUCE calls whatever the stream
+    # names, so whoever can write the artifact gets code execution on the next deploy
+    # holding the endpoint's execution role. That is TFLOW-01's reasoning applied one
+    # layer down, to what the model IS rather than what it reads.
+    "MART-01": "CRITICAL",
+    # Unpinned and cross-account are MEDIUM: both are preconditions rather than
+    # exploitation, and a team that deliberately shares an artifact bucket with a
+    # partner should not be handed a CRITICAL for a working arrangement.
+    "MART-02": "MEDIUM", "MART-03": "MEDIUM",
+    # The opt-in scan. CRITICAL only when a global with no explainable reason to be in a
+    # serialized model is present -- MART-05 carries the far commoner "this format can
+    # execute at all", which is LOW because nearly every PyTorch model is in it.
+    "MART-04": "CRITICAL", "MART-05": "LOW",
     "SHAI-01": "MEDIUM", "SHAI-02": "MEDIUM", "SHAI-03": "MEDIUM",
     "AILOG-01": "CRITICAL", "AILOG-02": "HIGH", "AILOG-03": "MEDIUM",
     # Forensic coverage. AILOG-04 is HIGH because without AWS::Bedrock::Model data
@@ -803,6 +818,11 @@ COMPLIANCE_MAP = {
     "SM-26": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SM-27": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
     "SM-28": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
+    "MART-01": {"PCI-DSS": "6.3.2", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "SI-7"},
+    "MART-02": {"PCI-DSS": "6.3.2", "HIPAA": "164.312(c)(1)", "SOC2": "CC8.1", "NIST": "CM-5"},
+    "MART-03": {"PCI-DSS": "12.8.1", "HIPAA": "164.308(b)(1)", "SOC2": "CC9.2", "NIST": "SI-7"},
+    "MART-04": {"PCI-DSS": "6.3.2", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "SI-7"},
+    "MART-05": {"PCI-DSS": "6.3.2", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "SI-7"},
     "SHAI-01": {"PCI-DSS": "12.5.1", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC3.2", "NIST": "CM-8"},
     "SHAI-02": {"PCI-DSS": "12.5.1", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC3.2", "NIST": "CM-8"},
     "SHAI-03": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
@@ -1177,6 +1197,11 @@ REMEDIATION_MAP = {
     "SM-26": "Set DataStorageConfig.KmsKey when data capture is enabled, so captured inference requests and responses are encrypted at rest in S3: aws sagemaker create-inference-experiment --data-storage-config Destination=<S3>,KmsKey=<KEY_ARN>. Captured payloads are the real inference traffic, which is usually the most sensitive data the experiment touches",
     "SM-27": "Tag the app image configuration so it can be attributed and governed: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Tags with the aws: prefix are system tags and do not satisfy the control. Never put personally identifiable or sensitive information in a tag -- tags are readable from many AWS services",
     "SM-28": "Tag the image: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Same caveats as SM-27 -- system aws: tags do not count, and tags are not a place for sensitive values",
+    "MART-01": "Close write access to the artifact bucket immediately -- whoever can write it executes code inside your endpoint on the next deploy: aws s3api get-bucket-policy --bucket <BUCKET> and remove every external or wildcard principal holding a write action, then aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true. Then verify the artifact currently there is the one you published",
+    "MART-02": "Pin the artifact to a specific object version so a replaced file cannot silently become what runs: aws sagemaker create-model --model-name <M> --primary-container Image=<IMG>,ModelDataSource={S3DataSource={S3Uri=<URI>,S3DataType=S3Object,CompressionType=None,ETag=<ETAG>}} -- get the ETag with aws s3api head-object --bucket <BUCKET> --key <KEY>. Enable bucket versioning at the same time so the pinned version cannot be deleted out from under you",
+    "MART-03": "Confirm the external account owning this artifact bucket is one you intend to load executable code from, because that is what a model artifact is. Prefer copying the artifact into an account you control and pinning it: aws s3 cp s3://<THEIR_BUCKET>/<KEY> s3://<YOUR_BUCKET>/<KEY> , then re-point the model at your copy",
+    "MART-04": "Treat this artifact as hostile until proven otherwise -- the finding names the module and function it references, and there is no legitimate reason for a serialized model to invoke it. Do NOT load it to investigate. Pull the object aside for offline analysis, identify who wrote it (aws s3api list-object-versions --bucket <BUCKET> --prefix <KEY> and CloudTrail data events for PutObject), and rebuild the model from a source you trust",
+    "MART-05": "Re-serialize the model in a format that cannot execute on load. safetensors is the direct replacement for PyTorch state dicts, loaded with safetensors.torch.load_file rather than torch.load; publish it and re-point the model with aws sagemaker create-model --model-name <M> --primary-container Image=<IMG>,ModelDataSource={S3DataSource={S3Uri=<SAFETENSORS_URI>,S3DataType=S3Object,CompressionType=None}}. This is the durable fix for MART-01 through MART-04 at once -- a safetensors artifact in a writable bucket is a data-integrity problem rather than a remote-code-execution one",
     "SHAI-01": "Confirm whether this identity is meant to be building AI. If it is, add it to --ai-owners so the next scan stops asking; if it is not, find out who ran it: aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=CreateAgent --start-time <ISO> . The finding names the principal, the resource kinds and the regions, which is enough to start the conversation",
     "SHAI-02": "Find the full set of regions you would have to cover -- aws account list-regions --region-opt-status-contains ENABLED ENABLED_BY_DEFAULT -- then scan them: python aws_live_scanner.py --all-regions , and add that to whatever schedule runs OverWatch. Resources in an unscanned region are not assessed by ANY check -- their guardrails, network posture and key custody are simply unknown",
     "SHAI-03": "Add a Bedrock interface endpoint so the traffic has a governed path and an endpoint policy can bound which models are reachable: aws ec2 create-vpc-endpoint --vpc-id <VPC> --vpc-endpoint-type Interface --service-name com.amazonaws.<REGION>.bedrock-runtime --subnet-ids <SUBNETS> --security-group-ids <SG> ; then attach a policy restricting bedrock:InvokeModel to the model ARNs you approve. If the VPC does not use Bedrock at all, this finding is not applicable and can be waived",
@@ -1986,6 +2011,17 @@ def _op_action(op: str) -> str:
     return "".join(p.title() for p in (op or "").split("_"))
 
 
+def _looks_like_account_scoped(bucket: str) -> bool:
+    """Whether a bucket name carries a 12-digit account id.
+
+    The only ownership signal available without a second API call, and used ONLY to
+    suppress MART-03 on obviously-own buckets rather than to assert foreignness. A name
+    is weak evidence, so the check it feeds is a WARN.
+    """
+    parts = (bucket or "").replace(".", "-").split("-")
+    return any(len(p) == 12 and p.isdigit() for p in parts)
+
+
 def _op_to_api(op: str) -> str:
     """boto3 snake_case operation -> the IAM action name.
 
@@ -2183,6 +2219,9 @@ class AWSLiveScanner:
         # question has not been answered, which SHAI-00 reports -- it does NOT
         # mean every creator is undeclared.
         self._ai_owners = ()
+        # Slice 4.6: the artifact opcode scan is the ONE check that reads
+        # object bytes, so it is off unless --scan-model-artifacts asks.
+        self._scan_model_artifacts = False
         # knowledgeBaseId -> injection surface, from the data sources AGT-03 reads.
         self._kb_surface = {}
         self._perm_ledger = None            # set by _preflight_permissions()
@@ -8912,6 +8951,9 @@ class AWSLiveScanner:
             except Exception as e:
                 self._add("WARN", "SM-09", "SAGEMAKER", name, str(e))
                 continue
+            # Slice 4.6 -- the same DescribeModel detail, read for where the artifact
+            # comes from rather than how the container is networked. No extra call.
+            self._emit_model_artifacts(name, detail)
             p = aws_sagemaker.model_posture(detail)
             self._add("FAIL" if not p["isolated"] else "PASS", "SM-09", "SAGEMAKER", name,
                       (f"Model '{name}' has network isolation disabled — the container "
@@ -8935,6 +8977,133 @@ class AWSLiveScanner:
                            f"registry ({', '.join(pub)}) | {name}") if pub else
                           f"Model '{name}' pipeline containers all use a VPC "
                           f"registry | {name}")
+
+    def _emit_model_artifacts(self, model_name, detail):
+        """MART-01..05 — the artifact a model loads, and who can replace it.
+
+        A serialized model is not data: pickle REDUCE calls whatever the stream names,
+        so loading an artifact runs code holding the endpoint's execution role. The
+        config half asks who could REPLACE it; MART-04, behind --scan-model-artifacts,
+        asks whether the one currently there is malicious."""
+        containers = []
+        prim = (detail or {}).get("PrimaryContainer")
+        if isinstance(prim, dict):
+            containers.append(prim)
+        containers.extend(c for c in ((detail or {}).get("Containers") or [])
+                          if isinstance(c, dict))
+
+        for container in containers:
+            for src in aws_modelartifact.artifact_sources(container):
+                self._assess_model_artifact(model_name, src)
+
+    def _assess_model_artifact(self, model_name, src):
+        uri = src.get("uri") or ""
+        bucket = uri.replace("s3://", "", 1).split("/")[0] if uri.startswith("s3://") \
+            else ""
+        where = f"{model_name}:{src.get('channel')}"
+
+        # MART-01 -- who can write it. Reuses the one bucket-policy reading shared with
+        # S3-09 and TFLOW-01 rather than adding a second thing to get wrong. None means
+        # UNREADABLE, which must never be treated as "not writable".
+        scope = self._bucket_write_scope(f"arn:aws:s3:::{bucket}") if bucket else None
+        if scope in aws_toxicflow._EXTERNAL_SCOPES:
+            self._add("FAIL", "MART-01", "SAGEMAKER", where,
+                      f"{aws_modelartifact.describe_source(src, scope)}. A model "
+                      f"artifact is executable code, so this is remote code execution "
+                      f"in the endpoint on its next deploy | {where}")
+        elif scope is None and bucket:
+            self._add("INFO", "MART-00", "SAGEMAKER", where,
+                      f"Artifact bucket '{bucket}' policy was not readable — who may "
+                      f"replace the model code for '{model_name}' could not be "
+                      f"established rather than being nobody (no phantom pass)")
+
+        # MART-02 -- pinned to a version, or resolving to whatever is there at deploy.
+        if not src.get("pinned"):
+            self._add("FAIL", "MART-02", "SAGEMAKER", where,
+                      f"Model '{model_name}' loads its {src.get('channel')} artifact "
+                      f"from {uri} with no ETag — what runs is whatever sits at that "
+                      f"URI at deploy time, and nothing in the account records that it "
+                      f"changed | {where}")
+
+        # MART-03 -- an artifact owned by somebody else's account.
+        if bucket and self.account and self._foreign_artifact_bucket(bucket):
+            self._add("WARN", "MART-03", "SAGEMAKER", where,
+                      f"Model '{model_name}' loads executable model code from "
+                      f"{uri}, a bucket this account does not appear to own — confirm "
+                      f"it is a source you intend to run code from | {where}")
+
+        # MART-05 -- can this format execute at all? Suffix only; no bytes read.
+        fmt = aws_modelartifact.artifact_format(uri, None)
+        if fmt["safe_format"]:
+            self._add("PASS", "MART-05", "SAGEMAKER", where,
+                      f"Model '{model_name}' uses {fmt['format']}, a format that cannot "
+                      f"execute on load | {where}")
+        elif fmt["executes"]:
+            self._add("FAIL", "MART-05", "SAGEMAKER", where,
+                      f"Model '{model_name}' loads {uri} — {fmt['why']}, so loading it "
+                      f"executes whatever the stream names. safetensors is the direct "
+                      f"replacement | {where}")
+
+        # MART-04 -- the opt-in crossing.
+        if self._scan_model_artifacts:
+            self._scan_one_artifact(model_name, where, bucket, uri)
+
+    def _foreign_artifact_bucket(self, bucket) -> bool:
+        """Whether an artifact bucket looks like it belongs to another account.
+
+        Deliberately conservative: only a bucket this scan could not stat at all, or one
+        whose name carries a different account id, counts. Guessing ownership from a name
+        would put a finding on every sensibly-named bucket in the estate."""
+        acct = self.account or ""
+        return bool(acct) and acct not in bucket and _looks_like_account_scoped(bucket)
+
+    def _scan_one_artifact(self, model_name, where, bucket, uri):
+        """MART-04 — the static opcode scan. The one check that reads object bytes.
+
+        Bounded, opt-in, and never unpickled. A refused read is reported as refused: an
+        artifact we could not fetch is not a clean one."""
+        key = uri.replace("s3://", "", 1).split("/", 1)[1] if "/" in \
+            uri.replace("s3://", "", 1) else ""
+        if not bucket or not key or key.endswith("/"):
+            # A prefix rather than an object: there is no single artifact to scan, and
+            # listing the prefix would be a second permission this slice did not ask for.
+            self._add("INFO", "MART-00", "SAGEMAKER", where,
+                      f"Artifact reference {uri} names a prefix rather than an object, "
+                      f"so no opcode scan was possible")
+            return
+        try:
+            body = self._client("s3").get_object(
+                Bucket=bucket, Key=key,
+                Range=f"bytes=0-{aws_modelartifact.MAX_SCAN_BYTES - 1}")
+            data = body["Body"].read(aws_modelartifact.MAX_SCAN_BYTES)
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("MART-04", "s3:GetObject")
+                self._add("INFO", "MART-00", "SAGEMAKER", where,
+                          f"Artifact {uri} NOT scanned — missing s3:GetObject on it. "
+                          f"An artifact that could not be fetched is not a clean one "
+                          f"(no phantom pass)")
+            else:
+                self._add("WARN", "MART-04", "SAGEMAKER", where, str(e))
+            return
+
+        scan = aws_modelartifact.scan_opcodes(data)
+        verdict = aws_modelartifact.verdict_for(scan)
+        if verdict == "MALICIOUS":
+            self._add("FAIL", "MART-04", "SAGEMAKER", where,
+                      f"Model '{model_name}' artifact {uri} references "
+                      f"{', '.join(scan['dangerous_globals'])} — there is no legitimate "
+                      f"reason for a serialized model to invoke that. Do NOT load it to "
+                      f"investigate. {aws_modelartifact.CONTENTS_NOT_READ} | {where}")
+        elif verdict == "UNKNOWN":
+            self._add("INFO", "MART-00", "SAGEMAKER", where,
+                      f"Artifact {uri} could not be parsed as a pickle stream "
+                      f"({scan.get('reason')}) — unreadable, not clean")
+        elif scan.get("truncated"):
+            self._add("INFO", "MART-00", "SAGEMAKER", where,
+                      f"Artifact {uri} was scanned to the first "
+                      f"{aws_modelartifact.MAX_SCAN_BYTES} bytes only; anything beyond "
+                      f"that was not examined")
 
     def _check_sagemaker_monitoring(self, sm):
         """SM-13..SM-22 — the same two questions across five resource types.
@@ -14895,6 +15064,7 @@ def _apply_phase6_config(sc, args) -> None:
     sc._pentest_results = _load_pentest_results(getattr(args, "pentest_results", None))
     # Slice 4.4 -- the declared AI owner set, split here so the scanner
     # never has to parse a CLI string.
+    sc._scan_model_artifacts = bool(getattr(args, "scan_model_artifacts", False))
     sc._ai_owners = tuple(o.strip() for o in
                           (getattr(args, "ai_owners", "") or "").split(",")
                           if o.strip())
@@ -15088,6 +15258,13 @@ examples:
              "rows only — garak `attempt` rows carry the prompts and the model's "
              "responses and are never parsed.",
     )
+    parser.add_argument(
+        "--scan-model-artifacts", action="store_true", dest="scan_model_artifacts",
+        help="Fetch SageMaker model artifacts and statically scan their pickle opcode "
+             "stream (MART-04). CROSSES the read-only-of-CONFIG line: it needs "
+             "s3:GetObject, which no managed policy grants and which OverWatch excludes "
+             "by default. Off unless asked; needs the CnappModelArtifactRead policy "
+             "scoped to your artifact prefixes; never unpickles; fails open to MART-00.")
     parser.add_argument(
         "--ai-owners", metavar="LIST", dest="ai_owners", default="",
         help="Comma-separated IAM principals expected to create AI resources "
