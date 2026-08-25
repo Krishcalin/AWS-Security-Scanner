@@ -155,6 +155,35 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
     would be a guess.
 
 ### Fixed
+- **Slice 3.3 destroyed slice 1.5's test module, and the suite reported green.**
+  `tests/test_mcp.py` already existed — 402 lines covering **decision D6**, the
+  enforcement boundary on OverWatch's own local MCP server: that it *refuses to start*
+  without an explicit acknowledgement, redacts identifiers by default, and audits every
+  call. Writing the 3.3 classifier tests over that path took it from **34 test functions
+  to 22**.
+  - It survived review because the total went **up** — 3,060 → 3,097 — as the new slice
+    added more tests than the overwrite removed. Both full runs were accurate about what
+    they ran and blind to what had left the repo. **A rising test count is not evidence
+    that nothing was lost.**
+  - 1.5's suite is restored; the 3.3 classifier tests now live in
+    `tests/test_mcp_provenance.py`. Both merges were checked for any other file that lost
+    content — `tests/test_mcp.py` was the only one. True count: **3,131**.
+- **`tests/test_suite_ratchet.py` — a ratchet on the test suite itself.** Every guard in
+  this codebase exists because a confident wrong answer shipped once: the check-map
+  lockstep, node parity, the permission ledger, the zero-telemetry tripwire. The tests
+  were the one load-bearing artefact with no such guard, which is how the enforcement
+  tests for a deliberate product decision came to be deleted by accident.
+  - Each of the 181 test modules carries a floor. Dropping below it fails; losing a whole
+    module fails; a new module with no floor fails; and a floor that has **fallen behind**
+    fails, because a floor that never rises decays into permission to delete everything
+    added after it. `python tests/test_suite_ratchet.py --update` re-ratchets, and only
+    ever *raises* a floor — lowering one is a decision somebody makes in a commit message,
+    never a side effect of running a script.
+  - Counted with `ast` rather than by collecting through pytest, so the floor does not
+    depend on fixtures importing cleanly and an unparseable module is reported rather than
+    silently read as zero. Memoized: the un-cached version re-parsed the whole tree per
+    parametrized case — 6m13s, versus 4.8s now. A guard that doubles the suite's runtime
+    is a guard people start skipping.
 - **`AGC-05` was a phantom finding — a CRITICAL false positive on the architecture AWS
   documents as correct.** `credentialProviderConfigurations` lives on **`GetGatewayTarget`
   and on no other response**; `ListGatewayTargets` returns `TargetSummary` — `targetId`,
