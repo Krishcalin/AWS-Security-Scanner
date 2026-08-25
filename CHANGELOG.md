@@ -7,6 +7,36 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 5 · slice 5.3 — platform traffic-encryption evidence** (`aws_nitro.py`,
+  `NITRO-01/02`). Almost every answer a CNAPP gives about traffic encryption is about TLS
+  at an **edge** — a listener, a certificate, a viewer policy. This is the layer
+  *underneath*: whether the machines encrypt what they say to each other before any
+  application gets a say.
+  - AWS's Nitro System does it automatically, but only for supported instance types, and
+    support is a property of the **type** rather than something an operator configures —
+    so `DescribeInstanceTypes` → `NetworkInfo.EncryptionInTransitSupported` is a readable
+    answer to a question almost nothing asks. **`NITRO-01`** reports instances whose type
+    provides none; **`NITRO-02`** reports Xen-hypervisor instances, which predate the
+    platform generation and cannot use automatic encryption, Nitro Enclaves or NitroTPM.
+  - **It composes with `5.1` rather than stacking beside it.** CISA's *Optimal* for the
+    ZTMM `Networks / Traffic encryption` function asks for encryption applied *"to the
+    extent possible"*, and an edge certificate never touches traffic **between**
+    instances. These two checks are the only readable evidence about that layer, so the
+    function could not have reached Optimal before this slice existed — the mapping now
+    carries them there.
+  - **A capability claim, never an observation.** The field says the type encrypts
+    automatically; it does not say any particular flow was encrypted, and OverWatch cannot
+    watch a packet. A test asserts no finding ever says *"exposed"* or *"intercepted"*.
+  - **An absent field is unknown, not unsupported**, and unknown is counted apart from
+    unencrypted throughout: an instance whose type could not be described is not an
+    unencrypted one, and folding the two together turns a coverage gap into a finding.
+  - The **scope is AWS's, repeated rather than widened**: between instances in a VPC or
+    peered VPC, and explicitly *not* a statement about S3, the internet, or NAT.
+  - Both rated **LOW** deliberately — neither is a misconfiguration, and an application
+    doing its own mutual TLS is in a fine position on a type that scores here.
+  - **No new IAM action**: `ec2:DescribeInstanceTypes` falls under SecurityAudit's
+    `ec2:Describe*`.
+
 - **Phase 5 · slice 5.1 — CISA ZTMM v2 scoring, with its work shown** (`aws_ztmm.py`,
   written to `ztmm_scorecard.json`). *"Zero Trust CNAPP"* is not a build and no analyst
   market exists by that name. What is real is scoring an AWS estate against the published
@@ -415,6 +445,14 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
     would be a guess.
 
 ### Fixed
+- **The botocore wheel ships nine EC2 API versions, and the first one is from 2014.**
+  Reading the service model by taking the first `/ec2/` match landed on `2014-09-01`,
+  which predates `DescribeInstanceTypes` entirely — so the operation and the
+  `EncryptionInTransitSupported` field both appeared not to exist. The correct version is
+  **`2016-11-15`**, and it is now recorded as a constant in `aws_nitro.py` with a test,
+  because a silently-empty verification is worse than a failed one: it looks like an
+  answer.
+
 - **The pickle danger table was authored from memory and wrong where it mattered most.**
   It listed `builtins.open` — a pair pickle **never emits**, because `open` pickles as
   **`_io.open`**. The most common malicious payload there is would have been missed by a

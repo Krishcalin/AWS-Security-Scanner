@@ -355,6 +355,13 @@ ZTMM_MAPPING: Dict[Tuple[str, str], Dict[str, List[str]]] = {
     ("Networks", "Traffic encryption"): {
         INITIAL: ["ELB-01"],
         ADVANCED: ["ACM-01", "ACM-02"],
+        # Slice 5.3 composes here rather than merely stacking. CISA's Optimal for this
+        # function is encryption applied "as appropriate ... to the extent possible",
+        # and TLS at an edge does not reach it: the traffic BETWEEN instances is the
+        # part an edge certificate never touches. NITRO-01/02 are the only readable
+        # evidence about that layer, which is why this function could not have reached
+        # Optimal before 5.3 existed.
+        OPTIMAL: ["NITRO-01", "NITRO-02"],
     },
     ("Networks", "Visibility and analytics"): {
         INITIAL: ["VPC-03"],

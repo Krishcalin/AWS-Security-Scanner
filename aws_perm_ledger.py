@@ -297,6 +297,21 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
     # from their own detector. Recorded as a deliberate absence rather than an omission,
     # the same way slice 3.5's pen-test ingest is -- a reader checking why AIDR-01 has no
     # entry should find the reason here rather than assume it was forgotten.
+    # Slice 5.3 needs no NEW action: ec2:DescribeInstanceTypes falls under
+    # SecurityAudit's ec2:Describe*. Recorded so declining it names what it costs, and
+    # because the ZTMM Networks/Traffic encryption function depends on these two.
+    "NITRO-01": (
+        _req("ec2:DescribeInstanceTypes",
+             "read NetworkInfo.EncryptionInTransitSupported -- whether the instance "
+             "TYPE automatically encrypts in-transit traffic between instances, which "
+             "is the only readable answer to whether east-west traffic is encrypted "
+             "below the application"),
+    ),
+    "NITRO-02": (
+        _req("ec2:DescribeInstanceTypes",
+             "read Hypervisor -- whether the instance predates the Nitro platform "
+             "generation and its isolation guarantees"),
+    ),
     "MART-01": (
         _req("sagemaker:DescribeModel",
              "read ModelDataUrl and ModelDataSource.S3Uri -- WHERE the container loads "

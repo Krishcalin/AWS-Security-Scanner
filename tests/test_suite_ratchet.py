@@ -190,6 +190,8 @@ FLOORS = {
     "test_multitenancy_schema.py": 7,
     "test_multitenancy_store.py": 9,
     "test_neptune_loader.py": 9,
+    "test_nitro.py": 23,
+    "test_nitro_wiring.py": 16,
     "test_offline_gate.py": 10,
     "test_packaging_server.py": 7,
     "test_pentest_ingest.py": 23,
