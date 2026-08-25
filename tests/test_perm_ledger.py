@@ -72,7 +72,13 @@ VIEW_ONLY_ALONE = [{
 # clean. Every one is justified against a real check in REQUIREMENTS: an earlier
 # draft hung them all on the informational AGC-00 id, which is nine permissions
 # nobody could justify in review wearing the appearance of justification.
-EXPECTED_GAP = ("bedrock-agentcore:GetAgentRuntime",
+EXPECTED_GAP = ("aoss:BatchGetCollection",
+                "aoss:GetAccessPolicy",
+                "aoss:GetSecurityPolicy",
+                "aoss:ListAccessPolicies",
+                "aoss:ListCollections",
+                "aoss:ListSecurityPolicies",
+                "bedrock-agentcore:GetAgentRuntime",
                 "bedrock-agentcore:GetGateway",
                 "bedrock-agentcore:GetGatewayTarget",
                 "bedrock-agentcore:GetMemory",
@@ -90,11 +96,17 @@ EXPECTED_GAP = ("bedrock-agentcore:GetAgentRuntime",
                 "bedrock:GetAgentActionGroup",
                 "bedrock:GetDataSource",
                 "bedrock:GetGuardrail",
-                "bedrock:GetKnowledgeBase")
+                "bedrock:GetKnowledgeBase",
+                "cloudtrail:DescribeTrails",
+                "cloudtrail:GetEventSelectors",
+                "cloudtrail:LookupEvents",
+                "s3vectors:GetVectorBucket",
+                "s3vectors:GetVectorBucketPolicy",
+                "s3vectors:ListVectorBuckets")
 
 
 # ── the load-bearing assertion ──────────────────────────────────────────────
-def test_the_shipped_role_is_missing_exactly_nineteen_actions():
+def test_the_shipped_role_is_missing_exactly_thirtyone_actions():
     """Computed from the policy documents, not recalled. If this number moves, either
     AWS changed SecurityAudit or we added a call — both worth a human looking."""
     led = L.evaluate(SHIPPED_ROLE)
@@ -107,7 +119,7 @@ def test_the_blocked_checks_are_the_knowledge_base_and_guardrail_grading_ones():
     what makes GetGuardrail cheap to justify: one Get buys three checks. AIGRD-03 is
     absent on purpose -- enforcement is read from statements already collected."""
     led = L.evaluate(SHIPPED_ROLE)
-    assert set(led.blocked) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AMEM-02", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "TFLOW-01"}
+    assert set(led.blocked) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "SHAI-01", "SHAI-02", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
     assert led.blocked["AGT-03"] == ("bedrock:GetDataSource",
                                      "bedrock:GetKnowledgeBase")
     # Slice 3.1: GetDataSource now also buys TFLOW-01, because the data
@@ -148,7 +160,7 @@ def test_declining_an_action_names_what_it_costs():
         "AGT-04", "AGY-01", "AGY-02", "AGY-03"}
     assert led.forfeit(["bedrock:GetGuardrail"]) == (
         "AIGRD-01", "AIGRD-02", "AIGRD-04")
-    assert set(led.forfeit(EXPECTED_GAP)) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AMEM-02", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "TFLOW-01"}
+    assert set(led.forfeit(EXPECTED_GAP)) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "SHAI-01", "SHAI-02", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
 
 
 def test_declining_an_action_a_working_check_depends_on_is_also_counted():
@@ -178,7 +190,17 @@ def test_the_additive_policy_contains_only_read_actions():
     pol = L.evaluate(SHIPPED_ROLE).additive_policy()
     for action in pol["Statement"][0]["Action"]:
         verb = action.split(":", 1)[1]
-        assert verb.startswith(("Get", "List", "Describe")), f"{action} is not a read"
+        # BatchGet* is a read verb like the rest -- aoss:BatchGetCollection is how that
+        # service spells DescribeCollection. Added when slice 4.2 tripped this guard,
+        # which is the guard working: a new service's naming convention had to be
+        # examined rather than waved through.
+        # "Lookup" is CloudTrail's read verb, and the distinction it raises is worth
+        # writing down: LookupEvents reads the account's own AUDIT TRAIL -- who called
+        # which API -- not any workload payload. That is the same class as
+        # DescribeInstances, and it is emphatically NOT the class of s3:GetObject or
+        # logs:StartQuery, which read customer content and belong in the separate
+        # opt-in blocks. AITHR-01 has depended on it since Phase 1.
+        assert verb.startswith(("Get", "List", "Describe", "BatchGet", "Lookup")),             f"{action} is not a read"
         assert action.lower() not in ("s3:getobject", "logs:startquery")
 
 
@@ -266,5 +288,6 @@ def test_every_requirement_action_is_a_read():
     for check_id, reqs in L.REQUIREMENTS.items():
         for r in reqs:
             verb = r.action.split(":", 1)[1]
-            assert verb.startswith(("Get", "List", "Describe")), (
+            assert verb.startswith(("Get", "List", "Describe", "BatchGet",
+                                    "Lookup")), (
                 f"{check_id} requires {r.action}, which is not a read action")

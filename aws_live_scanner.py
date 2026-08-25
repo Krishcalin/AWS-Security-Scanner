@@ -85,6 +85,9 @@ import aws_cdr
 import aws_mcp
 import aws_perm_ledger
 import aws_sagemaker
+import aws_shadowai
+import aws_ailog
+import aws_vectorstore
 import aws_effperm
 import aws_state
 import aws_unused
@@ -243,6 +246,9 @@ SECTION_LABELS = {
     "EFS":            "AMAZON EFS",
     "ACM":            "AWS CERTIFICATE MANAGER",
     "SAGEMAKER":      "AMAZON SAGEMAKER",
+    "VECTORSTORE":    "RAG VECTOR STORES",
+    "AI_LOGGING":     "AI LOGGING DEPTH",
+    "SHADOW_AI":      "SHADOW AI",
     "COGNITO":        "AMAZON COGNITO",
     "APIGATEWAYV2":   "API GATEWAY (HTTP APIs)",
     "IAMPRIVESC":     "IAM PRIVILEGE ESCALATION",
@@ -430,6 +436,35 @@ CHECK_SEVERITY = {
     # AWS rates them Low too -- but included, because the slice's claim is parity with
     # all 25 controls and a coverage table with two holes in it is not parity.
     "SM-27": "LOW", "SM-28": "LOW",
+    # Slice 4.2 -- the RAG vector store. VEC-01 is REACH and VEC-02 is READ, kept
+    # apart because the OpenSearch Serverless reference keeps them apart: "network
+    # access only determines which networks can reach the collection endpoint; data
+    # access policies determine which principals can perform operations on the data".
+    # Only VEC-03 claims both, and only when each was separately established -- the
+    # same gating ATT&CK-02 uses rather than asserting a terminal it did not prove.
+    # Slice 4.3 -- what BDR-01 creates by being followed. Turning invocation logging
+    # on writes every prompt and completion to a destination, and until now nothing
+    # asked whether that destination was safe. AILOG-01 is CRITICAL because a public
+    # bucket of prompts is a disclosure of user input and model output at once; the
+    # custody and retention findings are lower because the data is at least not
+    # world-readable.
+    # Slice 4.4 -- shadow AI. All MEDIUM, deliberately. None of these is a
+    # misconfiguration: an undeclared creator may be a team nobody told the security
+    # group about, a region may be a legitimate expansion, and a VPC without a Bedrock
+    # endpoint may simply not use Bedrock. They are questions the operator has not
+    # answered, and rating a question as CRITICAL is how a category gets ignored.
+    "SHAI-01": "MEDIUM", "SHAI-02": "MEDIUM", "SHAI-03": "MEDIUM",
+    "AILOG-01": "CRITICAL", "AILOG-02": "HIGH", "AILOG-03": "MEDIUM",
+    # Forensic coverage. AILOG-04 is HIGH because without AWS::Bedrock::Model data
+    # events there is no record of who invoked which model -- the question AITHR-01
+    # needs for LLMjacking and the first one an incident responder asks.
+    "AILOG-04": "HIGH", "AILOG-05": "MEDIUM", "AILOG-06": "MEDIUM",
+    "VEC-01": "HIGH", "VEC-02": "HIGH", "VEC-03": "CRITICAL",
+    "VEC-04": "MEDIUM",
+    # s3vectors. VEC-05 is public, VEC-06 cross-account: a named external account is a
+    # decision somebody may have made on purpose, and collapsing it into "public" would
+    # put a CRITICAL on a working partner integration.
+    "VEC-05": "HIGH", "VEC-06": "MEDIUM", "VEC-07": "MEDIUM",
     "AMEM-01": "MEDIUM", "AMEM-02": "HIGH",
     # MCP provenance. MCP-01 is HIGH rather than CRITICAL because federating a
     # third-party tool provider is a legitimate design -- the finding is that the
@@ -767,6 +802,22 @@ COMPLIANCE_MAP = {
     "SM-26": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SM-27": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
     "SM-28": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
+    "SHAI-01": {"PCI-DSS": "12.5.1", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC3.2", "NIST": "CM-8"},
+    "SHAI-02": {"PCI-DSS": "12.5.1", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC3.2", "NIST": "CM-8"},
+    "SHAI-03": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "AILOG-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "AILOG-02": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "AILOG-03": {"PCI-DSS": "10.5.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-9"},
+    "AILOG-04": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
+    "AILOG-05": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
+    "AILOG-06": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "VEC-01": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "VEC-02": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "VEC-03": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "VEC-04": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "VEC-05": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "VEC-06": {"PCI-DSS": "7.2.1", "HIPAA": "164.308(b)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "VEC-07": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "AMEM-01": {"PCI-DSS": "3.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "AMEM-02": {"PCI-DSS": "3.6.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "PENT-01": {"PCI-DSS": "11.4.1", "HIPAA": "164.308(a)(8)", "SOC2": "CC4.1", "NIST": "CA-8"},
@@ -1125,6 +1176,22 @@ REMEDIATION_MAP = {
     "SM-26": "Set DataStorageConfig.KmsKey when data capture is enabled, so captured inference requests and responses are encrypted at rest in S3: aws sagemaker create-inference-experiment --data-storage-config Destination=<S3>,KmsKey=<KEY_ARN>. Captured payloads are the real inference traffic, which is usually the most sensitive data the experiment touches",
     "SM-27": "Tag the app image configuration so it can be attributed and governed: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Tags with the aws: prefix are system tags and do not satisfy the control. Never put personally identifiable or sensitive information in a tag -- tags are readable from many AWS services",
     "SM-28": "Tag the image: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Same caveats as SM-27 -- system aws: tags do not count, and tags are not a place for sensitive values",
+    "SHAI-01": "Confirm whether this identity is meant to be building AI. If it is, add it to --ai-owners so the next scan stops asking; if it is not, find out who ran it: aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=CreateAgent --start-time <ISO> . The finding names the principal, the resource kinds and the regions, which is enough to start the conversation",
+    "SHAI-02": "Find the full set of regions you would have to cover -- aws account list-regions --region-opt-status-contains ENABLED ENABLED_BY_DEFAULT -- then scan them: python aws_live_scanner.py --all-regions , and add that to whatever schedule runs OverWatch. Resources in an unscanned region are not assessed by ANY check -- their guardrails, network posture and key custody are simply unknown",
+    "SHAI-03": "Add a Bedrock interface endpoint so the traffic has a governed path and an endpoint policy can bound which models are reachable: aws ec2 create-vpc-endpoint --vpc-id <VPC> --vpc-endpoint-type Interface --service-name com.amazonaws.<REGION>.bedrock-runtime --subnet-ids <SUBNETS> --security-group-ids <SG> ; then attach a policy restricting bedrock:InvokeModel to the model ARNs you approve. If the VPC does not use Bedrock at all, this finding is not applicable and can be waived",
+    "AILOG-01": "Close the prompt-log bucket immediately -- it holds every prompt users sent and every completion the model returned: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true ; then aws s3api get-bucket-policy --bucket <BUCKET> and remove any wildcard principal. Treat this as a disclosure until the access logs say otherwise",
+    "AILOG-02": "Put the prompt-log destination on a customer-managed key so you can revoke and audit access to it: aws s3api put-bucket-encryption --bucket <BUCKET> --server-side-encryption-configuration '{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\",\"KMSMasterKeyID\":\"<KEY_ARN>\"}}]}' ; for a CloudWatch destination: aws logs associate-kms-key --log-group-name <GROUP> --kms-key-id <KEY_ARN>",
+    "AILOG-03": "Set a retention period on the prompt log so it does not accumulate indefinitely: aws logs put-retention-policy --log-group-name <GROUP> --retention-in-days 90 ; for S3, add a lifecycle rule with aws s3api put-bucket-lifecycle-configuration. Prompt logs are evidence, and evidence with no expiry is also a growing liability",
+    "AILOG-04": "Add a CloudTrail advanced event selector for model invocations so you have a record of who called which model: aws cloudtrail put-event-selectors --trail-name <TRAIL> --advanced-event-selectors '[{\"Name\":\"bedrock-data\",\"FieldSelectors\":[{\"Field\":\"eventCategory\",\"Equals\":[\"Data\"]},{\"Field\":\"resources.type\",\"Equals\":[\"AWS::Bedrock::Model\"]}]}]'. Basic event selectors cannot express this -- they accept only DynamoDB, Lambda and S3 object types",
+    "AILOG-05": "Extend the advanced event selector to the Bedrock resource types you run -- AWS::Bedrock::AgentAlias, AWS::Bedrock::KnowledgeBase, AWS::Bedrock::Guardrail, AWS::Bedrock::Session -- with aws cloudtrail put-event-selectors. Data events are billed per event, so add the types whose activity you would need to reconstruct rather than all of them",
+    "AILOG-06": "Add advanced event selectors for the AgentCore resource types you run -- AWS::BedrockAgentCore::Runtime, Gateway, Memory, TokenVault -- with aws cloudtrail put-event-selectors. Without them an agent's own actions leave no data-plane record, which is the trail an incident responder follows after a prompt injection",
+    "VEC-01": "Make the collection private and reach it through a VPC endpoint or Bedrock's own private path: aws opensearchserverless update-security-policy --name <POLICY> --type network --policy-version <V> --policy '[{\"Rules\":[{\"ResourceType\":\"collection\",\"Resource\":[\"collection/<NAME>\"]}],\"AllowFromPublic\":false,\"SourceVPCEs\":[\"<VPCE_ID>\"],\"SourceServices\":[\"bedrock.amazonaws.com\"]}]'. Note that a public rule in ANY matching policy wins, so find every policy that matches this collection with: aws opensearchserverless list-security-policies --type network",
+    "VEC-02": "Replace the wildcard principal with the specific roles that need the corpus: aws opensearchserverless list-access-policies --type data, then update-access-policy with Principal set to the exact role ARNs. A data access policy is what decides who can READ the vectors regardless of how the network is configured",
+    "VEC-03": "Both gates are open. Close the READ gate first -- it is the control that actually decides retrieval and it takes effect immediately: aws opensearchserverless list-access-policies --type data, then update-access-policy with Principal narrowed to the exact role ARNs. Then close the reach gate per VEC-01. Fixing only the network leaves a corpus any admitted caller can still read",
+    "VEC-04": "Recreate the collection with a customer-managed key; the key is set at creation and cannot be changed: aws opensearchserverless create-security-policy --name <POLICY> --type encryption --policy '[{\"Rules\":[{\"ResourceType\":\"collection\",\"Resource\":[\"collection/<NAME>\"]}],\"KmsARN\":\"<KEY_ARN>\"}]' before creating the collection it applies to",
+    "VEC-05": "Remove the wildcard principal from the vector bucket policy: aws s3vectors get-vector-bucket-policy --vector-bucket-name <B> to read it, then put-vector-bucket-policy with the principal narrowed to the roles that need it. A public policy on a RAG corpus exposes the organization's documents in embedded form",
+    "VEC-06": "Confirm the external account is one you intend to share the corpus with, and scope the grant to the specific role rather than the account root: aws s3vectors put-vector-bucket-policy --vector-bucket-name <B> --policy file://policy.json. Cross-account is reported apart from public because it is frequently deliberate",
+    "VEC-07": "Recreate the vector bucket with a customer-managed key: aws s3vectors create-vector-bucket --vector-bucket-name <B> --encryption-configuration sseType=aws:kms,kmsKeyArn=<KEY_ARN>. sseType=AES256 is SSE-S3, and aws:kms without a kmsKeyArn is still an AWS-managed key -- neither gives you a key you can disable",
     "AMEM-01": "Decide the window deliberately rather than inheriting it. Bedrock agent: aws bedrock-agent update-agent --agent-id <AGENT_ID> --agent-name <NAME> --foundation-model <MODEL> --memory-configuration '{\"enabledMemoryTypes\":[\"SESSION_SUMMARY\"],\"storageDays\":7}' ; AgentCore: aws bedrock-agentcore-control update-memory --memory-id <ID> --event-expiry-duration 7 ; shorter is not automatically better, but the number should be one somebody chose",
     "AMEM-02": "Re-key the memory store onto a customer-managed key so you can revoke and audit access to what carries between an agent's sessions: aws kms create-key --description 'AgentCore memory' ; then recreate the memory with --encryption-key-arn <KEY_ARN>, and scope the key policy to the memory execution role rather than leaving it account-wide",
     "PENT-01": "This is your own adversarial test result, ingested as reported. Treat the probe as a true positive until you have reviewed it, then bound what a successful probe would reach: aws iam get-role-policy --role-name <ROLE> --policy-name <POLICY> and narrow it (see AISPM-01/AISPM-02), and check TFLOW-01/02 for what this identity reaches once an injection lands",
@@ -2111,6 +2178,10 @@ class AWSLiveScanner:
         # none set the control checks only that SOME non-system tag key exists -- so
         # an empty tuple here IS the documented default, not an unset option.
         self._sm_required_tags = ()
+        # Slice 4.4: the operator's declared AI owner set. Empty means the
+        # question has not been answered, which SHAI-00 reports -- it does NOT
+        # mean every creator is undeclared.
+        self._ai_owners = ()
         # knowledgeBaseId -> injection surface, from the data sources AGT-03 reads.
         self._kb_surface = {}
         self._perm_ledger = None            # set by _preflight_permissions()
@@ -8087,6 +8158,626 @@ class AWSLiveScanner:
                           f"manually before expiry | {domain}")
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 35: SHADOW AI (slice 4.4)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_shadow_ai(self):
+        """SHAI-01..03 — AI nobody told the security team about.
+
+        Shadow AI is not a property of a resource. A knowledge base built by the ML
+        platform team in the governed region is the system working; the identical
+        resource built by an application role in a region nobody scans is the thing this
+        section surfaces. An inventory cannot tell those apart, which is why this asks
+        WHO and WHERE rather than WHAT.
+
+        The third-party SaaS half -- someone pasting company data into a hosted
+        assistant -- is not attempted and is declared instead. See D9."""
+        self._section_header("SHADOW_AI")
+        self._add("INFO", "SHAI-00", "SHADOW_AI", "shadow-ai",
+                  f"{aws_shadowai.SAAS_NOT_DETECTABLE} | shadow-ai")
+        self._check_undeclared_ai_creators()
+        self._check_bedrock_private_path()
+
+    def _check_undeclared_ai_creators(self):
+        """SHAI-01/02 — who built AI, and where.
+
+        Only MANAGEMENT events. bedrock:InvokeModel is a data event that LookupEvents
+        never sees, which is what AILOG-04 reports as a gap -- and that limit is a
+        feature here: creation is the moment shadow AI becomes visible, and usage is
+        AITHR-01's question."""
+        events, denied = [], []
+        for reg in self._ai_scan_regions():
+            try:
+                ct = self._client("cloudtrail", region=reg)
+                pages = ct.get_paginator("lookup_events").paginate(
+                    LookupAttributes=[{"AttributeKey": "EventSource",
+                                       "AttributeValue": "bedrock.amazonaws.com"}],
+                    PaginationConfig={"MaxItems": 2000, "PageSize": 50})
+                for page in pages:
+                    for row in page.get("Events", []):
+                        raw = row.get("CloudTrailEvent")
+                        if not raw:
+                            continue
+                        try:
+                            events.append(json.loads(raw))
+                        except (TypeError, ValueError):
+                            continue
+            except Exception as e:
+                denied.append(f"{reg}: {e}")
+
+        if denied and not events:
+            for cid in ("SHAI-01", "SHAI-02"):
+                self._coverage.note_denied(cid, "cloudtrail:LookupEvents")
+            self._add("INFO", "SHAI-00", "SHADOW_AI", "cloudtrail",
+                      f"CloudTrail event history not readable ({denied[0]}) — who built "
+                      f"AI in this account was NOT established, which is not the same "
+                      f"as nobody having built any | cloudtrail")
+            return
+
+        found = aws_shadowai.creators(events)
+        if not found:
+            return
+
+        declared = list(self._ai_owners or ())
+        if not declared:
+            # A check that fires on the correct configuration is one people turn off.
+            # The absence of a declared set is the operator's unanswered question, not
+            # the account's fault, and it is reported as exactly that.
+            self._add("INFO", "SHAI-00", "SHADOW_AI", "shadow-ai",
+                      f"{len(found)} identity/identities have created AI resources in "
+                      f"this account. No owner set was declared (--ai-owners), so "
+                      f"OverWatch cannot say which of them is expected: "
+                      f"{', '.join(sorted(found))} | shadow-ai")
+        else:
+            undeclared = aws_shadowai.undeclared_creators(found, declared)
+            for row in undeclared:
+                self._add("FAIL", "SHAI-01", "SHADOW_AI", row["principal"],
+                          f"{aws_shadowai.describe_creator(row)} | {row['principal']}")
+            if not undeclared:
+                self._add("PASS", "SHAI-01", "SHADOW_AI", "shadow-ai",
+                          f"All {len(found)} AI creator(s) are in the declared owner "
+                          f"set | shadow-ai")
+
+        # SHAI-02 — AI built where nothing was assessed.
+        seen = aws_shadowai.active_regions(found)
+        scanned = set(self._coverage.scanned_regions or [self.region])
+        unassessed = sorted(seen - scanned)
+        if unassessed:
+            self._add("FAIL", "SHAI-02", "SHADOW_AI", "shadow-ai",
+                      f"AI resources were created in {', '.join(unassessed)}, which "
+                      f"this scan did not enumerate — their guardrails, network posture "
+                      f"and key custody are unknown rather than clean. Re-run with "
+                      f"--all-regions | shadow-ai")
+
+    def _check_bedrock_private_path(self):
+        """SHAI-03 — whether Bedrock traffic has a governed path.
+
+        The config-only substitute for the flow-log query the roadmap proposed. An
+        interface endpoint keeps Bedrock traffic on the AWS network where an endpoint
+        policy can bound which models are reachable; without one it leaves via NAT or an
+        internet gateway and no such policy applies."""
+        try:
+            ec2 = self._client("ec2")
+            eps = (ec2.describe_vpc_endpoints() or {}).get("VpcEndpoints") or []
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("SHAI-03", "ec2:DescribeVpcEndpoints")
+                self._add("INFO", "SHAI-00", "SHADOW_AI", "vpc",
+                          "Bedrock private-path posture NOT audited — missing "
+                          "ec2:DescribeVpcEndpoints (no phantom pass) | vpc")
+            return
+        try:
+            vpcs = [v.get("VpcId") for v in
+                    ((ec2.describe_vpcs() or {}).get("Vpcs") or []) if v.get("VpcId")]
+        except Exception:
+            vpcs = []
+
+        posture = aws_shadowai.vpc_endpoint_posture(eps, vpcs)
+        if not posture["checked"]:
+            return
+        if posture["without_endpoint"]:
+            self._add("WARN", "SHAI-03", "SHADOW_AI", "vpc",
+                      f"{len(posture['without_endpoint'])} VPC(s) have no Bedrock "
+                      f"interface endpoint ({', '.join(posture['without_endpoint'])}) — "
+                      f"any Bedrock traffic from them leaves via NAT or an internet "
+                      f"gateway, where no VPC endpoint policy can bound which models "
+                      f"are reachable. Not applicable if the VPC does not use Bedrock "
+                      f"| vpc")
+        else:
+            self._add("PASS", "SHAI-03", "SHADOW_AI", "vpc",
+                      f"Every enumerated VPC has a Bedrock interface endpoint | vpc")
+
+    def _ai_scan_regions(self):
+        """Regions to query for AI creation events.
+
+        The scanned set, which --all-regions widens. Deliberately NOT every AWS region:
+        an unbounded sweep is slow and expensive, and SHAI-02 reports what the chosen
+        set could not see rather than pretending the set was complete."""
+        return list(self._coverage.scanned_regions or [self.region])
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 34: AI LOGGING DEPTH (slice 4.3)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_ai_logging(self):
+        """AILOG-01..06 — where the prompts land, and who saw the call.
+
+        The second half of BDR-01's own advice. BDR-01 says turn invocation logging on,
+        which is right — it is the only control in the AI pillar that produces evidence
+        after an incident. What it never asked is what that produces: with
+        textDataDeliveryEnabled, the destination receives every prompt and every
+        completion in the account and becomes a crown jewel on the day it is switched on.
+
+        Configuration only. The reason the destination matters is that it holds prompts,
+        and a scanner that read them to check them would be the second copy of the
+        problem — D2 and D8."""
+        self._section_header("AI_LOGGING")
+        self._check_prompt_log_destinations()
+        self._check_ai_data_events()
+
+    def _check_prompt_log_destinations(self):
+        """AILOG-01..03 — the sink BDR-01 names, assessed as the crown jewel it is."""
+        try:
+            bedrock = self._client("bedrock")
+            config = (bedrock.get_model_invocation_logging_configuration() or {}
+                      ).get("loggingConfig") or {}
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("AILOG-01", "AILOG-02", "AILOG-03"):
+                    self._coverage.note_denied(
+                        cid, "bedrock:GetModelInvocationLoggingConfiguration")
+                self._add("INFO", "AILOG-00", "AI_LOGGING", "bedrock",
+                          "Prompt-log destinations NOT audited — missing "
+                          "bedrock:GetModelInvocationLoggingConfiguration "
+                          "(no phantom pass)")
+            return
+
+        posture = aws_ailog.delivery_posture(config)
+        sinks = aws_ailog.log_destinations(config)
+        if not posture["enabled"]:
+            return                      # BDR-01 already reports logging being off
+        if not posture["carries_content"]:
+            # Metrics-shaped logging. Saying nothing would be wrong too: an operator who
+            # believes they have an audit trail of prompts should learn they do not.
+            self._add("INFO", "AILOG-00", "AI_LOGGING", "bedrock",
+                      f"Invocation logging is on but delivers no prompt or completion "
+                      f"payloads ({', '.join(posture['modalities']) or 'metadata only'}) "
+                      f"— there is no record of what was actually asked or answered")
+            return
+
+        self._add("INFO", "AILOG-00", "AI_LOGGING", "bedrock",
+                  f"{aws_ailog.describe_delivery(posture, sinks)}. "
+                  f"{aws_ailog.CONTENTS_NOT_READ}")
+
+        for sink in sinks:
+            label = f"{sink['name']}"
+            if sink["kind"] == "s3":
+                self._assess_prompt_log_bucket(sink, posture)
+            else:
+                self._assess_prompt_log_group(sink, posture)
+
+    def _assess_prompt_log_bucket(self, sink, posture):
+        """AILOG-01/02/03 for an S3 prompt-log destination."""
+        bucket = sink["name"]
+        s3 = self._client("s3")
+        role = f" ({sink['role']})" if sink.get("role") != "primary" else ""
+
+        # Public? Same discipline as LOG-09: AccessDenied means the bucket belongs to
+        # another account, which is a COVERAGE fact, never a FAIL.
+        try:
+            bpa = (s3.get_public_access_block(Bucket=bucket) or {}).get(
+                "PublicAccessBlockConfiguration") or {}
+            blocked = bool(bpa) and all(bpa.values())
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("AILOG-01", "s3:GetBucketPublicAccessBlock")
+                self._add("INFO", "AILOG-00", "AI_LOGGING", bucket,
+                          f"Prompt-log bucket '{bucket}'{role} is owned by another "
+                          f"account — its exposure cannot be verified from here "
+                          f"(no phantom pass)")
+                return
+            blocked = False
+
+        exposed = False
+        if not blocked:
+            try:
+                pol = (s3.get_bucket_policy(Bucket=bucket) or {}).get("Policy")
+                for st in (json.loads(pol) or {}).get("Statement", []) if pol else []:
+                    # The shared classifier's field is "kind", and its public values
+                    # are "public" and "public_conditioned" -- read off the function
+                    # rather than recalled, after the first authoring of this line
+                    # invented a "scope" key that never existed and therefore never
+                    # matched. A condition-scoped public grant still counts: a
+                    # condition narrows WHO, not whether the principal is the world.
+                    verdict = classify_resource_policy_stmt(st, self.account or "")
+                    if verdict and verdict.get("kind") in ("public",
+                                                           "public_conditioned"):
+                        exposed = True
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("AILOG-01", "s3:GetBucketPolicy")
+
+        if exposed:
+            self._add("FAIL", "AILOG-01", "AI_LOGGING", bucket,
+                      f"Prompt-log bucket '{bucket}'{role} is PUBLICLY accessible and "
+                      f"receives {' and '.join(posture['modalities'])} payloads — every "
+                      f"prompt users sent and every completion the model returned. "
+                      f"Treat as a disclosure until access logs say otherwise | {bucket}")
+        elif blocked:
+            self._add("PASS", "AILOG-01", "AI_LOGGING", bucket,
+                      f"Prompt-log bucket '{bucket}'{role} blocks public access | {bucket}")
+
+        # AILOG-02 — key custody on the sink.
+        try:
+            enc = (s3.get_bucket_encryption(Bucket=bucket) or {}).get(
+                "ServerSideEncryptionConfiguration", {}).get("Rules", [])
+            cmk = any((r.get("ApplyServerSideEncryptionByDefault") or {}).get(
+                "KMSMasterKeyID") for r in enc)
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("AILOG-02", "s3:GetEncryptionConfiguration")
+                return
+            cmk = False
+        self._add("FAIL" if not cmk else "PASS", "AILOG-02", "AI_LOGGING", bucket,
+                  (f"Prompt-log bucket '{bucket}'{role} is not encrypted with a "
+                   f"customer-managed key — no key you can disable to cut access to "
+                   f"the prompt history | {bucket}") if not cmk else
+                  f"Prompt-log bucket '{bucket}'{role} uses a customer-managed key "
+                  f"| {bucket}")
+
+    def _assess_prompt_log_group(self, sink, posture):
+        """AILOG-02/03 for a CloudWatch prompt-log destination.
+
+        AILOG-01 does not apply: a log group has no public-access concept. Emitting a
+        PASS for it would be a clean answer to a question that was never asked."""
+        group = sink["name"]
+        logs = self._client("logs")
+        try:
+            found = (logs.describe_log_groups(logGroupNamePrefix=group) or {}
+                     ).get("logGroups") or []
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("AILOG-02", "AILOG-03"):
+                    self._coverage.note_denied(cid, "logs:DescribeLogGroups")
+            return
+        lg = next((g for g in found if g.get("logGroupName") == group), None)
+        if lg is None:
+            self._add("INFO", "AILOG-00", "AI_LOGGING", group,
+                      f"Prompt-log group '{group}' is configured on Bedrock but was not "
+                      f"found in this region — logging may be silently failing")
+            return
+        cmk = bool(lg.get("kmsKeyId"))
+        self._add("FAIL" if not cmk else "PASS", "AILOG-02", "AI_LOGGING", group,
+                  (f"Prompt-log group '{group}' is not encrypted with a customer-managed "
+                   f"key — no key you can disable to cut access to the prompt history "
+                   f"| {group}") if not cmk else
+                  f"Prompt-log group '{group}' uses a customer-managed key | {group}")
+        retention = lg.get("retentionInDays")
+        self._add("FAIL" if not retention else "PASS", "AILOG-03", "AI_LOGGING", group,
+                  (f"Prompt-log group '{group}' has NO retention policy — every prompt "
+                   f"and completion is kept indefinitely. Prompt logs are evidence, and "
+                   f"evidence with no expiry is also a growing liability | {group}")
+                  if not retention else
+                  f"Prompt-log group '{group}' retains for {retention} day(s) | {group}")
+
+    def _check_ai_data_events(self):
+        """AILOG-04..06 — whether any trail records AI data-plane activity.
+
+        LOG-08 asks whether a trail records data events at all, so an account passes it
+        while no trail anywhere names AWS::Bedrock::Model. That is the difference between
+        'we log data events' and 'we can tell you who invoked which model'."""
+        try:
+            ct = self._client("cloudtrail")
+            trails = (ct.describe_trails(includeShadowTrails=True) or {}
+                      ).get("trailList") or []
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("AILOG-04", "AILOG-05", "AILOG-06"):
+                    self._coverage.note_denied(cid, "cloudtrail:DescribeTrails")
+                self._add("INFO", "AILOG-00", "AI_LOGGING", "cloudtrail",
+                          "AI data-event coverage NOT audited — missing "
+                          "cloudtrail:DescribeTrails (no phantom pass)")
+            return
+
+        seen, collected, denied = set(), [], False
+        for t in trails:
+            arn = t.get("TrailARN") or t.get("Name")
+            if not arn or arn in seen:
+                continue
+            seen.add(arn)
+            try:
+                collected.append({"name": t.get("Name") or arn,
+                                  "selectors": ct.get_event_selectors(TrailName=arn)})
+            except Exception as e:
+                if self._is_access_denied(e):
+                    denied = True
+        if denied and not collected:
+            for cid in ("AILOG-04", "AILOG-05", "AILOG-06"):
+                self._coverage.note_denied(cid, "cloudtrail:GetEventSelectors")
+            self._add("INFO", "AILOG-00", "AI_LOGGING", "cloudtrail",
+                      "AI data-event coverage NOT established — event selectors "
+                      "unreadable on every trail (no phantom pass)")
+            return
+        if not collected:
+            return                      # no trails at all: LOG-01 already reports that
+
+        cov = aws_ailog.trail_ai_data_events(collected)
+
+        self._add("FAIL" if not cov["model_invocations"] else "PASS", "AILOG-04",
+                  "AI_LOGGING", "cloudtrail",
+                  ("No CloudTrail trail records AWS::Bedrock::Model data events — there "
+                   "is no record of who invoked which model, with which identity, from "
+                   "where. Basic event selectors cannot express this; it needs an "
+                   "ADVANCED selector | cloudtrail")
+                  if not cov["model_invocations"] else
+                  f"Model invocations are recorded as data events by "
+                  f"{', '.join(t for t, v in cov['by_trail'].items() if aws_ailog.MODEL_DATA_TYPE in v)}"
+                  f" | cloudtrail")
+
+        # AILOG-05/06 report the REMAINING gaps only where some AI coverage exists.
+        # On an account with no AI data events at all, AILOG-04 is the finding and
+        # repeating it twice more is noise rather than depth.
+        if cov["any"]:
+            missing = [t for t in cov["bedrock_missing"]
+                       if t != aws_ailog.MODEL_DATA_TYPE]
+            if missing:
+                self._add("WARN", "AILOG-05", "AI_LOGGING", "cloudtrail",
+                          f"Bedrock data events cover model invocations but not "
+                          f"{', '.join(missing)} — agent, knowledge-base and guardrail "
+                          f"activity leaves no data-plane record | cloudtrail")
+            if cov["agentcore_missing"] and self._has_agentcore_estate():
+                self._add("WARN", "AILOG-06", "AI_LOGGING", "cloudtrail",
+                          f"No data events for {len(cov['agentcore_missing'])} AgentCore "
+                          f"resource type(s) — an agent's own actions leave no "
+                          f"data-plane record, which is the trail an incident responder "
+                          f"follows after a prompt injection | cloudtrail")
+
+    def _has_agentcore_estate(self) -> bool:
+        """Whether this account runs AgentCore at all.
+
+        Reporting an AgentCore logging gap to an account with no AgentCore is noise, and
+        noise is how a category gets ignored. Derived from what the AGENTCORE section
+        already stashed rather than from a second enumeration."""
+        return any((r.get("kind") or "").startswith("AgentCore")
+                   for r in (self._aispm_resources or []))
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 33: RAG VECTOR STORES (slice 4.2)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_vectorstore(self):
+        """VEC-01..07 — who can reach the agent's corpus, and who holds its key.
+
+        Configuration only. s3vectors:GetVectors and aoss's index API return the
+        embeddings themselves, and reading those is the escalation D2 declined for
+        prompt text — a security product that ingests the corpus it audits has become a
+        second copy of the thing at risk. Every finding says so, because a vector-store
+        finding silent on contents reads as 'contents checked, contents clean'."""
+        self._section_header("VECTORSTORE")
+        self._check_aoss_collections()
+        self._check_s3vectors()
+
+    def _check_aoss_collections(self):
+        """VEC-01..04 — OpenSearch Serverless VECTORSEARCH collections."""
+        try:
+            aoss = self._client("opensearchserverless")
+        except Exception:
+            return
+        summaries = self._vec_page(aoss, "list_collections", "collectionSummaries",
+                                   "VEC-01", "aoss-collections")
+        if not summaries:
+            return
+        ids = [c.get("id") for c in summaries if isinstance(c, dict) and c.get("id")]
+        details = []
+        batch = getattr(aoss, "batch_get_collection", None)
+        if batch is None:
+            return
+        # BatchGetCollection caps at 100 ids per call.
+        for i in range(0, len(ids), 100):
+            try:
+                details.extend((batch(ids=ids[i:i + 100]) or {})
+                               .get("collectionDetails") or [])
+            except Exception as e:
+                if self._is_access_denied(e):
+                    for cid in ("VEC-01", "VEC-04"):
+                        self._coverage.note_denied(cid, "aoss:BatchGetCollection")
+                    self._add("INFO", "VEC-00", "VECTORSTORE", "aoss",
+                              "Collections NOT audited — missing "
+                              "aoss:BatchGetCollection (no phantom pass)")
+                return
+
+        vectors = [d for d in details
+                   if aws_vectorstore.collection_key_custody(d)["is_vector"]]
+        if not vectors:
+            self._add("INFO", "VEC-00", "VECTORSTORE", "aoss",
+                      f"No VECTORSEARCH collections found "
+                      f"({len(details)} collection(s) of other types were not "
+                      f"assessed — SEARCH and TIMESERIES are not an agent's corpus)")
+            return
+
+        net_policies = self._vec_policies(aoss, "list_security_policies",
+                                          "get_security_policy", "network",
+                                          "securityPolicySummaries",
+                                          "securityPolicyDetail", "VEC-01")
+        data_policies = self._vec_policies(aoss, "list_access_policies",
+                                           "get_access_policy", "data",
+                                           "accessPolicySummaries",
+                                           "accessPolicyDetail", "VEC-02")
+
+        for d in vectors:
+            name = d.get("name") or d.get("id") or "collection"
+            net = aws_vectorstore.network_exposure(name, net_policies)
+            acc = aws_vectorstore.access_policy_breadth(name, data_policies)
+            custody = aws_vectorstore.collection_key_custody(d)
+
+            # VEC-01 — REACH. Never phrased as "your vectors are public": the reference
+            # is explicit that network access decides who can reach the endpoint and the
+            # data access policy decides who can read.
+            if net["public"]:
+                self._add("FAIL", "VEC-01", "VECTORSTORE", name,
+                          f"{aws_vectorstore.describe_exposure(name, net)}. "
+                          f"{aws_vectorstore.CONTENTS_NOT_READ} | {name}")
+            elif net["governed"]:
+                self._add("PASS", "VEC-01", "VECTORSTORE", name,
+                          f"Vector collection '{name}' is reachable only privately"
+                          f"{' (including Bedrock)' if net['bedrock_private'] else ''}"
+                          f" | {name}")
+            else:
+                # No matching policy is not a private one, and must not read as safe.
+                self._add("INFO", "VEC-00", "VECTORSTORE", name,
+                          f"Vector collection '{name}' is matched by NO network policy "
+                          f"this scan could read — its reachability could not be "
+                          f"established rather than being private (no phantom pass)")
+
+            # VEC-02 — READ.
+            if acc["broad"]:
+                self._add("FAIL", "VEC-02", "VECTORSTORE", name,
+                          f"Vector collection '{name}' has a data access policy "
+                          f"granting a wildcard principal — anyone the network admits "
+                          f"can read the corpus. {aws_vectorstore.CONTENTS_NOT_READ} "
+                          f"| {name}")
+            elif acc["governed"]:
+                self._add("PASS", "VEC-02", "VECTORSTORE", name,
+                          f"Vector collection '{name}' data access is scoped to "
+                          f"{len(acc['principals'])} named principal(s) | {name}")
+
+            # VEC-03 — the composition, and ONLY when both halves were established.
+            if net["public"] and acc["broad"]:
+                self._add("FAIL", "VEC-03", "VECTORSTORE", name,
+                          f"Vector collection '{name}' is reachable from the public "
+                          f"internet AND readable by a wildcard principal — both gates "
+                          f"are open, so the corpus is retrievable by anyone who finds "
+                          f"the endpoint. {aws_vectorstore.CONTENTS_NOT_READ} | {name}")
+
+            # VEC-04 — key custody.
+            self._add("FAIL" if not custody["cmk"] else "PASS", "VEC-04",
+                      "VECTORSTORE", name,
+                      (f"Vector collection '{name}' is encrypted with an AWS-owned key "
+                       f"— there is no key you can disable to cut access to the corpus "
+                       f"| {name}") if not custody["cmk"] else
+                      f"Vector collection '{name}' is on a customer-managed key | {name}")
+
+    def _check_s3vectors(self):
+        """VEC-05..07 — S3 Vectors buckets."""
+        try:
+            s3v = self._client("s3vectors")
+        except Exception:
+            return
+        buckets = self._vec_page(s3v, "list_vector_buckets", "vectorBuckets",
+                                 "VEC-05", "s3vectors-buckets")
+        if not buckets:
+            return
+        for b in buckets:
+            name = b.get("vectorBucketName") if isinstance(b, dict) else None
+            if not name:
+                continue
+            try:
+                detail = (s3v.get_vector_bucket(vectorBucketName=name) or {}
+                          ).get("vectorBucket") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("VEC-07", "s3vectors:GetVectorBucket")
+                detail = {}
+            enc = aws_vectorstore.vector_bucket_encryption(detail)
+            self._add("FAIL" if not enc["cmk"] else "PASS", "VEC-07",
+                      "VECTORSTORE", name,
+                      (f"S3 Vectors bucket '{name}' is encrypted with "
+                       f"{enc['sse_type'] or 'an AWS-managed key'} rather than a "
+                       f"customer-managed key — no key you can disable to cut access "
+                       f"to the corpus | {name}") if not enc["cmk"] else
+                      f"S3 Vectors bucket '{name}' is on a customer-managed key | {name}")
+
+            try:
+                pol = (s3v.get_vector_bucket_policy(vectorBucketName=name) or {}
+                       ).get("policy")
+            except Exception as e:
+                if self._is_access_denied(e):
+                    for cid in ("VEC-05", "VEC-06"):
+                        self._coverage.note_denied(
+                            cid, "s3vectors:GetVectorBucketPolicy")
+                    self._add("INFO", "VEC-00", "VECTORSTORE", name,
+                              f"S3 Vectors bucket '{name}' policy NOT read — missing "
+                              f"s3vectors:GetVectorBucketPolicy (no phantom pass)")
+                continue                # no policy at all is the common, safe case
+            exp = aws_vectorstore.bucket_policy_exposure(pol, self.account or "")
+            if exp["public"]:
+                self._add("FAIL", "VEC-05", "VECTORSTORE", name,
+                          f"S3 Vectors bucket '{name}' policy grants a wildcard "
+                          f"principal — the RAG corpus is exposed to anyone. "
+                          f"{aws_vectorstore.CONTENTS_NOT_READ} | {name}")
+            if exp["cross_account"]:
+                self._add("FAIL", "VEC-06", "VECTORSTORE", name,
+                          f"S3 Vectors bucket '{name}' policy grants "
+                          f"{len(exp['cross_account'])} external principal(s) "
+                          f"({', '.join(exp['cross_account'])}) — confirm each is a "
+                          f"sharing decision you made | {name}")
+
+    def _vec_page(self, client, op, key, cid, label):
+        """Inline-paginate a vector-store list call, distinguishing denied from empty."""
+        fn = getattr(client, op, None)
+        if fn is None:
+            return None
+        try:
+            out, token = [], None
+            for _ in range(200):
+                resp = fn(**({"nextToken": token} if token else {}))
+                out.extend(resp.get(key) or [])
+                token = resp.get("nextToken")
+                if not token or not isinstance(token, str):
+                    break
+            return out
+        except Exception as e:
+            if self._is_access_denied(e):
+                action = f"{'aoss' if 'collection' in op or 'polic' in op else 's3vectors'}:{_op_to_api(op)}"
+                self._coverage.note_denied(cid, action)
+                self._add("INFO", "VEC-00", "VECTORSTORE", label,
+                          f"{label} NOT enumerated — missing {action} "
+                          f"(no phantom pass)")
+            else:
+                self._add("WARN", cid, "VECTORSTORE", label, str(e))
+            return None
+
+    def _vec_policies(self, aoss, list_op, get_op, ptype, list_key, get_key, cid):
+        """Every aoss policy of one type, fetched in full.
+
+        The LIST call returns summaries without the policy document, so each one needs
+        its own Get — the same shape that made AGC-05 grade on a field the list response
+        never carries. Returns None when unreadable, which the caller keeps distinct
+        from 'no policies exist'."""
+        lst, get = getattr(aoss, list_op, None), getattr(aoss, get_op, None)
+        if lst is None or get is None:
+            return None
+        try:
+            summaries, token = [], None
+            for _ in range(200):
+                kw = {"type": ptype}
+                if token:
+                    kw["nextToken"] = token
+                resp = lst(**kw)
+                summaries.extend(resp.get(list_key) or [])
+                token = resp.get("nextToken")
+                if not token or not isinstance(token, str):
+                    break
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied(cid, f"aoss:{_op_to_api(list_op)}")
+            return None
+        out = []
+        for sm in summaries:
+            nm = sm.get("name") if isinstance(sm, dict) else None
+            if not nm:
+                continue
+            try:
+                got = get(name=nm, type=ptype) or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied(cid, f"aoss:{_op_to_api(get_op)}")
+                continue
+            detail = got.get(get_key)
+            if isinstance(detail, list):
+                out.extend(d for d in detail if isinstance(d, dict))
+            elif isinstance(detail, dict):
+                out.append(detail)
+        return out
+
+    # ══════════════════════════════════════════════════════════════════════════
     # SECTION 32: AMAZON SAGEMAKER
     # ══════════════════════════════════════════════════════════════════════════
     def _check_sagemaker(self):
@@ -11199,7 +11890,8 @@ class AWSLiveScanner:
 
     # AI sections that enumerate REGIONAL resources. Scanned from one region, each
     # sees only that region's estate — and reports success either way.
-    _AI_REGIONAL_SECTIONS = ("BEDROCK", "BEDROCK_AGENTS", "SAGEMAKER", "AGENTCORE")
+    _AI_REGIONAL_SECTIONS = ("BEDROCK", "BEDROCK_AGENTS", "SAGEMAKER", "AGENTCORE",
+                             "VECTORSTORE")
 
     def _aispm_region_coverage_note(self):
         """Emit AISPM-00 naming the regions this scan did not examine.
@@ -13189,6 +13881,9 @@ class AWSLiveScanner:
             "EFS":            self._check_efs,
             "ACM":            self._check_acm,
             "SAGEMAKER":      self._check_sagemaker,
+            "VECTORSTORE":    self._check_vectorstore,
+            "AI_LOGGING":     self._check_ai_logging,
+            "SHADOW_AI":      self._check_shadow_ai,
             "COGNITO":        self._check_cognito,
             "APIGATEWAYV2":   self._check_apigatewayv2,
             "IAMPRIVESC":     self._check_iam_privesc,
@@ -14154,6 +14849,11 @@ def _apply_phase6_config(sc, args) -> None:
     # and for the same reason. A load failure costs the ingest and nothing else:
     # _load_pentest_results prints why and returns {}.
     sc._pentest_results = _load_pentest_results(getattr(args, "pentest_results", None))
+    # Slice 4.4 -- the declared AI owner set, split here so the scanner
+    # never has to parse a CLI string.
+    sc._ai_owners = tuple(o.strip() for o in
+                          (getattr(args, "ai_owners", "") or "").split(",")
+                          if o.strip())
     sc.side_scan = args.side_scan
     sc.side_scan_targets = args.side_scan_targets
     sc.side_scan_tags = args.side_scan_tag or []
@@ -14344,6 +15044,12 @@ examples:
              "rows only — garak `attempt` rows carry the prompts and the model's "
              "responses and are never parsed.",
     )
+    parser.add_argument(
+        "--ai-owners", metavar="LIST", dest="ai_owners", default="",
+        help="Comma-separated IAM principals expected to create AI resources "
+             "(role names or ARNs). Without it SHAI-01 does not fire: a check that "
+             "flags every legitimate creator on the first scan is one people turn "
+             "off. The identities found are still listed, as SHAI-00.")
     parser.add_argument(
         "--tool-patterns", metavar="FILE", dest="tool_patterns",
         help="JSON pattern set for tool-description poisoning (TPOIS-03). "

@@ -272,6 +272,114 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "read protocolConfiguration.mcp.instructions -- the server-level string "
              "handed to the model as direction, which a reviewer sees as documentation"),
     ),
+    # Slice 4.2 -- the RAG vector store. None of these are in SecurityAudit or
+    # ViewOnlyAccess: aoss and s3vectors both postdate those managed policies, so the
+    # ledger is what makes the gap visible BEFORE a scan rather than at runtime.
+    #
+    # Every action here is a CONFIG read. s3vectors:GetVectors and ListVectors are
+    # deliberately absent and always will be -- see D8. Asking for them would be asking
+    # for the customer's corpus.
+    # Slice 4.3. GetModelInvocationLoggingConfiguration is already granted (BDR-01);
+    # what is new is cloudtrail:GetEventSelectors, which the scanner already CALLS for
+    # LOG-08 but which was never in the ledger -- so declining it silently cost a check
+    # nobody was told about. Recorded now for both.
+    # Slice 4.4. Both actions are already granted and already called -- LookupEvents
+    # for AITHR-01, DescribeVpcEndpoints under SecurityAudit's ec2:Describe*. Recorded
+    # anyway so declining either one names everything it costs, which is the whole
+    # contract of this table. The third-party SaaS half of shadow AI needs no action at
+    # all because it is not attempted; see D9.
+    "SHAI-01": (
+        _req("cloudtrail:LookupEvents",
+             "read AI resource CREATION events -- who stood up an agent, a knowledge "
+             "base or a guardrail, which is the moment shadow AI becomes visible"),
+    ),
+    "SHAI-02": (
+        _req("cloudtrail:LookupEvents",
+             "read the regions AI was created in, including regions this scan never "
+             "enumerated and therefore never assessed"),
+    ),
+    "SHAI-03": (
+        _req("ec2:DescribeVpcEndpoints",
+             "read whether Bedrock traffic has a governed path -- without an interface "
+             "endpoint it leaves via NAT or an internet gateway, where no endpoint "
+             "policy can bound which models are reachable"),
+    ),
+    "AILOG-01": (
+        _req("bedrock:GetModelInvocationLoggingConfiguration",
+             "read s3Config and cloudWatchConfig -- WHERE the prompts and completions "
+             "are written, which is the destination this check then assesses"),
+    ),
+    "AILOG-02": (
+        _req("bedrock:GetModelInvocationLoggingConfiguration",
+             "identify the prompt-log destination whose key custody is in question"),
+    ),
+    "AILOG-03": (
+        _req("bedrock:GetModelInvocationLoggingConfiguration",
+             "identify the prompt-log destination whose retention is in question"),
+    ),
+    "AILOG-04": (
+        _req("cloudtrail:DescribeTrails", "enumerate the trails in the account"),
+        _req("cloudtrail:GetEventSelectors",
+             "read each trail's ADVANCED event selectors -- whether any of them names "
+             "AWS::Bedrock::Model, without which there is no record of who invoked "
+             "which model"),
+    ),
+    "AILOG-05": (
+        _req("cloudtrail:GetEventSelectors",
+             "read which Bedrock resource types are covered by data events"),
+    ),
+    "AILOG-06": (
+        _req("cloudtrail:GetEventSelectors",
+             "read which AgentCore resource types are covered -- an agent's own "
+             "actions leave no data-plane record without them"),
+    ),
+    "VEC-01": (
+        _req("aoss:ListCollections", "find OpenSearch Serverless collections"),
+        _req("aoss:BatchGetCollection",
+             "read collectionType, which is what separates a VECTORSEARCH store -- the "
+             "agent's memory -- from a log-analytics collection this slice ignores"),
+        _req("aoss:ListSecurityPolicies",
+             "enumerate the network policies, ALL of which must be read: a public "
+             "rule in any policy matching a collection overrides a private rule in "
+             "another, so reading one of them is not reading the answer"),
+        _req("aoss:GetSecurityPolicy",
+             "read AllowFromPublic and SourceVPCEs -- whether the corpus endpoint is "
+             "reachable from the internet"),
+    ),
+    "VEC-02": (
+        _req("aoss:ListAccessPolicies",
+             "enumerate the data access policies, which are the control that "
+             "actually decides retrieval -- the network only decides who can reach "
+             "the endpoint"),
+        _req("aoss:GetAccessPolicy",
+             "read the principals a data access policy grants -- the control that "
+             "decides who can READ the vectors, independent of the network"),
+    ),
+    "VEC-03": (
+        _req("aoss:GetSecurityPolicy", "the reach half of the composition"),
+        _req("aoss:GetAccessPolicy", "the read half of the composition"),
+    ),
+    "VEC-04": (
+        _req("aoss:BatchGetCollection",
+             "read kmsKeyArn -- whether the corpus is on a key the customer can revoke"),
+    ),
+    "VEC-05": (
+        _req("s3vectors:ListVectorBuckets",
+             "find S3 Vectors buckets -- the other place a RAG corpus lives, and "
+             "one no existing OverWatch section enumerates"),
+        _req("s3vectors:GetVectorBucketPolicy",
+             "read the resource policy -- whether the corpus is exposed to anyone"),
+    ),
+    "VEC-06": (
+        _req("s3vectors:GetVectorBucketPolicy",
+             "read named external principals, reported apart from public because a "
+             "partner integration is frequently deliberate"),
+    ),
+    "VEC-07": (
+        _req("s3vectors:GetVectorBucket",
+             "read encryptionConfiguration -- sseType AES256 is SSE-S3 and aws:kms "
+             "without an ARN is still AWS-managed; neither is a key you can disable"),
+    ),
     "AGC-07": (
         _req("bedrock-agentcore:GetTokenVault",
              "read whether the store holding every agent credential for systems "

@@ -7,6 +7,101 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 4 · slice 4.4 — shadow AI, the half that is actually visible**
+  (`aws_shadowai.py`, `SHAI-01`…`SHAI-03`, new `SHADOW_AI` section, `--ai-owners`).
+  Shadow AI is **not a property of a resource**. A knowledge base built by the ML platform
+  team in the governed region is the system working; the identical resource built by an
+  application role in a region nobody scans is the thing worth a conversation. An
+  inventory cannot tell those apart, which is why this asks **who** and **where** rather
+  than **what**.
+  - **`SHAI-01`** (MEDIUM) — AI resources created by an identity outside the declared
+    owner set. **Without `--ai-owners` it does not fire at all**, listing what it found as
+    `SHAI-00` instead: a check that flags every legitimate creator on the first scan is
+    one people turn off, and then it never fires on the one that mattered either.
+  - **`SHAI-02`** (MEDIUM) — AI built in regions this scan never enumerated. A coverage
+    statement rather than a misconfiguration, and the most consequential kind: for those
+    resources the guardrail posture, network exposure and key custody are **unknown
+    rather than clean**.
+  - **`SHAI-03`** (MEDIUM) — VPCs with no Bedrock interface endpoint. Without one, Bedrock
+    traffic leaves via NAT or an internet gateway and **no VPC endpoint policy applies** —
+    the only place you can say which models a workload may invoke. Reported as a WARN and
+    explicitly marked not-applicable for VPCs that do not use Bedrock, because
+    configuration cannot tell which those are.
+  - Only **management** events are read. `bedrock:InvokeModel` is a data event
+    `LookupEvents` never sees — the gap `AILOG-04` reports — and that limit is a feature
+    here: creation is the moment shadow AI becomes visible, and usage is `AITHR-01`'s
+    question. Sessions collapse to their role, because ten sessions of one role are one
+    creator.
+  - **No new IAM action.** `cloudtrail:LookupEvents` was already used by `AITHR-01` and
+    `ec2:DescribeVpcEndpoints` falls under SecurityAudit's `ec2:Describe*`; both are now
+    recorded in the ledger so declining either names what it costs.
+
+- **Phase 4 · slice 4.3 — where the prompts land, and who saw the call**
+  (`aws_ailog.py`, `AILOG-01`…`AILOG-06`, new `AI_LOGGING` section). Both halves close a
+  gap in advice OverWatch already gives.
+  - **`BDR-01` names a destination and stops there.** It is right that invocation logging
+    should be on — it is the only control in the AI pillar producing evidence after an
+    incident. But with `textDataDeliveryEnabled`, that bucket or log group receives
+    **every prompt and every completion in the account**. Turning logging on *creates a
+    crown jewel*, and nothing asked whether the crown jewel was locked.
+    **`AILOG-01`** (CRITICAL) a publicly-accessible prompt-log bucket; **`AILOG-02`**
+    (HIGH) key custody on the sink; **`AILOG-03`** (MEDIUM) a log group with no retention
+    — prompt logs are evidence, and evidence with no expiry is also a growing liability.
+  - **`LOG-08` asks whether a trail records data events; it cannot say which.** An account
+    passes it while logging only S3 object activity, so **`AILOG-04`** (HIGH) asks whether
+    any trail names `AWS::Bedrock::Model` — without it there is no record of who invoked
+    which model, which is both `AITHR-01`'s LLMjacking signal and the first question after
+    any AI incident. **`AILOG-05`/`AILOG-06`** (MEDIUM) report the remaining Bedrock and
+    AgentCore gaps.
+  - **Three things verified rather than assumed.** The four delivery switches are
+    independent; `cloudWatchConfig.largeDataDeliveryS3Config` is a **third** destination
+    that receives the biggest payloads and is the one operators forget; and Bedrock data
+    events require **advanced** event selectors — basic ones accept only DynamoDB, Lambda
+    and S3 object types, so a trail full of S3 data events carries no AI coverage at all.
+  - **Restraint where the question was not asked.** A CloudWatch destination gets no
+    `AILOG-01` (a log group has no public-access concept, and a PASS would answer a
+    question nobody asked); a bucket owned by another account is a coverage note, never a
+    verdict; an account with no AgentCore gets no AgentCore finding; and an account with
+    no AI data events at all is told once, not three times.
+  - Configuration only, and stated: the reason the destination matters is that it holds
+    prompts, and a scanner that read them to check them would be the second copy of the
+    problem — the same reasoning as **D2** and **D8**.
+
+- **Phase 4 · slice 4.2 — the RAG vector store, from configuration** (`aws_vectorstore.py`,
+  `VEC-01`…`VEC-07`, new `VECTORSTORE` section). A retrieval-augmented agent answers from
+  what its vector store holds, which makes that store the agent's memory of the
+  organization's documents — the same reasoning that already makes `TFLOW-01` treat a
+  writable knowledge-base source as a **proven** injection entry. This slice asks the
+  layer beneath: who can reach the corpus, and who holds its key.
+  - **The two gates are kept apart, and only their composition is CRITICAL.** The
+    OpenSearch Serverless reference is explicit — *"network access only determines which
+    networks can reach the collection endpoint; data access policies determine which
+    principals can perform operations on the data."* So **`VEC-01`** (HIGH) reports
+    *reach*, **`VEC-02`** (HIGH) reports *read*, and **`VEC-03`** (CRITICAL) claims both
+    only when each was separately established. Collapsing them would assert a terminal
+    never proved, which is the failure `ATT&CK-02` exists to prevent.
+  - **`VEC-04`** (MEDIUM) collection key custody; **`VEC-05`** (HIGH) public S3 Vectors
+    bucket policy; **`VEC-06`** (MEDIUM) *named* cross-account grants, reported apart
+    from public because a partner integration is frequently deliberate and a CRITICAL on
+    a working design is how a category gets ignored; **`VEC-07`** (MEDIUM) bucket key
+    custody, where **both** `AES256` and `aws:kms` *without* a `kmsKeyArn` fail — neither
+    is a key the customer can disable.
+  - **Three readings taken from the reference rather than guessed**, each of which would
+    have produced a wrong answer: **public wins** (a public rule in *any* matching policy
+    overrides a private one, and `AllowFromPublic` makes the service ignore `SourceVPCEs`
+    entirely, so the verdict is a union across policies); **`collection` and `dashboard`
+    are different doors to the same room** (a private API endpoint with a public
+    Dashboards endpoint is still reachable); and **`bedrock.amazonaws.com` in
+    `SourceServices` is the correct architecture**, never a finding.
+  - Scope is **`VECTORSEARCH` collections only**. A `SEARCH` or `TIMESERIES` collection is
+    not an agent's corpus, and putting AI findings on every log-analytics collection in
+    the account is how operators learn to skip the category.
+  - A collection matched by **no** network policy is an INFO, not a PASS: reachability
+    *could not be established* rather than being private.
+  - **Nine new IAM actions** (`aoss:` ×6, `s3vectors:` ×3), all config reads, in the
+    always-on additive policy rather than behind a flag. Both services postdate
+    SecurityAudit and ViewOnlyAccess, so neither managed policy grants any of them.
+
 - **Phase 4 · slice 4.1 — SageMaker depth to Security Hub parity** (`aws_sagemaker.py`,
   `SM-08`…`SM-28`). OverWatch shipped seven SageMaker checks; four answered a published
   control (SageMaker.1/2/3/21) and three are ours with no Security Hub equivalent. That
@@ -199,6 +294,58 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
     would be a guess.
 
 ### Fixed
+- **`docs/DECISIONS.md` **D9** records a refused detection surface.** Slice 4.4 specified
+  "one CloudTrail query, one flow-log query", and the flow-log half cannot work from this
+  vantage point: VPC flow logs record **IP addresses, not hostnames**, and the major AI
+  providers front their APIs with **shared Cloudflare and Fastly ranges**. An
+  address-matching rule would fire on every CDN-fronted site in the estate while missing
+  any provider that rotated an address — *a detection surface whose misses read as passes*,
+  which is the exact objection slice `3.2` raised against shipping injection phrasings.
+  Refusing it once is worth nothing if the next slice does it. `SHAI-03` ships the
+  config-only question underneath instead, and `SHAI-00` states the gap on **every scan**
+  so a reader cannot mistake silence for coverage.
+- **The permission ledger's read-verb guard rejected `Lookup`.** `cloudtrail:LookupEvents`
+  is CloudTrail's read verb, and the distinction it raised is now written down: it reads
+  the account's **own audit trail** — who called which API — not any workload payload.
+  That is the class of `DescribeInstances`, emphatically **not** the class of
+  `s3:GetObject` or `logs:StartQuery`, which read customer content and belong in the
+  separate opt-in blocks. Third naming convention this guard has forced an examination of,
+  which is the guard working.
+
+- **The public-bucket branch of `AILOG-01` could never have fired.** It tested
+  `verdict["scope"]`, and `classify_resource_policy_stmt` returns **`kind`** — an
+  invented field name, the same class of error as the invented
+  `_classify_policy_principal` before it. A wrong key silently yields `None`, which reads
+  as "not public": a check that always passes. Corrected against the function rather than
+  from memory, with the real values (`public`, `public_conditioned`) written down.
+- **The ledger-rebuild helper was resetting a test's name on every run.** Its regex
+  matched *any* `test_the_shipped_role_is_missing_exactly_<word>_actions` and always wrote
+  back `eighteen`, so the name had been wrong for three slices while the real gap climbed
+  to thirty. A test name is documentation, and documentation that silently reverts is
+  worse than none. The helper now derives the word from the computed count.
+- **`cloudtrail:GetEventSelectors` was never in the permission ledger**, despite the
+  scanner calling it for `LOG-08` since long before this slice — so declining it silently
+  cost a check nobody was told about. That is precisely the gap the ledger exists to
+  close, and it is now recorded for both `LOG-08`'s successor checks and `AILOG-04`.
+
+- **The roadmap's *boundary* label on 4.2 was wrong, and `docs/DECISIONS.md` **D8** now
+  records why.** Verification came before design: every security question worth asking
+  about a RAG store is answerable from configuration. Only `s3vectors:GetVectors` /
+  `ListVectors` cross the line, and what they return is **embeddings** — vectors computed
+  from the customer's documents and partially invertible back toward them. That is the
+  escalation **D2** declined for prompt text, and the argument transfers unchanged: a
+  security product that ingests the corpus it audits has become a second copy of the
+  thing at risk. So 4.2 ships **in-charter**, with no FLOW-00 opt-in block, and the
+  refusal is stated rather than implied — every `VEC-*` finding carries *"this check
+  reads configuration only and does NOT read the stored vectors"*, the same way `MCP-04`
+  states its blind spot. A test asserts the module never names those operations in
+  executable code, after first being narrowed so it stops firing on the docstring that
+  explains the refusal.
+- **The permission ledger's read-verb guard rejected `BatchGet`.** `aoss:BatchGetCollection`
+  is how that service spells `DescribeCollection`, and the guard did its job — a new
+  service's naming convention got examined rather than waved through — but the allow-list
+  was missing a legitimate read verb. Extended in both places that check it.
+
 - **The permission ledger was lying about SageMaker, and had been since the checks
   shipped.** Its three entries were **rotated by one**: `SM-04` (notebook VPC deployment)
   held the Studio *domain* actions, `SM-06` (Studio home-EFS key) held the

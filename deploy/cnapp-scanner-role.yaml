@@ -195,6 +195,28 @@ Resources:
   # supported — it needs the exact s3:GetObject the role excludes. Use a CloudWatch Logs
   # flow-log destination for the overlay, or leave Layer B off.
 
+  # ── RAG vector stores (slice 4.2) ───────────────────────────────────────────
+  # aoss (OpenSearch Serverless) and s3vectors both POSTDATE SecurityAudit and
+  # ViewOnlyAccess, so neither managed policy grants any of this. All nine actions are
+  # CONFIG reads and belong in the always-on additive policy, NOT behind an opt-in flag:
+  # they read network policies, data access policies, key ARNs and bucket policies --
+  # the same class of read the rest of the role already performs.
+  #
+  # What is deliberately ABSENT, and permanently: s3vectors:GetVectors and
+  # s3vectors:ListVectors. Those return the embeddings themselves, computed from the
+  # customer's documents. See docs/DECISIONS.md D8. Asking for them would be asking for
+  # the corpus, and no OverWatch check needs it.
+  #
+  #   - aoss:ListCollections
+  #   - aoss:BatchGetCollection        # collectionType + kmsKeyArn
+  #   - aoss:ListSecurityPolicies      # network + encryption policy names
+  #   - aoss:GetSecurityPolicy         # AllowFromPublic / SourceVPCEs
+  #   - aoss:ListAccessPolicies
+  #   - aoss:GetAccessPolicy           # who may retrieve
+  #   - s3vectors:ListVectorBuckets
+  #   - s3vectors:GetVectorBucket      # encryptionConfiguration
+  #   - s3vectors:GetVectorBucketPolicy
+
   # ── OPTIONAL: expanded DSPM datastore surfaces ──────────────────────────────
   # The DSPM crown-jewel classifier (DSPM-01/02/03) covers S3/RDS/Aurora/DocumentDB/Neptune/
   # Redshift/DynamoDB/EFS/OpenSearch using describe/list APIs already in SecurityAudit. Four
