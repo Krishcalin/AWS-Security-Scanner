@@ -117,6 +117,7 @@ Resources:
                   - bedrock-agentcore:ListOauth2CredentialProviders
                   - bedrock-agentcore:ListApiKeyCredentialProviders
                   - bedrock-agentcore:ListMemories
+                  - bedrock-agentcore:GetMemory
                   - bedrock-agentcore:ListBrowsers
                   - bedrock-agentcore:ListCodeInterpreters
                 Resource: '*'

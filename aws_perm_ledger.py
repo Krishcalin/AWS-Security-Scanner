@@ -138,6 +138,29 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
     # the entry (granted in 1.2), GetAgent for the role, and the bucket policies the
     # S3 section already reads. The flagship computation is a composition of things
     # the scanner holds, which is what made it affordable.
+    # AMEM-01 is the first check in this table that spans TWO surfaces, and the
+    # distinction matters enough to write down. The retention window lives on
+    # memoryConfiguration.storageDays for a Bedrock agent (GetAgent, granted in 1.2)
+    # and on eventExpiryDuration for an AgentCore memory (GetMemory, granted by
+    # nothing). evaluate() is AND-semantics -- one missing action blocks the whole
+    # check -- so naming GetMemory here would have made the preflight announce
+    # "AMEM-01 will NOT be evaluated" in a report that then carries AMEM-01 findings
+    # for every Bedrock agent. That is a phantom GAP: the mirror of the phantom pass,
+    # and just as wrong. The requirement is therefore the action the check needs to
+    # produce ANY answer; the AgentCore half degrades to a scoped AccessDenied that
+    # _audit_agentcore_memory records at runtime, naming the surface it lost.
+    "AMEM-01": (
+        _req("bedrock:GetAgent",
+             "read memoryConfiguration.storageDays -- how long an instruction that "
+             "reached an agent's memory keeps being read back into later sessions"),
+    ),
+    # AMEM-02 has no Bedrock-agent half: only AgentCore Memory exposes an encryption
+    # key at all, so declining GetMemory forfeits the whole check rather than half.
+    "AMEM-02": (
+        _req("bedrock-agentcore:GetMemory",
+             "read encryptionKeyArn -- whether the store carrying instructions "
+             "between sessions is on a key the customer can disable"),
+    ),
     "TFLOW-01": (
         _req("bedrock:GetDataSource",
              "read each knowledge-base data source type -- a WEB crawler or an "
@@ -417,9 +440,18 @@ class CoverageManifest:
     enumerated: List[str] = field(default_factory=list)           # resource types seen
     not_enumerable: Dict[str, str] = field(default_factory=dict)  # type -> action
 
-    def note_denied(self, check_id: str, action: str) -> None:
-        """Record a check as NOT EVALUATED. Deliberately distinct from a PASS."""
-        self.not_evaluated[check_id] = f"AccessDenied — missing {action}"
+    def note_denied(self, check_id: str, action: str,
+                    scope: Optional[str] = None) -> None:
+        """Record a check as NOT EVALUATED. Deliberately distinct from a PASS.
+
+        `scope` names the SURFACE the denial cost us, for a check that reads more than
+        one. Without it the sentence "AMEM-01 was not evaluated" is false in a report
+        that carries AMEM-01 findings for the surface that was readable — a reader
+        who cannot tell "no answer" from "no answer for AgentCore" will read the
+        Bedrock findings as the whole picture."""
+        self.not_evaluated[check_id] = (
+            f"AccessDenied for {scope} — missing {action}" if scope
+            else f"AccessDenied — missing {action}")
         if action not in self.missing_actions:
             self.missing_actions.append(action)
 

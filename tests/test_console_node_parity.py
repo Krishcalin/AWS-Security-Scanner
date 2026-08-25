@@ -61,6 +61,8 @@ KNOWN_KINDS = frozenset({
     # Phase 3: a computed flow, not a resource — it annotates the graph the way
     # Vulnerability and ThreatFinding do.
     "ToxicFlow",
+    # Phase 3 slice 3.5: a result the OPERATOR produced, annotating the graph.
+    "PentestResult",
 })
 
 

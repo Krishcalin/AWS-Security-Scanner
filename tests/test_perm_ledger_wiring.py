@@ -81,6 +81,7 @@ def test_preflight_computes_the_ledger_from_our_own_role():
     assert s._perm_ledger.missing_actions == (
         "bedrock-agentcore:GetAgentRuntime",
         "bedrock-agentcore:GetGateway",
+        "bedrock-agentcore:GetMemory",
         "bedrock-agentcore:GetTokenVault",
         "bedrock-agentcore:GetWorkloadIdentity",
         "bedrock-agentcore:ListAgentRuntimes",
@@ -118,7 +119,7 @@ def test_preflight_records_the_blocked_checks_as_not_evaluated():
     # checks. The preflight derives this set from the ledger, so it picked all three
     # up without being told - which is the behaviour the runtime denial path in
     # _grade_guardrails was corrected to match.
-    assert set(s._coverage.not_evaluated) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "TFLOW-01"}
+    assert set(s._coverage.not_evaluated) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AMEM-02", "TFLOW-01"}
     assert not s._coverage.complete
 
 
@@ -187,6 +188,7 @@ def test_the_scan_result_carries_coverage_and_the_ledger():
     assert payload["permission_ledger"]["missing_actions"] == [
         "bedrock-agentcore:GetAgentRuntime",
         "bedrock-agentcore:GetGateway",
+        "bedrock-agentcore:GetMemory",
         "bedrock-agentcore:GetTokenVault",
         "bedrock-agentcore:GetWorkloadIdentity",
         "bedrock-agentcore:ListAgentRuntimes",
@@ -229,6 +231,6 @@ def test_the_annotated_policy_reaches_the_payload():
     # 15: slice 2.3 added GetGateway and ListGatewayTargets, which are what let
     # AGC-05 grade inbound authorization against the OUTBOUND configuration
     # rather than reporting authorizerType as a boolean.
-    assert len(rows) == 17
+    assert len(rows) == 18
     for row in rows:
         assert row["why"] and row["enables"] and row["forfeited_if_declined"]
