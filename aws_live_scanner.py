@@ -87,6 +87,7 @@ import aws_mcp
 import aws_perm_ledger
 import aws_sagemaker
 import aws_modelartifact
+import aws_nitro
 import aws_shadowai
 import aws_ailog
 import aws_evidence
@@ -468,6 +469,12 @@ CHECK_SEVERITY = {
     # a BLOCKED detection -- that is a control working, and scoring it would teach a
     # team to switch the detector off rather than to keep it.
     "AIDR-01": "HIGH",
+    # Slice 5.3 -- platform traffic encryption. Both LOW, and deliberately: neither
+    # is a misconfiguration. An instance type that does not automatically encrypt
+    # east-west traffic is a PLATFORM property the operator chose implicitly when they
+    # picked the type, and the application may well encrypt anyway. These are evidence
+    # for the ZTMM Networks/Traffic encryption function first and findings second.
+    "NITRO-01": "LOW", "NITRO-02": "LOW",
     "MART-01": "CRITICAL",
     # Unpinned and cross-account are MEDIUM: both are preconditions rather than
     # exploitation, and a team that deliberately shares an artifact bucket with a
@@ -827,6 +834,8 @@ COMPLIANCE_MAP = {
     "SM-27": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
     "SM-28": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
     "AIDR-01": {"PCI-DSS": "10.6.1", "HIPAA": "164.308(a)(1)(ii)(D)", "SOC2": "CC7.2", "NIST": "SI-4"},
+    "NITRO-01": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "NITRO-02": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "MART-01": {"PCI-DSS": "6.3.2", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "SI-7"},
     "MART-02": {"PCI-DSS": "6.3.2", "HIPAA": "164.312(c)(1)", "SOC2": "CC8.1", "NIST": "CM-5"},
     "MART-03": {"PCI-DSS": "12.8.1", "HIPAA": "164.308(b)(1)", "SOC2": "CC9.2", "NIST": "SI-7"},
@@ -1207,6 +1216,8 @@ REMEDIATION_MAP = {
     "SM-27": "Tag the app image configuration so it can be attributed and governed: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Tags with the aws: prefix are system tags and do not satisfy the control. Never put personally identifiable or sensitive information in a tag -- tags are readable from many AWS services",
     "SM-28": "Tag the image: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Same caveats as SM-27 -- system aws: tags do not count, and tags are not a place for sensitive values",
     "AIDR-01": "Your own detector recognised this and the request reached the model anyway, so treat the detector as reporting rather than enforcing: check whether it is deployed in blocking mode, and put an AWS-side control behind it -- aws bedrock get-guardrail --guardrail-identifier <ID> --guardrail-version DRAFT to confirm a PROMPT_ATTACK filter is set to BLOCK rather than NONE (AIGRD-01), and aws bedrock-agent update-agent to attach the guardrail if the agent has none. Then bound what a successful injection reaches with AISPM-01/02",
+    "NITRO-01": "Move the workload to an instance type that automatically encrypts in-transit traffic between instances, if east-west confidentiality matters for it: aws ec2 describe-instance-types --filters Name=network-info.encryption-in-transit-supported,Values=true --query InstanceTypes[].InstanceType to list the ones that do. If the type cannot change, the application must provide the encryption -- the platform will not",
+    "NITRO-02": "This instance runs on the Xen hypervisor rather than Nitro, so it predates the platform generation that provides automatic in-transit encryption and hardware-rooted isolation. Plan a migration to a current-generation type: aws ec2 describe-instance-types --filters Name=hypervisor,Values=nitro --query InstanceTypes[].InstanceType . Xen types are also excluded from Nitro Enclaves and NitroTPM",
     "MART-01": "Close write access to the artifact bucket immediately -- whoever can write it executes code inside your endpoint on the next deploy: aws s3api get-bucket-policy --bucket <BUCKET> and remove every external or wildcard principal holding a write action, then aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true. Then verify the artifact currently there is the one you published",
     "MART-02": "Pin the artifact to a specific object version so a replaced file cannot silently become what runs: aws sagemaker create-model --model-name <M> --primary-container Image=<IMG>,ModelDataSource={S3DataSource={S3Uri=<URI>,S3DataType=S3Object,CompressionType=None,ETag=<ETAG>}} -- get the ETag with aws s3api head-object --bucket <BUCKET> --key <KEY>. Enable bucket versioning at the same time so the pinned version cannot be deleted out from under you",
     "MART-03": "Confirm the external account owning this artifact bucket is one you intend to load executable code from, because that is what a model artifact is. Prefer copying the artifact into an account you control and pinning it: aws s3 cp s3://<THEIR_BUCKET>/<KEY> s3://<YOUR_BUCKET>/<KEY> , then re-point the model at your copy",
@@ -3505,6 +3516,9 @@ class AWSLiveScanner:
 
     def _check_ec2(self):
         self._section_header("EC2")
+        # Slice 5.3 -- the platform layer beneath TLS, run first so the estate summary
+        # heads the section rather than trailing the per-instance findings.
+        self._check_platform_encryption()
         ec2 = self._client("ec2")
 
         # EC2-04 — IMDSv2 enforcement
@@ -8595,6 +8609,71 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 33: RAG VECTOR STORES (slice 4.2)
     # ══════════════════════════════════════════════════════════════════════════
+    def _check_platform_encryption(self):
+        """NITRO-01/02 — whether the platform encrypts east-west traffic (slice 5.3).
+
+        The layer beneath TLS. On supported instance types the Nitro System encrypts
+        traffic between instances automatically, and support is a property of the TYPE
+        rather than something an operator configures — so this is readable, and almost
+        nothing asks it.
+
+        A capability claim, never an observation: OverWatch cannot watch a packet."""
+        try:
+            ec2 = self._client("ec2")
+            reservations = (ec2.describe_instances() or {}).get("Reservations") or []
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("NITRO-01", "NITRO-02"):
+                    self._coverage.note_denied(cid, "ec2:DescribeInstances")
+            return
+        instances = [i for r in reservations for i in (r.get("Instances") or [])]
+        wanted = sorted({i.get("InstanceType") for i in instances
+                         if i.get("InstanceType")})
+        if not wanted:
+            return
+
+        types = {}
+        try:
+            # DescribeInstanceTypes caps at 100 ids per call.
+            for i in range(0, len(wanted), 100):
+                resp = ec2.describe_instance_types(InstanceTypes=wanted[i:i + 100])
+                for t in (resp or {}).get("InstanceTypes") or []:
+                    if t.get("InstanceType"):
+                        types[t["InstanceType"]] = t
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("NITRO-01", "NITRO-02"):
+                    self._coverage.note_denied(cid, "ec2:DescribeInstanceTypes")
+                self._add("INFO", "NITRO-00", "EC2", "platform-encryption",
+                          "Platform in-transit encryption NOT assessed — missing "
+                          "ec2:DescribeInstanceTypes (no phantom pass)")
+            return
+
+        postures = [aws_nitro.instance_posture(i, types) for i in instances]
+        summary = aws_nitro.summarize_estate(postures)
+        if not summary["running"]:
+            return
+
+        self._add("INFO", "NITRO-00", "EC2", "platform-encryption",
+                  f"{summary['statement']} | platform-encryption")
+
+        for p in postures:
+            line = aws_nitro.describe_gap(p)
+            if line:
+                self._add("FAIL", "NITRO-01", "EC2", p["instance_id"],
+                          f"{line} | {p['instance_id']}")
+            elif p.get("running") and p.get("encrypts"):
+                self._add("PASS", "NITRO-01", "EC2", p["instance_id"],
+                          f"Instance {p['instance_id']} runs on {p['instance_type']}, "
+                          f"which automatically encrypts in-transit traffic between "
+                          f"instances | {p['instance_id']}")
+            if p.get("running") and p.get("hypervisor") == aws_nitro.XEN:
+                self._add("FAIL", "NITRO-02", "EC2", p["instance_id"],
+                          f"Instance {p['instance_id']} runs on the Xen hypervisor — "
+                          f"it predates the Nitro platform generation, so automatic "
+                          f"in-transit encryption, Nitro Enclaves and NitroTPM are all "
+                          f"unavailable to it | {p['instance_id']}")
+
     def _check_vectorstore(self):
         """VEC-01..07 — who can reach the agent's corpus, and who holds its key.
 
