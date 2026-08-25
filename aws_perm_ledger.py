@@ -293,6 +293,10 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
     # MART-04 crosses, and it crosses into the s3:GetObject action class the charter
     # excludes -- so it ships in the FLOW-00 shape, behind its own named policy and its
     # own flag, or it does not ship. See D10.
+    # Slice 4.7 needs NO IAM action at all: the input is a file the operator supplies
+    # from their own detector. Recorded as a deliberate absence rather than an omission,
+    # the same way slice 3.5's pen-test ingest is -- a reader checking why AIDR-01 has no
+    # entry should find the reason here rather than assume it was forgotten.
     "MART-01": (
         _req("sagemaker:DescribeModel",
              "read ModelDataUrl and ModelDataSource.S3Uri -- WHERE the container loads "
