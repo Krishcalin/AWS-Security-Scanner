@@ -244,6 +244,55 @@ phantom-pass-by-omission `MCP-04` and `VEC-*` exist to prevent.
 ask first. That is a real limit, named here rather than papered over with a rule that
 would appear to answer it.
 
+## D10 · Do we read model artifacts? — **YES, OPT-IN, IN THE FLOW-00 SHAPE**
+
+*Slice 4.6 scans model artifacts for pickle deserialization payloads. That needs
+`s3:GetObject`. The roadmap labelled it "crossing · D2". Does it ship?*
+
+**Answer: the config half ships in-charter and always on; the artifact read ships opt-in,
+behind its own named policy. And the roadmap's label was imprecise.**
+
+**It is a crossing, but not D2's.** D2 concerns *prompt and completion content* — what
+users typed and what models replied. A model artifact is neither. The actual crossing is
+the **`s3:GetObject` action class**, which `deploy/cnapp-scanner-role.yaml` already
+documents as deliberately excluded from the role, and which VPC flow-log content reads
+crossed first in **FLOW-00**. So this follows the shape FLOW-00 established rather than
+inventing one, and the permission ledger's own guard enforced it: the additive policy
+test names `s3:GetObject` as belonging to "the separate opt-in blocks", and rejected the
+first attempt to put `MART-04` in the always-on ask.
+
+**Why the crossing is worth offering at all.** A serialized model is not data. Pickle
+encodes instructions and `REDUCE` calls whatever the stream names, so loading an artifact
+executes code holding the loader's credentials — in a SageMaker endpoint, the execution
+role. The config half establishes that somebody *could* replace the artifact; only reading
+it establishes that somebody *did*.
+
+**Why it is safe to offer.** The scan **never unpickles**:
+
+| | |
+|---|---|
+| parser | `pickletools.genops`, which walks opcodes without running them |
+| verified by | a test that pickles a payload opening a file, scans it, and asserts the file does not exist |
+| enforced by | a test asserting `pickle.load`, `torch.load` and `joblib.load` never appear in executable code |
+| read bound | 8 MB, ranged; a truncated stream is reported as truncated, never as clean |
+| what is read | opcodes and the module/name pairs they reference — no tensor payload |
+
+A scanner that unpickled an artifact to determine whether unpickling it is safe would be
+the vulnerability, wearing a security label.
+
+**What restraint it ships with.** `EXECUTABLE` and `MALICIOUS` are separate verdicts.
+Almost every real PyTorch checkpoint contains `REDUCE` — that is how the format rebuilds
+a tensor — so only a global with no explainable reason to be in a serialized model earns
+the stronger word. Reporting every model as malicious is how a scanner gets switched off.
+
+**A correction worth recording.** The danger table was first authored from memory and
+listed `builtins.open` — a pair pickle **never** emits, because `open` pickles as
+`_io.open`. The commonest payload there is would have been missed by a table that read
+correctly. It is now driven by observation, with a test that pickles each callable and
+asserts the table names what CPython actually emits. `os.system` likewise pickles as
+`posix.system` on Linux and `nt.system` on Windows, and both are listed because the
+platform that matters is the artifact's, not the scanner's.
+
 ## Declared non-goals
 
 Scope statements, not gaps. Each of these is something OverWatch will not build, recorded

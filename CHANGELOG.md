@@ -7,6 +7,39 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 4 · slice 4.6 — the model artifact as executable code** (`aws_modelartifact.py`,
+  `MART-01`…`MART-05`, opt-in `--scan-model-artifacts`). A serialized model is **not
+  data**: pickle encodes instructions and `REDUCE` calls whatever the stream names, so
+  loading an artifact runs code holding the loader's credentials — in a SageMaker
+  endpoint, the execution role.
+  - **`MART-01`** (CRITICAL) — the artifact's S3 bucket is writable by an external
+    principal. Whoever can write it has a scheduled **remote code execution** inside the
+    endpoint: they replace the object and the next deploy runs their code, with nothing
+    else compromised and no alert raised. This is `TFLOW-01`'s reasoning one layer down —
+    that says whoever writes the corpus writes what the model *says*; this says whoever
+    writes the artifact writes what the model **is**.
+  - **`MART-02`** (MEDIUM) — no `ETag`, so the reference resolves at deploy time to
+    whatever is at the URI. The `MCP-04` rug-pull shape applied to weights, and the reason
+    `MART-01` is a code-execution finding rather than a data-integrity one. The legacy
+    `ModelDataUrl` has no ETag field at all and is unpinned by construction.
+  - **`MART-03`** (MEDIUM) cross-account artifact; **`MART-05`** (LOW) the format can
+    execute at all — rated LOW because nearly every PyTorch checkpoint is in one, and
+    reported as the *durable fix* for the rest of the family rather than a defect alone.
+  - **`MART-04`** (CRITICAL, opt-in) — a static opcode scan finding a global with no
+    explainable reason to be in a serialized model. **`EXECUTABLE` and `MALICIOUS` are
+    separate verdicts**: almost every real checkpoint contains `REDUCE`, that being how
+    the format rebuilds a tensor, and flagging them all is how a scanner gets switched off.
+  - **The scan never unpickles.** `pickletools.genops` walks opcodes without running them
+    — verified by a test that pickles a payload which opens a file, scans it, and asserts
+    the file does not exist; and enforced by a test that `pickle.load`, `torch.load` and
+    `joblib.load` never appear in executable code. The read is ranged and bounded to 8 MB,
+    and a truncated stream is reported as truncated, never as clean.
+  - **`D10`** records the crossing. The roadmap labelled 4.6 *"crossing · D2"*, and that
+    was imprecise: D2 concerns prompt and completion content, which an artifact is not.
+    The real crossing is the **`s3:GetObject` action class** — the one FLOW-00 crossed
+    first — so it ships in the FLOW-00 shape: a separate named `CnappModelArtifactRead`
+    policy, off by default, scoped to the artifact prefixes, failing open to `MART-00`.
+
 - **Phase 4 · slice 4.5 — the AI compliance evidence pack** (`aws_evidence.py`, written
   to `ai_compliance_evidence.json` alongside the other evidence artefacts). An auditor
   does not want a list of failures. They want to know, control by control, whether it was
@@ -320,6 +353,22 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
     would be a guess.
 
 ### Fixed
+- **The pickle danger table was authored from memory and wrong where it mattered most.**
+  It listed `builtins.open` — a pair pickle **never emits**, because `open` pickles as
+  **`_io.open`**. The most common malicious payload there is would have been missed by a
+  table that read perfectly plausibly. Likewise `os.system` pickles as `posix.system` on
+  Linux and `nt.system` on Windows; both are now listed, because the platform that matters
+  is the one the **artifact** was built on, not the one the scanner runs on. The table is
+  now driven by observation, with a test that pickles each dangerous callable and asserts
+  the table names what CPython actually emits — so it cannot drift back into
+  plausible-looking fiction.
+- **The permission ledger's own guard caught `MART-04` being smuggled into the always-on
+  ask.** `test_the_additive_policy_contains_only_read_actions` names `s3:GetObject` and
+  `logs:StartQuery` as belonging to "the separate opt-in blocks", and rejected the first
+  attempt to give `MART-04` a ledger entry. That policy is what an operator approves once
+  and forgets; a content read has no business in it. `MART-04` now has **no** ledger entry
+  by design, and its action is documented only in the deploy template's opt-in block.
+
 - **The evidence pack shipped with the exact failure it was written to prevent.** A
   framework control only enters the pack if the crosswalk already maps it, so the mapped
   set is N-of-N *by construction*: against the real crosswalk the summary read

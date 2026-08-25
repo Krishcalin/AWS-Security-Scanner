@@ -217,6 +217,34 @@ Resources:
   #   - s3vectors:GetVectorBucket      # encryptionConfiguration
   #   - s3vectors:GetVectorBucketPolicy
 
+  # ── OPT-IN ONLY (disabled by default) ──────────────────────────────────────
+  # Model artifact opcode scanning (--scan-model-artifacts -> MART-04). A serialized
+  # model is EXECUTABLE: pickle's REDUCE opcode calls whatever the stream names, so
+  # loading an artifact runs code with the loader's credentials. MART-01/02/03/05 tell
+  # you who could REPLACE the artifact and whether the format can execute, all from
+  # configuration and always on. Only MART-04 reads the object itself.
+  #
+  # This crosses read-only-of-CONFIG by ACTION CLASS -- the same class as FLOW-00's
+  # CloudWatch Logs Insights read, and the same class ReadOnlyAccess's s3:GetObject is
+  # deliberately excluded to avoid. So it is opt-in, least-privilege and resource-scoped
+  # to the artifact prefixes your models actually reference (read them from
+  # `aws sagemaker describe-model --model-name <M>`), and OverWatch FAILS OPEN to a
+  # MART-00 note when the grant is absent. The scan never unpickles: it walks the opcode
+  # stream with pickletools.genops and reads at most 8 MB per object. See docs/DECISIONS.md D10.
+  #
+  #   - PolicyName: CnappModelArtifactRead
+  #     PolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Effect: Allow
+  #           Action: [ s3:GetObject ]
+  #           Resource:
+  #             - 'arn:aws:s3:::<MODEL_ARTIFACT_BUCKET>/<PREFIX>/*'
+  #
+  # Scope the Resource to the artifact prefixes and nothing wider. A wildcard here would
+  # hand OverWatch read access to every object in the account, which is precisely the
+  # grant the base role exists to avoid needing.
+
   # ── OPTIONAL: expanded DSPM datastore surfaces ──────────────────────────────
   # The DSPM crown-jewel classifier (DSPM-01/02/03) covers S3/RDS/Aurora/DocumentDB/Neptune/
   # Redshift/DynamoDB/EFS/OpenSearch using describe/list APIs already in SecurityAudit. Four
