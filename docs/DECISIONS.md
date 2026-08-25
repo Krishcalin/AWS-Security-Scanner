@@ -203,6 +203,47 @@ decides whether the contents matter.
 and `s3vectors:ListVectors` are absent and always will be; a test asserts the module
 never names them in executable code.
 
+## D9 · Do we detect third-party AI SaaS from flow logs? — **NO**
+
+*Slice 4.4 specified "one CloudTrail query, one flow-log query". The flow-log query was
+meant to catch employees using hosted assistants. Do we build it?*
+
+**Answer: no. The CloudTrail half ships as specified; the flow-log half is refused and
+replaced with the config-only question underneath it.**
+
+**Why it cannot work from this vantage point.** VPC flow logs record IP addresses, not
+hostnames. Detecting `api.openai.com` therefore means matching against a provider IP
+allowlist, and:
+
+| | |
+|---|---|
+| the major providers front their APIs with | Cloudflare and Fastly **shared** ranges |
+| so an address match fires on | every CDN-fronted site in the estate |
+| and providers rotate addresses | continuously, silently |
+| so a miss looks exactly like | a clean bill of health |
+
+That last row is the disqualifying one. It is the same objection slice **3.2** raised
+against shipping injection phrasings for tool-description poisoning: *a detection product
+whose every miss reads as a clean bill of health, and whose every over-match teaches
+operators to skip the category*. Refusing it once is worth nothing if the next slice does
+it.
+
+**What ships instead.** `SHAI-03` asks the config-only question underneath: does Bedrock
+traffic have a **governed path** at all? A VPC with no Bedrock interface endpoint reaches
+Bedrock over NAT or an internet gateway, where no VPC endpoint policy can bound which
+models are reachable. That is a real control gap, readable from `ec2:DescribeVpcEndpoints`,
+with no false-positive engine attached.
+
+**And the gap is declared rather than implied.** `SHAI-00` states, on every scan, that
+third-party hosted assistants are not detectable from an AWS account and that answering
+that question needs an egress proxy or a CASB. A reader who sees a shadow-AI section with
+no mention of hosted assistants will otherwise assume they were covered — the same
+phantom-pass-by-omission `MCP-04` and `VEC-*` exist to prevent.
+
+**What this costs.** OverWatch does not answer the shadow-AI question most organizations
+ask first. That is a real limit, named here rather than papered over with a rule that
+would appear to answer it.
+
 ## Declared non-goals
 
 Scope statements, not gaps. Each of these is something OverWatch will not build, recorded

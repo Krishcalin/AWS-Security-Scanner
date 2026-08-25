@@ -7,6 +7,35 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 4 · slice 4.4 — shadow AI, the half that is actually visible**
+  (`aws_shadowai.py`, `SHAI-01`…`SHAI-03`, new `SHADOW_AI` section, `--ai-owners`).
+  Shadow AI is **not a property of a resource**. A knowledge base built by the ML platform
+  team in the governed region is the system working; the identical resource built by an
+  application role in a region nobody scans is the thing worth a conversation. An
+  inventory cannot tell those apart, which is why this asks **who** and **where** rather
+  than **what**.
+  - **`SHAI-01`** (MEDIUM) — AI resources created by an identity outside the declared
+    owner set. **Without `--ai-owners` it does not fire at all**, listing what it found as
+    `SHAI-00` instead: a check that flags every legitimate creator on the first scan is
+    one people turn off, and then it never fires on the one that mattered either.
+  - **`SHAI-02`** (MEDIUM) — AI built in regions this scan never enumerated. A coverage
+    statement rather than a misconfiguration, and the most consequential kind: for those
+    resources the guardrail posture, network exposure and key custody are **unknown
+    rather than clean**.
+  - **`SHAI-03`** (MEDIUM) — VPCs with no Bedrock interface endpoint. Without one, Bedrock
+    traffic leaves via NAT or an internet gateway and **no VPC endpoint policy applies** —
+    the only place you can say which models a workload may invoke. Reported as a WARN and
+    explicitly marked not-applicable for VPCs that do not use Bedrock, because
+    configuration cannot tell which those are.
+  - Only **management** events are read. `bedrock:InvokeModel` is a data event
+    `LookupEvents` never sees — the gap `AILOG-04` reports — and that limit is a feature
+    here: creation is the moment shadow AI becomes visible, and usage is `AITHR-01`'s
+    question. Sessions collapse to their role, because ten sessions of one role are one
+    creator.
+  - **No new IAM action.** `cloudtrail:LookupEvents` was already used by `AITHR-01` and
+    `ec2:DescribeVpcEndpoints` falls under SecurityAudit's `ec2:Describe*`; both are now
+    recorded in the ledger so declining either names what it costs.
+
 - **Phase 4 · slice 4.3 — where the prompts land, and who saw the call**
   (`aws_ailog.py`, `AILOG-01`…`AILOG-06`, new `AI_LOGGING` section). Both halves close a
   gap in advice OverWatch already gives.
@@ -265,6 +294,24 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
     would be a guess.
 
 ### Fixed
+- **`docs/DECISIONS.md` **D9** records a refused detection surface.** Slice 4.4 specified
+  "one CloudTrail query, one flow-log query", and the flow-log half cannot work from this
+  vantage point: VPC flow logs record **IP addresses, not hostnames**, and the major AI
+  providers front their APIs with **shared Cloudflare and Fastly ranges**. An
+  address-matching rule would fire on every CDN-fronted site in the estate while missing
+  any provider that rotated an address — *a detection surface whose misses read as passes*,
+  which is the exact objection slice `3.2` raised against shipping injection phrasings.
+  Refusing it once is worth nothing if the next slice does it. `SHAI-03` ships the
+  config-only question underneath instead, and `SHAI-00` states the gap on **every scan**
+  so a reader cannot mistake silence for coverage.
+- **The permission ledger's read-verb guard rejected `Lookup`.** `cloudtrail:LookupEvents`
+  is CloudTrail's read verb, and the distinction it raised is now written down: it reads
+  the account's **own audit trail** — who called which API — not any workload payload.
+  That is the class of `DescribeInstances`, emphatically **not** the class of
+  `s3:GetObject` or `logs:StartQuery`, which read customer content and belong in the
+  separate opt-in blocks. Third naming convention this guard has forced an examination of,
+  which is the guard working.
+
 - **The public-bucket branch of `AILOG-01` could never have fired.** It tested
   `verdict["scope"]`, and `classify_resource_policy_stmt` returns **`kind`** — an
   invented field name, the same class of error as the invented

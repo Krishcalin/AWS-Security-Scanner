@@ -2924,6 +2924,37 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Pair with AGY-03 - a human confirmation gate and a data-plane record answer different halves of the same question about what an agent did.",
         ],
     },
+    "SHAI-01": {
+        "risk": "An identity outside your declared AI owner set created AI resources in this account. Shadow AI is not a property of a resource - it is a property of who created it and where. A knowledge base built by the ML platform team in the governed region is the system working; the identical resource built by an application role is the thing worth a conversation. An inventory cannot tell those two apart, which is why this check asks who rather than what. What follows from an undeclared creator is not that something malicious happened - it usually has not - but that AI capability exists in the account outside whatever review process you thought covered it. The agent has an execution role, the knowledge base has a corpus, the guardrail may or may not be attached to anything, and nobody who owns AI risk knows they are there. Note what this section does NOT cover: employees pasting company data into a third-party hosted assistant. That is the shadow AI most organizations actually worry about and it is not detectable from inside an AWS account - see decision D9 for why the proposed flow-log approach was refused rather than approximated.",
+        "impact": "AI capability exists in the account outside the review process meant to cover it, with an execution role and data access nobody has assessed.",
+        "steps": [
+            "Read the finding: it names the principal, the resource kinds, the regions and the event count. That is enough to start the conversation without a forensic exercise.",
+            "If the identity is meant to be building AI, add it to --ai-owners so the next scan stops asking.",
+            "If it is not, find the human: aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=CreateAgent --start-time <ISO>",
+            "Assess what was built rather than only who built it - the agent's execution role (AISPM-01/02), its guardrail (AIGRD-01), and its corpus (VEC-01..03).",
+            "Only management events are visible here. Whether the resources were USED is a data-event question, which is what AILOG-04 reports on.",
+        ],
+    },
+    "SHAI-02": {
+        "risk": "AI resources were created in one or more regions this scan did not enumerate. That is a coverage statement rather than a misconfiguration, and it is the most consequential kind: every other AI check in OverWatch ran against the regions you scanned, so for these resources the guardrail posture, the network exposure, the key custody and the agent's blast radius are all simply unknown. They are not clean. A region drifts into use for ordinary reasons - a team picks the region nearest them, a quota forces a move, a proof of concept never came home - and the security consequence is the same either way: the AI estate is larger than the assessed estate, and the difference is invisible unless something goes looking. Note what this section does NOT cover: employees pasting company data into a third-party hosted assistant. That is the shadow AI most organizations actually worry about and it is not detectable from inside an AWS account - see decision D9 for why the proposed flow-log approach was refused rather than approximated.",
+        "impact": "Part of the AI estate has never been assessed by any check, and its posture is unknown rather than good.",
+        "steps": [
+            "Re-run against every enabled region: python aws_live_scanner.py --all-regions",
+            "Add the named regions to whatever schedule runs OverWatch, so the gap does not reopen next month.",
+            "If the region should not be in use at all, a service control policy is the durable answer: deny bedrock:* outside your approved regions at the OU level.",
+            "Re-read the AI findings after the wider scan. Resources in a region nobody watched are exactly where an ungoverned guardrail or a public corpus tends to be.",
+        ],
+    },
+    "SHAI-03": {
+        "risk": "One or more VPCs have no Bedrock interface endpoint, so any Bedrock traffic originating in them leaves through NAT or an internet gateway. Two things follow. The traffic is not on the AWS network for its whole path, and - the part that matters more - no VPC endpoint policy applies to it. An endpoint policy is the only place you can say which models a workload may invoke; without the endpoint there is no such control point, and a workload with bedrock:InvokeModel in its role can reach any model the account has access to. This is reported as a WARN rather than a failure because it is genuinely not applicable to a VPC that does not use Bedrock at all, and OverWatch cannot tell from configuration which VPCs those are. It is also the honest substitute for the flow-log query originally proposed for this slice: rather than guess at AI traffic from IP addresses, it asks whether a governed path exists. Note what this section does NOT cover: employees pasting company data into a third-party hosted assistant. That is the shadow AI most organizations actually worry about and it is not detectable from inside an AWS account - see decision D9 for why the proposed flow-log approach was refused rather than approximated.",
+        "impact": "Bedrock traffic from these VPCs has no endpoint-policy control point, so model access is bounded only by the IAM role.",
+        "steps": [
+            "Add the endpoint: aws ec2 create-vpc-endpoint --vpc-id <VPC> --vpc-endpoint-type Interface --service-name com.amazonaws.<REGION>.bedrock-runtime --subnet-ids <SUBNETS> --security-group-ids <SG>",
+            "Attach a policy to it restricting bedrock:InvokeModel to the model ARNs you have approved. The endpoint without a policy is a network improvement but not yet a control.",
+            "Add com.amazonaws.<REGION>.bedrock-agent-runtime too if agents run in the VPC - the runtime and the agent runtime are separate endpoints.",
+            "If the VPC does not use Bedrock, this is not applicable and can be waived rather than remediated.",
+        ],
+    },
     "AMEM-01": {
         "risk": "This agent has memory enabled with a retention window long enough that an instruction reaching memory keeps being read back into the model's context for that period. Agent memory is what lets a prompt injection outlive the conversation that carried it: everything else OverWatch reports about injection concerns what an agent reaches NOW, and this concerns how long it keeps reaching. There is no correct retention period - a support assistant that remembers a customer for a year may be exactly right - so this finding states the window in days rather than pronouncing on it. What it is really reporting is that a number exists which somebody should have chosen on purpose. Be clear about what this check does NOT do: it does not read memory contents. Whether anything poisoned is actually stored is a question about stored conversation, and reading that is the data-handling escalation decision D2 declined. The window is what configuration can establish.",
         "impact": "An instruction that reached memory once is presented to the model again in later sessions for the length of the window, potentially to different users where the memory is shared. A single successful injection becomes a recurring one.",

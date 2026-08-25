@@ -283,6 +283,27 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
     # what is new is cloudtrail:GetEventSelectors, which the scanner already CALLS for
     # LOG-08 but which was never in the ledger -- so declining it silently cost a check
     # nobody was told about. Recorded now for both.
+    # Slice 4.4. Both actions are already granted and already called -- LookupEvents
+    # for AITHR-01, DescribeVpcEndpoints under SecurityAudit's ec2:Describe*. Recorded
+    # anyway so declining either one names everything it costs, which is the whole
+    # contract of this table. The third-party SaaS half of shadow AI needs no action at
+    # all because it is not attempted; see D9.
+    "SHAI-01": (
+        _req("cloudtrail:LookupEvents",
+             "read AI resource CREATION events -- who stood up an agent, a knowledge "
+             "base or a guardrail, which is the moment shadow AI becomes visible"),
+    ),
+    "SHAI-02": (
+        _req("cloudtrail:LookupEvents",
+             "read the regions AI was created in, including regions this scan never "
+             "enumerated and therefore never assessed"),
+    ),
+    "SHAI-03": (
+        _req("ec2:DescribeVpcEndpoints",
+             "read whether Bedrock traffic has a governed path -- without an interface "
+             "endpoint it leaves via NAT or an internet gateway, where no endpoint "
+             "policy can bound which models are reachable"),
+    ),
     "AILOG-01": (
         _req("bedrock:GetModelInvocationLoggingConfiguration",
              "read s3Config and cloudWatchConfig -- WHERE the prompts and completions "

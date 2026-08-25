@@ -248,6 +248,8 @@ FLOORS = {
     "test_secrets.py": 9,
     "test_secrets_collector.py": 7,
     "test_seed_demo_data.py": 45,
+    "test_shadowai.py": 22,
+    "test_shadowai_wiring.py": 18,
     "test_sidescan.py": 41,
     "test_sidescan_ebs.py": 28,
     "test_sidescan_fs.py": 13,

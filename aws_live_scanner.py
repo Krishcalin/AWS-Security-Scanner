@@ -85,6 +85,7 @@ import aws_cdr
 import aws_mcp
 import aws_perm_ledger
 import aws_sagemaker
+import aws_shadowai
 import aws_ailog
 import aws_vectorstore
 import aws_effperm
@@ -247,6 +248,7 @@ SECTION_LABELS = {
     "SAGEMAKER":      "AMAZON SAGEMAKER",
     "VECTORSTORE":    "RAG VECTOR STORES",
     "AI_LOGGING":     "AI LOGGING DEPTH",
+    "SHADOW_AI":      "SHADOW AI",
     "COGNITO":        "AMAZON COGNITO",
     "APIGATEWAYV2":   "API GATEWAY (HTTP APIs)",
     "IAMPRIVESC":     "IAM PRIVILEGE ESCALATION",
@@ -446,6 +448,12 @@ CHECK_SEVERITY = {
     # bucket of prompts is a disclosure of user input and model output at once; the
     # custody and retention findings are lower because the data is at least not
     # world-readable.
+    # Slice 4.4 -- shadow AI. All MEDIUM, deliberately. None of these is a
+    # misconfiguration: an undeclared creator may be a team nobody told the security
+    # group about, a region may be a legitimate expansion, and a VPC without a Bedrock
+    # endpoint may simply not use Bedrock. They are questions the operator has not
+    # answered, and rating a question as CRITICAL is how a category gets ignored.
+    "SHAI-01": "MEDIUM", "SHAI-02": "MEDIUM", "SHAI-03": "MEDIUM",
     "AILOG-01": "CRITICAL", "AILOG-02": "HIGH", "AILOG-03": "MEDIUM",
     # Forensic coverage. AILOG-04 is HIGH because without AWS::Bedrock::Model data
     # events there is no record of who invoked which model -- the question AITHR-01
@@ -794,6 +802,9 @@ COMPLIANCE_MAP = {
     "SM-26": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SM-27": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
     "SM-28": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
+    "SHAI-01": {"PCI-DSS": "12.5.1", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC3.2", "NIST": "CM-8"},
+    "SHAI-02": {"PCI-DSS": "12.5.1", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC3.2", "NIST": "CM-8"},
+    "SHAI-03": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "AILOG-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "AILOG-02": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "AILOG-03": {"PCI-DSS": "10.5.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-9"},
@@ -1165,6 +1176,9 @@ REMEDIATION_MAP = {
     "SM-26": "Set DataStorageConfig.KmsKey when data capture is enabled, so captured inference requests and responses are encrypted at rest in S3: aws sagemaker create-inference-experiment --data-storage-config Destination=<S3>,KmsKey=<KEY_ARN>. Captured payloads are the real inference traffic, which is usually the most sensitive data the experiment touches",
     "SM-27": "Tag the app image configuration so it can be attributed and governed: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Tags with the aws: prefix are system tags and do not satisfy the control. Never put personally identifiable or sensitive information in a tag -- tags are readable from many AWS services",
     "SM-28": "Tag the image: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Same caveats as SM-27 -- system aws: tags do not count, and tags are not a place for sensitive values",
+    "SHAI-01": "Confirm whether this identity is meant to be building AI. If it is, add it to --ai-owners so the next scan stops asking; if it is not, find out who ran it: aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=CreateAgent --start-time <ISO> . The finding names the principal, the resource kinds and the regions, which is enough to start the conversation",
+    "SHAI-02": "Find the full set of regions you would have to cover -- aws account list-regions --region-opt-status-contains ENABLED ENABLED_BY_DEFAULT -- then scan them: python aws_live_scanner.py --all-regions , and add that to whatever schedule runs OverWatch. Resources in an unscanned region are not assessed by ANY check -- their guardrails, network posture and key custody are simply unknown",
+    "SHAI-03": "Add a Bedrock interface endpoint so the traffic has a governed path and an endpoint policy can bound which models are reachable: aws ec2 create-vpc-endpoint --vpc-id <VPC> --vpc-endpoint-type Interface --service-name com.amazonaws.<REGION>.bedrock-runtime --subnet-ids <SUBNETS> --security-group-ids <SG> ; then attach a policy restricting bedrock:InvokeModel to the model ARNs you approve. If the VPC does not use Bedrock at all, this finding is not applicable and can be waived",
     "AILOG-01": "Close the prompt-log bucket immediately -- it holds every prompt users sent and every completion the model returned: aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true ; then aws s3api get-bucket-policy --bucket <BUCKET> and remove any wildcard principal. Treat this as a disclosure until the access logs say otherwise",
     "AILOG-02": "Put the prompt-log destination on a customer-managed key so you can revoke and audit access to it: aws s3api put-bucket-encryption --bucket <BUCKET> --server-side-encryption-configuration '{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\",\"KMSMasterKeyID\":\"<KEY_ARN>\"}}]}' ; for a CloudWatch destination: aws logs associate-kms-key --log-group-name <GROUP> --kms-key-id <KEY_ARN>",
     "AILOG-03": "Set a retention period on the prompt log so it does not accumulate indefinitely: aws logs put-retention-policy --log-group-name <GROUP> --retention-in-days 90 ; for S3, add a lifecycle rule with aws s3api put-bucket-lifecycle-configuration. Prompt logs are evidence, and evidence with no expiry is also a growing liability",
@@ -2164,6 +2178,10 @@ class AWSLiveScanner:
         # none set the control checks only that SOME non-system tag key exists -- so
         # an empty tuple here IS the documented default, not an unset option.
         self._sm_required_tags = ()
+        # Slice 4.4: the operator's declared AI owner set. Empty means the
+        # question has not been answered, which SHAI-00 reports -- it does NOT
+        # mean every creator is undeclared.
+        self._ai_owners = ()
         # knowledgeBaseId -> injection surface, from the data sources AGT-03 reads.
         self._kb_surface = {}
         self._perm_ledger = None            # set by _preflight_permissions()
@@ -8140,6 +8158,143 @@ class AWSLiveScanner:
                           f"manually before expiry | {domain}")
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 35: SHADOW AI (slice 4.4)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_shadow_ai(self):
+        """SHAI-01..03 — AI nobody told the security team about.
+
+        Shadow AI is not a property of a resource. A knowledge base built by the ML
+        platform team in the governed region is the system working; the identical
+        resource built by an application role in a region nobody scans is the thing this
+        section surfaces. An inventory cannot tell those apart, which is why this asks
+        WHO and WHERE rather than WHAT.
+
+        The third-party SaaS half -- someone pasting company data into a hosted
+        assistant -- is not attempted and is declared instead. See D9."""
+        self._section_header("SHADOW_AI")
+        self._add("INFO", "SHAI-00", "SHADOW_AI", "shadow-ai",
+                  f"{aws_shadowai.SAAS_NOT_DETECTABLE} | shadow-ai")
+        self._check_undeclared_ai_creators()
+        self._check_bedrock_private_path()
+
+    def _check_undeclared_ai_creators(self):
+        """SHAI-01/02 — who built AI, and where.
+
+        Only MANAGEMENT events. bedrock:InvokeModel is a data event that LookupEvents
+        never sees, which is what AILOG-04 reports as a gap -- and that limit is a
+        feature here: creation is the moment shadow AI becomes visible, and usage is
+        AITHR-01's question."""
+        events, denied = [], []
+        for reg in self._ai_scan_regions():
+            try:
+                ct = self._client("cloudtrail", region=reg)
+                pages = ct.get_paginator("lookup_events").paginate(
+                    LookupAttributes=[{"AttributeKey": "EventSource",
+                                       "AttributeValue": "bedrock.amazonaws.com"}],
+                    PaginationConfig={"MaxItems": 2000, "PageSize": 50})
+                for page in pages:
+                    for row in page.get("Events", []):
+                        raw = row.get("CloudTrailEvent")
+                        if not raw:
+                            continue
+                        try:
+                            events.append(json.loads(raw))
+                        except (TypeError, ValueError):
+                            continue
+            except Exception as e:
+                denied.append(f"{reg}: {e}")
+
+        if denied and not events:
+            for cid in ("SHAI-01", "SHAI-02"):
+                self._coverage.note_denied(cid, "cloudtrail:LookupEvents")
+            self._add("INFO", "SHAI-00", "SHADOW_AI", "cloudtrail",
+                      f"CloudTrail event history not readable ({denied[0]}) — who built "
+                      f"AI in this account was NOT established, which is not the same "
+                      f"as nobody having built any | cloudtrail")
+            return
+
+        found = aws_shadowai.creators(events)
+        if not found:
+            return
+
+        declared = list(self._ai_owners or ())
+        if not declared:
+            # A check that fires on the correct configuration is one people turn off.
+            # The absence of a declared set is the operator's unanswered question, not
+            # the account's fault, and it is reported as exactly that.
+            self._add("INFO", "SHAI-00", "SHADOW_AI", "shadow-ai",
+                      f"{len(found)} identity/identities have created AI resources in "
+                      f"this account. No owner set was declared (--ai-owners), so "
+                      f"OverWatch cannot say which of them is expected: "
+                      f"{', '.join(sorted(found))} | shadow-ai")
+        else:
+            undeclared = aws_shadowai.undeclared_creators(found, declared)
+            for row in undeclared:
+                self._add("FAIL", "SHAI-01", "SHADOW_AI", row["principal"],
+                          f"{aws_shadowai.describe_creator(row)} | {row['principal']}")
+            if not undeclared:
+                self._add("PASS", "SHAI-01", "SHADOW_AI", "shadow-ai",
+                          f"All {len(found)} AI creator(s) are in the declared owner "
+                          f"set | shadow-ai")
+
+        # SHAI-02 — AI built where nothing was assessed.
+        seen = aws_shadowai.active_regions(found)
+        scanned = set(self._coverage.scanned_regions or [self.region])
+        unassessed = sorted(seen - scanned)
+        if unassessed:
+            self._add("FAIL", "SHAI-02", "SHADOW_AI", "shadow-ai",
+                      f"AI resources were created in {', '.join(unassessed)}, which "
+                      f"this scan did not enumerate — their guardrails, network posture "
+                      f"and key custody are unknown rather than clean. Re-run with "
+                      f"--all-regions | shadow-ai")
+
+    def _check_bedrock_private_path(self):
+        """SHAI-03 — whether Bedrock traffic has a governed path.
+
+        The config-only substitute for the flow-log query the roadmap proposed. An
+        interface endpoint keeps Bedrock traffic on the AWS network where an endpoint
+        policy can bound which models are reachable; without one it leaves via NAT or an
+        internet gateway and no such policy applies."""
+        try:
+            ec2 = self._client("ec2")
+            eps = (ec2.describe_vpc_endpoints() or {}).get("VpcEndpoints") or []
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("SHAI-03", "ec2:DescribeVpcEndpoints")
+                self._add("INFO", "SHAI-00", "SHADOW_AI", "vpc",
+                          "Bedrock private-path posture NOT audited — missing "
+                          "ec2:DescribeVpcEndpoints (no phantom pass) | vpc")
+            return
+        try:
+            vpcs = [v.get("VpcId") for v in
+                    ((ec2.describe_vpcs() or {}).get("Vpcs") or []) if v.get("VpcId")]
+        except Exception:
+            vpcs = []
+
+        posture = aws_shadowai.vpc_endpoint_posture(eps, vpcs)
+        if not posture["checked"]:
+            return
+        if posture["without_endpoint"]:
+            self._add("WARN", "SHAI-03", "SHADOW_AI", "vpc",
+                      f"{len(posture['without_endpoint'])} VPC(s) have no Bedrock "
+                      f"interface endpoint ({', '.join(posture['without_endpoint'])}) — "
+                      f"any Bedrock traffic from them leaves via NAT or an internet "
+                      f"gateway, where no VPC endpoint policy can bound which models "
+                      f"are reachable. Not applicable if the VPC does not use Bedrock "
+                      f"| vpc")
+        else:
+            self._add("PASS", "SHAI-03", "SHADOW_AI", "vpc",
+                      f"Every enumerated VPC has a Bedrock interface endpoint | vpc")
+
+    def _ai_scan_regions(self):
+        """Regions to query for AI creation events.
+
+        The scanned set, which --all-regions widens. Deliberately NOT every AWS region:
+        an unbounded sweep is slow and expensive, and SHAI-02 reports what the chosen
+        set could not see rather than pretending the set was complete."""
+        return list(self._coverage.scanned_regions or [self.region])
+
+    # ══════════════════════════════════════════════════════════════════════════
     # SECTION 34: AI LOGGING DEPTH (slice 4.3)
     # ══════════════════════════════════════════════════════════════════════════
     def _check_ai_logging(self):
@@ -13728,6 +13883,7 @@ class AWSLiveScanner:
             "SAGEMAKER":      self._check_sagemaker,
             "VECTORSTORE":    self._check_vectorstore,
             "AI_LOGGING":     self._check_ai_logging,
+            "SHADOW_AI":      self._check_shadow_ai,
             "COGNITO":        self._check_cognito,
             "APIGATEWAYV2":   self._check_apigatewayv2,
             "IAMPRIVESC":     self._check_iam_privesc,
@@ -14693,6 +14849,11 @@ def _apply_phase6_config(sc, args) -> None:
     # and for the same reason. A load failure costs the ingest and nothing else:
     # _load_pentest_results prints why and returns {}.
     sc._pentest_results = _load_pentest_results(getattr(args, "pentest_results", None))
+    # Slice 4.4 -- the declared AI owner set, split here so the scanner
+    # never has to parse a CLI string.
+    sc._ai_owners = tuple(o.strip() for o in
+                          (getattr(args, "ai_owners", "") or "").split(",")
+                          if o.strip())
     sc.side_scan = args.side_scan
     sc.side_scan_targets = args.side_scan_targets
     sc.side_scan_tags = args.side_scan_tag or []
@@ -14883,6 +15044,12 @@ examples:
              "rows only — garak `attempt` rows carry the prompts and the model's "
              "responses and are never parsed.",
     )
+    parser.add_argument(
+        "--ai-owners", metavar="LIST", dest="ai_owners", default="",
+        help="Comma-separated IAM principals expected to create AI resources "
+             "(role names or ARNs). Without it SHAI-01 does not fire: a check that "
+             "flags every legitimate creator on the first scan is one people turn "
+             "off. The identities found are still listed, as SHAI-00.")
     parser.add_argument(
         "--tool-patterns", metavar="FILE", dest="tool_patterns",
         help="JSON pattern set for tool-description poisoning (TPOIS-03). "
