@@ -118,7 +118,7 @@ def test_preflight_records_the_blocked_checks_as_not_evaluated():
     # checks. The preflight derives this set from the ledger, so it picked all three
     # up without being told - which is the behaviour the runtime denial path in
     # _grade_guardrails was corrected to match.
-    assert set(s._coverage.not_evaluated) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04"}
+    assert set(s._coverage.not_evaluated) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "TFLOW-01"}
     assert not s._coverage.complete
 
 

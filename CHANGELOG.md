@@ -7,6 +7,44 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 3 · slice 3.1 — toxic flow** (`aws_toxicflow.py`, `TFLOW-01`, `TFLOW-02`). The
+  in-charter answer to *"do you red team?"* (**decision D4**): rather than probing a
+  customer's model — which spends their inference budget and produces, in their own
+  CloudTrail, the exact signature `AITHR-01` exists to alarm on — compute what an
+  injection **would** reach, from configuration already held.
+  - **The entry is gated, exactly as `ATT&CK-02` gates a data terminal.** Compute the
+    chain always; require a proven entry for the strong finding.
+    - **PROVEN** — a knowledge-base data source of type `WEB` (the reference: *"the
+      configuration of web URLs to crawl"*), or type `S3` whose bucket policy grants a
+      **write** action to a public or external principal. Both are configuration.
+    - **ASSUMED** — everything else, reported as **`CONDITIONAL`** and phrased *"IF an
+      injection reaches…"*, because an agent's injection surface is frequently invisible
+      to a cloud API.
+  - A **publicly readable** knowledge-base bucket is deliberately *not* an entry — that
+    is a data-exposure problem (`S3-09`), and conflating the two would put the flagship
+    finding on every public bucket in the account. Only **write** grants let someone
+    plant content. An **unreadable** bucket policy leaves the source assumed: an
+    unreadable policy is not an open one.
+  - **Attenuation is bounded and never reaches zero.** A guardrail that blocks prompt
+    attacks, one IAM makes mandatory, and human confirmation each reduce the flow — but a
+    guardrail raises the *cost* of an injection rather than making one impossible, and
+    AWS's own reference records that guardrail input tags bypass the input check. A tool
+    that let a control erase a path would teach operators the control is a boundary,
+    which is the belief `AIGRD-01` exists to correct.
+  - **An agent that reaches nothing produces no flow**, however proven its entry. An
+    injection arriving somewhere harmless is not a finding, and a flagship that fired on
+    every agent would be noise with a good name.
+  - `TFLOW-01` is `INFERRED`; **`TFLOW-02` joins `AIPATH-01` in `_CONDITIONAL_IDS`** — the
+    class defined in slice 0.4, reached deliberately this time rather than by correction.
+  - **No new IAM action.** Every input was already read: `GetDataSource` (granted in 1.2)
+    for the entry, the action-group detail for capabilities, the guardrail grades from
+    2.1, and the bucket policies `S3-09`/`S3-10` already read. The one call new to the
+    scanner is `ListAgentKnowledgeBases`, which `SecurityAudit` already grants — without
+    it the injection surface would have to be treated as a property of the region, which
+    would attribute one knowledge base's web crawler to every agent in the account.
+  - The graph gains a `ToxicFlow` node and **no inbound edge**. Fabricating
+    `internet -> agent` is what `_emit_ai_topology` refuses one layer down; doing it here
+    would be the same error at the size of the flagship.
 - **Phase 2 · slices 2.5–2.7 — Phase 2 complete.**
 - **2.5 · agent credential exposure** (`AGC-07`, `AGC-08`).
   - **`AGC-07`** (HIGH · SC-12) — the AgentCore **token vault** is on a

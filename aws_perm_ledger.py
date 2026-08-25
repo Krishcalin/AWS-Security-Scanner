@@ -134,6 +134,21 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
     # Slice 2.4 adds NO new action: get_agent_action_group is already called for
     # AGT-04 and was granted in slice 1.2. Recorded so declining that one action
     # names everything it costs, which is the whole contract of the ledger.
+    # Slice 3.1 adds NO new action. Every input is already read: GetDataSource for
+    # the entry (granted in 1.2), GetAgent for the role, and the bucket policies the
+    # S3 section already reads. The flagship computation is a composition of things
+    # the scanner holds, which is what made it affordable.
+    "TFLOW-01": (
+        _req("bedrock:GetDataSource",
+             "read each knowledge-base data source type -- a WEB crawler or an "
+             "externally-writable S3 bucket is an OBSERVABLE untrusted-content "
+             "path, which is what separates a proven flow from an assumed one"),
+    ),
+    "TFLOW-02": (
+        _req("bedrock:GetAgent",
+             "resolve the agent execution role whose reach IS the flow -- with no "
+             "observable entry this is the half that is certainly true"),
+    ),
     "AITHR-03": (
         _req("guardduty:ListFindings",
              "find the AI Protection findings the main THREAT query cannot see -- "

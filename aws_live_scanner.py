@@ -74,6 +74,7 @@ import aws_aispm
 import aws_aiguard
 import aws_agentcore
 import aws_agency
+import aws_toxicflow
 import aws_aiprotect
 import aws_cbom
 import aws_airules
@@ -390,6 +391,10 @@ CHECK_SEVERITY = {
     # GuardDuty AI Protection, re-ranked. AITHR-04 is CRITICAL because the event it
     # describes already happened: an attack was recognised and allowed through.
     "AITHR-03": "HIGH", "AITHR-04": "CRITICAL",
+    # Toxic flow. TFLOW-01 has an OBSERVABLE untrusted-content entry; TFLOW-02
+    # rests on an assumption and says so, which is why they are separate ids with
+    # separate severities rather than one check carrying both readings.
+    "TFLOW-01": "CRITICAL", "TFLOW-02": "HIGH",
     "AIGRD-04": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
     "COG-05": "HIGH", "COG-06": "CRITICAL",
@@ -667,6 +672,10 @@ COMPLIANCE_MAP = {
     "AGC-08": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "AITHR-03": {"PCI-DSS": "10.6", "HIPAA": "164.308(a)(1)(ii)(D)", "SOC2": "CC7.2", "NIST": "SI-4"},
     "AITHR-04": {"PCI-DSS": "6.4.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "SI-4"},
+    # AC-6: a toxic flow is a least-privilege finding at heart -- what the agent
+    # reaches is what its role was given.
+    "TFLOW-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "TFLOW-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     # AI-SPM pillar (NIST reused from the frozen 38-control universe: AC-6/AC-3/SC-7)
     "AISPM-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "AISPM-02": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
@@ -995,6 +1004,8 @@ REMEDIATION_MAP = {
     "AIGRD-03": "Add the explicit Deny — the Allow half alone does not make a guardrail mandatory. Attach a policy carrying BOTH statements: Allow bedrock:InvokeModel/InvokeModelWithResponseStream with StringEquals on bedrock:GuardrailIdentifier, AND Deny the same actions with StringNotEquals on the same key and value: aws iam put-role-policy --role-name <ROLE> --policy-name enforce-guardrail --policy-document file://enforce.json ; use ArnNotLike with <GUARDRAIL_ARN>:* if any numeric version should be acceptable",
     "AIGRD-04": "Publish a numeric version so the configuration is pinned and the IAM condition can name it: aws bedrock create-guardrail-version --guardrail-identifier <ID> --description 'pinned for enforcement' ; then point every consumer and every bedrock:GuardrailIdentifier condition at <GUARDRAIL_ARN>:<VERSION> rather than at DRAFT",
     "AGT-05": "Attach a guardrail to the agent and shorten its idle session TTL: aws bedrock-agent update-agent --agent-id <AGENT_ID> --agent-name <NAME> --agent-resource-role-arn <ROLE_ARN> --foundation-model <MODEL_ID> --guardrail-configuration '{\"guardrailIdentifier\":\"<GUARDRAIL_ID>\",\"guardrailVersion\":\"DRAFT\"}' --idle-session-ttl-in-seconds 600",
+    "TFLOW-01": "Break the flow at whichever end is cheaper, and do both if the agent is production-facing. Cut the untrusted-content path -- remove the WEB data source, or close the write grant on the bucket feeding it: aws s3api put-bucket-policy --bucket <BUCKET> --policy file://no-external-write.json ; and cut the reach, which is what actually bounds the damage: narrow the execution role (see AISPM-01/AISPM-02) and require confirmation on consequential actions with aws bedrock-agent update-agent-action-group --agent-id <AGENT_ID> --agent-version DRAFT --action-group-id <AG_ID> --action-group-name <NAME> --function-schema '{\"functions\":[{\"name\":\"<FN>\",\"requireConfirmation\":\"ENABLED\"}]}'",
+    "TFLOW-02": "No untrusted-content path is visible, so start with the reach rather than the entry -- it is the half that is certainly true. Narrow the execution role (AISPM-01/AISPM-02), require confirmation on consequential actions, and attach a blocking PROMPT_ATTACK guardrail: aws bedrock update-guardrail --guardrail-identifier <ID> --name <NAME> --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\",\"inputAction\":\"BLOCK\"}]}'",
     "AITHR-03": "Treat the identity as compromised and bound it before deciding it was only inference: aws iam update-access-key --access-key-id <AKID> --status Inactive --user-name <USER> ; then aws guardduty get-findings --detector-id <DETECTOR_ID> --finding-ids <FINDING_ID> to see the models and the deviation, and reduce the reach that made it consequential (see AISPM-01/AISPM-02)",
     "AITHR-04": "The guardrail saw the attack and let it through -- switch the filter from detect to block: aws bedrock update-guardrail --guardrail-identifier <ID> --name <NAME> --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\",\"inputAction\":\"BLOCK\"}]}' ; then check AIGRD-02 for the same detect-only policy applied to other guardrails",
     "AITHR-01": "Revoke the access key and rotate the identity behind it, then bound what it could reach: aws iam update-access-key --access-key-id <AKID> --status Inactive --user-name <USER> ; aws iam delete-access-key --access-key-id <AKID> --user-name <USER>",
@@ -1945,6 +1956,12 @@ class AWSLiveScanner:
         # edges exist). All three types ship at severity Low, so THREAT's own
         # severity>=4 query never sees them.
         self._ai_protection = []
+        # Slice 3.1 — guardrail grades by id, stashed in BEDROCK (which runs
+        # before BEDROCK_AGENTS) so an agent can be asked whether the guardrail it
+        # names actually blocks anything.
+        self._guardrail_grades = {}
+        # knowledgeBaseId -> injection surface, from the data sources AGT-03 reads.
+        self._kb_surface = {}
         self._perm_ledger = None            # set by _preflight_permissions()
         # Action-group Lambda names, collected while auditing agents. Without
         # them the UpdateFunctionCode rule stays silent rather than firing on
@@ -5504,6 +5521,7 @@ class AWSLiveScanner:
                           f"Data sources for '{kbname}' NOT evaluated: {e}")
                 continue
 
+            ds_details, write_scopes = [], {}
             for ds in sources:
                 dsid   = ds["dataSourceId"]
                 dsname = ds.get("name", dsid)
@@ -5511,6 +5529,15 @@ class AWSLiveScanner:
                     ds_detail = ba.get_data_source(
                         knowledgeBaseId=kbid, dataSourceId=dsid
                     )["dataSource"]
+                    # Slice 3.1 — the same response, read for a second question: is this
+                    # a path for content the account does not author?
+                    ds_details.append(ds_detail)
+                    _cfg = ds_detail.get("dataSourceConfiguration") or {}
+                    if str(_cfg.get("type") or "").upper() == "S3":
+                        _b = (_cfg.get("s3Configuration") or {}).get("bucketArn")
+                        _scope = self._bucket_write_scope(_b)
+                        if _scope:
+                            write_scopes[dsid] = _scope
                     ds_kms = ds_detail.get(
                         "serverSideEncryptionConfiguration", {}
                     ).get("kmsKeyArn", "")
@@ -5523,6 +5550,9 @@ class AWSLiveScanner:
                 except Exception as e:
                     self._add("INFO", "AGT-03", "BEDROCK_AGENTS", dsname,
                               f"DataSource '{dsname}' NOT evaluated: {e}")
+            if ds_details:
+                self._kb_surface[str(kbid)] = aws_toxicflow.injection_surface(
+                    ds_details, write_scopes)
 
     def _check_bedrock_agents(self):
         self._section_header("BEDROCK_AGENTS")
@@ -5682,6 +5712,9 @@ class AWSLiveScanner:
                                       f"policy (IAM-only) | {gname}")
                 # AGY-01/02/03 — excessive agency, from the detail just read
                 self._emit_agency(aname, agency_groups)
+                # Slice 3.1 — the same assessment, kept for the toxic-flow computation
+                # so it is not recomputed from a second fetch.
+                self._stash_flow_inputs(ba, aid, aname, detail, agency_groups)
             except Exception as e:
                 self._add("WARN", "AGT-04", "BEDROCK_AGENTS", aname,
                           f"Could not audit action groups for "
@@ -10907,6 +10940,7 @@ class AWSLiveScanner:
             scp = None          # unreadable org -> fail open, exactly like CIEM
         self._emit_guardrail_coverage(g)
         self._emit_guardrail_enforcement(principals)
+        self._emit_toxic_flow(g, principals, scp_levels=scp)
         for res in self._aispm_resources:
             try:
                 self._aispm_emit(g, res, principals, scp_levels=scp)
@@ -11325,6 +11359,9 @@ class AWSLiveScanner:
                               f"Guardrail '{gname}' could not be graded: {e}")
                 continue
             g = aws_aiguard.grade_guardrail(detail)
+            self._guardrail_grades[str(gid)] = g
+            if gs.get("arn"):
+                self._guardrail_grades[str(gs["arn"])] = g
             inj = g["injection"]
 
             if not inj["effective"]:
@@ -11419,6 +11456,162 @@ class AWSLiveScanner:
                       f"InvokeModel calls that do not all carry a guardrail, so they will "
                       f"fail with AccessDenied. Split the roles rather than removing the "
                       f"enforcement | guardrail-enforcement")
+
+    def _stash_flow_inputs(self, ba, aid, aname, detail, agency_groups):
+        """Attach an agent's toxic-flow inputs to its AI-SPM stash entry.
+
+        Everything here comes from a response already in hand, except the agent->KB
+        association, which needs ListAgentKnowledgeBases -- an action SecurityAudit
+        already grants and the scanner simply never called. Without it the injection
+        surface would have to be treated as a property of the region rather than of the
+        agent, which would attribute one knowledge base's web crawler to every agent in
+        the account."""
+        entry = next((r for r in self._aispm_resources
+                      if r.get("name") == aname
+                      and r.get("kind") == "BedrockAgent"), None)
+        if entry is None:
+            return
+
+        a = aws_agency.assess_agent(agency_groups)
+        entry["agency_capabilities"] = a["signatures"]
+        entry["agency_severity"] = a["worst_severity"]
+        entry["confirmation_gated"] = a["coverage"]["gated"]
+        entry["confirmation_total"] = a["coverage"]["total"]
+
+        grade = self._guardrail_grades.get(
+            str((detail.get("guardrailConfiguration") or {}).get(
+                "guardrailIdentifier") or ""))
+        if grade:
+            # "Blocks" means the PROMPT_ATTACK filter actually stops an injection on
+            # input, which is AIGRD-01's verdict — not merely that a guardrail exists.
+            entry["guardrail_blocks"] = bool(grade["injection"]["effective"])
+
+        try:
+            kbs = ba.list_agent_knowledge_bases(
+                agentId=aid, agentVersion="DRAFT"
+            ).get("agentKnowledgeBaseSummaries", [])
+        except Exception:
+            return                      # no association readable -> surface stays assumed
+
+        merged = {"entry_class": aws_toxicflow.ASSUMED, "proven": [],
+                  "multi_author": [], "sources": 0, "types": []}
+        for kb in kbs:
+            s = self._kb_surface.get(str(kb.get("knowledgeBaseId") or ""))
+            if not s:
+                continue
+            merged["proven"] += s["proven"]
+            merged["multi_author"] += s["multi_author"]
+            merged["sources"] += s["sources"]
+            merged["types"] = sorted(set(merged["types"]) | set(s["types"]))
+        if merged["proven"]:
+            merged["entry_class"] = aws_toxicflow.PROVEN
+        entry["injection_surface"] = merged
+
+    def _bucket_write_scope(self, bucket_arn):
+        """Who, outside this account, may WRITE to the bucket backing a data source.
+
+        Returns the principal scope the existing bucket-policy classifier reports for the
+        statements granting a write action, or None when the policy is unreadable. None
+        matters: an unreadable policy is not an open one, and defaulting the other way
+        would manufacture the flagship's strongest finding out of a permissions error."""
+        bucket = (bucket_arn or "").split(":::")[-1].split("/")[0]
+        if not bucket:
+            return None
+        try:
+            pol = json.loads(self._client("s3").get_bucket_policy(
+                Bucket=bucket).get("Policy") or "{}")
+        except Exception:
+            return None
+        worst = None
+        rank = {"public": 3, "public_conditioned": 2, "cross_account": 1}
+        for stmt in (pol.get("Statement") or []):
+            if not isinstance(stmt, dict) or stmt.get("Effect") != "Allow":
+                continue
+            acts = stmt.get("Action") or []
+            acts = [acts] if isinstance(acts, str) else acts
+            if not any(str(a).lower() in aws_toxicflow._WRITE_ACTIONS
+                       for a in acts):
+                continue
+            # The one implementation of "who does this statement reach", shared with
+            # S3-09/S3-10 rather than reimplemented — a second reading of a bucket
+            # policy is a second thing to get wrong.
+            c = classify_resource_policy_stmt(stmt, self.account or "")
+            if c and rank.get(c.get("kind"), 0) > rank.get(worst or "", 0):
+                worst = c.get("kind")
+        return worst
+
+    def _emit_toxic_flow(self, g, principals, scp_levels=None):
+        """TFLOW-01/02 — what an injected agent reaches (Phase 3 slice 3.1).
+
+        The in-charter answer to "do you red team?" (decision D4): rather than probing a
+        customer's model, compute what an injection WOULD reach from configuration
+        already held. Structurally attack-path analysis pointed at an agent, and it
+        borrows that engine's discipline rather than inventing a parallel one -- compute
+        the chain always, gate the terminal on a proven entry.
+
+        Runs here because _collect_aispm is latched, post-clobber, and already holds the
+        principals, the SCP ceiling and the finished graph."""
+        agents = [r for r in self._aispm_resources
+                  if (r.get("kind") or "") in ("BedrockAgent", "AgentCoreRuntime")]
+        if not agents:
+            return
+
+        for res in agents:
+            name = res.get("name") or "agent"
+            role_arn = res.get("role_arn")
+
+            privesc = crown = None
+            if role_arn:
+                prin = principals.get((role_arn or "").lower())
+                if prin is not None:
+                    verdict, reason = aws_aispm.role_privesc_effective(
+                        prin.get("statements", []), prin.get("boundary"), scp_levels)
+                    # Only an unconditioned escalation counts, exactly as AISPM-01 does.
+                    # A capability that exists solely under a Condition is not a terminal
+                    # somebody reaches by talking to a model.
+                    if verdict == aws_effperm.KEEP:
+                        privesc = reason
+                    crown = aws_aispm.role_reaches_crown(g, role_arn)
+
+            caps = res.get("agency_capabilities") or []
+            cap_sev = res.get("agency_severity") or ""
+            entry = res.get("injection_surface") or aws_toxicflow.injection_surface([])
+            # Mandatory-ness is a property of the ROLE's policy, and the principals
+            # are already resolved here — so it is computed rather than plumbed.
+            mandatory = False
+            if role_arn and principals.get((role_arn or "").lower()):
+                mandatory = (aws_aiguard.enforcement_verdict(
+                    principals[(role_arn or "").lower()].get("statements") or []
+                )["verdict"] == aws_aiguard.ENFORCED)
+            atten = aws_toxicflow.attenuation(
+                guardrail_blocks=bool(res.get("guardrail_blocks")),
+                guardrail_mandatory=mandatory,
+                confirmation_gated=int(res.get("confirmation_gated") or 0),
+                confirmation_total=int(res.get("confirmation_total") or 0))
+
+            flow = aws_toxicflow.compute_flow(
+                agent_name=name, entry=entry, privesc=privesc, crown=crown,
+                capabilities=caps, capability_severity=cap_sev, atten=atten)
+            if flow is None:
+                continue          # reaches nothing; an injection landing here is not a finding
+
+            proven = flow["entry_class"] == aws_toxicflow.PROVEN
+            cid = "TFLOW-01" if proven else "TFLOW-02"
+            self._add("FAIL", cid, "DATA", name,
+                      f"{aws_toxicflow.describe(flow)} [flow score {flow['score']}] "
+                      f"| {name}")
+
+            # The graph carries the flow so the console and the attack-path screens can
+            # render it. No new edge KIND is introduced: a fabricated inbound edge is the
+            # error _emit_ai_topology refuses one layer down, and it would be the same
+            # error here at the size of the flagship.
+            try:
+                g.add_node(f"toxicflow:{name}", "ToxicFlow", name=name,
+                           entry_class=flow["entry_class"], score=flow["score"],
+                           terminals=", ".join(flow["terminals"]),
+                           attenuated=bool(flow["attenuation"]["applied"]))
+            except Exception:
+                pass
 
     def _emit_guardrail_coverage(self, g):
         """AGT-06 — how much of the AI estate sits behind a guardrail.

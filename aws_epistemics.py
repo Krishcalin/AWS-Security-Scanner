@@ -84,6 +84,7 @@ _INFERRED_IDS = frozenset({
     # AI-SPM: capability verdicts reasoned over policy + graph, not read from an API.
     "AISPM-01",   # escalation capability, ceiling-aware but still a judgement
     "AISPM-02",   # crown-data reach, via CAN_READ_DATA edges we derived
+    "TFLOW-01",   # reach reasoned over policy + graph, from an OBSERVED entry
 })
 
 _INFERRED_PREFIXES = (
@@ -95,6 +96,8 @@ _INFERRED_PREFIXES = (
 
 _CONDITIONAL_IDS = frozenset({
     "AIPATH-01",  # "assume a compromise lands" — a premise, not a derivation
+    "TFLOW-02",   # "assume an injection reaches this agent" — the same shape,
+                  # arrived at deliberately this time rather than by correction
 })
 """Findings that hold only if a stated assumption does.
 
