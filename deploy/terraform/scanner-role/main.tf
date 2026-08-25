@@ -41,7 +41,8 @@ resource "aws_iam_role_policy_attachment" "view_only" {
   policy_arn = "arn:aws:iam::aws:policy/job-function/ViewOnlyAccess"
 }
 
-# the two read-only extras SecurityAudit/ViewOnly miss (CIEM last-accessed + a few config reads)
+# the read-only extras SecurityAudit/ViewOnly miss: CIEM last-accessed, a few config
+# reads, and the three Bedrock config reads the AI pillar needs (see AiConfigReadGaps)
 data "aws_iam_policy_document" "extras" {
   statement {
     sid    = "CiemLastAccessed"
@@ -61,6 +62,22 @@ data "aws_iam_policy_document" "extras" {
       "ec2:GetEbsDefaultKmsKeyId",
       "ec2:GetSnapshotBlockPublicAccessState",
       "access-analyzer:ValidatePolicy",
+    ]
+    resources = ["*"]
+  }
+  # Three Bedrock CONFIG reads SecurityAudit v92 does not grant. Verified against the
+  # published policy document: it grants GetAgentKnowledgeBase (a KB association on an
+  # agent) but not GetKnowledgeBase, ListAgentActionGroups but not GetAgentActionGroup,
+  # ListDataSources but not GetDataSource. Without them AGT-03 and AGT-04 are refused
+  # at runtime and, before the preflight ledger existed, reported as if they had run.
+  # Always-on rather than opt-in: these read configuration, not content.
+  statement {
+    sid    = "AiConfigReadGaps"
+    effect = "Allow"
+    actions = [
+      "bedrock:GetKnowledgeBase",
+      "bedrock:GetDataSource",
+      "bedrock:GetAgentActionGroup",
     ]
     resources = ["*"]
   }
