@@ -121,5 +121,8 @@ const REL: Record<string, string> = {
   HAS_ROLE: 'assumes role', HAS_VULN: 'has CVE', CAN_READ_DATA: 'can read',
   CAN_PRIVESC_TO: 'can escalate', CAN_ASSUME: 'can assume', RUNS_IMAGE: 'runs',
   THREAT_ON: 'threat on', ATTACHED_TO: 'attached to',
+  // An annotation, like HAS_VULN and THREAT_ON — deliberately NOT in E_PATH.
+  // A probe the operator ran is not a capability an attacker holds.
+  PROBED: 'probed',
 }
 export const prettyRel = (rel: string): string => REL[rel] ?? rel.toLowerCase().replace(/_/g, ' ')

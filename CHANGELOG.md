@@ -37,6 +37,19 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
   - The format is detected **by content, not by extension**: an operator who renamed the
     file still gets the right parser, and a wrong guess would read a transcript file as a
     verdict file. A missing or malformed file costs the ingest and not the scan.
+  - **Onto the graph, with an edge.** A successful probe becomes a `PentestResult` node
+    joined to the probed resource by a new **`PROBED`** edge — being on the graph as an
+    orphan node is being on it in name only, and the edge is what lets a probe that got
+    through be read next to what the probed identity reaches. The edge is drawn **only to
+    a node this scan actually enumerated** (exact ARN, or the same ARN retyped):
+    `add_edge` auto-creates a missing endpoint as `Unknown`, so binding to an
+    operator-typed string would put a resource on the graph that exists nowhere else.
+    An unresolved target is **said** — *"does not match any resource this scan
+    enumerated — the probe is recorded, its reach is not"* — rather than dropped, because
+    *"succeeded against arn:…:agent/A1"* in a report where nothing links the two invites
+    the reader to assume the link was checked. `PROBED` is an **annotation**, like
+    `HAS_VULN` and `THREAT_ON`, and is deliberately kept out of `E_PATH`: a probe the
+    operator ran is not a capability an attacker holds.
   - **No new API call and no new IAM permission** — the input is a file the operator
     supplies.
 - **Phase 3 · slice 3.4 — memory-poisoning exposure, the configuration half**
@@ -72,6 +85,14 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
     would be a guess.
 
 ### Fixed
+- **`--pentest-results` was inert.** The flag parsed into `args.pentest_results` and was
+  never read: `_load_pentest_results` had no caller, `_pentest_results` stayed `{}`, and
+  `_emit_pentest_results` returned immediately — the whole of `3.5` was unreachable from
+  the command line. It is now loaded in `_apply_phase6_config`, the one seam both the org
+  and single-account paths pass through, alongside `3.2`'s pattern set. The wiring tests
+  had missed it by setting `_pentest_results` directly, which exercised the emitter and
+  skipped the only thing that had to be true for any of it to run; a test now crosses
+  that seam.
 - **The permission ledger no longer reports a phantom *gap*.** `AMEM-01` is the first
   check spanning **two surfaces** — the Bedrock-agent window (`bedrock:GetAgent`, granted
   since `1.2`) and the AgentCore one (`bedrock-agentcore:GetMemory`, granted by nothing).

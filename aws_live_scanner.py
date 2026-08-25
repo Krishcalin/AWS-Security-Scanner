@@ -11397,17 +11397,62 @@ class AWSLiveScanner:
                 continue
             cid = "PENT-01" if rating["severity"] in ("CRITICAL", "HIGH") else "PENT-02"
             label = " / ".join(x for x in (r.get("probe"), r.get("detector")) if x)
+            target, resolved = self._resolve_pentest_target(g, r.get("target"))
+            # An unresolved target is SAID so, not silently dropped. "succeeded
+            # against arn:...:agent/A1" in a report where nothing links the two
+            # invites the reader to assume the link was checked and held.
+            if r.get("target") and not resolved:
+                whither = (f" against {r['target']}, which does not match any resource "
+                           f"this scan enumerated — the probe is recorded, its reach "
+                           f"is not")
+            elif resolved:
+                whither = f" against {r['target']}"
+            else:
+                whither = ""
             self._add("FAIL", cid, "AI_THREAT", label or r.get("tool", "pentest"),
                       f"{aws_ingest_pentest.describe(r, rating)}"
-                      f"{' against ' + r['target'] if r.get('target') else ''}. "
+                      f"{whither}. "
                       f"This is a result you produced, ingested as reported "
                       f"| {label or r.get('tool')}")
             try:
-                g.add_node(f"pentest:{r.get('tool')}:{label}", "PentestResult",
-                           tool=r.get("tool", ""), probe=r.get("probe", ""),
-                           failed=rating["failed"], total=rating["total"])
+                node = g.add_node(f"pentest:{r.get('tool')}:{label}", "PentestResult",
+                                  tool=r.get("tool", ""), probe=r.get("probe", ""),
+                                  failed=rating["failed"], total=rating["total"],
+                                  target=r.get("target") or None)
+                # The edge is the whole reason to be on the graph: a probe that
+                # succeeded is only actionable read NEXT TO what the probed identity
+                # reaches. Drawn only to a node this scan actually enumerated --
+                # add_edge auto-creates a missing endpoint as Unknown, and inventing
+                # a resource from an operator-typed string would put a node on the
+                # graph that exists nowhere else, which is the fabrication the
+                # inbound-reachability rule forbids one layer up.
+                if node and resolved:
+                    g.add_edge(node, target, "PROBED", tool=r.get("tool", ""),
+                               probe=r.get("probe", ""), failed=rating["failed"],
+                               total=rating["total"], basis="operator-supplied")
             except Exception:
                 pass
+
+    @staticmethod
+    def _resolve_pentest_target(g, target):
+        """Match an operator-supplied target against a node this scan enumerated.
+
+        Returns ``(node_id, resolved)``. AI resources are keyed by ARN, so an exact
+        match is the common case; the case-insensitive pass exists because an ARN
+        retyped rather than pasted is still the same resource. Nothing else is tried:
+        a fuzzy name match would bind a probe to the wrong agent, and a wrong edge here
+        is worse than no edge -- it would put a successful probe's blast radius on a
+        resource that was never tested."""
+        want = (target or "").strip()
+        if not want or g is None:
+            return "", False
+        if g.node(want):
+            return want, True
+        low = want.lower()
+        for n in g.nodes():
+            if n["id"].lower() == low:
+                return n["id"], True
+        return want, False
 
     def _emit_tool_poisoning(self, aname, groups):
         """TPOIS-01/02/03 — instructions hiding in the field that describes a tool.
@@ -13601,6 +13646,10 @@ def _apply_phase6_config(sc, args) -> None:
     elif tp.get("patterns"):
         print(f"{BLUE}[*]{RESET} tool-description patterns: "
               f"{len(tp['patterns'])} rule(s) from {tp['source']}")
+    # Slice 3.5 — the operator's own adversarial-test results, loaded at the same seam
+    # and for the same reason. A load failure costs the ingest and nothing else:
+    # _load_pentest_results prints why and returns {}.
+    sc._pentest_results = _load_pentest_results(getattr(args, "pentest_results", None))
     sc.side_scan = args.side_scan
     sc.side_scan_targets = args.side_scan_targets
     sc.side_scan_tags = args.side_scan_tag or []
