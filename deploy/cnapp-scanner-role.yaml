@@ -106,6 +106,17 @@ Resources:
                   - bedrock:GetDataSource
                   - bedrock:GetAgentActionGroup
                   - bedrock:GetGuardrail
+                  - bedrock-agentcore:ListAgentRuntimes
+                  - bedrock-agentcore:GetAgentRuntime
+                  - bedrock-agentcore:ListGateways
+                  - bedrock-agentcore:GetGateway
+                  - bedrock-agentcore:ListGatewayTargets
+                  - bedrock-agentcore:ListWorkloadIdentities
+                  - bedrock-agentcore:ListOauth2CredentialProviders
+                  - bedrock-agentcore:ListApiKeyCredentialProviders
+                  - bedrock-agentcore:ListMemories
+                  - bedrock-agentcore:ListBrowsers
+                  - bedrock-agentcore:ListCodeInterpreters
                 Resource: '*'
       Tags:
         - { Key: 'cnapp:managed', Value: 'true' }

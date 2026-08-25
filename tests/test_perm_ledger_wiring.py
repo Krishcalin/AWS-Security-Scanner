@@ -74,6 +74,17 @@ def test_preflight_computes_the_ledger_from_our_own_role():
     s._preflight_permissions()
     assert s._perm_ledger is not None
     assert s._perm_ledger.missing_actions == (
+        "bedrock-agentcore:GetAgentRuntime",
+        "bedrock-agentcore:GetGateway",
+        "bedrock-agentcore:ListAgentRuntimes",
+        "bedrock-agentcore:ListApiKeyCredentialProviders",
+        "bedrock-agentcore:ListBrowsers",
+        "bedrock-agentcore:ListCodeInterpreters",
+        "bedrock-agentcore:ListGatewayTargets",
+        "bedrock-agentcore:ListGateways",
+        "bedrock-agentcore:ListMemories",
+        "bedrock-agentcore:ListOauth2CredentialProviders",
+        "bedrock-agentcore:ListWorkloadIdentities",
         "bedrock:GetAgentActionGroup", "bedrock:GetDataSource",
         "bedrock:GetGuardrail",
         "bedrock:GetKnowledgeBase")
@@ -100,7 +111,9 @@ def test_preflight_records_the_blocked_checks_as_not_evaluated():
     # up without being told - which is the behaviour the runtime denial path in
     # _grade_guardrails was corrected to match.
     assert set(s._coverage.not_evaluated) == {"AGT-03", "AGT-04",
-                                              "AIGRD-01", "AIGRD-02", "AIGRD-04"}
+                                              "AIGRD-01", "AIGRD-02", "AIGRD-04",
+                                              "AGC-01", "AGC-02", "AGC-03",
+                                              "AGC-04", "AGC-05", "AGC-06"}
     assert not s._coverage.complete
 
 
@@ -167,6 +180,17 @@ def test_the_scan_result_carries_coverage_and_the_ledger():
     assert "AGT-03" in payload["coverage"]["not_evaluated"]
     assert payload["permission_ledger"] is not None
     assert payload["permission_ledger"]["missing_actions"] == [
+        "bedrock-agentcore:GetAgentRuntime",
+        "bedrock-agentcore:GetGateway",
+        "bedrock-agentcore:ListAgentRuntimes",
+        "bedrock-agentcore:ListApiKeyCredentialProviders",
+        "bedrock-agentcore:ListBrowsers",
+        "bedrock-agentcore:ListCodeInterpreters",
+        "bedrock-agentcore:ListGatewayTargets",
+        "bedrock-agentcore:ListGateways",
+        "bedrock-agentcore:ListMemories",
+        "bedrock-agentcore:ListOauth2CredentialProviders",
+        "bedrock-agentcore:ListWorkloadIdentities",
         "bedrock:GetAgentActionGroup", "bedrock:GetDataSource",
         "bedrock:GetGuardrail",
         "bedrock:GetKnowledgeBase"]
@@ -192,6 +216,11 @@ def test_the_annotated_policy_reaches_the_payload():
     s.attack_paths = []
     s.choke_points = []
     rows = cnapp_service.serialize_scanner(s)["permission_ledger"]["annotated_policy"]
-    assert len(rows) == 4
+    # 13: the four Bedrock config reads plus nine for AgentCore, a separate
+    # service SecurityAudit predates entirely.
+    # 15: slice 2.3 added GetGateway and ListGatewayTargets, which are what let
+    # AGC-05 grade inbound authorization against the OUTBOUND configuration
+    # rather than reporting authorizerType as a boolean.
+    assert len(rows) == 15
     for row in rows:
         assert row["why"] and row["enables"] and row["forfeited_if_declined"]

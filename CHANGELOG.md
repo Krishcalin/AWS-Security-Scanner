@@ -7,6 +7,157 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **D3 · a Cryptographic Bill of Materials** (`aws_cbom.py`, emitted on `--cbom FILE`).
+  The xBOM skip is reversed **for cryptography only**. The regulatory driver (EO 14412, a
+  FAR rule in flight) and the operational question are the same one — *which of this
+  estate's cryptography does a quantum computer break* — and nobody can migrate what they
+  have not enumerated.
+  - **CycloneDX 1.6**, because `cryptoProperties` does not exist before it. The rest of
+    the product emits 1.5 and that stays correct for those documents.
+  - KMS keys become `related-crypto-material` (with `state` mapped from `KeyState` —
+    `PendingDeletion` is `deactivated`, not `destroyed`, because ciphertext is still
+    decryptable until the window closes), ACM certificates become `certificate`, and TLS
+    listeners become `protocol`. Algorithms are emitted once and referenced.
+  - **No new API call and no new IAM permission.** The material was already being read —
+    `kms.describe_key` for KMS-02/03/04, `acm.describe_certificate` for ACM-01..05,
+    `elb.describe_listeners` for ELB-02/03 — so the CBOM is a re-projection of responses
+    the scanner already holds. A test pins that, so a future dedicated fetch is reminded
+    the slice was approved on that basis.
+  - **An inventory, not a verdict.** RSA-2048 and P-256 are the correct choice today and
+    the wrong choice eventually; reporting them as failures would teach operators to
+    dismiss the category. No check IDs, no severity, no posture-score impact — a document
+    plus `quantum_exposure()` giving the count and the names, so a migration can be planned
+    against a horizon the customer chooses. A test asserts the module emits no verdicts.
+  - The document **states its own scope limit** in `metadata.properties`: an agentless scan
+    cannot see cryptography inside a workload, and a CBOM that does not say so reads as a
+    complete inventory to whoever did not build it.
+  - `tests/fixtures/cyclonedx_1_6_crypto.json` holds the enums and property names
+    **extracted verbatim** from the published schema, and `aws_cbom`'s constants are
+    asserted against it. This is not ceremony: a *summary* of the schema gave
+    `parameterizedBy` (real name `parameterSetIdentifier`), an `assetType` of `key` (there
+    is none — keys are `related-crypto-material`), a `primitive` enum of algorithm names
+    like "AES" (it is crypto primitives: `block-cipher`, `signature`, `kem`), and
+    `executionEnvironment` values of `software`/`hybrid` (they are `software-plain-ram`,
+    `software-tee`, `hardware`). Each would have produced a document that validates against
+    nothing, and none would have failed a test written from the same summary.
+
+- **`docs/DECISIONS.md` — the open product decisions, answered and enforced.** All six
+  roadmap decisions (D1–D4, D6, D7; there is no D5) now have a recorded answer, the
+  reasoning behind it, and — where one exists — the test that keeps it true.
+  - **D2 · does customer prompt text enter the graph? — NO.** Deliberate, not merely
+    not-yet-built. The wedge is the sovereign estate, where the security review is
+    currently *one line*; reading prompt text turns that into a data-processing
+    agreement. The detection value is already delivered by `AITHR-01`/`AITHR-02` from
+    **CloudTrail management events alone** — no content, no new permission. Reversal
+    conditions are recorded, including that the tripwire ships **before** the capability.
+  - **D4 · AI red teaming — OUT OF SCOPE**, recorded as a declared non-goal rather than
+    an answered question, under a new **Declared non-goals** section. Both forms are
+    named, and the second is the one that matters more: *active probing of live
+    endpoints* (whose CloudTrail signature **is** LLMjacking's — we would generate the
+    exact events `AITHR-01` alarms on), and ***agentic* red teaming**, driving the
+    customer's own tool-executing agent, which causes real **writes** by construction —
+    an agent under test does not know the instruction is a drill, and neither does what
+    it writes to. Not behind a flag: a flag makes it a supported capability with a
+    support burden and an incident path. The section also states what we offer instead
+    (toxic flow, graph-proven exploitability, pen-test ingest), because a non-goal that
+    only says no reads as a gap.
+    The roadmap's remaining charter-breaking items are **referenced, not ruled on** —
+    promoting a recommendation to a decision nobody made is how a scope document stops
+    being worth reading.
+  - **D7 · the Guardrail sibling dependency — DECOUPLED.** Measured rather than recalled:
+    11 commits, 2,524 LOC, no Dockerfile, no console entry point, no release workflow.
+    OverWatch contains **zero** references to it, and `aws_airules.py` imports only
+    `aws_cdr` and `aws_deepplane`. If ever integrated it is an *optional* detection source
+    behind the connector plane, never a prerequisite.
+  - **D3 · CBOM — BUILT.** Recorded first as deferred, then overruled: build it. The
+    reversal covers **cryptography only**; AIBOM/HBOM/QBOM stay skipped.
+  - **D1 and D6** are recorded as already taken (slices 1.2 and 1.5) so the file is the
+    complete register rather than a list of leftovers.
+- **`tests/test_decisions.py`** (10 tests) enforces the answers that have code
+  consequences. D4's check is an **AST walk**, not a grep: `aws_aiguard` holds
+  `"bedrock:invokemodel"` as a string because it analyses *policy text*, and `aws_airules`
+  matches `InvokeModel` as a *CloudTrail event name* — a substring check would flag both
+  and force someone to weaken the guard to get a green suite. Both the D4 and D7 guards
+  were verified by planting a violation and confirming they fail.
+
+- **Phase 2 · slice 2.3 — gateway authorization posture**, graded rather than counted.
+  - **`AGC-05`** (CRITICAL · AC-3) — a gateway that **admits callers it never authorizes
+    AND calls its targets with the gateway's own credentials.** Both halves are required,
+    and this is the point of the slice: a boolean `authorizerType == "NONE"` check would
+    be wrong in the direction that gets a scanner distrusted. AWS documents *both*
+    permissive inbound modes as deliberate architectures — `AUTHENTICATE_ONLY` exists so a
+    caller's token is verified and forwarded for the target to validate, `NONE` exists so
+    an existing system keeps owning the decision. Paired with an outbound type that
+    carries the caller's identity (`CALLER_IAM_CREDENTIALS`, `JWT_PASSTHROUGH`,
+    on-behalf-of token exchange), the target still authorizes and the design is sound.
+    The finding is the combination where it does not, and the developer guide states the
+    consequence verbatim: *"The gateway execution role is shared across all targets
+    configured with GATEWAY_IAM_ROLE. Its permissions are the upper bound for what any
+    authorized caller can exercise through the gateway."* With inbound `NONE`, "any
+    caller" includes unauthenticated ones.
+    - Four verdicts: `ENFORCED` (gateway authorizes) · `DELEGATED` (caller's identity
+      flows onward) · `COMPENSATED` (a policy engine or interceptor sits in front — WARN,
+      confirm it covers every target) · `OPEN` (FAIL).
+    - `AUTHENTICATE_ONLY` and `NONE` both grade `OPEN` against gateway credentials, and
+      the message still distinguishes them: "any authenticated caller" vs
+      "unauthenticated callers".
+  - **`AGC-06`** (MEDIUM · SC-7) — `exceptionLevel: DEBUG`. Per the reference, *"granular
+    exception messages are returned to help a user debug the gateway"* — which on a
+    gateway whose callers are not all trusted describes the targets behind it to whoever
+    provokes an error.
+  - **An unreadable target list is `UNKNOWN`, not `OPEN`.** Reporting a CRITICAL on the
+    strength of a refused `ListGatewayTargets` is the phantom-*finding* mirror of a
+    phantom pass; empty-because-none and empty-because-refused are kept distinct.
+  - Gateway execution roles are stashed into `_aispm_resources`, so `AISPM-01/02` grade
+    the very role `AGC-05` names as the upper bound of a caller's reach.
+  - Two new IAM actions (`GetGateway`, `ListGatewayTargets`) in both onboarding paths;
+    the ledger's reported gap grows 13 → 15.
+
+- **Phase 2 · slice 2.2 — the AgentCore estate** (`aws_agentcore.py`, new `AGENTCORE`
+  section). Amazon Bedrock **AgentCore** is a different service from Bedrock Agents, with
+  its own control plane (`bedrock-agentcore-control`) and its own IAM prefix
+  (`bedrock-agentcore`). An account can run an entire agent estate there — runtimes,
+  gateways, memory stores, browsers, code interpreters, workload identities, stored
+  third-party credentials — and none of it appears in a Bedrock Agents inventory.
+  - **`AGC-01`** (HIGH · CM-6) — the microVM metadata service does not require **MMDSv2**.
+    This is EC2's IMDSv1 problem moved inside an agent, and worse there for one reason:
+    exploiting IMDSv1 requires making the workload issue an attacker-chosen HTTP request,
+    and *making a workload issue an attacker-chosen request is what prompt injection does
+    as its normal mode of operation*. One induced GET returns the execution role's
+    credentials. Matches `EC2-04`'s severity and control, because it is the same failure.
+  - **`AGC-02`** (HIGH · SC-28) — secret-shaped environment variables on a runtime (up to
+    50 vars × 5000 chars). Reports **names only, never values**, reusing
+    `aws_secrets.env_secret_findings`. Worse than the Lambda equivalent because an agent
+    is a machine designed to be talked into revealing what it can see.
+  - **`AGC-03`** (MEDIUM · IA-5) — the estate's **external credential surface**. OAuth2
+    and API-key providers hold credentials for systems outside AWS, where no IAM policy
+    bounds them, no CloudTrail records their use and no KMS key protects what they open.
+  - **`AGC-04`** (MEDIUM · CM-7) — the **code-execution surface**: browsers fetch
+    arbitrary URLs, code interpreters run arbitrary code, both as the agent's identity.
+  - **Runtimes are stashed into `_aispm_resources`** rather than given a parallel
+    pipeline, so `AISPM-01/02/03`, the attack-path graph fusion and the guardrail
+    coverage feed all apply to AgentCore for free — one implementation of "what can this
+    agent's role do" instead of two that drift.
+  - **Nine new IAM actions**, all `List`/`Get` config reads, added to both onboarding
+    paths. SecurityAudit predates AgentCore entirely and grants none of them. The gap the
+    ledger reports grows 4 → 13.
+  - Renames the `BEDROCK_AGENTS` section label, which read **"AWS BEDROCK AGENT CORE"**
+    while auditing the older `bedrock-agent` API — with a real AgentCore section present,
+    two sections would have claimed the same name.
+  - Two things checked rather than assumed, both of which changed the code: the published
+    API reference is **ahead of the botocore we pin** (it documents Harnesses,
+    PaymentConnectors, PolicyEngines and Registries, none of which exist in 1.40.51), so
+    the operation set is taken from the pinned service model's own paginator file; and the
+    `List` **result keys are not uniform** (`items` for gateways, `browserSummaries` for
+    browsers, `memories` for memory), where one wrong guess yields a silently empty
+    inventory that reads exactly like a clean account.
+  - `network_posture()` deliberately exposes **no** `exposed`/`public`/`ingress` field and
+    a test enforces that. The reference gives `networkMode` as `PUBLIC | VPC` and says
+    nothing about inbound reachability; who may invoke a runtime is
+    `authorizerConfiguration`'s question. This is the AIPATH-01 lesson applied before the
+    mistake instead of after it.
+
+### Added
 - **Phase 1 · slice 1.5 — a local read-only MCP server** (`cnapp_mcp.py`), closing
   **decision D6**. An analyst can ask a scan questions in natural language instead of
   reading JSON. The server cannot scan, cannot change anything, and never talks to AWS —
