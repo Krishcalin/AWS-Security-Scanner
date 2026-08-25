@@ -84,7 +84,6 @@ _INFERRED_IDS = frozenset({
     # AI-SPM: capability verdicts reasoned over policy + graph, not read from an API.
     "AISPM-01",   # escalation capability, ceiling-aware but still a judgement
     "AISPM-02",   # crown-data reach, via CAN_READ_DATA edges we derived
-    "AIPATH-01",  # fusion of two inferences
 })
 
 _INFERRED_PREFIXES = (
@@ -94,10 +93,25 @@ _INFERRED_PREFIXES = (
     "KIEM-",      # cross-plane K8s->AWS entitlement reasoning
 )
 
-_CONDITIONAL_IDS: frozenset = frozenset()
-"""Empty today. Phase 3's toxic-flow checks land here — and the reason this constant
-exists before its first member does is that the class must be enforceable BEFORE the
-first finding that needs it, or the first one ships mislabelled."""
+_CONDITIONAL_IDS = frozenset({
+    "AIPATH-01",  # "assume a compromise lands" — a premise, not a derivation
+})
+"""Findings that hold only if a stated assumption does.
+
+AIPATH-01 is the first member, and it arrived by correction rather than by design.
+It sat in _INFERRED_IDS, which was half right: both of its legs ARE inferred — an
+escalation verdict reasoned over policy, a crown-data reach read off CAN_READ_DATA
+edges. What is not inferred is the thing that JOINS them. Nothing OverWatch reads
+says the resource can be reached; the fusion assumes a compromise lands and traces
+what follows. That is a premise, and a premise makes the finding conditional however
+sound the reasoning downstream of it is.
+
+This constant existed before its first member on the theory that the class must be
+enforceable before the first finding needs it, or that finding ships mislabelled.
+The theory was right and the timing was not: AIPATH-01 already existed, already
+rested on a premise, and shipped mislabelled anyway — because the class was written
+for Phase 3's toxic flow and nobody re-read the checks already on the books against
+it. Adding a category does not reclassify what came before it."""
 
 
 def classify(check_id: str) -> str:

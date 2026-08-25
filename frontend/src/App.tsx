@@ -17,6 +17,7 @@ import { Compliance } from './routes/Compliance'
 import { Remediation } from './routes/Remediation'
 import { Reports } from './routes/Reports'
 import { Settings } from './routes/Settings'
+import { Coverage } from './routes/Coverage'
 import { Placeholder } from './routes/Placeholder'
 import { CategoryDashboard } from './routes/CategoryDashboard'
 import { Projects, ProjectView } from './routes/Projects'
@@ -53,6 +54,7 @@ export default function App() {
               <Route path="/remediation" element={<Remediation />} />
               <Route path="/reports" element={<Reports />} />
               <Route path="/accounts" element={<CloudAccounts />} />
+              <Route path="/coverage" element={<Coverage />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/roles" element={<Roles />} />
               <Route path="/security" element={<Security />} />

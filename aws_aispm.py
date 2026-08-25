@@ -174,6 +174,78 @@ def ai_network_exposed(resource: dict) -> bool:
     return False
 
 
+# AI resource kinds a guardrail can sit in front of. A SageMaker notebook is not here:
+# a guardrail governs model invocation, and a notebook is a workstation that may or may
+# not invoke one. Counting it would depress the percentage with resources the control
+# does not apply to, which is how a coverage metric stops being believed.
+GUARDRAIL_APPLICABLE_KINDS = ("BedrockAgent",)
+
+
+def guardrail_coverage(graph, resources: List[dict], *,
+                       account: Optional[str] = None) -> dict:
+    """Guardrail coverage over the AI estate, shaped exactly like
+    ``aws_edr.compute_coverage``: ``{overall, per_kind, gaps}`` where gaps are the
+    UNGOVERNED resources ranked by attack-path exposure.
+
+    ``resources`` is the stash the scanner already builds for AI-SPM; a resource counts
+    as governed when it carries a non-empty ``guardrail_id``.
+
+    Ranking reuses ``aws_correlate`` reachability unchanged — no scoring is added here.
+    An ungoverned agent that is reachable from the internet AND can reach crown data is
+    the headline gap, and the graph already knows that."""
+    import aws_correlate
+
+    applicable = [r for r in (resources or [])
+                  if (r.get("kind") or "") in GUARDRAIL_APPLICABLE_KINDS]
+
+    reach_internet: set = set()
+    reach_crown: set = set()
+    if graph is not None and graph.node("internet") is not None:
+        reach_internet = set(graph.reachable(
+            "internet", aws_correlate.E_PATH, max_hops=64).keys())
+        for cid in aws_correlate.crown_nodes(graph):
+            reach_crown |= set(graph.reverse_reachable(
+                cid, aws_correlate.E_PATH, max_hops=64).keys())
+
+    def _governed(r: dict) -> bool:
+        return bool((r.get("guardrail_id") or "").strip())
+
+    def _node_id(r: dict) -> str:
+        return r.get("arn") or f"aispm:{r.get('kind')}:{r.get('name')}"
+
+    per_kind: Dict[str, dict] = {}
+    for k in sorted(GUARDRAIL_APPLICABLE_KINDS):
+        tot = [r for r in applicable if r.get("kind") == k]
+        gov = sum(1 for r in tot if _governed(r))
+        per_kind[k] = {"governed": gov, "total": len(tot),
+                       "pct": round(100.0 * gov / len(tot), 1) if tot else None}
+
+    gaps = []
+    for r in applicable:
+        if _governed(r):
+            continue
+        nid = _node_id(r)
+        exposed = nid in reach_internet
+        to_crown = nid in reach_crown
+        # exposed & crown-bound (3) > crown-bound (2) > exposed (1) > isolated (0),
+        # identical to the EDR ranking so the two coverage screens read the same way
+        rank = (2 if to_crown else 0) + (1 if exposed else 0)
+        gaps.append({"node_id": nid, "kind": r.get("kind"),
+                     "label": r.get("name") or nid.rsplit("/", 1)[-1],
+                     "reachable_from_internet": exposed, "reaches_crown": to_crown,
+                     "exposure_rank": rank})
+    gaps.sort(key=lambda g: (-g["exposure_rank"], str(g["kind"]), g["node_id"]))
+
+    total = len(applicable)
+    governed = sum(1 for r in applicable if _governed(r))
+    return {
+        "overall": {"governed": governed, "total": total,
+                    "pct": round(100.0 * governed / total, 1) if total else None},
+        "per_kind": per_kind,
+        "gaps": gaps,
+    }
+
+
 def ai_exposure_basis(resource: dict) -> Optional[str]:
     """WHY the resource counts as exposed, for the ``basis`` prop on the EXPOSED_TO
     edge. Mirrors :func:`ai_network_exposed` clause for clause, so the edge can never

@@ -71,6 +71,10 @@ import aws_flowlog
 import aws_secrets
 import aws_leastpriv
 import aws_aispm
+import aws_aiguard
+import aws_airules
+import aws_cdr
+import aws_perm_ledger
 import aws_effperm
 import aws_state
 import aws_unused
@@ -190,7 +194,7 @@ SECTIONS = [
     "APIGATEWAY", "ELB", "EBS", "REDSHIFT", "EFS", "ACM",
     "SAGEMAKER", "COGNITO", "APIGATEWAYV2", "IAMPRIVESC", "EXPOSURE",
     "COGNITO_IDENTITY", "WINVULN",
-    "VULN", "THREAT", "DATA", "CORRELATE",
+    "VULN", "THREAT", "DATA", "AI_THREAT", "CORRELATE",
 ]
 
 SECTION_LABELS = {
@@ -237,6 +241,7 @@ SECTION_LABELS = {
     "VULN":           "WORKLOAD VULNERABILITIES (INSPECTOR)",
     "THREAT":         "LIVE THREAT DETECTIONS (GUARDDUTY)",
     "DATA":           "DATA SECURITY & FLAGSHIP ATTACK PATHS",
+    "AI_THREAT":      "LLMJACKING & AI CONTROL TAMPERING",
     "CORRELATE":      "ATTACK-PATH CORRELATION & CHOKE POINTS",
     "SIDESCAN":       "AGENTLESS WORKLOAD SIDE-SCAN (EBS)",
 }
@@ -341,8 +346,27 @@ CHECK_SEVERITY = {
     "ACM-04": "HIGH", "ACM-05": "MEDIUM",
     "SM-01": "HIGH", "SM-02": "MEDIUM", "SM-03": "MEDIUM", "SM-04": "MEDIUM",
     "SM-05": "HIGH", "SM-06": "MEDIUM", "SM-07": "MEDIUM",
-    # AI-SPM pillar: execution-role blast radius + network isolation + fused AI attack path
-    "AISPM-01": "HIGH", "AISPM-02": "HIGH", "AISPM-03": "MEDIUM", "AIPATH-01": "CRITICAL",
+    # AI-SPM pillar: execution-role blast radius + network isolation, plus the
+    # conditional AIPATH-01 (egress + role reach; no ingress is claimed)
+    "AISPM-01": "HIGH", "AISPM-02": "HIGH", "AISPM-03": "MEDIUM",
+    # AIPATH-01 is HIGH rather than CRITICAL, and the downgrade is the point.
+    # CRITICAL here means every link was observed (ATTACK-01/02) or the primitive
+    # needs no assumption at all (IAMPE-01/03/04). AIPATH-01 fuses two HIGH legs
+    # across a premise OverWatch cannot verify — "assume a compromise lands" —
+    # because no signal it reads is an ingress signal. A CRITICAL derived from an
+    # outbound-access checkbox is precisely what _emit_ai_topology refuses to
+    # manufacture one layer down; asserting it in prose instead is the same error.
+    "AIPATH-01": "HIGH",
+    # LLMjacking and AI control tampering (CloudTrail management events)
+    "AITHR-01": "HIGH", "AITHR-02": "CRITICAL",
+    "AGT-06": "HIGH",
+    # Guardrail STRENGTH, as opposed to guardrail presence. AIGRD-01/02 are HIGH
+    # because each describes a guardrail that satisfies every "is one attached"
+    # check in the market while blocking nothing; AIGRD-03 is HIGH because an
+    # unenforced guardrail is optional at the caller's discretion. AIGRD-04 is
+    # MEDIUM: an unpinned DRAFT is a change-control weakness, not an open door.
+    "AIGRD-01": "HIGH", "AIGRD-02": "HIGH", "AIGRD-03": "HIGH",
+    "AIGRD-04": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
     "COG-05": "HIGH", "COG-06": "CRITICAL",
     "AGW2-01": "MEDIUM", "AGW2-02": "HIGH", "AGW2-03": "LOW",
@@ -587,11 +611,22 @@ COMPLIANCE_MAP = {
     "AGT-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "AGT-04": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "AGT-05": {"PCI-DSS": "6.4.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "CM-6"},
+    "AGT-06": {"PCI-DSS": "6.4.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "CM-6"},
+    # Guardrail grading reuses CM-6 (configuration settings), matching AGT-05/BDR-02.
+    # AIGRD-03 is AC-3 (access enforcement) because that is literally what a missing
+    # Deny fails to do, and AIGRD-04 is CM-5 (change restrictions) because an
+    # unversioned DRAFT takes effect without a controlled change.
+    "AIGRD-01": {"PCI-DSS": "6.4.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "CM-6"},
+    "AIGRD-02": {"PCI-DSS": "6.4.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "CM-6"},
+    "AIGRD-03": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "AIGRD-04": {"PCI-DSS": "6.4.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "CM-5"},
     # AI-SPM pillar (NIST reused from the frozen 38-control universe: AC-6/AC-3/SC-7)
     "AISPM-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "AISPM-02": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "AISPM-03": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "AIPATH-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "AITHR-01": {"PCI-DSS": "10.6", "HIPAA": "164.308(a)(1)(ii)(D)", "SOC2": "CC7.2", "NIST": "SI-4"},
+    "AITHR-02": {"PCI-DSS": "10.5", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-9"},
     # Cognito
     "COG-01": {"CIS": "1.5", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
     "COG-02": {"PCI-DSS": "8.3.6", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "IA-5(1)"},
@@ -896,11 +931,18 @@ REMEDIATION_MAP = {
     "AGT-02": "Scope the agent execution role to the exact models, knowledge bases and Lambdas it needs: aws iam put-role-policy --role-name <AGENT_ROLE> --policy-name agent-least-priv --policy-document file://scoped.json",
     "AGT-03": "Set a customer-managed key on the knowledge base and its data sources: aws bedrock-agent update-knowledge-base --knowledge-base-id <KB_ID> --name <NAME> --role-arn <ROLE_ARN> --knowledge-base-configuration file://kb-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}'",
     "AGT-04": "Restrict the action-group Lambda so only this agent can invoke it, and scope the function's own role: aws lambda add-permission --function-name <FN> --statement-id bedrock-agent --action lambda:InvokeFunction --principal bedrock.amazonaws.com --source-arn <AGENT_ALIAS_ARN>",
+    "AGT-06": "Create one guardrail and attach it to every agent that lacks one, then make it mandatory in IAM so it cannot simply be omitted: aws bedrock create-guardrail --name prod-guardrail --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\"}]}'",
+    "AIGRD-01": "Add a PROMPT_ATTACK filter at HIGH input strength — the other five filter types are content-safety categories and do not address injection: aws bedrock update-guardrail --guardrail-identifier <ID> --name <NAME> --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\",\"inputAction\":\"BLOCK\"}]}' ; then aws bedrock create-guardrail-version --guardrail-identifier <ID> so the change is pinned",
+    "AIGRD-02": "Switch the filters from detect to block. inputAction/outputAction 'NONE' means 'take no action but return detection information', so the guardrail is reporting rather than protecting: aws bedrock update-guardrail --guardrail-identifier <ID> --name <NAME> --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\",\"inputAction\":\"BLOCK\"}]}'",
+    "AIGRD-03": "Add the explicit Deny — the Allow half alone does not make a guardrail mandatory. Attach a policy carrying BOTH statements: Allow bedrock:InvokeModel/InvokeModelWithResponseStream with StringEquals on bedrock:GuardrailIdentifier, AND Deny the same actions with StringNotEquals on the same key and value: aws iam put-role-policy --role-name <ROLE> --policy-name enforce-guardrail --policy-document file://enforce.json ; use ArnNotLike with <GUARDRAIL_ARN>:* if any numeric version should be acceptable",
+    "AIGRD-04": "Publish a numeric version so the configuration is pinned and the IAM condition can name it: aws bedrock create-guardrail-version --guardrail-identifier <ID> --description 'pinned for enforcement' ; then point every consumer and every bedrock:GuardrailIdentifier condition at <GUARDRAIL_ARN>:<VERSION> rather than at DRAFT",
     "AGT-05": "Attach a guardrail to the agent and shorten its idle session TTL: aws bedrock-agent update-agent --agent-id <AGENT_ID> --agent-name <NAME> --agent-resource-role-arn <ROLE_ARN> --foundation-model <MODEL_ID> --guardrail-configuration '{\"guardrailIdentifier\":\"<GUARDRAIL_ID>\",\"guardrailVersion\":\"DRAFT\"}' --idle-session-ttl-in-seconds 600",
+    "AITHR-01": "Revoke the access key and rotate the identity behind it, then bound what it could reach: aws iam update-access-key --access-key-id <AKID> --status Inactive --user-name <USER> ; aws iam delete-access-key --access-key-id <AKID> --user-name <USER>",
+    "AITHR-02": "Restore the deleted or weakened control and deny the tamper actions to application roles: aws bedrock put-model-invocation-logging-configuration --logging-config file://logging.json ; aws iam put-role-policy --role-name <ROLE> --policy-name deny-ai-tamper --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"bedrock:DeleteGuardrail\",\"bedrock:DeleteModelInvocationLoggingConfiguration\"],\"Resource\":\"*\"}]}'",
     "AISPM-01": "Scope the AI execution role to least privilege — drop admin/privesc grants (iam:PassRole/*, *:*): aws iam put-role-policy --role-name <AI_EXEC_ROLE> --policy-name aispm-least-priv --policy-document file://scoped.json",
     "AISPM-02": "Restrict the AI execution role's data reach to only the buckets/tables the model needs (remove wildcard s3:GetObject/* grants): aws iam put-role-policy --role-name <AI_EXEC_ROLE> --policy-name aispm-data-scope --policy-document file://data-scope.json",
     "AISPM-03": "Isolate the AI resource on a private VPC subnet and disable direct internet egress: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --subnet-id <SUBNET> ; for a Studio domain: aws sagemaker update-domain --domain-id <DOMAIN_ID> --app-network-access-type VpcOnly",
-    "AIPATH-01": "Break the fused AI attack path — isolate the resource and scope its role: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --direct-internet-access Disabled ; then remove the execution role's crown-data/privesc grants (see AISPM-01/AISPM-02)",
+    "AIPATH-01": "Either leg alone defuses the pair. Closing egress is the faster containment: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --direct-internet-access Disabled ; cutting the role's reach (see AISPM-01/AISPM-02) is the one that actually bounds a compromise, because prompt injection arrives in content and needs no network route at all",
     "COG-01": "Require MFA: aws cognito-idp set-user-pool-mfa-config --user-pool-id <POOL_ID> --mfa-configuration ON --software-token-mfa-configuration Enabled=true",
     "COG-02": "Strengthen password policy: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --policies PasswordPolicy='{MinimumLength=12,RequireUppercase=true,RequireLowercase=true,RequireNumbers=true,RequireSymbols=true}'",
     "COG-03": "Enable threat protection: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --user-pool-add-ons AdvancedSecurityMode=ENFORCED",
@@ -1668,13 +1710,29 @@ def _cred_idle_days(last_used: str, created: str) -> Optional[int]:
 
 
 # ─── Scanner ──────────────────────────────────────────────────────────────────
+def _checks_gated_by(action: str) -> tuple:
+    """Every check id the permission ledger says depends on `action`.
+
+    Exists so a runtime AccessDenied can record the FULL set of checks it just cost us.
+    The alternative — naming them at the call site — drifts the moment another check
+    starts needing the same read, and drifts silently, leaving the newly-added check
+    looking evaluated when it was refused."""
+    want = (action or "").lower()
+    return tuple(sorted(
+        cid for cid, reqs in aws_perm_ledger.REQUIREMENTS.items()
+        if any((r.action or "").lower() == want for r in reqs)))
+
+
 class AWSLiveScanner:
     """Live, read-only AWS security audit scanner."""
 
     # Sections that enumerate global (region-agnostic) resources — run once even
     # when --all-regions sweeps every enabled region for the rest.
+    # AI_THREAT is global because its quota-dodging rule needs to see EVERY region
+    # at once — one key invoking across three regions in an hour is the signal, and
+    # a per-region pass can never observe it. It sweeps regions internally instead.
     GLOBAL_SECTIONS = {"IAM", "S3", "ROUTE53", "CLOUDFRONT", "IAMPRIVESC", "CORRELATE",
-                       "CLOUDWATCH"}
+                       "CLOUDWATCH", "AI_THREAT"}
 
     def __init__(
         self,
@@ -1805,6 +1863,15 @@ class AWSLiveScanner:
         # One coverage note per scan, not one per AI section — three identical
         # notes would be noise, and noise is how a true note gets skipped.
         self._aispm_region_noted = False
+        # Negative assurance for THIS run: what was refused, what was skipped. Built
+        # as the scan goes rather than reconstructed afterwards, because the only
+        # moment we know a check was denied is when it is denied.
+        self._coverage = aws_perm_ledger.CoverageManifest()
+        self._perm_ledger = None            # set by _preflight_permissions()
+        # Action-group Lambda names, collected while auditing agents. Without
+        # them the UpdateFunctionCode rule stays silent rather than firing on
+        # every Lambda deploy in the account.
+        self._agent_lambda_names = set()
 
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
@@ -5188,6 +5255,9 @@ class AWSLiveScanner:
         except Exception as e:
             self._add("WARN", "BDR-02", "BEDROCK", "bedrock", str(e))
 
+        # AIGRD-01/02/04 — grade what BDR-02 only counted.
+        self._grade_guardrails(bedrock)
+
         # BDR-03 — Custom model KMS encryption
         self._log("BDR-03: Bedrock — custom model encryption (KMS)")
         try:
@@ -5441,6 +5511,12 @@ class AWSLiveScanner:
                 "network_checkable": False,
                 "network": {},
                 "data_bearing": False,
+                # Read here rather than at AGT-05 so guardrail COVERAGE can be computed
+                # over the whole estate, not just per agent — an account with no
+                # guardrails at all has no per-agent gap to report and would otherwise
+                # produce silence where the answer is "none of them".
+                "guardrail_id": (detail.get("guardrailConfiguration") or {}).get(
+                    "guardrailIdentifier", ""),
             })
             if not role_arn:
                 self._add("FAIL", "AGT-02", "BEDROCK_AGENTS", aname,
@@ -5497,6 +5573,7 @@ class AWSLiveScanner:
                     ).get("lambda", "")
                     if lambda_arn:
                         fn_name = lambda_arn.split(":")[-1]
+                        self._agent_lambda_names.add(fn_name)
                         try:
                             pol_doc = json.loads(
                                 lmb.get_policy(
@@ -10078,6 +10155,102 @@ class AWSLiveScanner:
             self._add("PASS", "THREAT-01", "THREAT", "all",
                       "GuardDuty enabled; no active findings (severity >= 4)")
 
+    # ── AI_THREAT: LLMjacking + control tampering over CloudTrail ─────────────
+    def _check_ai_threat(self):
+        """LLMjacking and AI control tampering, from CloudTrail MANAGEMENT events.
+
+        Needs no new permission: cloudtrail:LookupEvents is already granted and
+        InvokeModel/Converse are management events. The stated limit, which belongs in
+        the report rather than in a footnote: Event history covers management events
+        only, ninety days, and one region per call. A longer or data-event window needs
+        a read of the trail bucket, which crosses the read-only-of-CONFIG line and is
+        deliberately not taken here.
+
+        GLOBAL section: the quota-dodging rule fires on one key invoking across three
+        or more regions within an hour, so it must see every region at once."""
+        self._section_header("AI_THREAT")
+        self._log("LLMjacking + AI control tampering (CloudTrail management events), "
+                  "re-ranked by what the acting identity can reach.")
+
+        regions = (self._get_all_regions() if self.all_regions_scan else [self.region])
+        events, denied = [], []
+        for reg in regions:
+            try:
+                ct = self._client("cloudtrail", region=reg)
+                pages = ct.get_paginator("lookup_events").paginate(
+                    LookupAttributes=[{"AttributeKey": "EventSource",
+                                       "AttributeValue": "bedrock.amazonaws.com"}],
+                    PaginationConfig={"MaxItems": 2000, "PageSize": 50})
+                for page in pages:
+                    for row in page.get("Events", []):
+                        raw = row.get("CloudTrailEvent")
+                        if not raw:
+                            continue
+                        try:
+                            events.append(json.loads(raw))
+                        except (TypeError, ValueError):
+                            continue
+            except Exception as e:
+                denied.append(f"{reg}: {e}")
+
+        if denied and not events:
+            # Refused is not clean. Record it as un-evaluated so the coverage manifest
+            # and the report both say so, rather than implying an absence of abuse.
+            self._coverage.note_denied("AITHR-01", "cloudtrail:LookupEvents")
+            self._add("INFO", "AITHR-00", "AI_THREAT", "cloudtrail",
+                      f"CloudTrail event history not readable ({denied[0]}) — LLMjacking "
+                      f"and AI tamper detection NOT evaluated, which is not the same as "
+                      f"no abuse | cloudtrail")
+            return
+
+        dets = aws_airules.detect(events,
+                                  lambda_allowlist=sorted(self._agent_lambda_names))
+        dets = aws_airules.rerank(dets, reach=self._identity_reach)
+
+        if not dets:
+            self._add("PASS", "AITHR-01", "AI_THREAT", "bedrock",
+                      f"No LLMjacking or AI control-tampering pattern in "
+                      f"{len(events)} Bedrock management event(s) across "
+                      f"{len(regions)} region(s)")
+            return
+
+        g = self._ensure_graph()
+        for det in dets:
+            cid = "AITHR-02" if det.type.startswith("ai:ai-") else "AITHR-01"
+            if g is not None:
+                try:
+                    node_id, node_kind, _status = aws_cdr.resolve_detection_node(
+                        g, det, account=self.account)
+                    aws_cdr.emit_threat_edges(g, node_id, node_kind, det)
+                except ValueError:
+                    pass            # cross-account ARN: never fold onto our graph
+            actor = (det.resource_arn or "").split("/")[-1] or "identity"
+            self._add("FAIL", cid, "AI_THREAT", actor,
+                      f"{det.title} (severity {det.severity}, {det.band}) | {actor}")
+
+    def _identity_reach(self, arn: str) -> dict:
+        """What the acting identity can reach — the half of a detection no log carries.
+
+        GuardDuty rates its own AI findings Low precisely because it cannot answer
+        this: it holds the event and not the environment."""
+        try:
+            principals = {(p.get("arn") or "").lower(): p
+                          for p in self._get_iam_principals()}
+        except Exception:
+            return {}
+        prin = principals.get((arn or "").lower())
+        if prin is None:
+            return {}
+        try:
+            scp = self._get_scp_context()
+        except Exception:
+            scp = None
+        verdict, reason = aws_aispm.role_privesc_effective(
+            prin.get("statements", []), prin.get("boundary"), scp)
+        crown = aws_aispm.role_reaches_crown(self.graph, arn) if self.graph else None
+        return {"privesc": reason if verdict == aws_effperm.KEEP else None,
+                "crown": crown}
+
     # ── DATA: Macie crown jewels + Access Analyzer + CAN_READ_DATA + ATTACK-02 ─
     def _check_data(self):
         self._section_header("DATA")
@@ -10363,6 +10536,49 @@ class AWSLiveScanner:
         self._dspm_timestream(g, roles)
         self._dspm_opensearch(g, roles)
 
+    def _preflight_permissions(self):
+        """Read our OWN role's policies and work out what this scan will not be able
+        to evaluate — BEFORE it runs.
+
+        The alternative is what the product did until now: call the API, get
+        AccessDenied, and emit a note per check. That tells an operator about a gap
+        only after they have already read a report shaped by it, and it cannot say
+        what the gap COSTS. Computing it from the policy documents can.
+
+        Fail-open in every direction. We may be running as a principal whose policies
+        we cannot read (a federated session, a role outside this account); that is
+        recorded and the scan proceeds exactly as before. A ledger is an improvement
+        to the report, never a precondition for it."""
+        try:
+            # self._client, not a bare boto3 client: it is the accessor every other
+            # section uses, it honours the assumed-role session, and it is mockable.
+            arn = self._client("sts").get_caller_identity().get("Arn", "")
+        except Exception:
+            return
+        # arn:aws:sts::123456789012:assumed-role/<RoleName>/<session>
+        role_name = ""
+        if ":assumed-role/" in arn:
+            role_name = arn.split(":assumed-role/", 1)[1].split("/", 1)[0]
+        elif ":role/" in arn:
+            role_name = arn.rsplit("/", 1)[-1]
+        if not role_name:
+            return
+        try:
+            principals = self._get_iam_principals()
+        except Exception:
+            return
+        me = next((p for p in principals
+                   if (p.get("name") or "") == role_name), None)
+        if me is None:
+            return
+        self._perm_ledger = aws_perm_ledger.evaluate(me.get("statements", []))
+        for check_id, actions in self._perm_ledger.blocked.items():
+            self._coverage.note_denied(check_id, ", ".join(actions))
+            self._add("INFO", "AISPM-00", "DATA", "coverage",
+                      f"{check_id} will NOT be evaluated: the scanner role is not "
+                      f"granted {', '.join(actions)}. This is an absence of evidence, "
+                      f"not a pass | coverage")
+
     # AI sections that enumerate REGIONAL resources. Scanned from one region, each
     # sees only that region's estate — and reports success either way.
     _AI_REGIONAL_SECTIONS = ("BEDROCK", "BEDROCK_AGENTS", "SAGEMAKER")
@@ -10387,6 +10603,8 @@ class AWSLiveScanner:
 
         regions = self._get_all_regions()
         others = sorted(r for r in regions if r != self.region)
+        self._coverage.scanned_regions = [self.region]
+        self._coverage.unscanned_regions = list(others)
         which = ", ".join(ran)
         if others:
             shown = ", ".join(others[:8])
@@ -10482,8 +10700,9 @@ class AWSLiveScanner:
         radius: AISPM-01 (privilege-escalation capable), AISPM-02 (reaches a crown
         datastore — a graph query over the CAN_READ_DATA edges the DSPM/Macie passes
         already added earlier in DATA), AISPM-03 (no network isolation), and the
-        fused AIPATH-01 (a network-exposed AI resource whose role can escalate or
-        read crown data — the AI analogue of the flagship toxic path). Runs LAST in
+        conditional AIPATH-01 (an AI resource pairing unrestricted EGRESS with a
+        role that can escalate or read crown data -- capability, not a route; the
+        ingress half is what _emit_ai_topology declines to invent). Runs LAST in
         DATA#42 (post-clobber) so principals + CAN_READ_DATA edges are complete and
         it cannot perturb the flagship/KIEM crown sets; reuses existing edge kinds +
         prop-based crown_nodes -> NO aws_correlate change. Fail-open: an
@@ -10508,12 +10727,184 @@ class AWSLiveScanner:
             scp = self._get_scp_context()
         except Exception:
             scp = None          # unreadable org -> fail open, exactly like CIEM
+        self._emit_guardrail_coverage(g)
+        self._emit_guardrail_enforcement(principals)
         for res in self._aispm_resources:
             try:
                 self._aispm_emit(g, res, principals, scp_levels=scp)
             except Exception as e:
                 self._add("INFO", "AISPM-00", "DATA", res.get("name", "ai"),
                           f"AI-SPM evaluation error for {res.get('name')}: {e}")
+
+    def _grade_guardrails(self, bedrock):
+        """AIGRD-01/02/04 — how strong each guardrail actually is.
+
+        BDR-02 above PASSes any guardrail that exists, which is the boolean every CNAPP
+        ships. It is satisfied by a guardrail whose every filter is set to take no action
+        — the Bedrock reference defines action NONE as "Take no action but return
+        detection information in the trace response" — and by one with no PROMPT_ATTACK
+        filter at all, which is content safety with nothing aimed at the threat that
+        makes agents different from APIs.
+
+        Regional on purpose: guardrails are regional resources, so each is graded once in
+        its own region. Needs bedrock:GetGuardrail, because ListGuardrails returns only
+        GuardrailSummary (arn/id/name/status/version/description/dates) and carries no
+        filter configuration at all."""
+        try:
+            summaries = bedrock.list_guardrails().get("guardrails", [])
+        except Exception:
+            return                      # BDR-02 above already reported the read failure
+        for gs in summaries:
+            gid = gs.get("id") or gs.get("arn")
+            gname = gs.get("name") or gid or "guardrail"
+            if not gid:
+                continue
+            try:
+                detail = bedrock.get_guardrail(guardrailIdentifier=gid)
+            except Exception as e:
+                if self._is_access_denied(e):
+                    # Every check this one action gates, not just the first. Noting
+                    # AIGRD-01 alone would report one check as unevaluated and leave
+                    # AIGRD-02 and AIGRD-04 looking clean — which is precisely the
+                    # phantom-pass the coverage manifest exists to prevent, reproduced
+                    # inside it. Derived from the ledger rather than listed here so the
+                    # two cannot drift apart when a fifth check needs the same read.
+                    for cid in _checks_gated_by("bedrock:GetGuardrail"):
+                        self._coverage.note_denied(cid, "bedrock:GetGuardrail")
+                    self._add("INFO", "AIGRD-00", "BEDROCK", gname,
+                              f"Guardrail '{gname}' NOT graded — missing permission "
+                              f"bedrock:GetGuardrail. Its presence is known; its strength "
+                              f"is not, and an ungraded guardrail is not a passing one "
+                              f"(no phantom pass)")
+                else:
+                    self._add("WARN", "AIGRD-00", "BEDROCK", gname,
+                              f"Guardrail '{gname}' could not be graded: {e}")
+                continue
+            g = aws_aiguard.grade_guardrail(detail)
+            inj = g["injection"]
+
+            if not inj["effective"]:
+                why = ("has no PROMPT_ATTACK filter" if not inj["present"]
+                       else "has a PROMPT_ATTACK filter that does not block on input"
+                       if not inj["input_blocks"]
+                       else f"blocks prompt attacks only at "
+                            f"{inj['input_strength']} strength (below MEDIUM)")
+                self._add("FAIL", "AIGRD-01", "BEDROCK", gname,
+                          f"Guardrail '{gname}' {why} — it is graded {g['grade']} and "
+                          f"does not defend the injection path, though a presence check "
+                          f"passes on it | {gname}")
+            else:
+                self._add("PASS", "AIGRD-01", "BEDROCK", gname,
+                          f"Guardrail '{gname}' blocks prompt attacks at "
+                          f"{inj['input_strength']} strength | {gname}")
+
+            if g["detect_only"]:
+                named = ", ".join(f"{d['type']} ({'+'.join(d['sides'])})"
+                                  for d in g["detect_only"])
+                verb = ("every filter is" if g["grade"] == aws_aiguard.DETECT_ONLY
+                        else "some filters are")
+                self._add("FAIL", "AIGRD-02", "BEDROCK", gname,
+                          f"Guardrail '{gname}': {verb} set to detect without blocking — "
+                          f"action NONE returns detection information and lets the "
+                          f"content through. Detect-only: {named} | {gname}")
+
+            if g["draft_only"]:
+                self._add("FAIL", "AIGRD-04", "BEDROCK", gname,
+                          f"Guardrail '{gname}' exists only as DRAFT — an edit takes "
+                          f"effect immediately with no published version, and a "
+                          f"bedrock:GuardrailIdentifier condition cannot pin what has no "
+                          f"version number | {gname}")
+
+    def _emit_guardrail_enforcement(self, principals):
+        """AIGRD-03 — is the guardrail MANDATORY, or merely available?
+
+        The differentiator of this slice, and it costs no new permission: the statements
+        are already collected for every principal. Attaching a guardrail to an agent does
+        not stop a caller invoking the model without one; only the explicit Deny does.
+        The Bedrock reference is unambiguous that the Deny is what carries the weight —
+        it holds "no matter what other permissions the user might have" — and every one
+        of its five worked examples pairs Allow with Deny.
+
+        ALLOW_ONLY is the finding worth having. That policy reads, to a human reviewing
+        it, exactly like enforcement.
+
+        Latched by the caller (_collect_aispm), because this is a property of an identity
+        rather than of a region."""
+        allow_only, unenforced, enforced, conflicted = [], [], [], []
+        for prin in (principals or {}).values():
+            name = (prin.get("arn") or prin.get("name") or "?").split("/")[-1]
+            try:
+                v = aws_aiguard.enforcement_verdict(prin.get("statements") or [])
+            except Exception:
+                continue
+            if v["verdict"] == aws_aiguard.NOT_APPLICABLE:
+                continue
+            if v["verdict"] == aws_aiguard.ALLOW_ONLY:
+                allow_only.append(name)
+            elif v["verdict"] == aws_aiguard.UNENFORCED:
+                unenforced.append(name)
+            else:
+                enforced.append(name)
+                if v["delegating"]:
+                    conflicted.append((name, v["delegating"]))
+
+        if not (allow_only or unenforced or enforced):
+            return                       # nobody here can invoke a model
+
+        if allow_only:
+            self._add("FAIL", "AIGRD-03", "DATA", "guardrail-enforcement",
+                      f"{len(allow_only)} principal(s) pin a guardrail with an Allow "
+                      f"condition but no matching explicit Deny, so a caller can still "
+                      f"invoke with no guardrail at all: "
+                      f"{', '.join(sorted(allow_only)[:5])} — this policy reads like "
+                      f"enforcement and is not | guardrail-enforcement")
+        if unenforced:
+            self._add("FAIL", "AIGRD-03", "DATA", "guardrail-enforcement",
+                      f"{len(unenforced)} principal(s) can invoke a model with no "
+                      f"bedrock:GuardrailIdentifier condition on any statement — the "
+                      f"guardrail is optional at the caller's discretion: "
+                      f"{', '.join(sorted(unenforced)[:5])} | guardrail-enforcement")
+        if enforced and not (allow_only or unenforced):
+            self._add("PASS", "AIGRD-03", "DATA", "guardrail-enforcement",
+                      f"All {len(enforced)} model-invoking principal(s) are bound to a "
+                      f"guardrail by an explicit Deny | guardrail-enforcement")
+        for name, acts in conflicted:
+            self._add("WARN", "AIGRD-03", "DATA", "guardrail-enforcement",
+                      f"Principal {name} enforces a guardrail AND holds "
+                      f"{', '.join(acts)} — AWS documents that these APIs make internal "
+                      f"InvokeModel calls that do not all carry a guardrail, so they will "
+                      f"fail with AccessDenied. Split the roles rather than removing the "
+                      f"enforcement | guardrail-enforcement")
+
+    def _emit_guardrail_coverage(self, g):
+        """AGT-06 — how much of the AI estate sits behind a guardrail.
+
+        Emitted here, in DATA post-clobber, because the ranking reuses attack-path
+        reachability and needs the finished graph. Reports a percentage rather than a
+        list of failures so that an account with NO guardrails anywhere produces the
+        sentence "0 of 6 agents are governed" instead of the silence a per-agent check
+        gives when there is no per-agent gap to find."""
+        cov = aws_aispm.guardrail_coverage(g, self._aispm_resources,
+                                           account=self.account)
+        total = cov["overall"]["total"]
+        if not total:
+            return                      # no agents: nothing to be governed
+        governed, pct = cov["overall"]["governed"], cov["overall"]["pct"]
+        if not cov["gaps"]:
+            self._add("PASS", "AGT-06", "BEDROCK_AGENTS", "guardrail-coverage",
+                      f"All {total} Bedrock agent(s) are behind a guardrail "
+                      f"| guardrail-coverage")
+            return
+        headline = cov["gaps"][0]
+        where = ("internet-reachable and able to reach crown data"
+                 if headline["exposure_rank"] == 3 else
+                 "able to reach crown data" if headline["reaches_crown"] else
+                 "internet-reachable" if headline["reachable_from_internet"] else
+                 "not externally reachable")
+        self._add("FAIL", "AGT-06", "BEDROCK_AGENTS", "guardrail-coverage",
+                  f"Only {governed} of {total} Bedrock agent(s) are behind a guardrail "
+                  f"({pct}%) — {len(cov['gaps'])} ungoverned, worst is "
+                  f"'{headline['label']}' ({where}) | guardrail-coverage")
 
     def _aispm_emit(self, g, res, principals, scp_levels=None):
         """Emit one AI resource's node + HAS_ROLE anchor + AISPM findings. Static
@@ -10563,8 +10954,8 @@ class AWSLiveScanner:
                               f"| {name}")
                 elif verdict == aws_effperm.CONDITIONED:
                     # Survives only under a Condition. Worth a human's attention,
-                    # not worth a CRITICAL fused path — so it does NOT set `privesc`
-                    # and therefore cannot itself raise AIPATH-01.
+                    # but not enough to assert the pair -- so it does NOT set
+                    # `privesc` and therefore cannot itself raise AIPATH-01.
                     self._add("WARN", "AISPM-01", "DATA", name,
                               f"AI execution role {rolename} for {name} {reason}, but the "
                               f"permission boundary / SCP allows it only under a Condition — "
@@ -10575,13 +10966,23 @@ class AWSLiveScanner:
                               f"{crown} (CAN_READ_DATA) — the model has a standing line to "
                               f"sensitive data | {name}")
 
-        # AIPATH-01 — fused: network-exposed AI resource whose role escalates or reads crown
+        # AIPATH-01 — the two true legs, and the premise that joins them.
+        # Deliberately NOT called an attack path. `exposed` is built only from egress
+        # and isolation signals (see _emit_ai_topology, which refuses to fabricate the
+        # matching inbound edge and cites the SageMaker docs for why), so OverWatch has
+        # observed no route IN and must not imply one. What is real is the PAIR: a role
+        # with reach, and an unimpeded way to move results out. Stating the premise in
+        # the finding rather than assuming it silently is what makes this the first
+        # member of aws_epistemics._CONDITIONAL_IDS.
         if exposed and (privesc or crown):
             leg = "escalate privilege" if privesc else f"read crown data {crown}"
             self._add("FAIL", "AIPATH-01", "DATA", name,
-                      f"FUSED AI ATTACK PATH: network-exposed {kind} {name} -> execution role "
-                      f"can {leg}. Compromise or prompt-injection yields powerful credentials "
-                      f"plus an open egress channel. | {name}")
+                      f"CONDITIONAL AI EXPOSURE: {kind} {name} pairs unrestricted egress "
+                      f"with an execution role that can {leg}. No inbound route is "
+                      f"asserted — every network signal here is an egress signal. IF the "
+                      f"resource is compromised (prompt injection arrives in content, not "
+                      f"over the network), the attacker inherits those credentials AND an "
+                      f"open channel to move the results out. | {name}")
 
     def _dspm_emit(self, g, arn, kind, name, cj, public, encrypted, roles, read_actions,
                    read_probe=None):
@@ -11337,8 +11738,19 @@ class AWSLiveScanner:
             "VULN":           self._check_vuln,
             "THREAT":         self._check_threat,
             "DATA":           self._check_data,
+            "AI_THREAT":      self._check_ai_threat,
             "CORRELATE":      self._check_correlate,
         }
+
+        # BEFORE any section runs: work out what this role will not be able to
+        # evaluate, so the report can say so up front rather than leaving the reader
+        # to infer a gap from silence. Fail-open — a scan never depends on it.
+        try:
+            self._preflight_permissions()
+        except Exception as e:
+            self._add("INFO", "AISPM-00", "DATA", "coverage",
+                      f"Permission preflight did not run ({e}); coverage gaps will be "
+                      f"reported only as they are encountered | coverage")
 
         base_region = self.region
         for section in self.sections:

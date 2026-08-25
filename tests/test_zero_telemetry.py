@@ -248,7 +248,7 @@ def test_registry_egress_guard_pinned():
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Every module that turns a THIRD-PARTY payload into something OverWatch stores.
-_INGEST_MODULES = ("aws_cdr.py", "aws_edr.py", "aws_ingest.py")
+_INGEST_MODULES = ("aws_cdr.py", "aws_edr.py", "aws_ingest.py", "aws_airules.py")
 
 # Keys whose value is model input/output. Reading one of these is reading a prompt.
 _CONTENT_KEYS = frozenset({
@@ -263,7 +263,7 @@ _CONTENT_KEYS = frozenset({
 
 # Helpers a normalizer may route an evidence dict through. Each must take a dict
 # LITERAL as its first argument, so the fields are still written out one by one.
-_EVIDENCE_WRAPPERS = ("_wrap_identity",)
+_EVIDENCE_WRAPPERS = ("_wrap_identity", "_wrap_blast_radius")
 
 
 def _ingest_sources():
@@ -424,3 +424,80 @@ def test_the_poisoned_fixture_is_not_shipped():
     assert _POISONED not in _app_modules()
     for path in _app_modules():
         assert "poisoned_normalizer" not in _src(path), f"{path} imports the fixture"
+
+
+# ── G. the MCP seam: what we CAN pin, and an honest note on what we cannot ────
+# Slice 1.5 / decision D6. This section is different in kind from A-F, and the
+# difference is worth stating rather than glossing.
+#
+# A-F constrain OUR code and, between them, prove that OverWatch does not send data
+# anywhere. Section G cannot make that claim, because an MCP server's whole purpose is
+# to hand data to a client process we did not write, running on the operator's machine,
+# configured with a model we cannot see. A local stdio server passes every assertion in
+# A-F trivially while being the largest data-egress DECISION in the product.
+#
+# So this section pins the three things that are actually ours to pin:
+#   G1  the server cannot start without an explicit operator acknowledgement,
+#   G2  it never imports the scanner (which would let it reach AWS, and would put one
+#       stray coloured print between us and a corrupted protocol stream),
+#   G3  redaction is the DEFAULT construction, not an option somebody remembers.
+#
+# What it does NOT prove, and what no test here could: that the client kept the data
+# inside the boundary. That is documented in docs/MCP.md and stated in the server's own
+# initialize instructions, and it is the reason the gate exists at all.
+_MCP = os.path.join(ROOT, "cnapp_mcp.py")
+
+
+def test_g1_the_mcp_server_is_fail_closed(monkeypatch, capsys):
+    """The gate is the boundary. If this ever defaults to open, the zero-telemetry
+    story quietly stops covering the largest egress in the product.
+
+    monkeypatch.delenv is load-bearing, not tidiness. Without it, a developer working on
+    this feature with the acknowledgement exported would have main() start the server and
+    block forever on stdin — and an earlier draft guarded that with an `or` clause which
+    turned the whole assertion vacuous on exactly that machine."""
+    import cnapp_mcp
+    monkeypatch.delenv(cnapp_mcp.ACK_ENV, raising=False)
+    assert cnapp_mcp.gate({}) == (False, False)
+    assert cnapp_mcp.gate({cnapp_mcp.ACK_ENV: "1"}) == (True, False), (
+        "acknowledging the client boundary must NOT also enable identifiers")
+    assert cnapp_mcp.main([]) != 0, "the server started without an acknowledgement"
+    assert capsys.readouterr().out == "", "the refusal must not reach stdout"
+
+
+def test_g2_the_mcp_server_never_imports_the_scanner():
+    """Read-only over a finished report, by construction rather than by intention.
+    Importing the scanner would give the server a path to AWS and put its stdout prints
+    in the middle of a protocol stream the spec says must carry MCP messages only."""
+    forbidden = {"aws_live_scanner", "boto3", "botocore", "cnapp_service", "cnapp_store"}
+    for node in ast.walk(ast.parse(_src(_MCP), _MCP)):
+        for m in _imported_modules(node):
+            root = m.split(".")[0]
+            assert root not in forbidden, (
+                f"cnapp_mcp.py imports {m!r} — it must read a finished report and "
+                f"nothing else")
+
+
+def test_g3_redaction_is_the_default_construction():
+    import cnapp_mcp
+    assert cnapp_mcp.Redactor().enabled is True, (
+        "a redactor that defaults to off makes every call site the security control")
+    r = cnapp_mcp.Redactor()
+    assert "123456789012" not in r.text("account 123456789012")
+    assert "10.0.0.4" not in r.text("host 10.0.0.4")
+    assert "secret-bucket" not in r.text("arn:aws:s3:::secret-bucket")
+
+
+def test_g4_the_server_writes_diagnostics_to_stderr_only():
+    """The MCP spec: "The server MUST NOT write anything to its stdout that is not a
+    valid MCP message." A print() added for debugging would break every client, and
+    silently — the client just sees a parse error."""
+    tree = ast.parse(_src(_MCP), _MCP)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                and node.func.id == "print":
+            pytest.fail("cnapp_mcp.py calls print() — stdout carries MCP messages only; "
+                        "use _log() which writes to stderr")
+        if isinstance(node, ast.Attribute) and node.attr in ("stdout",) \
+                and isinstance(node.value, ast.Name) and node.value.id == "sys":
+            pass    # sys.stdout is legitimately the transport; print() is not

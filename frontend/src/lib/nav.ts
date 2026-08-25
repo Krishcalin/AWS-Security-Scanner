@@ -1,4 +1,5 @@
 import {
+  ScanSearch,
   LayoutDashboard, Waypoints, CircleAlert, ShieldAlert, Boxes, KeyRound,
   ShieldCheck, Wrench, FileText, Cloud, Settings2, PackageCheck,
   Globe, Database, Container, BrainCircuit, UserRoundMinus, FolderKanban, Terminal, Radar,
@@ -30,6 +31,7 @@ export const NAV_MAIN: NavItem[] = [
   { to: '/compliance', label: 'Compliance', icon: ShieldCheck },
   { to: '/remediation', label: 'Remediation', icon: Wrench },
   { to: '/reports', label: 'Reports', icon: FileText },
+  { to: '/coverage', label: 'Coverage', icon: ScanSearch },
 ]
 
 export const NAV_ADMIN: NavItem[] = [

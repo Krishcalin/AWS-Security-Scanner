@@ -47,8 +47,8 @@ def _run(boundary, *, exposed=False):
     """One AI resource whose execution role can PassRole, under `boundary`.
 
     `exposed=True` gives a SageMaker notebook with direct internet egress, which is
-    what makes AIPATH-01 reachable at all — a Bedrock agent is network_checkable=False
-    and can never be exposed, so testing the fused path with one would assert nothing."""
+    what makes AIPATH-01 reachable at all -- a Bedrock agent is network_checkable=False
+    and has no egress leg, so testing the pair with one would assert nothing."""
     s = _scanner()
     res = {"kind": "BedrockAgent", "name": "support-bot",
            "arn": "arn:aws:bedrock:us-east-1:123456789012:agent/A1",
@@ -114,14 +114,14 @@ def test_a_conditioned_boundary_downgrades_to_warn_rather_than_clearing():
     assert "Condition" in warns[0].message
 
 
-def test_an_exposed_resource_with_unconditioned_escalation_does_raise_the_fused_path():
+def test_open_egress_plus_unconditioned_escalation_does_raise_the_pair():
     """The control for the test below. Without this, 'AIPATH-01 not raised' could be
     passing because the fixture can never raise it, which asserts nothing at all."""
     assert "AIPATH-01" in _ids(_run(None, exposed=True), "FAIL")
 
 
-def test_a_conditioned_escalation_does_not_raise_a_critical_fused_path():
-    """AIPATH-01 is CRITICAL and asserts a live fused route. A capability that exists
+def test_a_conditioned_escalation_does_not_raise_the_conditional_pair():
+    """AIPATH-01 asserts a role with real reach. A capability that exists
     only under a Condition is not that — and the test above proves this fixture WOULD
     have raised it, so the absence here is the fix and not the fixture."""
     boundary = [{"effect": "Allow", "actions": {"iam:passrole"}, "resources": {"*"},
@@ -202,7 +202,10 @@ def test_ingested_runtime_evidence_is_observed_not_inferred():
 
 
 def test_capability_verdicts_are_inferred():
-    for cid in ("AISPM-01", "AISPM-02", "AIPATH-01", "IAMPE-03", "CIEM-01"):
+    # AIPATH-01 was here and has been moved to the CONDITIONAL assertion below. Its
+    # legs are inferred; the fusion rests on "assume a compromise lands", which is a
+    # premise rather than a derivation.
+    for cid in ("AISPM-01", "AISPM-02", "IAMPE-03", "CIEM-01"):
         assert aws_epistemics.classify(cid) == aws_epistemics.INFERRED, cid
 
 

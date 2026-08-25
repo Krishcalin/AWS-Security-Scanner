@@ -82,6 +82,31 @@ Resources:
                   - ec2:GetSnapshotBlockPublicAccessState
                   - access-analyzer:ValidatePolicy
                 Resource: '*'
+              # Three Bedrock CONFIG reads SecurityAudit v92 does not grant, each needed
+              # by a check that was otherwise refused at runtime and — before the
+              # preflight ledger existed — reported as though it had run. Verified
+              # against the published policy document rather than assumed: SecurityAudit
+              # grants GetAgentKnowledgeBase (a knowledge-base ASSOCIATION on an agent)
+              # but not GetKnowledgeBase; ListAgentActionGroups but not
+              # GetAgentActionGroup; ListDataSources but not GetDataSource. Two of those
+              # are one word apart, which is why inspection missed this for so long and
+              # computation did not — aws_perm_ledger.py derives exactly this list from
+              # the role's own attached policies and tests/test_perm_ledger.py pins it.
+              #
+              # Always-on, unlike the opt-in blocks below: these read CONFIGURATION, the
+              # same action class as the ec2:Get* entries above. No Put/Create/Delete/
+              # Update, no s3:GetObject, no logs:StartQuery — read-only-of-CONFIG holds.
+              #
+              # EXISTING DEPLOYMENTS need a stack update to pick this up. Until they do,
+              # AGT-03 and AGT-04 are reported as NOT EVALUATED — never as passed.
+              - Sid: AiConfigReadGaps
+                Effect: Allow
+                Action:
+                  - bedrock:GetKnowledgeBase
+                  - bedrock:GetDataSource
+                  - bedrock:GetAgentActionGroup
+                  - bedrock:GetGuardrail
+                Resource: '*'
       Tags:
         - { Key: 'cnapp:managed', Value: 'true' }
 
@@ -180,7 +205,10 @@ Resources:
   # List/Describe only — never ssm:GetParameter / secretsmanager:GetSecretValue (the value reads).
   #
   # ── AI-SPM + CDR-lite + cloud-forensics (v2.26) — NO new grant by default ────
-  # AI-SPM (AISPM-01..03 + AIPATH-01) reads bedrock/bedrock-agent/sagemaker list/describe/get (all
+  # AI-SPM (AISPM-01..03 + AIPATH-01) itself needs NO new API — it reasons over the
+  # cached IAM principals and the graph. The per-resource AI checks read bedrock/
+  # bedrock-agent/sagemaker list/describe/get; three of those are NOT in
+  # SecurityAudit and are granted above as AiConfigReadGaps. The rest are (all
   # in SecurityAudit) and reuses the cached IAM principals — zero new API. CDR-lite is a PUSH plane:
   # the operator streams GuardDuty/Security Hub/CloudTrail detection events to POST /detections and
   # OverWatch makes ZERO AWS calls to fold them (it works off the uploaded events + the stored

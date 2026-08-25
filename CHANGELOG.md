@@ -4,6 +4,144 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Phase 1 · slice 1.5 — a local read-only MCP server** (`cnapp_mcp.py`), closing
+  **decision D6**. An analyst can ask a scan questions in natural language instead of
+  reading JSON. The server cannot scan, cannot change anything, and never talks to AWS —
+  it reads a finished report.
+  - **D6 was ruled "ship it enforced".** The server is inside the OverWatch boundary; an
+    MCP client never is, and there is no version of this product where we control it.
+    The roadmap proposed a warning inside the tool descriptions, but those are read by
+    the *model*, not by the engineer editing a config file — a disclaimer, not a
+    boundary. So the boundary is enforced instead:
+    - **Fail-closed start.** Without `OVERWATCH_MCP_ACK_CLIENT_EGRESS=1` the server
+      refuses to run and explains why on stderr, exiting `2`. This makes nobody safer by
+      itself; it makes the egress a decision somebody made rather than a default nobody
+      noticed.
+    - **Identifiers redacted by default.** ARNs, 12-digit account IDs and IPv4 addresses
+      become stable pseudonyms (`arn:aws:s3:::s3-7f3a2b`). The analysis travels — *"a
+      public bucket reaches a crown datastore"* — and the identity does not. Serving real
+      identifiers needs a second explicit flag, following the "hashed by default" line
+      already drawn for D2. Pseudonyms are stable *within* a process so an analyst can
+      correlate across answers, and different *across* processes so two transcripts
+      cannot be joined on them.
+    - **Every tool call audited** to a JSONL log — tool, arguments, whether identifiers
+      were served, byte count and a SHA-256 of the payload. A digest rather than a second
+      copy of the findings. We cannot audit what the client did with a response; we can
+      say exactly what left the server, and that is the half we can honour.
+  - **Section G of `tests/test_zero_telemetry.py`** pins what is ours to pin: the gate is
+    fail-closed, the module imports neither the scanner nor boto3, redaction is the
+    default *construction*, and nothing calls `print()` (the MCP spec requires that
+    stdout carry protocol messages only). The section header states plainly what it
+    **cannot** prove — that the client kept the data inside the boundary — because
+    Sections A–F prove OverWatch sends nothing, and a local stdio server passes every one
+    of them trivially while being the largest egress decision in the product.
+  - Stdlib only, no MCP SDK: the transport is newline-delimited JSON-RPC 2.0, and a
+    dependency whose transitive imports could reach a network would undercut the very
+    guarantee Section G exists to make testable.
+  - Tools: `overwatch_scan_summary`, `overwatch_coverage`, `overwatch_findings`,
+    `overwatch_attack_paths`, `overwatch_check_reference`. `overwatch_coverage` is
+    deliberately prominent and named in the server's `initialize` instructions, because
+    a model asked "am I secure?" over a partial scan will otherwise answer from what it
+    was handed — **an unevaluated control is not a passing control.**
+  - `docs/MCP.md`, including the local-model configuration that is the only one where
+    output stays inside the operator's boundary, and an explicit note that this is a
+    *convenience* delta rather than a new capability: a scan already writes every finding
+    and ARN to a JSON report that any client could be pointed at today.
+
+- **Phase 2 · slice 2.1 — guardrail GRADING, and enforcement read from IAM text**
+  (`aws_aiguard.py`). Every CNAPP, this one included, has checked a guardrail as a
+  boolean: `BDR-02` PASSes any guardrail that exists. That boolean is satisfied by
+  configurations which block nothing at all.
+  - **`AIGRD-01`** (HIGH · CM-6) — no `PROMPT_ATTACK` filter, or one that does not block
+    on input, or one below `MEDIUM` strength. Bedrock's six content-filter categories
+    grade what a model *says*; only `PROMPT_ATTACK` addresses what a user makes it *do*.
+    A guardrail can be a thorough content-safety filter and leave a tool-using agent
+    entirely open to instruction hijacking.
+  - **`AIGRD-02`** (HIGH · CM-6) — filters set to detect without blocking. The Bedrock
+    reference defines action `NONE` exactly: *"Take no action but return detection
+    information in the trace response."* Such a guardrail produces telemetry, lets the
+    content through, and passes every presence check in the market.
+  - **`AIGRD-03`** (HIGH · AC-3) — **the guardrail is available but not mandatory.**
+    Attaching one to an agent does not stop a caller invoking the model without it; only
+    the `bedrock:GuardrailIdentifier` condition key does, and only with BOTH halves AWS
+    documents. The Allow half declines to grant when unmet; the *explicit Deny* is what
+    closes the door — it holds *"no matter what other permissions the user might have."*
+    A policy carrying the Allow and not the Deny reads like enforcement to a human
+    reviewing it and is not. **Costs no new permission** — decided from identity-policy
+    statements the scanner already collects.
+  - **`AIGRD-04`** (MEDIUM · CM-5) — guardrail exists only as `DRAFT`: edits reach live
+    traffic with no published artifact to diff, and a condition key cannot pin what has
+    no version number.
+  - Also surfaced as a **WARN, not a FAIL**: a role that enforces a guardrail *and* holds
+    `InvokeAgent` / `InvokeInlineAgent` / `RetrieveAndGenerate`. AWS documents that those
+    make internal `InvokeModel` calls which do not all carry a guardrail, so the Deny
+    rejects them. It is the reason teams switch enforcement back off, and a FAIL here
+    would push an operator to do exactly that.
+  - **A fourth managed-policy gap, found the same way as the first three:**
+    `bedrock:GetGuardrail` is not in SecurityAudit v92 — the same List-without-Get shape
+    (`ListGuardrails` granted, `GetGuardrail` not) that slice 1.2 found three times.
+    `ListGuardrails` returns `GuardrailSummary` only and carries no filter configuration,
+    so strength cannot be read without it. Added to both the CloudFormation and Terraform
+    onboarding paths; one `Get` buys three checks.
+  - Two claims **deliberately not made**, recorded in the module docstring: that a bare
+    guardrail ID in a Condition never matches (every AWS example uses the full ARN, but
+    the reference does not state what the condition key resolves to at evaluation time —
+    flagging it would be an inference about IAM internals dressed as a reading of the
+    policy); and that enforcement is absolute (the same page documents that guardrail
+    input tags can bypass the guardrail on the prompt, though it always applies on the
+    response).
+
+### Fixed
+- A runtime `AccessDenied` on `bedrock:GetGuardrail` recorded only `AIGRD-01` as
+  unevaluated, leaving `AIGRD-02` and `AIGRD-04` — blocked by the very same read —
+  looking clean. That is a phantom pass produced inside the coverage manifest whose
+  purpose is preventing them. The set is now derived from the permission ledger
+  (`_checks_gated_by`), so a fifth check needing the same read is covered the day it is
+  added rather than silently reporting itself as evaluated. The preflight path was
+  already correct, having derived it from the ledger all along.
+
+### Changed
+- **`AIPATH-01` no longer claims an attack path it never observed.** Slice 0.3 established
+  — with the SageMaker API reference quoted verbatim — that every input to
+  `ai_network_exposed` is an **egress or isolation** signal, and made `_emit_ai_topology`
+  refuse to emit the inbound `internet -[EXPOSED_TO]->` edge that would have made the
+  finding enumerate as a real path. That refusal held. The finding's own **prose** did not:
+  it went on opening `FUSED AI ATTACK PATH: network-exposed …`, and its detail page
+  described "an attacker who reaches the model host". The graph and the sentence describing
+  it disagreed for two slices, and only the graph was under test.
+  - The message now leads with the two legs that **are** true — unrestricted egress, and a
+    role that can escalate privilege or read crown data — and states the premise joining
+    them instead of hiding it: *"No inbound route is asserted … IF the resource is
+    compromised (prompt injection arrives in content, not over the network)…"*. The pair is
+    still worth reporting, because the likeliest compromise of an AI resource needs no
+    network route at all.
+  - **Epistemic class `INFERRED` → `CONDITIONAL`.** Both legs are genuinely inferred; what
+    joins them is a premise, not a derivation. `_CONDITIONAL_IDS` was built in slice 0.4 and
+    left empty for Phase 3's toxic flow — its first member turned out to already exist and
+    to have been shipping mislabelled, because **adding a category does not reclassify what
+    came before it**.
+  - **Severity `CRITICAL` → `HIGH`.** `CRITICAL` here means every link was observed
+    (`ATTACK-01/02`) or the primitive needs no assumption (`IAMPE-01/03/04`). Nothing pinned
+    the old value and sample data carries `AIPATH-01` only in the slice-1.1 permission
+    ledger, never as a scored finding, so no fixture or demo output changed.
+  - Remediation and detail steps no longer tell operators to re-scan and watch an
+    `internet -> AI -> role -> crown` path disappear — it never appeared.
+  - The "fused attack path" vocabulary is retired from the severity table, both AI-SPM
+    docstrings and the test names, because that phrase *is* the claim in compressed form:
+    left in place, the next reader finds a docstring describing a fused attack path beside a
+    body that declines to build one, and concludes the body is the bug.
+
+### Added
+- `tests/test_aipath_conditional.py` (14 tests) pins **agreement between the finding and the
+  graph**, which is the invariant that was missing: whenever `AIPATH-01` fires, the graph must
+  carry no inbound edge to the node it names **and** the message must not tell the reader
+  otherwise. Testing only the structure is what allowed the prose to drift. The absence
+  assertion carries its own positive control (the `HAS_ROLE` edge must be found by the same
+  query), so it cannot pass because the graph is empty or the key was misspelled.
+
 ## [2.35.0] — 2026
 
 **Coverage-close Batch 1 — "surface over existing engines"** (from the Wiz use-case gap
