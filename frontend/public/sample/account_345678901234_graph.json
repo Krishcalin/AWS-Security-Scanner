@@ -1,17 +1,25 @@
 {
-  "directed": true,
-  "multigraph": false,
-  "nodes": [
-    {
-      "cidr": "0.0.0.0/0",
-      "id": "internet",
-      "kind": "InternetSource"
-    },
-    {
-      "account": "345678901234",
-      "id": "capability:admin:345678901234",
-      "kind": "AdminCapability"
-    }
-  ],
-  "edges": []
+ "directed": true,
+ "multigraph": false,
+ "nodes": [
+  {
+   "cidr": "0.0.0.0/0",
+   "id": "internet",
+   "kind": "InternetSource"
+  },
+  {
+   "account": "345678901234",
+   "id": "capability:admin:345678901234",
+   "kind": "AdminCapability"
+  },
+  {
+   "id": "arn:aws:bedrock:us-east-1:345678901234:agent/SUPPORTBOT01",
+   "kind": "BedrockAgent",
+   "name": "helpdesk-bot",
+   "ai_resource": true,
+   "network_exposed": false,
+   "egress_unrestricted": false
+  }
+ ],
+ "edges": []
 }
