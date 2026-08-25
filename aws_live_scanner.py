@@ -84,6 +84,7 @@ import aws_airules
 import aws_cdr
 import aws_mcp
 import aws_perm_ledger
+import aws_sagemaker
 import aws_effperm
 import aws_state
 import aws_unused
@@ -405,6 +406,30 @@ CHECK_SEVERITY = {
     # Memory exposure (config half) and adversarial-test ingest. AMEM-01 is MEDIUM
     # because a long window is a choice rather than a defect; AMEM-02 is HIGH for
     # the same custody reason AGC-07 is.
+    # Slice 4.1 — SageMaker depth to Security Hub parity. Severities are AWS's own,
+    # taken from the published control reference rather than chosen here, because a
+    # scanner that claims parity with a standard and then quietly re-rates it is
+    # disagreeing with the standard where nobody can see the disagreement.
+    #
+    # Two of these CORRECT values OverWatch shipped: SageMaker.2 (custom VPC, SM-04)
+    # and SageMaker.3 (root access, SM-02) are both HIGH, and both were MEDIUM here.
+    # This raises the severity of two existing checks and therefore moves the posture
+    # score of any account running notebooks -- deliberate, and called out in the
+    # CHANGELOG rather than slipped in with a batch of new ids.
+    "SM-02": "HIGH", "SM-04": "HIGH",
+    # Network isolation on the two job kinds AWS rates HIGH (explainability, quality);
+    # the other three are MEDIUM. The asymmetry is AWS's and is preserved rather than
+    # smoothed, so a finding here matches the finding an auditor sees in Security Hub.
+    "SM-15": "HIGH", "SM-19": "HIGH",
+    "SM-08": "MEDIUM", "SM-09": "MEDIUM", "SM-10": "MEDIUM", "SM-11": "MEDIUM",
+    "SM-12": "MEDIUM", "SM-13": "MEDIUM", "SM-14": "MEDIUM", "SM-16": "MEDIUM",
+    "SM-17": "MEDIUM", "SM-18": "MEDIUM", "SM-20": "MEDIUM", "SM-21": "MEDIUM",
+    "SM-22": "MEDIUM", "SM-23": "MEDIUM", "SM-24": "MEDIUM", "SM-25": "MEDIUM",
+    "SM-26": "MEDIUM",
+    # Tagging controls. LOW because they are inventory hygiene rather than posture --
+    # AWS rates them Low too -- but included, because the slice's claim is parity with
+    # all 25 controls and a coverage table with two holes in it is not parity.
+    "SM-27": "LOW", "SM-28": "LOW",
     "AMEM-01": "MEDIUM", "AMEM-02": "HIGH",
     # MCP provenance. MCP-01 is HIGH rather than CRITICAL because federating a
     # third-party tool provider is a legitimate design -- the finding is that the
@@ -721,6 +746,27 @@ COMPLIANCE_MAP = {
     "MCP-03": {"PCI-DSS": "6.2.4", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.1", "NIST": "SI-7"},
     "MCP-04": {"PCI-DSS": "12.8.4", "HIPAA": "164.308(b)(1)", "SOC2": "CC9.2", "NIST": "SI-7"},
     "MCP-05": {"PCI-DSS": "6.5.1", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC8.1", "NIST": "CM-5"},
+    "SM-08": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(i)", "SOC2": "A1.2", "NIST": "SC-5"},
+    "SM-09": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SM-10": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC6.8", "NIST": "SC-7"},
+    "SM-11": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC6.8", "NIST": "SC-7"},
+    "SM-12": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "SM-13": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SM-14": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "SM-15": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SM-16": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "SM-17": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SM-18": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "SM-19": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SM-20": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "SM-21": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SM-22": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "SM-23": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "SM-24": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "SM-25": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "SM-26": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "SM-27": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
+    "SM-28": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
     "AMEM-01": {"PCI-DSS": "3.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "AMEM-02": {"PCI-DSS": "3.6.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "PENT-01": {"PCI-DSS": "11.4.1", "HIPAA": "164.308(a)(8)", "SOC2": "CC4.1", "NIST": "CA-8"},
@@ -1058,6 +1104,27 @@ REMEDIATION_MAP = {
     "MCP-03": "Read the gateway's MCP instructions as the model receives them, not as documentation: aws bedrock-agentcore-control get-gateway --gateway-identifier <ID> --query protocolConfiguration.mcp.instructions. Remove chat-template delimiters and invisible codepoints, then re-set the field with update-gateway. Treat whoever can edit this string as able to address your agents directly",
     "MCP-04": "No action closes this one -- it is a limit of what AWS records, not a misconfiguration. Compensate rather than remediate: put a human in front of consequential actions (AGY-03), narrow the gateway execution role so a changed tool reaches less (AISPM-01/02), and pin the vendor by contract and version since the account cannot pin them technically. Re-scan after any change to the federation and compare",
     "MCP-05": "Match the change against your own change record. If it was yours, nothing more is needed and the next scan will read as stable. If it was not, treat the gateway as untrusted until you know who made it: aws bedrock-agentcore-control get-gateway-target --gateway-identifier <ID> --target-id <TID> for the current state, then cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=UpdateGatewayTarget to find who called it and when",
+    "SM-08": "Raise the production variant's initial instance count above 1 so SageMaker spreads it across Availability Zones: aws sagemaker create-endpoint-config --endpoint-config-name <NEW> --production-variants VariantName=<V>,ModelName=<M>,InitialInstanceCount=2,InstanceType=<T> ; then aws sagemaker update-endpoint --endpoint-name <E> --endpoint-config-name <NEW>. Serverless variants are out of scope -- they have no instance count to raise",
+    "SM-09": "Recreate the model with network isolation on: aws sagemaker create-model --model-name <M> --execution-role-arn <ROLE> --enable-network-isolation --primary-container Image=<IMG>. An isolated container cannot reach the internet or other AWS services, and no AWS credentials are placed in its runtime environment",
+    "SM-10": "Point the primary container at a private registry reachable in your VPC: aws sagemaker create-model --model-name <M> --execution-role-arn <ROLE> --primary-container Image=<IMG>,ImageConfig={RepositoryAccessMode=Vpc,RepositoryAuthConfig={RepositoryCredentialsProviderArn=<LAMBDA_ARN>}}. Images then travel over VPC endpoints instead of the public internet, which is what makes the pull auditable and tamper-resistant",
+    "SM-11": "Set ImageConfig.RepositoryAccessMode=Vpc on EVERY container in the inference pipeline, not only the primary -- a single Platform-mode container reintroduces the public pull for the whole pipeline: aws sagemaker describe-model --model-name <M> --query Containers[].ImageConfig",
+    "SM-12": "Migrate the notebook to a supported platform. The identifier cannot be changed in place: aws sagemaker create-notebook-instance --notebook-instance-name <NEW> --instance-type <T> --role-arn <ROLE> --platform-identifier notebook-al2023-v1 ; then move the work across and delete the old instance. An unsupported platform stops receiving SageMaker security updates and critical bug fixes",
+    "SM-13": 'Network isolation cannot be changed in place -- recreate the data quality job definition with NetworkConfig.EnableNetworkIsolation set to true: aws sagemaker create-data-quality-job-definition. An isolated container makes no outbound calls and receives no AWS credentials, which is what bounds an escape to the container itself',
+    "SM-14": 'Inter-container traffic encryption cannot be changed in place -- recreate the data quality job definition with NetworkConfig.EnableInterContainerTrafficEncryption set to true: aws sagemaker create-data-quality-job-definition. This only matters at an instance count of 2 or more, which is when traffic between containers exists at all',
+    "SM-15": 'Network isolation cannot be changed in place -- recreate the model explainability job definition with NetworkConfig.EnableNetworkIsolation set to true: aws sagemaker create-model-explainability-job-definition. An isolated container makes no outbound calls and receives no AWS credentials, which is what bounds an escape to the container itself',
+    "SM-16": 'Inter-container traffic encryption cannot be changed in place -- recreate the model explainability job definition with NetworkConfig.EnableInterContainerTrafficEncryption set to true: aws sagemaker create-model-explainability-job-definition. This only matters at an instance count of 2 or more, which is when traffic between containers exists at all',
+    "SM-17": 'Network isolation cannot be changed in place -- recreate the model bias job definition with NetworkConfig.EnableNetworkIsolation set to true: aws sagemaker create-model-bias-job-definition. An isolated container makes no outbound calls and receives no AWS credentials, which is what bounds an escape to the container itself',
+    "SM-18": 'Inter-container traffic encryption cannot be changed in place -- recreate the model bias job definition with NetworkConfig.EnableInterContainerTrafficEncryption set to true: aws sagemaker create-model-bias-job-definition. This only matters at an instance count of 2 or more, which is when traffic between containers exists at all',
+    "SM-19": 'Network isolation cannot be changed in place -- recreate the model quality job definition with NetworkConfig.EnableNetworkIsolation set to true: aws sagemaker create-model-quality-job-definition. An isolated container makes no outbound calls and receives no AWS credentials, which is what bounds an escape to the container itself',
+    "SM-20": 'Inter-container traffic encryption cannot be changed in place -- recreate the model quality job definition with NetworkConfig.EnableInterContainerTrafficEncryption set to true: aws sagemaker create-model-quality-job-definition. This only matters at an instance count of 2 or more, which is when traffic between containers exists at all',
+    "SM-21": "Set EnableNetworkIsolation in the schedule's NetworkConfig: aws sagemaker update-monitoring-schedule --monitoring-schedule-name <S> --monitoring-schedule-config file://config.json, with NetworkConfig.EnableNetworkIsolation=true inside MonitoringJobDefinition. Monitoring jobs read production inference data, so an un-isolated one is an egress path from your most sensitive traffic",
+    "SM-22": "Inter-container traffic encryption cannot be updated in place on a monitoring schedule -- recreate it with NetworkConfig.EnableInterContainerTrafficEncryption=true inside MonitoringJobDefinition: aws sagemaker create-monitoring-schedule --monitoring-schedule-name <S> --monitoring-schedule-config file://config.json",
+    "SM-23": "Encrypt the feature group's offline store with a customer-managed key. The key is set at creation: aws sagemaker create-feature-group --feature-group-name <FG> --offline-store-config S3StorageConfig={S3Uri=<URI>,KmsKeyId=<KEY_ARN>}. An offline store is the historical record of every feature value your models trained on",
+    "SM-24": "Encrypt the online store with a customer-managed key: aws sagemaker create-feature-group --feature-group-name <FG> --online-store-config SecurityConfig={KmsKeyId=<KEY_ARN>},EnableOnlineStore=true. This applies to Standard storage; an InMemory online store is a different product and out of the control's scope",
+    "SM-25": "Set a customer-managed key for instance storage when creating the inference experiment: aws sagemaker create-inference-experiment --name <N> --kms-key <KEY_ARN> ... . The SageMaker execution role needs kms:CreateGrant on that key. This covers model artifacts and temporary inference data on the ML compute volume",
+    "SM-26": "Set DataStorageConfig.KmsKey when data capture is enabled, so captured inference requests and responses are encrypted at rest in S3: aws sagemaker create-inference-experiment --data-storage-config Destination=<S3>,KmsKey=<KEY_ARN>. Captured payloads are the real inference traffic, which is usually the most sensitive data the experiment touches",
+    "SM-27": "Tag the app image configuration so it can be attributed and governed: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Tags with the aws: prefix are system tags and do not satisfy the control. Never put personally identifiable or sensitive information in a tag -- tags are readable from many AWS services",
+    "SM-28": "Tag the image: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Same caveats as SM-27 -- system aws: tags do not count, and tags are not a place for sensitive values",
     "AMEM-01": "Decide the window deliberately rather than inheriting it. Bedrock agent: aws bedrock-agent update-agent --agent-id <AGENT_ID> --agent-name <NAME> --foundation-model <MODEL> --memory-configuration '{\"enabledMemoryTypes\":[\"SESSION_SUMMARY\"],\"storageDays\":7}' ; AgentCore: aws bedrock-agentcore-control update-memory --memory-id <ID> --event-expiry-duration 7 ; shorter is not automatically better, but the number should be one somebody chose",
     "AMEM-02": "Re-key the memory store onto a customer-managed key so you can revoke and audit access to what carries between an agent's sessions: aws kms create-key --description 'AgentCore memory' ; then recreate the memory with --encryption-key-arn <KEY_ARN>, and scope the key policy to the memory execution role rather than leaving it account-wide",
     "PENT-01": "This is your own adversarial test result, ingested as reported. Treat the probe as a true positive until you have reviewed it, then bound what a successful probe would reach: aws iam get-role-policy --role-name <ROLE> --policy-name <POLICY> and narrow it (see AISPM-01/AISPM-02), and check TFLOW-01/02 for what this identity reaches once an injection lands",
@@ -1851,6 +1918,14 @@ def _op_action(op: str) -> str:
     return "".join(p.title() for p in (op or "").split("_"))
 
 
+def _op_to_api(op: str) -> str:
+    """boto3 snake_case operation -> the IAM action name.
+
+    `list_feature_groups` -> `ListFeatureGroups`. Used so a denial names the permission
+    an operator must grant rather than the Python method they cannot see."""
+    return "".join(part.title() for part in (op or "").split("_"))
+
+
 def _checks_gated_by(action: str) -> tuple:
     """Every check id the permission ledger says depends on `action`.
 
@@ -2032,6 +2107,10 @@ class AWSLiveScanner:
         # scan. The scan path stays stateless -- a DB is a --state opt-in, and a check
         # that needs one to run at all would make the config half hostage to it.
         self._mcp_surfaces = []
+        # SageMaker.6/.7's requiredKeyTags parameter. AWS ships no default, and with
+        # none set the control checks only that SOME non-system tag key exists -- so
+        # an empty tuple here IS the documented default, not an unset option.
+        self._sm_required_tags = ()
         # knowledgeBaseId -> injection surface, from the data sources AGT-03 reads.
         self._kb_surface = {}
         self._perm_ledger = None            # set by _preflight_permissions()
@@ -8085,6 +8164,256 @@ class AWSLiveScanner:
         # SM-05/06 Studio domains + SM-07 endpoint configs (run independently of notebooks)
         self._check_sagemaker_domains(sm)
         self._check_sagemaker_endpoint_configs(sm)
+        # Slice 4.1 — the twenty-one Security Hub controls the sections above never
+        # answered. Each runs independently: an account with no models must still have
+        # its feature groups read, and one whose monitoring jobs are unreadable must
+        # still get an answer about its endpoints.
+        self._check_sagemaker_models(sm)
+        self._check_sagemaker_monitoring(sm)
+        self._check_sagemaker_feature_groups(sm)
+        self._check_sagemaker_inference_experiments(sm)
+        self._check_sagemaker_endpoint_redundancy(sm)
+        self._check_sagemaker_tagging(sm)
+
+    # ── slice 4.1: Security Hub parity ────────────────────────────────────────
+    def _sm_page(self, sm, op, key, cid, label):
+        """Inline-paginate one SageMaker list operation.
+
+        Returns None when the list could not be read, which callers must keep distinct
+        from []. `_paginate_all` is deliberately not used here for the reason the Studio
+        domain reader gives: it swallows an AccessDenied into a phantom empty list, and
+        an empty list reads as `nothing to check` — a clean bill of health issued on the
+        strength of a refused call."""
+        fn = getattr(sm, op, None)
+        if fn is None:
+            return None                    # operation absent from this SDK version
+        try:
+            out, token = [], None
+            for _ in range(200):
+                resp = fn(**({"NextToken": token} if token else {}))
+                out.extend(resp.get(key) or [])
+                token = resp.get("NextToken")
+                if not token or not isinstance(token, str):
+                    break
+            return out
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied(cid, f"sagemaker:{_op_to_api(op)}")
+                self._add("INFO", "SM-00", "SAGEMAKER", label,
+                          f"{label} NOT audited — missing sagemaker:{_op_to_api(op)} "
+                          f"(no phantom pass)")
+            else:
+                self._add("WARN", cid, "SAGEMAKER", label, str(e))
+            return None
+
+    def _check_sagemaker_models(self, sm):
+        """SM-09 network isolation, SM-10/11 private container registry."""
+        models = self._sm_page(sm, "list_models", "Models", "SM-09", "sagemaker-models")
+        if not models:
+            return
+        for m in models:
+            name = m.get("ModelName")
+            if not name:
+                continue
+            try:
+                detail = sm.describe_model(ModelName=name)
+            except Exception as e:
+                self._add("WARN", "SM-09", "SAGEMAKER", name, str(e))
+                continue
+            p = aws_sagemaker.model_posture(detail)
+            self._add("FAIL" if not p["isolated"] else "PASS", "SM-09", "SAGEMAKER", name,
+                      (f"Model '{name}' has network isolation disabled — the container "
+                       f"can reach the internet and AWS credentials are placed in its "
+                       f"runtime environment | {name}") if not p["isolated"] else
+                      f"Model '{name}' is network-isolated | {name}")
+            self._add("FAIL" if not p["primary_private_registry"] else "PASS",
+                      "SM-10", "SAGEMAKER", name,
+                      (f"Model '{name}' pulls its primary container image from the "
+                       f"public platform registry rather than a private registry in "
+                       f"your VPC | {name}") if not p["primary_private_registry"] else
+                      f"Model '{name}' primary container uses a VPC registry | {name}")
+            # SM-11 applies only to a multi-container pipeline. A single-container model
+            # has no pipeline, and reporting one would be a finding about a shape the
+            # configuration does not have.
+            if p["has_pipeline"]:
+                pub = p["public_pipeline_containers"]
+                self._add("FAIL" if pub else "PASS", "SM-11", "SAGEMAKER", name,
+                          (f"Model '{name}' inference pipeline pulls "
+                           f"{len(pub)} container image(s) from the public platform "
+                           f"registry ({', '.join(pub)}) | {name}") if pub else
+                          f"Model '{name}' pipeline containers all use a VPC "
+                          f"registry | {name}")
+
+    def _check_sagemaker_monitoring(self, sm):
+        """SM-13..SM-22 — the same two questions across five resource types.
+
+        Driven by aws_sagemaker.MONITORING_KINDS rather than written out five times,
+        because the failure mode of five copies is that one of them stops matching the
+        other four and nobody notices which."""
+        for (label, list_op, list_key, name_field, desc_op, desc_kwarg,
+             iso_ctl, enc_ctl, _cond) in aws_sagemaker.MONITORING_KINDS:
+            iso_id = aws_sagemaker.SECURITY_HUB_PARITY[iso_ctl][0]
+            enc_id = aws_sagemaker.SECURITY_HUB_PARITY[enc_ctl][0]
+            items = self._sm_page(sm, list_op, list_key, iso_id, f"sagemaker-{list_key}")
+            if not items:
+                continue
+            desc = getattr(sm, desc_op, None)
+            if desc is None:
+                continue
+            for it in items:
+                name = it.get(name_field)
+                if not name:
+                    continue
+                try:
+                    detail = desc(**{desc_kwarg: name})
+                except Exception as e:
+                    self._add("WARN", iso_id, "SAGEMAKER", name, str(e))
+                    continue
+                p = aws_sagemaker.monitoring_posture(detail)
+                self._add("FAIL" if not p["isolated"] else "PASS", iso_id,
+                          "SAGEMAKER", name,
+                          (f"{label} '{name}' has network isolation disabled — its "
+                           f"containers can make outbound network calls | {name}")
+                          if not p["isolated"] else
+                          f"{label} '{name}' is network-isolated | {name}")
+                # The conditional half. On a single instance there is no traffic
+                # between containers, so the control cannot be failed and is not
+                # reported at all -- neither as FAIL nor as a PASS it did not earn.
+                if not p["encryption_applicable"]:
+                    continue
+                self._add("FAIL" if not p["encrypted"] else "PASS", enc_id,
+                          "SAGEMAKER", name,
+                          (f"{label} '{name}' runs on {p['instance_count']} instances "
+                           f"with inter-container traffic unencrypted | {name}")
+                          if not p["encrypted"] else
+                          f"{label} '{name}' encrypts inter-container traffic | {name}")
+
+    def _check_sagemaker_feature_groups(self, sm):
+        """SM-23 offline store CMK, SM-24 online store CMK."""
+        groups = self._sm_page(sm, "list_feature_groups", "FeatureGroupSummaries",
+                               "SM-23", "sagemaker-feature-groups")
+        if not groups:
+            return
+        for g in groups:
+            name = g.get("FeatureGroupName")
+            if not name:
+                continue
+            try:
+                detail = sm.describe_feature_group(FeatureGroupName=name)
+            except Exception as e:
+                self._add("WARN", "SM-23", "SAGEMAKER", name, str(e))
+                continue
+            p = aws_sagemaker.feature_group_encryption(detail)
+            if p["has_offline"]:
+                self._add("FAIL" if not p["offline_kms"] else "PASS", "SM-23",
+                          "SAGEMAKER", name,
+                          (f"Feature group '{name}' offline store is not encrypted with "
+                           f"a KMS key — it holds the historical record of every feature "
+                           f"value your models trained on | {name}")
+                          if not p["offline_kms"] else
+                          f"Feature group '{name}' offline store is KMS-encrypted | {name}")
+            if p["has_online"] and p["online_applicable"]:
+                self._add("FAIL" if not p["online_kms"] else "PASS", "SM-24",
+                          "SAGEMAKER", name,
+                          (f"Feature group '{name}' online store is not encrypted with a "
+                           f"customer-managed KMS key | {name}") if not p["online_kms"]
+                          else f"Feature group '{name}' online store is KMS-encrypted "
+                               f"| {name}")
+
+    def _check_sagemaker_inference_experiments(self, sm):
+        """SM-25 instance storage CMK, SM-26 captured data CMK."""
+        exps = self._sm_page(sm, "list_inference_experiments", "InferenceExperiments",
+                             "SM-25", "sagemaker-inference-experiments")
+        if not exps:
+            return
+        for e in exps:
+            name = e.get("Name")
+            if not name:
+                continue
+            try:
+                detail = sm.describe_inference_experiment(Name=name)
+            except Exception as exc:
+                self._add("WARN", "SM-25", "SAGEMAKER", name, str(exc))
+                continue
+            p = aws_sagemaker.inference_experiment_encryption(detail)
+            self._add("FAIL" if not p["instance_kms"] else "PASS", "SM-25",
+                      "SAGEMAKER", name,
+                      (f"Inference experiment '{name}' instance storage volume has no "
+                       f"customer-managed KMS key | {name}") if not p["instance_kms"]
+                      else f"Inference experiment '{name}' instance storage is "
+                           f"KMS-encrypted | {name}")
+            # SM-26 is about the CAPTURED PAYLOAD. With capture off there is no payload,
+            # so the control does not apply and nothing is claimed either way.
+            if p["capture_enabled"]:
+                self._add("FAIL" if not p["data_kms"] else "PASS", "SM-26",
+                          "SAGEMAKER", name,
+                          (f"Inference experiment '{name}' captures inference requests "
+                           f"and responses to S3 with no KMS key — captured payloads are "
+                           f"the real inference traffic | {name}") if not p["data_kms"]
+                          else f"Inference experiment '{name}' captured data is "
+                               f"KMS-encrypted | {name}")
+
+    def _check_sagemaker_endpoint_redundancy(self, sm):
+        """SM-08 — production variants with an initial instance count greater than 1."""
+        cfgs = self._sm_page(sm, "list_endpoint_configs", "EndpointConfigs",
+                             "SM-08", "sagemaker-endpoint-configs")
+        if not cfgs:
+            return
+        for c in cfgs:
+            name = c.get("EndpointConfigName")
+            if not name:
+                continue
+            try:
+                detail = sm.describe_endpoint_config(EndpointConfigName=name)
+            except Exception as e:
+                self._add("WARN", "SM-08", "SAGEMAKER", name, str(e))
+                continue
+            p = aws_sagemaker.endpoint_variant_redundancy(detail)
+            if not p["applicable"]:
+                continue               # serverless only: no instance count to raise
+            self._add("FAIL" if p["single_instance"] else "PASS", "SM-08",
+                      "SAGEMAKER", name,
+                      (f"Endpoint config '{name}' has {len(p['single_instance'])} "
+                       f"production variant(s) on a single instance "
+                       f"({', '.join(p['single_instance'])}) — no multi-AZ redundancy "
+                       f"| {name}") if p["single_instance"] else
+                      f"Endpoint config '{name}' production variants are "
+                      f"multi-instance | {name}")
+
+    def _check_sagemaker_tagging(self, sm):
+        """SM-27 app image configs, SM-28 images.
+
+        Inventory hygiene rather than posture, and rated LOW for that reason, but the
+        slice's claim is parity with all 25 controls and a coverage table with two holes
+        in it is not parity."""
+        for op, key, name_field, arn_field, cid, label in (
+                ("list_app_image_configs", "AppImageConfigs", "AppImageConfigName",
+                 "AppImageConfigArn", "SM-27", "app image config"),
+                ("list_images", "Images", "ImageName", "ImageArn", "SM-28", "image")):
+            items = self._sm_page(sm, op, key, cid, f"sagemaker-{key}")
+            if not items:
+                continue
+            list_tags = getattr(sm, "list_tags", None)
+            if list_tags is None:
+                continue
+            for it in items:
+                name, arn = it.get(name_field), it.get(arn_field)
+                if not name or not arn:
+                    continue
+                try:
+                    tags = (list_tags(ResourceArn=arn) or {}).get("Tags") or []
+                except Exception as e:
+                    if self._is_access_denied(e):
+                        self._coverage.note_denied(cid, "sagemaker:ListTags")
+                    else:
+                        self._add("WARN", cid, "SAGEMAKER", name, str(e))
+                    continue
+                missing = aws_sagemaker.missing_tag_keys(tags, self._sm_required_tags)
+                self._add("FAIL" if missing else "PASS", cid, "SAGEMAKER", name,
+                          (f"SageMaker {label} '{name}' is missing tag key(s): "
+                           f"{', '.join(missing)} — untagged resources cannot be "
+                           f"attributed to an owner | {name}") if missing else
+                          f"SageMaker {label} '{name}' is tagged | {name}")
 
     def _check_sagemaker_domains(self, sm):
         """SM-05 Studio domain public egress + SM-06 home-EFS CMK. Inline-paginate (never

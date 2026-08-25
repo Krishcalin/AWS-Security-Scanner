@@ -2576,6 +2576,221 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "This check needs --state. Without a state DB there is no previous scan to compare against, and the config-half findings (MCP-01..04) are all that can be established from a single run.",
         ],
     },
+    "SM-08": {
+        "risk": "This endpoint configuration has a production variant running on a single instance. SageMaker spreads a variant with two or more instances across Availability Zones, so a single-instance variant has no redundancy: the AZ, the host, or the container failing takes the endpoint with it. This is a resilience control rather than a confidentiality one, and it is in the security standard for a reason worth stating - availability is what lets you recover from a security incident. An endpoint you cannot fail over is an endpoint you cannot take offline to investigate. This check answers Security Hub control SageMaker.4.",
+        "impact": "The inference endpoint has a single point of failure, and no capacity to absorb the loss of one instance during an incident or a deployment.",
+        "steps": [
+            "Create a new endpoint config with InitialInstanceCount of at least 2 and update the endpoint onto it - production variants are immutable, so this is a create-then-update rather than an edit.",
+            "Serverless variants are outside this control: they have no instance count, and OverWatch does not report them.",
+            "Size the second instance for real failover rather than as a formality - two instances that both saturate under normal load are not redundancy.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-09": {
+        "risk": "This hosted model runs without network isolation. SageMaker training and inference containers are internet-enabled by default, which means the container can make outbound calls to anywhere and AWS credentials are placed in its runtime environment. With isolation on, neither is true: no inbound or outbound network call can be made to or from the container, including to other AWS services, and no credentials are made available to it. That distinction is what bounds a container escape or a poisoned dependency to the container itself rather than to whatever the execution role can reach. It matters more here than on a generic workload because of what this job reads: monitoring jobs are pointed at production inference data, so an un-isolated one is an egress path out of your most sensitive traffic. This check answers Security Hub control SageMaker.5.",
+        "impact": "A compromised model container can reach the internet and use the execution role's credentials.",
+        "steps": [
+            "Recreate the model with --enable-network-isolation. The flag is set at creation.",
+            "A network-isolated model cannot download artifacts at runtime, so bake anything it needs into the image or the model data rather than fetching it on start.",
+            "Check SM-10/SM-11 at the same time - a model that pulls its image from the public registry and runs without isolation has neither a trusted source nor a bounded blast radius.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-10": {
+        "risk": "This model pulls its primary container image from the public SageMaker platform registry rather than from a private registry reachable inside your VPC. The image is what actually runs your inference, so where it comes from is a supply-chain question: an image pulled over the public internet is one whose provenance you did not control and whose pull you cannot audit. With RepositoryAccessMode set to Vpc, the pull happens through VPC endpoints against a registry you own, which is what makes the source both trusted and traceable. This check answers Security Hub control SageMaker.16.",
+        "impact": "The code running your inference comes from a source outside your control, fetched over a path you cannot observe.",
+        "steps": [
+            "Set ImageConfig.RepositoryAccessMode to Vpc on the primary container and supply RepositoryAuthConfig so SageMaker can authenticate to your registry.",
+            "Mirror the images you depend on into your own ECR repository rather than referencing an upstream one - a mirror you control is the point.",
+            "Scan the mirrored image (ECR-01/ECR-02) so 'private' does not quietly become 'unexamined'.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-11": {
+        "risk": "One or more containers in this model's inference pipeline pull their image from the public platform registry. A multi-container pipeline is only as trustworthy as its least trustworthy container: each one processes the request in turn, so a single public-registry container reintroduces for the whole pipeline exactly the provenance problem SM-10 describes for the primary. OverWatch counts the primary and the pipeline separately because Security Hub does, and because the remediation is per-container. This check answers Security Hub control SageMaker.19.",
+        "impact": "An untrusted image sits somewhere in the inference chain, with access to the request as it passes through.",
+        "steps": [
+            "Set ImageConfig.RepositoryAccessMode to Vpc on EVERY container in the pipeline. The finding names the ones that are not.",
+            "Audit the full chain: aws sagemaker describe-model --model-name <M> --query Containers[].ImageConfig",
+            "Treat each pipeline container as a separate supply-chain dependency, because that is what it is.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-12": {
+        "risk": "This notebook instance runs on a platform SageMaker no longer supports. An unsupported platform keeps working - that is what makes it easy to leave in place - but it stops receiving SageMaker security updates and critical bug fixes. Because the platform identifier cannot be changed after creation, this is one of the few findings whose remediation is genuinely 'build a new one', and the longer it waits the more state accumulates on the instance to migrate. The supported list is read from AWS's control reference and dated in aws_sagemaker.py (2026-08-25); it moves, so a stale copy of this scanner will eventually understate the problem. This check answers Security Hub control SageMaker.8.",
+        "impact": "The notebook stops receiving security patches, and it holds credentials, data and code with the execution role attached to it.",
+        "steps": [
+            "Create a replacement with --platform-identifier notebook-al2023-v1 and migrate the work across; the identifier is immutable on an existing instance.",
+            "Move notebook content into a repository before deleting the old instance - anything only on the ML volume is lost with it.",
+            "While migrating, take the opportunity to fix SM-01/SM-02/SM-03 on the replacement: direct internet access, root access and the KMS key are all creation-time settings too.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-13": {
+        "risk": "This data quality job definition runs without network isolation. SageMaker training and inference containers are internet-enabled by default, which means the container can make outbound calls to anywhere and AWS credentials are placed in its runtime environment. With isolation on, neither is true: no inbound or outbound network call can be made to or from the container, including to other AWS services, and no credentials are made available to it. That distinction is what bounds a container escape or a poisoned dependency to the container itself rather than to whatever the execution role can reach. It matters more here than on a generic workload because of what this job reads: monitoring jobs are pointed at production inference data, so an un-isolated one is an egress path out of your most sensitive traffic. This check answers Security Hub control SageMaker.11.",
+        "impact": "A compromised or poisoned container can reach the internet and use the execution role's credentials, turning a container-level problem into an account-level one.",
+        "steps": [
+            "Network isolation cannot be changed in place. Recreate the data quality job definition with NetworkConfig.EnableNetworkIsolation set to true.",
+            "Check whether the job needs outbound access at all before assuming it does - a monitoring job that reads S3 and writes S3 usually reaches both through VPC endpoints, which isolation does not block.",
+            "If it genuinely needs an external dependency, put that dependency behind a VPC endpoint or a proxy you control rather than leaving the container open.",
+            "Bound what an un-isolated container could do meanwhile by narrowing the job's RoleArn - that role is the ceiling on what an escape reaches.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-14": {
+        "risk": "This data quality job definition runs on more than one instance with inter-container traffic unencrypted. During distributed processing the instances exchange the material the job is working on - inference records, model weights, intermediate results, parameters - and by default that traffic is not encrypted. Anyone positioned between the instances reads it. The control is conditional and OverWatch honours that: on a single instance there is no traffic between containers, so this finding is not raised at all rather than raised and dismissed. Seeing it means the job genuinely has instances talking to each other in the clear. This check answers Security Hub control SageMaker.9.",
+        "impact": "The data the job processes is readable in transit between its own compute instances, including model parameters and the production records being monitored.",
+        "steps": [
+            "Recreate the data quality job definition with NetworkConfig.EnableInterContainerTrafficEncryption set to true. It cannot be updated in place.",
+            "Expect a throughput cost on large distributed jobs and size the cluster for it; that cost is the reason the flag exists rather than being permanently on.",
+            "If the job does not need multiple instances, reducing the instance count to 1 also removes the exposure - there is then no inter-container traffic at all.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-15": {
+        "risk": "This model explainability job definition runs without network isolation. SageMaker training and inference containers are internet-enabled by default, which means the container can make outbound calls to anywhere and AWS credentials are placed in its runtime environment. With isolation on, neither is true: no inbound or outbound network call can be made to or from the container, including to other AWS services, and no credentials are made available to it. That distinction is what bounds a container escape or a poisoned dependency to the container itself rather than to whatever the execution role can reach. It matters more here than on a generic workload because of what this job reads: monitoring jobs are pointed at production inference data, so an un-isolated one is an egress path out of your most sensitive traffic. This check answers Security Hub control SageMaker.20.",
+        "impact": "A compromised or poisoned container can reach the internet and use the execution role's credentials, turning a container-level problem into an account-level one.",
+        "steps": [
+            "Network isolation cannot be changed in place. Recreate the model explainability job definition with NetworkConfig.EnableNetworkIsolation set to true.",
+            "Check whether the job needs outbound access at all before assuming it does - a monitoring job that reads S3 and writes S3 usually reaches both through VPC endpoints, which isolation does not block.",
+            "If it genuinely needs an external dependency, put that dependency behind a VPC endpoint or a proxy you control rather than leaving the container open.",
+            "Bound what an un-isolated container could do meanwhile by narrowing the job's RoleArn - that role is the ceiling on what an escape reaches.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-16": {
+        "risk": "This model explainability job definition runs on more than one instance with inter-container traffic unencrypted. During distributed processing the instances exchange the material the job is working on - inference records, model weights, intermediate results, parameters - and by default that traffic is not encrypted. Anyone positioned between the instances reads it. The control is conditional and OverWatch honours that: on a single instance there is no traffic between containers, so this finding is not raised at all rather than raised and dismissed. Seeing it means the job genuinely has instances talking to each other in the clear. This check answers Security Hub control SageMaker.10.",
+        "impact": "The data the job processes is readable in transit between its own compute instances, including model parameters and the production records being monitored.",
+        "steps": [
+            "Recreate the model explainability job definition with NetworkConfig.EnableInterContainerTrafficEncryption set to true. It cannot be updated in place.",
+            "Expect a throughput cost on large distributed jobs and size the cluster for it; that cost is the reason the flag exists rather than being permanently on.",
+            "If the job does not need multiple instances, reducing the instance count to 1 also removes the exposure - there is then no inter-container traffic at all.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-17": {
+        "risk": "This model bias job definition runs without network isolation. SageMaker training and inference containers are internet-enabled by default, which means the container can make outbound calls to anywhere and AWS credentials are placed in its runtime environment. With isolation on, neither is true: no inbound or outbound network call can be made to or from the container, including to other AWS services, and no credentials are made available to it. That distinction is what bounds a container escape or a poisoned dependency to the container itself rather than to whatever the execution role can reach. It matters more here than on a generic workload because of what this job reads: monitoring jobs are pointed at production inference data, so an un-isolated one is an egress path out of your most sensitive traffic. This check answers Security Hub control SageMaker.12.",
+        "impact": "A compromised or poisoned container can reach the internet and use the execution role's credentials, turning a container-level problem into an account-level one.",
+        "steps": [
+            "Network isolation cannot be changed in place. Recreate the model bias job definition with NetworkConfig.EnableNetworkIsolation set to true.",
+            "Check whether the job needs outbound access at all before assuming it does - a monitoring job that reads S3 and writes S3 usually reaches both through VPC endpoints, which isolation does not block.",
+            "If it genuinely needs an external dependency, put that dependency behind a VPC endpoint or a proxy you control rather than leaving the container open.",
+            "Bound what an un-isolated container could do meanwhile by narrowing the job's RoleArn - that role is the ceiling on what an escape reaches.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-18": {
+        "risk": "This model bias job definition runs on more than one instance with inter-container traffic unencrypted. During distributed processing the instances exchange the material the job is working on - inference records, model weights, intermediate results, parameters - and by default that traffic is not encrypted. Anyone positioned between the instances reads it. The control is conditional and OverWatch honours that: on a single instance there is no traffic between containers, so this finding is not raised at all rather than raised and dismissed. Seeing it means the job genuinely has instances talking to each other in the clear. This check answers Security Hub control SageMaker.15.",
+        "impact": "The data the job processes is readable in transit between its own compute instances, including model parameters and the production records being monitored.",
+        "steps": [
+            "Recreate the model bias job definition with NetworkConfig.EnableInterContainerTrafficEncryption set to true. It cannot be updated in place.",
+            "Expect a throughput cost on large distributed jobs and size the cluster for it; that cost is the reason the flag exists rather than being permanently on.",
+            "If the job does not need multiple instances, reducing the instance count to 1 also removes the exposure - there is then no inter-container traffic at all.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-19": {
+        "risk": "This model quality job definition runs without network isolation. SageMaker training and inference containers are internet-enabled by default, which means the container can make outbound calls to anywhere and AWS credentials are placed in its runtime environment. With isolation on, neither is true: no inbound or outbound network call can be made to or from the container, including to other AWS services, and no credentials are made available to it. That distinction is what bounds a container escape or a poisoned dependency to the container itself rather than to whatever the execution role can reach. It matters more here than on a generic workload because of what this job reads: monitoring jobs are pointed at production inference data, so an un-isolated one is an egress path out of your most sensitive traffic. This check answers Security Hub control SageMaker.25.",
+        "impact": "A compromised or poisoned container can reach the internet and use the execution role's credentials, turning a container-level problem into an account-level one.",
+        "steps": [
+            "Network isolation cannot be changed in place. Recreate the model quality job definition with NetworkConfig.EnableNetworkIsolation set to true.",
+            "Check whether the job needs outbound access at all before assuming it does - a monitoring job that reads S3 and writes S3 usually reaches both through VPC endpoints, which isolation does not block.",
+            "If it genuinely needs an external dependency, put that dependency behind a VPC endpoint or a proxy you control rather than leaving the container open.",
+            "Bound what an un-isolated container could do meanwhile by narrowing the job's RoleArn - that role is the ceiling on what an escape reaches.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-20": {
+        "risk": "This model quality job definition runs on more than one instance with inter-container traffic unencrypted. During distributed processing the instances exchange the material the job is working on - inference records, model weights, intermediate results, parameters - and by default that traffic is not encrypted. Anyone positioned between the instances reads it. The control is conditional and OverWatch honours that: on a single instance there is no traffic between containers, so this finding is not raised at all rather than raised and dismissed. Seeing it means the job genuinely has instances talking to each other in the clear. This check answers Security Hub control SageMaker.13.",
+        "impact": "The data the job processes is readable in transit between its own compute instances, including model parameters and the production records being monitored.",
+        "steps": [
+            "Recreate the model quality job definition with NetworkConfig.EnableInterContainerTrafficEncryption set to true. It cannot be updated in place.",
+            "Expect a throughput cost on large distributed jobs and size the cluster for it; that cost is the reason the flag exists rather than being permanently on.",
+            "If the job does not need multiple instances, reducing the instance count to 1 also removes the exposure - there is then no inter-container traffic at all.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-21": {
+        "risk": "This monitoring schedule runs without network isolation. SageMaker training and inference containers are internet-enabled by default, which means the container can make outbound calls to anywhere and AWS credentials are placed in its runtime environment. With isolation on, neither is true: no inbound or outbound network call can be made to or from the container, including to other AWS services, and no credentials are made available to it. That distinction is what bounds a container escape or a poisoned dependency to the container itself rather than to whatever the execution role can reach. It matters more here than on a generic workload because of what this job reads: monitoring jobs are pointed at production inference data, so an un-isolated one is an egress path out of your most sensitive traffic. This check answers Security Hub control SageMaker.14.",
+        "impact": "A compromised or poisoned container can reach the internet and use the execution role's credentials, turning a container-level problem into an account-level one.",
+        "steps": [
+            "Network isolation cannot be changed in place. Recreate the monitoring schedule with NetworkConfig.EnableNetworkIsolation set to true.",
+            "Check whether the job needs outbound access at all before assuming it does - a monitoring job that reads S3 and writes S3 usually reaches both through VPC endpoints, which isolation does not block.",
+            "If it genuinely needs an external dependency, put that dependency behind a VPC endpoint or a proxy you control rather than leaving the container open.",
+            "Bound what an un-isolated container could do meanwhile by narrowing the job's RoleArn - that role is the ceiling on what an escape reaches.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-22": {
+        "risk": "This monitoring schedule runs on more than one instance with inter-container traffic unencrypted. During distributed processing the instances exchange the material the job is working on - inference records, model weights, intermediate results, parameters - and by default that traffic is not encrypted. Anyone positioned between the instances reads it. The control is conditional and OverWatch honours that: on a single instance there is no traffic between containers, so this finding is not raised at all rather than raised and dismissed. Seeing it means the job genuinely has instances talking to each other in the clear. This check answers Security Hub control SageMaker.22.",
+        "impact": "The data the job processes is readable in transit between its own compute instances, including model parameters and the production records being monitored.",
+        "steps": [
+            "Recreate the monitoring schedule with NetworkConfig.EnableInterContainerTrafficEncryption set to true. It cannot be updated in place.",
+            "Expect a throughput cost on large distributed jobs and size the cluster for it; that cost is the reason the flag exists rather than being permanently on.",
+            "If the job does not need multiple instances, reducing the instance count to 1 also removes the exposure - there is then no inter-container traffic at all.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-23": {
+        "risk": "This feature group's OFFLINE store is not encrypted with a customer-managed KMS key. The data is encrypted either way - this is a custody question, not an encryption one, the same question AGC-07 raises for the token vault. What a customer-managed key buys is a set of levers a service-managed key does not have: you can revoke access to everything it protects by disabling one key, you can see every decrypt in CloudTrail under a key policy you own, and you can narrow who is allowed to decrypt at all. In an incident, the containment question is whether you can cut access to this data quickly, and with a service-managed key that question has no answer. This check answers Security Hub control SageMaker.17.",
+        "impact": "The historical record of every feature value your models trained on sits in S3 with no key you can revoke and no decrypt trail you own.",
+        "steps": [
+            "Set OfflineStoreConfig.S3StorageConfig.KmsKeyId at creation - it cannot be added to an existing feature group in place.",
+            "Scope the key policy to the feature group's RoleArn rather than leaving it account-wide. The key is only a lever if it is narrower than the account.",
+            "Remember what an offline store is: the training history. It is frequently the most sensitive artifact in an ML account and the least often reviewed.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-24": {
+        "risk": "This feature group's ONLINE store is not encrypted with a customer-managed KMS key. The data is encrypted either way - this is a custody question, not an encryption one, the same question AGC-07 raises for the token vault. What a customer-managed key buys is a set of levers a service-managed key does not have: you can revoke access to everything it protects by disabling one key, you can see every decrypt in CloudTrail under a key policy you own, and you can narrow who is allowed to decrypt at all. In an incident, the containment question is whether you can cut access to this data quickly, and with a service-managed key that question has no answer. This check answers Security Hub control SageMaker.18.",
+        "impact": "The live feature values served to production inference have no independent kill switch and no decrypt trail you own.",
+        "steps": [
+            "Set OnlineStoreConfig.SecurityConfig.KmsKeyId at creation.",
+            "This control covers Standard storage. An InMemory online store is a different product and OverWatch does not report it here.",
+            "Pair with SM-23 - offline and online are two halves of the same data, and encrypting one is not encrypting the feature group.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-25": {
+        "risk": "This inference experiment's instance storage volume is not encrypted with a customer-managed KMS key. The data is encrypted either way - this is a custody question, not an encryption one, the same question AGC-07 raises for the token vault. What a customer-managed key buys is a set of levers a service-managed key does not have: you can revoke access to everything it protects by disabling one key, you can see every decrypt in CloudTrail under a key policy you own, and you can narrow who is allowed to decrypt at all. In an incident, the containment question is whether you can cut access to this data quickly, and with a service-managed key that question has no answer. This check answers Security Hub control SageMaker.23.",
+        "impact": "Model artifacts and temporary inference data on the ML compute volume are outside your key custody for the life of the shadow test.",
+        "steps": [
+            "Pass --kms-key at create-inference-experiment; it cannot be set afterwards.",
+            "Grant the SageMaker execution role kms:CreateGrant on the key, or the experiment will fail to start.",
+            "Shadow tests run production traffic against a candidate model, so the volume holds real inference data even though the experiment is 'not production'.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-26": {
+        "risk": "This inference experiment's CAPTURED request and response data is not encrypted with a customer-managed KMS key. The data is encrypted either way - this is a custody question, not an encryption one, the same question AGC-07 raises for the token vault. What a customer-managed key buys is a set of levers a service-managed key does not have: you can revoke access to everything it protects by disabling one key, you can see every decrypt in CloudTrail under a key policy you own, and you can narrow who is allowed to decrypt at all. In an incident, the containment question is whether you can cut access to this data quickly, and with a service-managed key that question has no answer. This check answers Security Hub control SageMaker.24.",
+        "impact": "The captured inference payloads - the real requests your users sent and the real responses the model returned - sit in S3 with no key you control.",
+        "steps": [
+            "Set DataStorageConfig.KmsKey when creating the experiment with data capture on.",
+            "If you do not need the capture, turning it off removes the exposure entirely - this control only applies where capture is enabled.",
+            "Captured payloads are usually the most sensitive artifact an experiment produces, because they are the production traffic itself rather than a summary of it.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-27": {
+        "risk": "This SageMaker app image configuration carries no non-system tag key. Tagging is inventory hygiene rather than security posture, and AWS rates it Low for that reason - OverWatch matches that rating rather than inflating it. What makes it worth reporting at all is attribution: an untagged resource has no owner, and a resource with no owner is the one nobody deletes, nobody patches and nobody can answer questions about during an incident. Tags are also the basis of attribute-based access control, so an untagged resource silently sits outside any ABAC policy you write. Note that tags with the aws: prefix are applied by AWS and do not satisfy this control. This check answers Security Hub control SageMaker.6.",
+        "impact": "The resource cannot be attributed to an owner, and falls outside any attribute-based access control policy.",
+        "steps": [
+            "Add an ownership tag: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>",
+            "Never put personally identifiable or otherwise sensitive information in a tag - tags are readable from many AWS services and are not designed for private data.",
+            "If your organisation requires specific keys, set them so this control checks for those rather than merely for the presence of any tag.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
+    "SM-28": {
+        "risk": "This SageMaker image carries no non-system tag key. Tagging is inventory hygiene rather than security posture, and AWS rates it Low for that reason - OverWatch matches that rating rather than inflating it. What makes it worth reporting at all is attribution: an untagged resource has no owner, and a resource with no owner is the one nobody deletes, nobody patches and nobody can answer questions about during an incident. Tags are also the basis of attribute-based access control, so an untagged resource silently sits outside any ABAC policy you write. Note that tags with the aws: prefix are applied by AWS and do not satisfy this control. This check answers Security Hub control SageMaker.7.",
+        "impact": "The resource cannot be attributed to an owner, and falls outside any attribute-based access control policy.",
+        "steps": [
+            "Add an ownership tag: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>",
+            "Never put personally identifiable or otherwise sensitive information in a tag - tags are readable from many AWS services and are not designed for private data.",
+            "If your organisation requires specific keys, set them so this control checks for those rather than merely for the presence of any tag.",
+            "Confirm the change with a re-scan - this control is evaluated from configuration, so the next run shows it resolved rather than requiring you to assert it.",
+        ],
+    },
     "AMEM-01": {
         "risk": "This agent has memory enabled with a retention window long enough that an instruction reaching memory keeps being read back into the model's context for that period. Agent memory is what lets a prompt injection outlive the conversation that carried it: everything else OverWatch reports about injection concerns what an agent reaches NOW, and this concerns how long it keeps reaching. There is no correct retention period - a support assistant that remembers a customer for a year may be exactly right - so this finding states the window in days rather than pronouncing on it. What it is really reporting is that a number exists which somebody should have chosen on purpose. Be clear about what this check does NOT do: it does not read memory contents. Whether anything poisoned is actually stored is a question about stored conversation, and reading that is the data-handling escalation decision D2 declined. The window is what configuration can establish.",
         "impact": "An instruction that reached memory once is presented to the model again in later sessions for the length of the window, potentially to different users where the memory is shared. A single successful injection becomes a recurring one.",

@@ -240,6 +240,8 @@ FLOORS = {
     "test_registry_scan.py": 10,
     "test_registry_sidescan.py": 6,
     "test_remediate.py": 14,
+    "test_sagemaker_depth.py": 38,
+    "test_sagemaker_wiring.py": 29,
     "test_sbom_diff.py": 8,
     "test_secrets.py": 9,
     "test_secrets_collector.py": 7,
@@ -266,6 +268,8 @@ FLOORS = {
     "test_wql_parity.py": 4,
     "test_zero_telemetry.py": 20,
 }  # @@FLOORS@@
+
+
 def test_every_module_carries_a_floor():
     """Joining the suite is a deliberate act. Without this, a module added today has no
     floor tomorrow, and the ratchet quietly stops covering the newest code — which is
@@ -336,7 +340,13 @@ def _rewrite() -> int:
     body = "\n".join(f'    "{m}": {merged[m]},' for m in sorted(merged))
     start = src.index("FLOORS = {")
     end = src.index("@@FLOORS@@", start) + len("@@FLOORS@@")
-    new = src[:start] + "FLOORS = {\n" + body + "\n}  # @@FLOORS@@" + src[end + 2:]
+    # `end` already points PAST the marker, so the original `src[end + 2:]` ate two
+    # more characters on every run. Harmless the first time; on the second it deleted
+    # the newlines before the next `def`, leaving a file that would not parse — and the
+    # symptom was the whole suite failing to COLLECT, which looks nothing like the
+    # cause. A regeneration script that damages the file it regenerates is worse than
+    # no script, so `test_update_is_idempotent` now runs it twice and re-parses.
+    new = src[:start] + "FLOORS = {\n" + body + "\n}  # @@FLOORS@@" + src[end:]
     _CACHE.clear()
     path.write_text(new, encoding="utf-8", newline="")
     return len(merged)
@@ -348,3 +358,44 @@ if __name__ == "__main__":
     else:
         print(f"{len(_modules())} test modules, "
               f"{sum(n for n in _modules().values() if n > 0)} test functions")
+
+
+def test_update_is_idempotent():
+    """The guard on the guard.
+
+    `--update` rewrites this very file, and its first version ate two characters past
+    the marker on every run: correct once, and on the second run it deleted the newlines
+    before the next `def` and left a module that would not parse. The symptom was the
+    entire suite failing to COLLECT, which looks nothing like the cause and lands in the
+    one file nobody re-reads.
+
+    Running the rewrite twice against a copy and re-parsing is the cheapest possible
+    proof that regenerating the floors cannot break the floors."""
+    import ast
+    import shutil
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = os.path.join(tmp, "test_suite_ratchet.py")
+        shutil.copy(__file__, target)
+        # Real sibling modules to floor. Without them TESTS_DIR (which resolves
+        # relative to the COPY) holds nothing, --update writes an empty block, and the
+        # test would pass while exercising none of the rewrite it exists to check.
+        for name, n in (("test_alpha.py", 3), ("test_beta.py", 2)):
+            with open(os.path.join(tmp, name), "w", encoding="utf-8") as fh:
+                fh.write("".join(f"def test_{i}():\n    pass\n\n" for i in range(n)))
+        for _ in range(2):
+            subprocess.run([sys.executable, target, "--update"],
+                           cwd=tmp, capture_output=True, check=True)
+            ast.parse(open(target, encoding="utf-8").read())
+        body = open(target, encoding="utf-8").read()
+    # Not a count of the marker string — it also appears in _rewrite's own source and
+    # in this test. What matters is that the generated BLOCK is still well-formed and
+    # still separated from the code after it, which is precisely what the off-by-two
+    # destroyed.
+    assert "\n}  # @@FLOORS@@\n\n\ndef " in body
+    # And the floors survived, with the right counts, rather than the block being
+    # emptied -- which is what an un-exercised rewrite would also produce.
+    assert '"test_alpha.py": 3,' in body
+    assert '"test_beta.py": 2,' in body

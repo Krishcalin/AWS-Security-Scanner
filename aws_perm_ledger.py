@@ -70,6 +70,85 @@ def _req(action: str, why: str) -> Requirement:
 # Scoped to the AI pillar today, and deliberately so: authoring a mapping for all 300+
 # checks from memory would reproduce exactly the error this module exists to prevent.
 # Every entry below was read off the call site, not recalled. Extend it the same way.
+# ── SageMaker requirement groups (slice 4.1) ─────────────────────────────────
+# Named tuples rather than repeated literals: twenty-five checks draw on eleven API
+# pairs, and writing each pair out per check is how one of them ends up naming an
+# action the call site does not make.
+_NOTEBOOK = (
+    _req("sagemaker:ListNotebookInstances", "find notebook instances"),
+    _req("sagemaker:DescribeNotebookInstance",
+         "read direct-internet access, root access, subnet attachment, volume "
+         "encryption and the platform identifier -- five checks off one call"),
+)
+_DOMAIN = (
+    _req("sagemaker:ListDomains", "find SageMaker Studio domains"),
+    _req("sagemaker:DescribeDomain",
+         "read the domain's app network access type and home-EFS key custody"),
+)
+_ENDPOINT_CONFIG = (
+    _req("sagemaker:ListEndpointConfigs", "find inference endpoint configs"),
+    _req("sagemaker:DescribeEndpointConfig",
+         "read storage key custody and production-variant instance counts -- "
+         "KmsKeyId appears on this call and on no other"),
+)
+_MODEL = (
+    _req("sagemaker:ListModels", "find hosted models"),
+    _req("sagemaker:DescribeModel",
+         "read network isolation and each container's RepositoryAccessMode -- "
+         "whether the image running your inference came from a registry you control"),
+)
+_DATA_QUALITY = (
+    _req("sagemaker:ListDataQualityJobDefinitions", "find data quality job definitions"),
+    _req("sagemaker:DescribeDataQualityJobDefinition",
+         "read NetworkConfig -- isolation and inter-container encryption for a job "
+         "pointed at production inference data"),
+)
+_EXPLAINABILITY = (
+    _req("sagemaker:ListModelExplainabilityJobDefinitions",
+         "find model explainability job definitions"),
+    _req("sagemaker:DescribeModelExplainabilityJobDefinition",
+         "read NetworkConfig -- isolation and inter-container encryption"),
+)
+_BIAS = (
+    _req("sagemaker:ListModelBiasJobDefinitions", "find model bias job definitions"),
+    _req("sagemaker:DescribeModelBiasJobDefinition",
+         "read NetworkConfig and the cluster instance count, which is what decides "
+         "whether the encryption control applies at all"),
+)
+_MODEL_QUALITY = (
+    _req("sagemaker:ListModelQualityJobDefinitions",
+         "find model quality job definitions"),
+    _req("sagemaker:DescribeModelQualityJobDefinition",
+         "read NetworkConfig -- isolation and inter-container encryption"),
+)
+_SCHEDULE = (
+    _req("sagemaker:ListMonitoringSchedules", "find monitoring schedules"),
+    _req("sagemaker:DescribeMonitoringSchedule",
+         "read the schedule's inline MonitoringJobDefinition.NetworkConfig, which is "
+         "one level deeper than a job definition's"),
+)
+_FEATURE_GROUP = (
+    _req("sagemaker:ListFeatureGroups", "find feature groups"),
+    _req("sagemaker:DescribeFeatureGroup",
+         "read offline and online store key custody -- the offline store is the "
+         "historical record of every feature value your models trained on"),
+)
+_INFERENCE_EXPERIMENT = (
+    _req("sagemaker:ListInferenceExperiments", "find inference experiments"),
+    _req("sagemaker:DescribeInferenceExperiment",
+         "read instance-storage and captured-data key custody; a shadow test runs "
+         "production traffic, so the captured payload is production traffic"),
+)
+_APP_IMAGE_CONFIG = (
+    _req("sagemaker:ListAppImageConfigs", "find app image configurations"),
+    _req("sagemaker:ListTags", "read the tags that make a resource attributable"),
+)
+_IMAGE = (
+    _req("sagemaker:ListImages", "find SageMaker images"),
+    _req("sagemaker:ListTags", "read the tags that make a resource attributable"),
+)
+
+
 REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
     "BDR-01": (
         _req("bedrock:GetModelInvocationLoggingConfiguration",
@@ -306,20 +385,34 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
         _req("bedrock:GetAgent",
              "read the agent's guardrail association and idle session TTL"),
     ),
-    "SM-04": (
-        _req("sagemaker:ListDomains", "find SageMaker Studio domains"),
-        _req("sagemaker:DescribeDomain",
-             "read the domain's network access type and default execution role"),
-    ),
-    "SM-06": (
-        _req("sagemaker:ListEndpointConfigs", "find inference endpoint configs"),
-        _req("sagemaker:DescribeEndpointConfig", "read endpoint KMS configuration"),
-    ),
-    "SM-07": (
-        _req("sagemaker:ListNotebookInstances", "find notebook instances"),
-        _req("sagemaker:DescribeNotebookInstance",
-             "read direct-internet access, subnet attachment and volume encryption"),
-    ),
+    # ── SageMaker (slice 4.1) ─────────────────────────────────────────────────
+    # The three entries that were here before were ROTATED BY ONE: "SM-04" (notebook
+    # VPC deployment) held the Studio DOMAIN actions, "SM-06" (Studio home-EFS key)
+    # held the ENDPOINT-CONFIG actions, and "SM-07" (endpoint-config key) held the
+    # NOTEBOOK actions. Every one of them named a different check's resource.
+    #
+    # The consequence was the ledger telling an operator the opposite of the truth:
+    # declining sagemaker:ListNotebookInstances was reported as costing SM-07 alone,
+    # when it actually costs SM-01, SM-02, SM-03, SM-04 and SM-12 -- every notebook
+    # check there is. "Declining an action names exactly what it costs" is the whole
+    # contract of this module, and for SageMaker it was naming the wrong things.
+    #
+    # Corrected below and extended to all 25 checks. Grouped by the API pair each set
+    # of checks shares, because that is the unit an operator actually grants.
+    "SM-01": _NOTEBOOK, "SM-02": _NOTEBOOK, "SM-03": _NOTEBOOK, "SM-04": _NOTEBOOK,
+    "SM-12": _NOTEBOOK,
+    "SM-05": _DOMAIN, "SM-06": _DOMAIN,
+    "SM-07": _ENDPOINT_CONFIG, "SM-08": _ENDPOINT_CONFIG,
+    "SM-09": _MODEL, "SM-10": _MODEL, "SM-11": _MODEL,
+    "SM-13": _DATA_QUALITY, "SM-14": _DATA_QUALITY,
+    "SM-15": _EXPLAINABILITY, "SM-16": _EXPLAINABILITY,
+    "SM-17": _BIAS, "SM-18": _BIAS,
+    "SM-19": _MODEL_QUALITY, "SM-20": _MODEL_QUALITY,
+    "SM-21": _SCHEDULE, "SM-22": _SCHEDULE,
+    "SM-23": _FEATURE_GROUP, "SM-24": _FEATURE_GROUP,
+    "SM-25": _INFERENCE_EXPERIMENT, "SM-26": _INFERENCE_EXPERIMENT,
+    "SM-27": _APP_IMAGE_CONFIG,
+    "SM-28": _IMAGE,
     # AISPM-01..03 and AIPATH-01 need NO new action: they reason over the IAM
     # principals already cached from GetAccountAuthorizationDetails and over graph
     # edges other sections emitted. Recorded explicitly so the ledger can say

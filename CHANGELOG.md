@@ -7,6 +7,50 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 4 · slice 4.1 — SageMaker depth to Security Hub parity** (`aws_sagemaker.py`,
+  `SM-08`…`SM-28`). OverWatch shipped seven SageMaker checks; four answered a published
+  control (SageMaker.1/2/3/21) and three are ours with no Security Hub equivalent. That
+  left **21 of the 25 published controls unanswered**, across eight resource types the
+  scanner never opened: models, feature groups, inference experiments, four kinds of
+  monitoring job definition, monitoring schedules, app image configs and images.
+  - **Parity is now a checkable claim, not an assertion.** `SECURITY_HUB_PARITY` maps
+    every one of the 25 controls to the check that answers it, with **AWS's own
+    severity**, and a test fails the build if a control is listed without a check behind
+    it. A second test fails if our severity disagrees with the standard — a scanner that
+    claims parity and then quietly re-rates a control is disagreeing where nobody can see
+    it. `OVERWATCH_ORIGINAL` names our three extras separately, because *"we go beyond
+    the standard"* and *"we have an unmapped check"* are opposite facts that look
+    identical in a coverage count.
+  - **Twelve of the 21 collapse into one classifier.** Data-quality, model-bias,
+    model-explainability and model-quality job definitions plus monitoring schedules all
+    carry the same two flags — `EnableNetworkIsolation` and
+    `EnableInterContainerTrafficEncryption`. `MONITORING_KINDS` is the table both the
+    scanner and the tests walk; five hand-written copies is how one of them stops
+    matching the other four and nobody notices which.
+  - **Absent means *disabled* here, and only here.** The documented exception to this
+    codebase's absent-means-unknown rule: SageMaker.14 fails a schedule whose flag is
+    "set to false **or not configured**". Sourced, not stylistic, and pinned by a test so
+    it is not later "fixed" into consistency with the wrong rule.
+  - **Four controls are conditional, and the finding is withheld rather than dismissed**
+    — no encryption finding on a single instance (no inter-container traffic exists), no
+    pipeline finding on a single-container model, no captured-data finding with capture
+    off, no redundancy finding on a serverless-only endpoint config. In each case a FAIL
+    would name a risk the configuration cannot have and a PASS would be one it did not
+    earn.
+  - **`SM-02` and `SM-04` are raised MEDIUM → HIGH.** SageMaker.2 (custom VPC) and
+    SageMaker.3 (root access) are both High in the standard and were MEDIUM here. This
+    **moves the posture score** of any account running notebooks — called out rather than
+    slipped in with a batch of new ids.
+  - Verified against botocore **1.40.51**, the pinned version: unlike slice 3.3, every
+    operation this slice needs is present, so nothing is deferred. `MonitoringResources`
+    vs `JobResources` was caught during that pass — reading only the latter returns
+    instance count 0 for every schedule, which would have made SageMaker.22 inapplicable
+    everywhere, and a conditional check that never fires reads exactly like one that
+    always passes.
+  - SageMaker.8's supported-platform list and the control snapshot are both **dated** in
+    `aws_sagemaker.py`; AWS adds controls and ages platforms out, and an undated snapshot
+    silently becomes a false parity claim.
+
 - **Phase 3 · slice 3.3 — MCP server provenance** (`aws_mcp.py`, `MCP-01/02/03/04`). An
   AgentCore Gateway **is** an MCP server, and what it publishes to an agent is decided by
   its targets. Three of the four target kinds — `openApiSchema`, `smithyModel`, `lambda`
@@ -155,6 +199,20 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
     would be a guess.
 
 ### Fixed
+- **The permission ledger was lying about SageMaker, and had been since the checks
+  shipped.** Its three entries were **rotated by one**: `SM-04` (notebook VPC deployment)
+  held the Studio *domain* actions, `SM-06` (Studio home-EFS key) held the
+  *endpoint-config* actions, and `SM-07` (endpoint-config key) held the *notebook*
+  actions. Every entry named a different check's resource.
+  - The visible consequence: declining `sagemaker:ListNotebookInstances` was reported as
+    costing `SM-07` alone — a check that reads no notebook at all — when it actually costs
+    `SM-01`, `SM-02`, `SM-03`, `SM-04` and now `SM-12`, every notebook check there is.
+    *"Declining an action names exactly what it costs"* is this module's whole contract,
+    and for SageMaker it was naming the wrong things.
+  - Corrected and extended to all 28 SageMaker checks via 13 shared requirement groups,
+    with a test asserting **every ledger action is one the scanner actually calls** — the
+    defect class this replaces.
+
 - **Slice 3.3 destroyed slice 1.5's test module, and the suite reported green.**
   `tests/test_mcp.py` already existed — 402 lines covering **decision D6**, the
   enforcement boundary on OverWatch's own local MCP server: that it *refuses to start*
