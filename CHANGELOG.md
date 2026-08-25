@@ -7,6 +7,37 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 5 · slice 5.1 — CISA ZTMM v2 scoring, with its work shown** (`aws_ztmm.py`,
+  written to `ztmm_scorecard.json`). *"Zero Trust CNAPP"* is not a build and no analyst
+  market exists by that name. What is real is scoring an AWS estate against the published
+  model **from configuration alone**, and showing the evidence behind every pillar score.
+  - **The structure was verified, and the obvious inference was wrong.** Five pillars ×
+    seven functions gives 35; the model has **37** — Applications and Data each carry a
+    fifth pillar-specific function. Building on the assumption would have under-counted
+    two pillars' denominators and reported better coverage than exists, which is exactly
+    the failure slice `4.5` shipped and had to correct.
+  - **No overall maturity score, deliberately and permanently.** An estate Advanced on
+    four pillars and unscoreable on Devices does not *have* a maturity level — it has four
+    maturity levels and a blind spot, and the single figure that hides which is the figure
+    every competing product prints.
+  - **A pillar takes its WEAKEST function, not its average.** Zero trust is a chain: an
+    estate with Optimal authentication and Traditional access management is not Advanced,
+    and averaging is how a scorer flatters an estate into a number nobody can act on.
+  - **`Unscored` is not a stage** and is not on the scale at all. Calling a function
+    nothing maps to *"Traditional"* would turn OverWatch's own blind spot into a finding
+    about the customer. Stages are cumulative, so a gap stops the climb — passing the
+    Optimal checks does not skip an unevidenced Advanced.
+  - **The Devices problem is stated per function, not waved at.** Five of its seven
+    functions need something running *on* an endpoint, which the charter forbids, and each
+    carries its own reason; but `Asset and supply-chain risk management` and
+    `Resource access` have genuine AWS-side signal, so *"Devices is unscoreable"* would
+    have been too coarse a claim.
+  - The shipped mapping covers **22 of 37** functions from **40 real check ids** —
+    verified by a test that fails the build if one stops existing, because a table
+    authored from a reading of a framework is exactly where invented identifiers appear
+    (as slice `4.6`'s `builtins.open` demonstrated). The other 15 report `Unscored` **with
+    a reason** rather than being quietly scored Traditional to fill the table.
+
 - **Phase 4 · slice 4.7 — AI runtime detections, from anywhere** (`aws_ingest_aidr.py`,
   `AIDR-01`, `--ai-detections`). **Phase 4 complete.**
   - **The roadmap asked for "sibling Guardrail event ingest", and that could not be
