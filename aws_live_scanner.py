@@ -91,6 +91,7 @@ import aws_shadowai
 import aws_ailog
 import aws_evidence
 import aws_vectorstore
+import aws_ztmm
 import aws_effperm
 import aws_state
 import aws_unused
@@ -14716,7 +14717,36 @@ above carries a risk explanation, business impact and step-by-step remediation f
         except OSError as e:
             print(f"{YELLOW}[WARN]{RESET} Could not write audit manifest: {e}")
         self.save_ai_evidence_pack(output_dir)
+        self.save_ztmm_scorecard(output_dir)
         print(f"{BLUE}[*]{RESET} Evidence directory: {output_dir}/")
+
+    def save_ztmm_scorecard(self, output_dir: str):
+        """Write the CISA ZTMM v2 scorecard (slice 5.1).
+
+        "Zero Trust CNAPP" is not a build. What is real is scoring an estate against the
+        published model FROM CONFIGURATION ALONE and showing the evidence behind every
+        pillar score -- so this artefact carries, per function, the stage reached and the
+        exact checks that evidenced it.
+
+        There is deliberately no overall maturity number. An estate strong on four
+        pillars and unscoreable on Devices does not have a maturity level, and the single
+        figure that hides which pillar is which is the figure every competing product
+        prints."""
+        card = aws_ztmm.score_estate(
+            aws_ztmm.ZTMM_MAPPING, self.results, self._coverage.not_evaluated)
+        card["account"] = self.account
+        path = os.path.join(output_dir, "ztmm_scorecard.json")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(card, f, indent=2, sort_keys=True, default=str)
+            print(f"{BLUE}[*]{RESET} CISA ZTMM v2 scorecard: {path}")
+            for name in aws_ztmm.PILLARS:
+                pil = card["pillars"][name]
+                print(f"    {name}: {pil['stage']} "
+                      f"({pil['functions_scored']}/{pil['functions_total']} "
+                      f"function(s) scored)")
+        except OSError as e:
+            print(f"{YELLOW}[WARN]{RESET} Could not write ZTMM scorecard: {e}")
 
     def save_ai_evidence_pack(self, output_dir: str):
         """Write the AI compliance evidence pack (slice 4.5).

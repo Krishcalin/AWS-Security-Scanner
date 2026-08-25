@@ -279,6 +279,8 @@ FLOORS = {
     "test_wql.py": 22,
     "test_wql_parity.py": 4,
     "test_zero_telemetry.py": 20,
+    "test_ztmm.py": 28,
+    "test_ztmm_wiring.py": 8,
 }  # @@FLOORS@@
 
 
