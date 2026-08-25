@@ -7,6 +7,32 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 4 · slice 4.5 — the AI compliance evidence pack** (`aws_evidence.py`, written
+  to `ai_compliance_evidence.json` alongside the other evidence artefacts). An auditor
+  does not want a list of failures. They want to know, control by control, whether it was
+  assessed, by what, and what the answer rests on — and above all **what was not
+  assessed**.
+  - **The thing OverWatch can actually win on.** Every product maps controls to checks and
+    paints the result green; almost none can say which controls their scan never reached,
+    because they do not know. OverWatch does, from three artefacts it already maintains
+    for exactly this reason: the **permission ledger** (which checks the role could not
+    evaluate), the **coverage manifest** (regions never looked at, checks that returned
+    AccessDenied), and **`aws_epistemics`** (whether a claim is `OBSERVED`, `CONFIGURED`,
+    `INFERRED` or `CONDITIONAL`, so *"the guardrail is configured"* is not silently
+    upgraded to *"the guardrail works"*).
+  - **No status means "compliant".** The strongest available is `ASSESSED_PASS` — *these
+    checks ran and none failed* — and its own text says it is *"not a determination that
+    the control is satisfied"*. Whether it is satisfied is the auditor's judgement, and a
+    tool that pre-empts it is selling an opinion as a fact. `PARTIAL` and `NOT_EVALUATED`
+    keep *incomplete* and *could not look* apart from *clean*.
+  - **Mapping provenance is carried, not dropped.** The crosswalk is candid that no
+    official NIST 800-53 → AI RMF crosswalk exists and these are OverWatch's reading of
+    two texts; every evidence row carries that note and the mapping's confidence. Where a
+    control is reached through several spine controls it keeps the **lowest** confidence
+    of them, so one confident mapping cannot launder several speculative ones.
+  - Coverage is reported as **counts, never a percentage** — *"68% compliant"* is
+    precisely the sentence this module exists to make impossible to write.
+
 - **Phase 4 · slice 4.4 — shadow AI, the half that is actually visible**
   (`aws_shadowai.py`, `SHAI-01`…`SHAI-03`, new `SHADOW_AI` section, `--ai-owners`).
   Shadow AI is **not a property of a resource**. A knowledge base built by the ML platform
@@ -294,6 +320,23 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
     would be a guess.
 
 ### Fixed
+- **The evidence pack shipped with the exact failure it was written to prevent.** A
+  framework control only enters the pack if the crosswalk already maps it, so the mapped
+  set is N-of-N *by construction*: against the real crosswalk the summary read
+  **"12 of 12 reached"** for NIST AI RMF — a framework with **72** controls. A reader
+  would have taken one sixth of a framework for all of it. That is the phantom pass at
+  framework scale, reproduced in the module whose entire purpose is to stop it.
+  `coverage_summary()` now takes the framework's own `catalog_size` as the denominator
+  and reports *"mapped 12 of 72 … the remaining 60 are not reached by the crosswalk at
+  all and were NOT looked at"*. With no catalog size supplied it states the fraction as
+  **UNKNOWN** rather than computing one from its own reach, because silence is what
+  produced the bug.
+- **`get_crosswalk()` returns `(crosswalk, frameworks, digest)`** — the crosswalk first.
+  The signature is `Tuple[Dict, Dict, str]`, which is ambiguous, and the first authoring
+  of the evidence pack had it backwards. It was caught because a test runs against the
+  **shipped crosswalk file** rather than a fixture, so a wrong assumption about the API
+  failed in the suite instead of in a customer's audit.
+
 - **`docs/DECISIONS.md` **D9** records a refused detection surface.** Slice 4.4 specified
   "one CloudTrail query, one flow-log query", and the flow-log half cannot work from this
   vantage point: VPC flow logs record **IP addresses, not hostnames**, and the major AI
