@@ -41,7 +41,29 @@ _QUERY_ALLOW = frozenset((
     "security secure posture account accounts scan resource resources data secret secrets "
     "credential credentials role roles permission permissions least privilege overprivileged "
     "encryption encrypted mfa summarize summary explain why fewest step steps blast radius "
-    "crown jewel jewels bucket buckets s3 iam ec2 rds admin recommend recommendation").split())
+    "crown jewel jewels bucket buckets s3 iam ec2 rds admin recommend recommendation "
+# AI vocabulary is listed here rather than left to the corpus ON PURPOSE. The rule
+# below accepts a token present in EITHER this set or the scan, so once
+# finding_detail carried real Bedrock/SageMaker prose most AI questions started
+# answering on an account that HAS AI findings -- and kept abstaining on one that
+# does not, because the words existed nowhere. That made the copilot's grasp of a
+# question depend on the account's contents. "Is my SageMaker notebook exposed?"
+# against a clean estate should answer "this scan found no SageMaker findings",
+# which is true and useful; an abstain says "I did not understand you", which is
+# neither, and is the same nothing-found/did-not-look confusion the AI pillar was
+# fixed to stop making elsewhere.
+"ai ml model models llm llms genai bedrock sagemaker guardrail guardrails "
+"prompt prompts injection jailbreak agent agents notebook notebooks "
+"inference endpoint endpoints embedding embeddings vector rag knowledge "
+"training dataset datasets foundation "
+# structural query words, not topics: these were the other half of the abstains
+# ("guardrail COVERAGE", "endpoints that LACK logging") and they are about the
+# shape of a question, not its subject.
+"coverage lack lacking missing without enabled disabled configured have has "
+# Plain security nouns that were simply absent. "which endpoints LACK LOGGING"
+# failed on the word "logging", which is as central to this product as
+# "encryption" -- nothing to do with AI, just a gap the AI questions exposed.
+"logging logs log audit trail monitoring rotation versioning retention").split())
 
 COPILOT_SYSTEM_PROMPT = (
     "You are OverWatch's security copilot. Answer the user's question using ONLY the "

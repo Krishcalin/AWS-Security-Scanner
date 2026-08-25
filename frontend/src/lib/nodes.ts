@@ -1,6 +1,12 @@
 import {
   Globe, ShieldAlert, Scale, Server, IdCard, KeyRound, UserRound,
-  Database, Table2, Container, Boxes, Bug, Radar, Circle, type LucideIcon,
+  Database, Table2, Container, Boxes, Bug, Radar, Circle,
+  Archive, Zap, Lock, FileKey, KeySquare, ShieldCheck, ShieldX, Hexagon,
+  BadgeCheck, UserCheck, Users, Package, Box, Cloud, Unlink, Network,
+  Waypoints, Cog, Building2, BrainCircuit, Bot, Notebook,
+  Siren, HardDrive, FolderTree, Fingerprint, Waves, MemoryStick, Search,
+  Layers, Warehouse, Clock,
+  type LucideIcon,
 } from 'lucide-react'
 
 export interface NodeMeta { icon: LucideIcon; label: string; tone: string }
@@ -19,6 +25,56 @@ const META: Record<string, NodeMeta> = {
   ECSTaskDefinition: { icon: Boxes, label: 'ECS task', tone: 'var(--info)' },
   Vulnerability: { icon: Bug, label: 'CVE', tone: 'var(--crit)' },
   ThreatFinding: { icon: Radar, label: 'Threat', tone: 'var(--high)' },
+  CdrDetection: { icon: Siren, label: 'Runtime detection', tone: 'var(--high)' },
+
+  // Data terminals. S3Bucket had NO entry, so the node the flagship attack path
+  // ends at was drawn as a grey circle labelled with its own class name. The rest of
+  // this family arrives via _dspm_emit rather than a literal add_node, which is why
+  // they were missed for as long as they were -- every one of them is a crown-jewel
+  // terminal, i.e. exactly the node a reader is looking for.
+  S3Bucket: { icon: Archive, label: 'S3 bucket', tone: 'var(--gold)' },
+  RDSCluster: { icon: Layers, label: 'RDS cluster', tone: 'var(--gold)' },
+  RedshiftCluster: { icon: Warehouse, label: 'Redshift cluster', tone: 'var(--gold)' },
+  OpenSearchDomain: { icon: Search, label: 'OpenSearch domain', tone: 'var(--gold)' },
+  EFSFileSystem: { icon: FolderTree, label: 'EFS file system', tone: 'var(--gold)' },
+  FSxFileSystem: { icon: HardDrive, label: 'FSx file system', tone: 'var(--gold)' },
+  MemoryDBCluster: { icon: MemoryStick, label: 'MemoryDB cluster', tone: 'var(--gold)' },
+  KinesisStream: { icon: Waves, label: 'Kinesis stream', tone: 'var(--gold)' },
+  TimestreamTable: { icon: Clock, label: 'Timestream table', tone: 'var(--gold)' },
+  Secret: { icon: FileKey, label: 'Discovered secret', tone: 'var(--gold)' },
+  SecretsManagerSecret: { icon: KeySquare, label: 'Secrets Manager secret', tone: 'var(--gold)' },
+  KMSKey: { icon: Lock, label: 'KMS key', tone: 'var(--accent)' },
+
+  // Compute and edge
+  LambdaFunction: { icon: Zap, label: 'Lambda function', tone: 'var(--info)' },
+  ECSFargateTask: { icon: Box, label: 'Fargate task', tone: 'var(--info)' },
+  ECRRepository: { icon: Package, label: 'Image repository', tone: 'var(--info)' },
+  ApiGateway: { icon: Network, label: 'API Gateway', tone: 'var(--info)' },
+  CloudFrontDistribution: { icon: Cloud, label: 'CloudFront', tone: 'var(--info)' },
+  NetworkInterface: { icon: Waypoints, label: 'Network interface', tone: 'var(--ink2)' },
+  SecurityGroup: { icon: ShieldCheck, label: 'Security group', tone: 'var(--ink2)' },
+  ObservedCidr: { icon: Globe, label: 'Observed CIDR', tone: 'var(--ink2)' },
+  DanglingDNSRecord: { icon: Unlink, label: 'Dangling DNS', tone: 'var(--high)' },
+
+  // Identity
+  AWSAccount: { icon: Building2, label: 'AWS account', tone: 'var(--ink2)' },
+  AnyPrincipal: { icon: Users, label: 'Any principal', tone: 'var(--crit)' },
+  FederatedPrincipal: { icon: UserCheck, label: 'Federated principal', tone: 'var(--accent)' },
+  IAMPrincipal: { icon: Fingerprint, label: 'IAM principal', tone: 'var(--accent)' },
+  ServicePrincipal: { icon: Cog, label: 'Service principal', tone: 'var(--ink2)' },
+
+  // Kubernetes
+  KubePod: { icon: Hexagon, label: 'Pod', tone: 'var(--info)' },
+  KubeServiceAccount: { icon: BadgeCheck, label: 'K8s service account', tone: 'var(--accent)' },
+  KubeAdminCapability: { icon: ShieldX, label: 'K8s admin capability', tone: 'var(--crit)' },
+
+  // AI. Deliberately distinct icons rather than one shared brain: a notebook, a
+  // managed domain and an agent fail in different ways and get remediated
+  // differently, and a graph that draws them identically hides that.
+  SageMakerNotebook: { icon: Notebook, label: 'SageMaker notebook', tone: 'var(--info)' },
+  SageMakerDomain: { icon: BrainCircuit, label: 'SageMaker Studio domain', tone: 'var(--gold)' },
+  BedrockAgent: { icon: Bot, label: 'Bedrock agent', tone: 'var(--info)' },
+  AIResource: { icon: BrainCircuit, label: 'AI resource', tone: 'var(--info)' },
 }
 
 export const nodeMeta = (kind: string): NodeMeta =>

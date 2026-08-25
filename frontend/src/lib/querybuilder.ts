@@ -7,6 +7,10 @@
 export const QUERY_KINDS = [
   '', 'S3Bucket', 'EC2Instance', 'IAMRole', 'IAMUser', 'RDSInstance', 'DynamoDBTable',
   'LoadBalancer', 'ECRImage', 'Vulnerability', 'AdminCapability', 'InternetSource',
+  'LambdaFunction', 'ECSFargateTask', 'KubePod', 'SecretsManagerSecret',
+  // AI kinds: without these the Query console cannot express "which AI resources
+  // reach crown data", which is the question the AI pillar exists to answer.
+  'SageMakerNotebook', 'SageMakerDomain', 'BedrockAgent',
 ]
 
 export interface QuickPred { key: string; label: string; pred: Record<string, unknown> }
