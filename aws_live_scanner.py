@@ -77,6 +77,7 @@ import aws_agency
 import aws_toxicflow
 import aws_toolpoison
 import aws_agentmemory
+import aws_ingest_aidr
 import aws_ingest_pentest
 import aws_aiprotect
 import aws_cbom
@@ -460,6 +461,12 @@ CHECK_SEVERITY = {
     # names, so whoever can write the artifact gets code execution on the next deploy
     # holding the endpoint's execution role. That is TFLOW-01's reasoning applied one
     # layer down, to what the model IS rather than what it reads.
+    # Slice 4.7 -- AI runtime detections the operator's own detector produced.
+    # AIDR-01 is HIGH: something was RECOGNISED as an attack and reached the model
+    # anyway, which is a control that did not hold. There is deliberately no check for
+    # a BLOCKED detection -- that is a control working, and scoring it would teach a
+    # team to switch the detector off rather than to keep it.
+    "AIDR-01": "HIGH",
     "MART-01": "CRITICAL",
     # Unpinned and cross-account are MEDIUM: both are preconditions rather than
     # exploitation, and a team that deliberately shares an artifact bucket with a
@@ -818,6 +825,7 @@ COMPLIANCE_MAP = {
     "SM-26": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SM-27": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
     "SM-28": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
+    "AIDR-01": {"PCI-DSS": "10.6.1", "HIPAA": "164.308(a)(1)(ii)(D)", "SOC2": "CC7.2", "NIST": "SI-4"},
     "MART-01": {"PCI-DSS": "6.3.2", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "SI-7"},
     "MART-02": {"PCI-DSS": "6.3.2", "HIPAA": "164.312(c)(1)", "SOC2": "CC8.1", "NIST": "CM-5"},
     "MART-03": {"PCI-DSS": "12.8.1", "HIPAA": "164.308(b)(1)", "SOC2": "CC9.2", "NIST": "SI-7"},
@@ -1197,6 +1205,7 @@ REMEDIATION_MAP = {
     "SM-26": "Set DataStorageConfig.KmsKey when data capture is enabled, so captured inference requests and responses are encrypted at rest in S3: aws sagemaker create-inference-experiment --data-storage-config Destination=<S3>,KmsKey=<KEY_ARN>. Captured payloads are the real inference traffic, which is usually the most sensitive data the experiment touches",
     "SM-27": "Tag the app image configuration so it can be attributed and governed: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Tags with the aws: prefix are system tags and do not satisfy the control. Never put personally identifiable or sensitive information in a tag -- tags are readable from many AWS services",
     "SM-28": "Tag the image: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Same caveats as SM-27 -- system aws: tags do not count, and tags are not a place for sensitive values",
+    "AIDR-01": "Your own detector recognised this and the request reached the model anyway, so treat the detector as reporting rather than enforcing: check whether it is deployed in blocking mode, and put an AWS-side control behind it -- aws bedrock get-guardrail --guardrail-identifier <ID> --guardrail-version DRAFT to confirm a PROMPT_ATTACK filter is set to BLOCK rather than NONE (AIGRD-01), and aws bedrock-agent update-agent to attach the guardrail if the agent has none. Then bound what a successful injection reaches with AISPM-01/02",
     "MART-01": "Close write access to the artifact bucket immediately -- whoever can write it executes code inside your endpoint on the next deploy: aws s3api get-bucket-policy --bucket <BUCKET> and remove every external or wildcard principal holding a write action, then aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true. Then verify the artifact currently there is the one you published",
     "MART-02": "Pin the artifact to a specific object version so a replaced file cannot silently become what runs: aws sagemaker create-model --model-name <M> --primary-container Image=<IMG>,ModelDataSource={S3DataSource={S3Uri=<URI>,S3DataType=S3Object,CompressionType=None,ETag=<ETAG>}} -- get the ETag with aws s3api head-object --bucket <BUCKET> --key <KEY>. Enable bucket versioning at the same time so the pinned version cannot be deleted out from under you",
     "MART-03": "Confirm the external account owning this artifact bucket is one you intend to load executable code from, because that is what a model artifact is. Prefer copying the artifact into an account you control and pinning it: aws s3 cp s3://<THEIR_BUCKET>/<KEY> s3://<YOUR_BUCKET>/<KEY> , then re-point the model at your copy",
@@ -2207,6 +2216,9 @@ class AWSLiveScanner:
         # Slice 3.5 — adversarial test verdicts the operator supplies. Empty unless
         # --pentest-results names a file; OverWatch never produces these itself.
         self._pentest_results = {}
+        # Slice 4.7 -- the operator's own AI runtime detections, vendor
+        # neutral. OverWatch produces none of these itself.
+        self._ai_detections = {}
         # Slice 3.3: one entry per gateway, compared against the state DB AFTER the
         # scan. The scan path stays stateless -- a DB is a --state opt-in, and a check
         # that needs one to run at all would make the config half hostage to it.
@@ -11706,6 +11718,7 @@ class AWSLiveScanner:
 
         self._emit_ai_protection()
         self._emit_pentest_results()
+        self._emit_ai_detections()
 
     def _identity_reach(self, arn: str) -> dict:
         """What the acting identity can reach — the half of a detection no log carries.
@@ -12730,6 +12743,47 @@ class AWSLiveScanner:
                           f"key — the store that carries instructions between an agent's "
                           f"sessions has no key you can disable to cut access to it "
                           f"| {name}")
+
+    def _emit_ai_detections(self):
+        """AIDR-01 — detections the operator's own AI runtime detector produced.
+
+        The roadmap asked for a named sibling product's event ingest. D7 forbids that
+        dependency and a test enforces it, so this reads a vendor-neutral schema any
+        detector can emit instead -- the sibling on the same footing as anything else,
+        and OverWatch depending on none of them.
+
+        BLOCKED detections are NOT scored. A detector that stopped an injection is
+        evidence a control worked, and turning that into a finding is how a team learns
+        to switch the detector off rather than to keep it."""
+        parsed = self._ai_detections
+        if not parsed or not parsed.get("detections"):
+            return
+
+        if parsed.get("skipped_content_fields"):
+            self._add("INFO", "AIDR-00", "AI_THREAT", "ai-detections",
+                      f"Ingested {len(parsed['detections'])} AI runtime detection(s); "
+                      f"{parsed['skipped_content_fields']} content field(s) were NOT "
+                      f"read — {aws_ingest_aidr.CONTENTS_NOT_READ} | ai-detections")
+
+        held = 0
+        for det in parsed["detections"]:
+            rating = aws_ingest_aidr.rate(det)
+            if rating["control_held"]:
+                held += 1
+                continue
+            label = det.get("rule") or det.get("category") or det.get("detector")
+            self._add("FAIL", "AIDR-01", "AI_THREAT", label,
+                      f"{aws_ingest_aidr.describe(det, rating)}. This is a result your "
+                      f"own detector produced, ingested as reported. "
+                      f"{aws_ingest_aidr.CONTENTS_NOT_READ} | {label}")
+
+        if held:
+            # Reported as assurance, deliberately at INFO. An operator whose detector is
+            # working should see that in the report rather than only its failures.
+            self._add("INFO", "AIDR-00", "AI_THREAT", "ai-detections",
+                      f"{held} detection(s) were BLOCKED by your detector — evidence "
+                      f"the control held, recorded as assurance rather than as "
+                      f"findings | ai-detections")
 
     def _emit_pentest_results(self):
         """PENT-01/02 — adversarial test results the operator produced.
@@ -15010,6 +15064,34 @@ def _backend_meta_for(args, scheme: str, available: bool, reason: Optional[str] 
     return meta
 
 
+def _load_ai_detections(path) -> dict:
+    """Read a vendor-neutral AI runtime detection file (slice 4.7).
+
+    A single JSON object. Any detector can emit the schema; OverWatch names none of them
+    and depends on none of them, which is what D7 permits and what a product-specific
+    reader would have violated."""
+    if not path:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except OSError as exc:
+        print(f"{YELLOW}[WARN]{RESET} AI detections not read: {exc}")
+        return {}
+    except ValueError as exc:
+        print(f"{YELLOW}[WARN]{RESET} AI detections not parsed: {exc}")
+        return {}
+    parsed = aws_ingest_aidr.parse(doc)
+    if parsed.get("error"):
+        print(f"{YELLOW}[WARN]{RESET} {parsed['error']}")
+        return {}
+    n = len(parsed.get("detections") or [])
+    skipped = parsed.get("skipped_content_fields") or 0
+    print(f"{BLUE}[*]{RESET} AI detections: {n} ingested"
+          + (f", {skipped} content field(s) skipped unread" if skipped else ""))
+    return parsed
+
+
 def _load_pentest_results(path) -> dict:
     """Read an adversarial-test result file (slice 3.5).
 
@@ -15065,6 +15147,7 @@ def _apply_phase6_config(sc, args) -> None:
     # Slice 4.4 -- the declared AI owner set, split here so the scanner
     # never has to parse a CLI string.
     sc._scan_model_artifacts = bool(getattr(args, "scan_model_artifacts", False))
+    sc._ai_detections = _load_ai_detections(getattr(args, "ai_detections", None))
     sc._ai_owners = tuple(o.strip() for o in
                           (getattr(args, "ai_owners", "") or "").split(",")
                           if o.strip())
@@ -15258,6 +15341,13 @@ examples:
              "rows only — garak `attempt` rows carry the prompts and the model's "
              "responses and are never parsed.",
     )
+    parser.add_argument(
+        "--ai-detections", metavar="FILE", dest="ai_detections",
+        help="AI runtime detections from YOUR detector, in the vendor-neutral "
+             "overwatch.ai-detection/v1 schema (AIDR-01). OverWatch produces none of "
+             "these and is tied to no product. Verdicts only: the schema has no field "
+             "for a prompt, and content fields present in the file are counted and "
+             "left unread.")
     parser.add_argument(
         "--scan-model-artifacts", action="store_true", dest="scan_model_artifacts",
         help="Fetch SageMaker model artifacts and statically scan their pickle opcode "

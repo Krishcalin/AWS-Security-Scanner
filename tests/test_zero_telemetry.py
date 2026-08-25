@@ -252,8 +252,12 @@ def test_registry_egress_guard_pinned():
 # ingest OverWatch performs: a garak report contains the attack prompts and the
 # model's responses verbatim. The module reads verdict rows only, and this is what
 # keeps that true rather than taking its word for it.
+# aws_ingest_aidr.py joins for the same reason aws_ingest_pentest.py did, only more
+# so: an AI runtime detector SITS IN THE REQUEST PATH, so its natural output is the
+# most content-dense payload any ingest here will ever be offered. It is the one place
+# D2 is most tempting to lose.
 _INGEST_MODULES = ("aws_cdr.py", "aws_edr.py", "aws_ingest.py", "aws_airules.py",
-                   "aws_ingest_pentest.py")
+                   "aws_ingest_pentest.py", "aws_ingest_aidr.py")
 
 # Keys whose value is model input/output. Reading one of these is reading a prompt.
 _CONTENT_KEYS = frozenset({

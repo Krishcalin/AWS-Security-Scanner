@@ -7,6 +7,37 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 4 · slice 4.7 — AI runtime detections, from anywhere** (`aws_ingest_aidr.py`,
+  `AIDR-01`, `--ai-detections`). **Phase 4 complete.**
+  - **The roadmap asked for "sibling Guardrail event ingest", and that could not be
+    built.** `D7` measured the sibling — 11 commits, no Dockerfile, no console entry
+    point, no publish workflow — and ruled OverWatch takes no dependency on it, with
+    `test_decisions.py` failing the build if any application module so much as names it.
+    A product-specific reader would have introduced exactly that reference. So this reads
+    a **vendor-neutral** schema, `overwatch.ai-detection/v1`, that any AI-runtime detector
+    can emit — the sibling on the same footing as anything else, and OverWatch depending
+    on none of them. That is what D7's standing rule permits, and *a detection ingest
+    that accepts only one vendor's format is a dependency wearing an ingest's clothes.*
+  - **`AIDR-01`** (HIGH · SI-4) — the operator's own detector recognised a request as an
+    attack **and the request reached the model anyway**. The detector is reporting rather
+    than enforcing.
+  - **A `BLOCKED` detection is never scored.** It is evidence a control *worked*, reported
+    at INFO as assurance — turning a successful block into a finding is how a team learns
+    to switch the detector off rather than to keep it.
+  - **The content line, which is where this slice is delicate.** An AI runtime detector
+    sits in the request path, so its natural output is the most content-dense payload any
+    ingest in this product will ever be offered, and carrying "the prompt that triggered
+    it" would make the finding far more useful. **D2 declined it.** The schema therefore
+    has *no field* for a prompt, completion or matched string — a mapping that tried to
+    carry one would have nowhere to put it — every field read is named in
+    `DETECTION_FIELDS`, content fields present in the file are **counted and left
+    unread**, and identifiers are truncated because an oversized "rule name" is precisely
+    how prompt text arrives through a field nobody expected to carry it.
+  - `aws_ingest_aidr.py` joins **Section F** of the zero-telemetry tripwire alongside
+    `aws_ingest_pentest.py`, and for a stronger reason.
+  - **No IAM action at all** — the input is a file the operator supplies. Recorded in the
+    ledger as a deliberate absence rather than left to look like an omission.
+
 - **Phase 4 · slice 4.6 — the model artifact as executable code** (`aws_modelartifact.py`,
   `MART-01`…`MART-05`, opt-in `--scan-model-artifacts`). A serialized model is **not
   data**: pickle encodes instructions and `REDUCE` calls whatever the stream names, so
