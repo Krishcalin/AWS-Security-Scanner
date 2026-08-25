@@ -261,3 +261,106 @@ def test_the_new_permissions_are_in_both_onboarding_paths():
         text = (root / rel).read_text(encoding="utf-8")
         for act in ("GetGateway", "ListGatewayTargets"):
             assert f"bedrock-agentcore:{act}" in text, f"{rel} missing {act}"
+
+
+# ── slice 2.5: agent credential exposure ────────────────────────────────────
+def _cred_ac(vault=None, wi_detail=None, *, vault_denied=False):
+    c = MagicMock()
+    if vault_denied:
+        c.get_token_vault.side_effect = Exception("AccessDeniedException")
+    else:
+        c.get_token_vault.return_value = vault or {}
+    c.get_workload_identity.return_value = wi_detail or {}
+    return c
+
+
+CREDS = {"AgentCoreOauth2Provider": [{"name": "github"}],
+         "AgentCoreWorkloadIdentity": [{"name": "agent-wi"}]}
+
+
+def test_a_service_managed_token_vault_fails():
+    """Not an encryption failure — a custody one. The vault holds credentials to systems
+    outside AWS, and a service-managed key removes every lever over them at once."""
+    ac = _cred_ac({"tokenVaultId": "default",
+                   "kmsConfiguration": {"keyType": "ServiceManagedKey"}})
+    s = _scanner(ac)
+    s._audit_agentcore_credentials(ac, CREDS)
+    f = _ids(s, "AGC-07", "FAIL")
+    assert f and "revoke access by disabling a key" in f[0].message
+    assert "1 credential(s)" in f[0].message
+
+
+def test_a_customer_managed_token_vault_passes():
+    ac = _cred_ac({"tokenVaultId": "default",
+                   "kmsConfiguration": {"keyType": "CustomerManagedKey",
+                                        "kmsKeyArn": "arn:aws:kms:::key/k"}})
+    s = _scanner(ac)
+    s._audit_agentcore_credentials(ac, CREDS)
+    assert _ids(s, "AGC-07", "PASS")
+
+
+def test_an_empty_kms_configuration_is_unknown_not_service_managed():
+    """An uninterpretable response and a service-managed key are different facts."""
+    ac = _cred_ac({"tokenVaultId": "default"})
+    s = _scanner(ac)
+    s._audit_agentcore_credentials(ac, CREDS)
+    assert not _ids(s, "AGC-07")
+    assert any("not assumed" in r.message for r in _ids(s, "AGC-00"))
+
+
+def test_a_refused_token_vault_read_is_recorded():
+    ac = _cred_ac(vault_denied=True)
+    s = _scanner(ac)
+    s._audit_agentcore_credentials(ac, CREDS)
+    assert "AGC-07" in s._coverage.not_evaluated
+    assert not _ids(s, "AGC-07", "PASS")
+
+
+def test_an_estate_with_no_credentials_asks_no_custody_question():
+    ac = _cred_ac({"kmsConfiguration": {"keyType": "ServiceManagedKey"}})
+    s = _scanner(ac)
+    s._audit_agentcore_credentials(ac, {})
+    assert not _ids(s, "AGC-07")
+
+
+def test_a_plaintext_oauth_return_url_fails():
+    ac = _cred_ac({"kmsConfiguration": {"keyType": "CustomerManagedKey"}},
+                  {"name": "agent-wi",
+                   "allowedResourceOauth2ReturnUrls": ["https://ok.example/cb",
+                                                       "http://bad.example/cb"]})
+    s = _scanner(ac)
+    s._audit_agentcore_credentials(ac, CREDS)
+    f = _ids(s, "AGC-08", "FAIL")
+    assert f and "http://bad.example/cb" in f[0].message
+    assert "https://ok.example/cb" not in f[0].message
+
+
+def test_https_and_custom_scheme_return_urls_pass():
+    ac = _cred_ac({"kmsConfiguration": {"keyType": "CustomerManagedKey"}},
+                  {"name": "agent-wi",
+                   "allowedResourceOauth2ReturnUrls": ["https://ok.example/cb",
+                                                       "myapp://callback"]})
+    s = _scanner(ac)
+    s._audit_agentcore_credentials(ac, CREDS)
+    assert not _ids(s, "AGC-08")
+
+
+def test_a_wildcard_is_not_flagged():
+    """Whether AgentCore matches these by prefix, pattern or equality is undocumented.
+    A finding whose severity depends on undocumented matching semantics is a guess about
+    somebody else's implementation, so only the SCHEME is judged."""
+    assert G.unsafe_return_urls(
+        {"allowedResourceOauth2ReturnUrls": ["https://*.example.com/cb"]}) == []
+
+
+def test_an_sdk_without_the_new_operations_does_not_raise():
+    c = MagicMock(spec=[])
+    s = _scanner(c)
+    s._audit_agentcore_credentials(c, CREDS)      # must not raise
+
+
+def test_the_credential_checks_are_fully_mapped():
+    import aws_finding_detail as D
+    for cid in ("AGC-07", "AGC-08"):
+        assert cid in A.CHECK_SEVERITY and cid in A.COMPLIANCE_MAP
+        assert cid in A.REMEDIATION_MAP and cid in D.FINDING_DETAIL

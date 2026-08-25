@@ -57,6 +57,10 @@ KNOWN_KINDS = frozenset({
     "Vulnerability", "ThreatFinding", "CdrDetection",
     # AI pillar (arrive as a stash `kind` passed through as a variable)
     "SageMakerNotebook", "SageMakerDomain", "BedrockAgent", "AIResource",
+    "AgentCoreRuntime", "AgentCoreGateway",
+    # Phase 3: a computed flow, not a resource — it annotates the graph the way
+    # Vulnerability and ThreatFinding do.
+    "ToxicFlow",
 })
 
 
