@@ -101,7 +101,10 @@ def test_the_blocked_checks_are_the_knowledge_base_and_guardrail_grading_ones():
     assert set(led.blocked) == {"AGT-03", "AGT-04",
                                 "AIGRD-01", "AIGRD-02", "AIGRD-04",
                                 "AGC-01", "AGC-02", "AGC-03", "AGC-04",
-                                "AGC-05", "AGC-06"}
+                                "AGC-05", "AGC-06",
+                                # slice 2.4 rides on GetAgentActionGroup, which
+                                # the managed policies also do not grant
+                                "AGY-01", "AGY-02", "AGY-03"}
     assert led.blocked["AGT-03"] == ("bedrock:GetDataSource",
                                      "bedrock:GetKnowledgeBase")
     assert led.blocked["AGT-04"] == ("bedrock:GetAgentActionGroup",)
@@ -132,13 +135,17 @@ def test_declining_an_action_names_what_it_costs():
     """The number that turns an IAM review into a decision instead of a leap."""
     led = L.evaluate(SHIPPED_ROLE)
     assert led.forfeit(["bedrock:GetKnowledgeBase"]) == ("AGT-03",)
-    assert led.forfeit(["bedrock:GetAgentActionGroup"]) == ("AGT-04",)
+    # Slice 2.4 made this one action buy four checks rather than one, which is
+    # exactly what the ledger exists to make visible before somebody declines it.
+    assert set(led.forfeit(["bedrock:GetAgentActionGroup"])) == {
+        "AGT-04", "AGY-01", "AGY-02", "AGY-03"}
     assert led.forfeit(["bedrock:GetGuardrail"]) == (
         "AIGRD-01", "AIGRD-02", "AIGRD-04")
     assert set(led.forfeit(EXPECTED_GAP)) == {"AGT-03", "AGT-04",
                                               "AIGRD-01", "AIGRD-02", "AIGRD-04",
                                               "AGC-01", "AGC-02", "AGC-03",
-                                              "AGC-04", "AGC-05", "AGC-06"}
+                                              "AGC-04", "AGC-05", "AGC-06",
+                                              "AGY-01", "AGY-02", "AGY-03"}
 
 
 def test_declining_an_action_a_working_check_depends_on_is_also_counted():

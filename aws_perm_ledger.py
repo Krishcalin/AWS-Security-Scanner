@@ -131,6 +131,26 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "find memory stores -- where an injected instruction can be made to "
              "persist across sessions"),
     ),
+    # Slice 2.4 adds NO new action: get_agent_action_group is already called for
+    # AGT-04 and was granted in slice 1.2. Recorded so declining that one action
+    # names everything it costs, which is the whole contract of the ledger.
+    "AGY-01": (
+        _req("bedrock:GetAgentActionGroup",
+             "read parentActionSignature -- whether an agent holds a shell or "
+             "desktop-control capability, which is excessive agency in the form "
+             "OWASP LLM06 calls excessive functionality"),
+    ),
+    "AGY-02": (
+        _req("bedrock:GetAgentActionGroup",
+             "read parentActionSignature for the code-execution and file-access "
+             "capabilities, whose reach is the execution role rather than the "
+             "sandbox around them"),
+    ),
+    "AGY-03": (
+        _req("bedrock:GetAgentActionGroup",
+             "read requireConfirmation on each function -- the control AWS names as "
+             "the prompt-injection safeguard, and which is DISABLED unless set"),
+    ),
     "AGC-05": (
         _req("bedrock-agentcore:GetGateway",
              "read authorizerType and the policy-engine/interceptor configuration -- whether the gateway authorizes its callers, or admits them and lets something else decide"),

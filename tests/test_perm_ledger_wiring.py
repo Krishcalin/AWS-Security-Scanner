@@ -113,7 +113,8 @@ def test_preflight_records_the_blocked_checks_as_not_evaluated():
     assert set(s._coverage.not_evaluated) == {"AGT-03", "AGT-04",
                                               "AIGRD-01", "AIGRD-02", "AIGRD-04",
                                               "AGC-01", "AGC-02", "AGC-03",
-                                              "AGC-04", "AGC-05", "AGC-06"}
+                                              "AGC-04", "AGC-05", "AGC-06",
+                                              "AGY-01", "AGY-02", "AGY-03"}
     assert not s._coverage.complete
 
 

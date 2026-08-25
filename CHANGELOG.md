@@ -7,6 +7,42 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 2 · slice 2.4 — excessive agency and the human-in-the-loop gate**
+  (`aws_agency.py`). OWASP LLM06 splits excessive agency into functionality, permissions
+  and autonomy. The middle one was already covered by `AISPM-01/02`; this covers the
+  other two, both readable from action-group configuration the scanner **already
+  fetches** for `AGT-04`. **No new API call, no new IAM permission.**
+  - **`AGY-01`** (CRITICAL · CM-7) — the agent holds `ANTHROPIC.Bash` (shell execution)
+    or `ANTHROPIC.Computer` (desktop control).
+  - **`AGY-02`** (HIGH · CM-7) — `AMAZON.CodeInterpreter` or `ANTHROPIC.TextEditor`. The
+    sandbox around a code interpreter bounds the filesystem, not the credentials the code
+    runs with; file *write* is how an injected instruction outlives the conversation that
+    delivered it.
+  - **`AGY-03`** (MEDIUM · AC-3) — **no action requires human confirmation.** AWS names
+    `requireConfirmation` as the prompt-injection safeguard — *"You can safeguard your
+    application from malicious prompt injections by requesting confirmation…"* — and
+    states its default: *"By default, user confirmation is DISABLED if this field is not
+    specified."* So the control AWS itself points at is off unless somebody turned it on,
+    and nothing in a cloud inventory shows which agents left it off. Reported as coverage
+    (`N of M gated`), matching the guardrail and EDR feeds.
+  - Severity is split across three check IDs because `CHECK_SEVERITY` is per check ID: one
+    ID would have to price a **shell** and a **text editor** identically, and the wrong
+    one would be the shell. `AMAZON.UserInput` raises nothing — it lets the agent ask a
+    question, which is the agent deferring rather than acting.
+  - **Absent `requireConfirmation` counts as ungated**, and that is a *documented* default
+    rather than an assumption — deliberately the opposite treatment from `requireMMDSV2`
+    in slice 2.2, where the reference states no default and absent therefore stays
+    unknown. Same shape of field, opposite handling, because the documentation differs.
+  - **No consequence is inferred from a function's name.** Flagging `delete_account` while
+    passing `get_weather` is a guess about semantics wearing the clothes of a configuration
+    reading; it fails on any non-English convention, and the first false positive on a
+    read-only `purge_cache` is what teaches an operator to skip the category. A test pins
+    that no such heuristic creeps in.
+  - OpenAPI action groups are reported as **un-assessed**, not ungated:
+    `x-requireConfirmation` lives inside a schema payload that may be an S3 object we do
+    not read. Calling it ungated invents a gap; calling it gated hides one.
+  - The ledger now records that `bedrock:GetAgentActionGroup` buys **four** checks rather
+    than one, so declining it names everything it forfeits.
 - **D3 · a Cryptographic Bill of Materials** (`aws_cbom.py`, emitted on `--cbom FILE`).
   The xBOM skip is reversed **for cryptography only**. The regulatory driver (EO 14412, a
   FAR rule in flight) and the operational question are the same one — *which of this

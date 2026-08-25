@@ -73,6 +73,7 @@ import aws_leastpriv
 import aws_aispm
 import aws_aiguard
 import aws_agentcore
+import aws_agency
 import aws_cbom
 import aws_airules
 import aws_cdr
@@ -380,6 +381,9 @@ CHECK_SEVERITY = {
     # AND hands them the gateway role downstream; the permissive inbound modes are
     # supported designs on their own, so the grade is what earns the severity.
     "AGC-05": "CRITICAL", "AGC-06": "MEDIUM",
+    # Excessive agency (OWASP LLM06). Split by what the capability grants, because
+    # one check id would have to price a shell and a text editor identically.
+    "AGY-01": "CRITICAL", "AGY-02": "HIGH", "AGY-03": "MEDIUM",
     "AIGRD-04": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
     "COG-05": "HIGH", "COG-06": "CRITICAL",
@@ -646,6 +650,11 @@ COMPLIANCE_MAP = {
     # the frozen universe, so DEBUG error disclosure maps to SC-7 as a boundary leak.
     "AGC-05": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "AGC-06": {"PCI-DSS": "6.5.5", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    # CM-7 (least functionality) for capability breadth; AC-3 (access enforcement)
+    # for the confirmation gate, which is what decides whether an action happens.
+    "AGY-01": {"PCI-DSS": "2.2.4", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "CM-7"},
+    "AGY-02": {"PCI-DSS": "2.2.4", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "CM-7"},
+    "AGY-03": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     # AI-SPM pillar (NIST reused from the frozen 38-control universe: AC-6/AC-3/SC-7)
     "AISPM-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "AISPM-02": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
@@ -958,6 +967,9 @@ REMEDIATION_MAP = {
     "AGT-03": "Set a customer-managed key on the knowledge base and its data sources: aws bedrock-agent update-knowledge-base --knowledge-base-id <KB_ID> --name <NAME> --role-arn <ROLE_ARN> --knowledge-base-configuration file://kb-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}'",
     "AGT-04": "Restrict the action-group Lambda so only this agent can invoke it, and scope the function's own role: aws lambda add-permission --function-name <FN> --statement-id bedrock-agent --action lambda:InvokeFunction --principal bedrock.amazonaws.com --source-arn <AGENT_ALIAS_ARN>",
     "AGT-06": "Create one guardrail and attach it to every agent that lacks one, then make it mandatory in IAM so it cannot simply be omitted: aws bedrock create-guardrail --name prod-guardrail --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\"}]}'",
+    "AGY-01": "Remove the capability unless the agent genuinely needs it, and gate what remains. Delete the action group: aws bedrock-agent delete-agent-action-group --agent-id <AGENT_ID> --agent-version DRAFT --action-group-id <AG_ID> --skip-resource-in-use-check ; or disable it: aws bedrock-agent update-agent-action-group --agent-id <AGENT_ID> --agent-version DRAFT --action-group-id <AG_ID> --action-group-name <NAME> --action-group-state DISABLED ; then aws bedrock-agent prepare-agent --agent-id <AGENT_ID>",
+    "AGY-02": "Scope the capability to what the agent needs, or remove it: aws bedrock-agent update-agent-action-group --agent-id <AGENT_ID> --agent-version DRAFT --action-group-id <AG_ID> --action-group-name <NAME> --action-group-state DISABLED ; and bound what it can reach by narrowing the execution role (see AISPM-01/AISPM-02), because a sandbox limits the filesystem and not the credentials",
+    "AGY-03": "Require confirmation on every action whose effect you would not want taken on the strength of a document the agent read. Set requireConfirmation ENABLED in the function schema: aws bedrock-agent update-agent-action-group --agent-id <AGENT_ID> --agent-version DRAFT --action-group-id <AG_ID> --action-group-name <NAME> --function-schema '{\"functions\":[{\"name\":\"<FN>\",\"requireConfirmation\":\"ENABLED\"}]}' ; then aws bedrock-agent prepare-agent --agent-id <AGENT_ID>",
     "AGC-05": "Either authorize at the gateway or carry the caller's identity to the target -- not neither. To authorize at the edge: aws bedrock-agentcore-control update-gateway --gateway-identifier <ID> --authorizer-type CUSTOM_JWT --authorizer-configuration '{\"customJWTAuthorizer\":{\"discoveryUrl\":\"<URL>\",\"allowedClients\":[\"<CLIENT_ID>\"]}}' . To delegate instead, switch the targets to CALLER_IAM_CREDENTIALS so the target's own IAM still applies, and scope the gateway execution role down either way",
     "AGC-06": "Stop returning granular errors to callers by omitting exceptionLevel: aws bedrock-agentcore-control update-gateway --gateway-identifier <ID> --no-exception-level ; keep DEBUG for a non-production gateway only",
     "AGC-03": "Inventory what each provider opens and scope it: aws bedrock-agentcore-control list-oauth2-credential-providers ; aws bedrock-agentcore-control list-api-key-credential-providers ; then confirm each credential is least-privilege IN THE THIRD-PARTY SYSTEM, because no AWS control bounds it -- and set a rotation owner, since CloudTrail will not show you its use",
@@ -5608,12 +5620,14 @@ class AWSLiveScanner:
                 groups = ba.list_agent_action_groups(
                     agentId=aid, agentVersion="DRAFT"
                 ).get("actionGroupSummaries", [])
+                agency_groups = []          # slice 2.4 — assessed after the loop
                 for grp in groups:
                     gname = grp.get("actionGroupName", "N/A")
                     gid   = grp.get("actionGroupId", "")
                     grp_detail = ba.get_agent_action_group(
                         agentId=aid, agentVersion="DRAFT", actionGroupId=gid
                     )["agentActionGroup"]
+                    agency_groups.append(grp_detail)
                     lambda_arn = grp_detail.get(
                         "actionGroupExecutor", {}
                     ).get("lambda", "")
@@ -5645,6 +5659,8 @@ class AWSLiveScanner:
                                       fn_name,
                                       f"Lambda '{fn_name}' no resource "
                                       f"policy (IAM-only) | {gname}")
+                # AGY-01/02/03 — excessive agency, from the detail just read
+                self._emit_agency(aname, agency_groups)
             except Exception as e:
                 self._add("WARN", "AGT-04", "BEDROCK_AGENTS", aname,
                           f"Could not audit action groups for "
@@ -11028,6 +11044,58 @@ class AWSLiveScanner:
             # resources the control cannot apply to stops being believed.
             "workload_identity_arn": ident["workload_identity_arn"],
         })
+
+    def _emit_agency(self, aname, groups):
+        """AGY-01/02/03 — what an agent can do, and what nobody has to approve.
+
+        OWASP LLM06 splits excessive agency into functionality, permissions and autonomy.
+        The middle one is already covered: AISPM-01/02 grade the execution role. This
+        covers the other two, both readable from action-group configuration that AGT-04
+        already fetches.
+
+        The severity split is not cosmetic. ``parentActionSignature`` ranges from
+        ANTHROPIC.Bash (a shell) to ANTHROPIC.TextEditor (files), and pricing them the
+        same would either overstate the second or understate the first."""
+        a = aws_agency.assess_agent(groups)
+        if not a["has_any_surface"]:
+            return
+
+        for cap in a["capabilities"]:
+            cid = "AGY-01" if cap["severity"] == "CRITICAL" else "AGY-02"
+            self._add("FAIL", cid, "BEDROCK_AGENTS", aname,
+                      f"Agent '{aname}' holds {cap['signature']} — {cap['grants']}. "
+                      f"{cap['why'][0].upper()}{cap['why'][1:]} | {aname}")
+
+        cov = a["coverage"]
+        if cov["total"]:
+            if cov["gated"] == 0:
+                extra = (" — and it holds "
+                         + ", ".join(a["signatures"])
+                         if a["ungated_high_agency"] else "")
+                self._add("FAIL", "AGY-03", "BEDROCK_AGENTS", aname,
+                          f"None of agent '{aname}'s {cov['total']} action(s) require "
+                          f"human confirmation{extra}. AWS documents this field as the "
+                          f"prompt-injection safeguard, and it is DISABLED unless set "
+                          f"| {aname}")
+            elif cov["gated"] < cov["total"]:
+                self._add("WARN", "AGY-03", "BEDROCK_AGENTS", aname,
+                          f"{cov['gated']} of {cov['total']} action(s) on agent "
+                          f"'{aname}' require confirmation ({cov['pct']}%) — ungated: "
+                          f"{', '.join(cov['ungated'][:5])} | {aname}")
+            else:
+                self._add("PASS", "AGY-03", "BEDROCK_AGENTS", aname,
+                          f"All {cov['total']} action(s) on agent '{aname}' require "
+                          f"human confirmation | {aname}")
+
+        # An OpenAPI action group carries x-requireConfirmation inside the schema payload,
+        # which may be an S3 object we do not read. Named rather than counted either way:
+        # calling it ungated invents a gap, calling it gated hides one.
+        if cov["openapi_groups_not_assessed"]:
+            self._add("INFO", "AGY-00", "BEDROCK_AGENTS", aname,
+                      f"Confirmation posture NOT assessed for OpenAPI action group(s) on "
+                      f"'{aname}': {', '.join(cov['openapi_groups_not_assessed'])} — "
+                      f"x-requireConfirmation lives inside the schema payload "
+                      f"(no phantom pass)")
 
     def _grade_guardrails(self, bedrock):
         """AIGRD-01/02/04 — how strong each guardrail actually is.

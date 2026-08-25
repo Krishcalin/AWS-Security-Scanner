@@ -2466,6 +2466,40 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Treat coverage as necessary but not sufficient: assume a determined injection succeeds, and confirm AGT-02 and AGT-04 have bounded what the agent could then do.",
         ],
     },
+    "AGY-01": {
+        "risk": "This agent holds a built-in capability that lets it execute shell commands or operate a machine directly - ANTHROPIC.Bash or ANTHROPIC.Computer. These are not tools the agent calls through a Lambda you wrote and can reason about; they are general-purpose capabilities, and their reach is whatever the surrounding execution context can reach. OWASP LLM06 calls this excessive functionality, and the reason it sits at the top of the agentic risk list is the interaction with prompt injection: an agent's normal mode of operation is to be persuaded by text. A document in a knowledge base, a page it fetches, a ticket it reads - any of these can carry an instruction, and with a shell attached the instruction becomes a command. AWS notes that computer use is a beta capability; that is a maturity statement about the feature, not a bound on what it can do.",
+        "impact": "An instruction delivered as content becomes execution. Anything the runtime's identity and network can reach is reachable this way, and the action leaves the audit trail of the agent rather than of an attacker.",
+        "steps": [
+            "Establish whether the agent needs it at all. These capabilities are frequently added during prototyping and never removed, and the question 'what breaks if I disable this' usually has the answer 'nothing'.",
+            "Disable the action group: aws bedrock-agent update-agent-action-group --agent-id <AGENT_ID> --agent-version DRAFT --action-group-id <AG_ID> --action-group-name <NAME> --action-group-state DISABLED ; then aws bedrock-agent prepare-agent --agent-id <AGENT_ID>",
+            "Or delete it: aws bedrock-agent delete-agent-action-group --agent-id <AGENT_ID> --agent-version DRAFT --action-group-id <AG_ID> --skip-resource-in-use-check",
+            "If it must stay, require confirmation on every function in the same agent (AGY-03) so a human sits between the instruction and the act - and understand that this is mitigation, not removal.",
+            "Bound what the capability reaches: check AISPM-01 and AISPM-02 for this agent's execution role. A shell is only as dangerous as the identity running it.",
+            "Attach a guardrail with a PROMPT_ATTACK filter at HIGH input strength (AIGRD-01). It does not make injection impossible; it raises the cost of the delivery.",
+        ],
+    },
+    "AGY-02": {
+        "risk": "This agent can execute code or read and write files - AMAZON.CodeInterpreter or ANTHROPIC.TextEditor. Both are legitimate and useful, and both convert an instruction the agent was given into an effect. The sandbox around a code interpreter is worth being precise about: it bounds the filesystem, not the credentials the code runs with and not the network it can reach, so 'sandboxed' does not mean 'contained'. File write deserves separate attention because it is how an injected instruction OUTLIVES the conversation that delivered it - text written now is text read back later, by this agent or another.",
+        "impact": "Code executes and files change on the strength of content the agent read. Where the runtime holds credentials, the code holds them too; where files are read back later, the instruction persists past the session.",
+        "steps": [
+            "Confirm the capability is still used. Code interpreters in particular are often enabled for one experiment and left on.",
+            "Disable it if not: aws bedrock-agent update-agent-action-group --agent-id <AGENT_ID> --agent-version DRAFT --action-group-id <AG_ID> --action-group-name <NAME> --action-group-state DISABLED",
+            "Narrow the execution role rather than trusting the sandbox - AISPM-01 and AISPM-02 grade what that role can escalate to and read. That reach IS the capability's reach.",
+            "For file access, consider where written files are later consumed. If an agent reads a location it can also write, an injected instruction can be made to persist across sessions.",
+            "Require confirmation on the functions in this agent (AGY-03) so consequential calls have a human in front of them.",
+        ],
+    },
+    "AGY-03": {
+        "risk": "None of this agent's actions require human confirmation before they run. Bedrock Agents carry a per-function requireConfirmation field, and AWS is unambiguous about what it is for: 'You can safeguard your application from malicious prompt injections by requesting confirmation from your application users before invoking the action group function.' It is also unambiguous about the default: 'By default, user confirmation is DISABLED if this field is not specified.' So the control AWS itself names as the prompt-injection safeguard is off unless somebody turned it on, and nothing in a conventional cloud inventory shows which agents left it off. This is the autonomy limb of OWASP LLM06. It matters most in combination: an agent with a shell, a code interpreter or a broad execution role, and no gate, goes from an instruction in a document to an effect in production with nothing in between.",
+        "impact": "Every action the agent can take, it can take alone, on the strength of text it was given. There is no point in the sequence where a person sees what is about to happen and can decline it.",
+        "steps": [
+            "Decide per function, not per agent. The test is: would you want this taken on the strength of a document the agent read? Read-only lookups usually pass that test; anything that writes, spends, sends or deletes usually does not.",
+            "Enable it: aws bedrock-agent update-agent-action-group --agent-id <AGENT_ID> --agent-version DRAFT --action-group-id <AG_ID> --action-group-name <NAME> --function-schema '{\"functions\":[{\"name\":\"<FN>\",\"requireConfirmation\":\"ENABLED\"}]}' ; then aws bedrock-agent prepare-agent --agent-id <AGENT_ID>",
+            "For OpenAPI action groups the equivalent field is x-requireConfirmation inside the schema; OverWatch reports those as un-assessed rather than guessing, so check them by hand.",
+            "Make sure the confirmation reaches a human who can judge it. The API returns the invocation for confirmation; an application that auto-confirms has implemented the field and not the control.",
+            "Treat this as necessary and not sufficient - a gate in front of a shell (AGY-01) is better than nothing and is not a reason to keep the shell.",
+        ],
+    },
     "AGC-01": {
         "risk": "This AgentCore Runtime does not require version 2 of the microVM Metadata Service (MMDS). It is the EC2 IMDSv1 problem moved inside an agent, and it is worse there for one specific reason: exploiting IMDSv1 requires finding a way to make the workload issue an attacker-chosen HTTP request, and making a workload issue an attacker-chosen request is precisely what prompt injection does as its normal mode of operation. A document in a knowledge base, a web page an agent fetches, a support ticket it reads - any of these can carry an instruction to retrieve the metadata endpoint and include the response in its output. With v1 permitted, that single GET returns the runtime's execution-role credentials. MMDSv2's session-token handshake is what makes the same request fail, because a naive fetch cannot perform the PUT that obtains the token.",
         "impact": "The runtime's execution role is stolen without any compromise of AWS itself - the agent hands over its own credentials because it was asked to. Whatever that role can reach, the attacker now reaches directly, outside the agent and outside whatever guardrails sit in front of it.",
