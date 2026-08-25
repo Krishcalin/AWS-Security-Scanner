@@ -101,7 +101,10 @@ class TestDataStructures(unittest.TestCase):
         self.assertEqual(VERSION, "2.35.0")
 
     def test_sections_count(self):
-        self.assertEqual(len(SECTIONS), 44)   # +WINVULN (Phase 8 Windows OS-vuln)
+        # 45: +AI_THREAT (Phase 1 slice 1.3 — LLMjacking + AI control tampering).
+        # Pinned on purpose: a new section changes scan cost and ordering, so it should
+        # be a conscious edit here rather than something that appears unnoticed.
+        self.assertEqual(len(SECTIONS), 45)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:
