@@ -7,6 +7,40 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 3 · slice 3.2 — tool-description poisoning** (`aws_toolpoison.py`,
+  `TPOIS-01/02/03`, `--tool-patterns`). A model reads a tool's **description** to decide
+  when to call it, which makes the description an instruction channel: whoever can edit
+  one addresses the model directly, while the reviewer sees a field that looks like
+  documentation.
+  - **`TPOIS-01`** (HIGH · SI-7) — the description contains **chat-template delimiters**:
+    `<|im_start|>` (ChatML), `[INST]`/`<<SYS>>` (Llama 2, Mistral),
+    `<|start_header_id|>` (Llama 3), Anthropic's legacy `Human:` turn marker. These are
+    *structural tokens published by model vendors*, not phrasings — a field describing a
+    function has no reason to carry one, the way a config value has no reason to begin
+    `AKIA`.
+  - **`TPOIS-02`** (HIGH · SI-7) — characters **invisible to a reviewer and visible to a
+    tokenizer**: zero-width spaces, tag characters, bidirectional overrides (Trojan
+    Source applied to a config field). This is the signal most worth having, because the
+    entire premise of description poisoning is that somebody looked at the field and saw
+    nothing wrong. Any Unicode category `Cf` character is caught, not just a named list.
+  - **`TPOIS-03`** (HIGH · SI-7) — a hit from a pattern set **the operator supplies**,
+    attributed to the `source` that file declares. A set without a `source` is refused
+    outright: a finding that cannot say where its rule came from is one nobody can argue
+    with.
+  - **OverWatch authors no injection phrasings, and that is the product position.** They
+    are unbounded, multilingual and adversarially chosen; a list written here would be a
+    detection product whose every miss reads as a clean bill of health and whose every
+    over-match teaches operators to skip the category. A test asserts no phrasing creeps
+    into the module. Same reasoning as **D4** on red teaming and **2.6** on re-ranking
+    rather than re-detecting.
+  - **No finding ever quotes the description back.** A report that prints the payload has
+    moved it into the ticket and the chat window of whoever triages it. Enforced by tests
+    at both the classifier and the scanner surface.
+  - Charter-checked before building: a tool description is **configuration**, not
+    conversation content — `_CONTENT_KEYS` names conversation payloads and deliberately
+    excludes `description`, and `_INGEST_MODULES` covers third-party payload ingest,
+    which a config read is not. **No new API call and no new IAM permission**: it reads
+    the action-group detail `AGT-04` already fetches.
 - **Phase 3 · slice 3.1 — toxic flow** (`aws_toxicflow.py`, `TFLOW-01`, `TFLOW-02`). The
   in-charter answer to *"do you red team?"* (**decision D4**): rather than probing a
   customer's model — which spends their inference budget and produces, in their own

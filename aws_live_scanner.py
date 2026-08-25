@@ -75,6 +75,7 @@ import aws_aiguard
 import aws_agentcore
 import aws_agency
 import aws_toxicflow
+import aws_toolpoison
 import aws_aiprotect
 import aws_cbom
 import aws_airules
@@ -395,6 +396,9 @@ CHECK_SEVERITY = {
     # rests on an assumption and says so, which is why they are separate ids with
     # separate severities rather than one check carrying both readings.
     "TFLOW-01": "CRITICAL", "TFLOW-02": "HIGH",
+    # Tool-description poisoning. All HIGH: a description carrying instructions is
+    # not a weak control, it is a control working exactly as the attacker intended.
+    "TPOIS-01": "HIGH", "TPOIS-02": "HIGH", "TPOIS-03": "HIGH",
     "AIGRD-04": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
     "COG-05": "HIGH", "COG-06": "CRITICAL",
@@ -676,6 +680,11 @@ COMPLIANCE_MAP = {
     # reaches is what its role was given.
     "TFLOW-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "TFLOW-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    # SI-7 (information integrity): the finding is that a configuration field says
+    # something other than what it appears to say.
+    "TPOIS-01": {"PCI-DSS": "6.5.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC7.1", "NIST": "SI-7"},
+    "TPOIS-02": {"PCI-DSS": "6.5.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC7.1", "NIST": "SI-7"},
+    "TPOIS-03": {"PCI-DSS": "6.5.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC7.1", "NIST": "SI-7"},
     # AI-SPM pillar (NIST reused from the frozen 38-control universe: AC-6/AC-3/SC-7)
     "AISPM-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "AISPM-02": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
@@ -1004,6 +1013,9 @@ REMEDIATION_MAP = {
     "AIGRD-03": "Add the explicit Deny — the Allow half alone does not make a guardrail mandatory. Attach a policy carrying BOTH statements: Allow bedrock:InvokeModel/InvokeModelWithResponseStream with StringEquals on bedrock:GuardrailIdentifier, AND Deny the same actions with StringNotEquals on the same key and value: aws iam put-role-policy --role-name <ROLE> --policy-name enforce-guardrail --policy-document file://enforce.json ; use ArnNotLike with <GUARDRAIL_ARN>:* if any numeric version should be acceptable",
     "AIGRD-04": "Publish a numeric version so the configuration is pinned and the IAM condition can name it: aws bedrock create-guardrail-version --guardrail-identifier <ID> --description 'pinned for enforcement' ; then point every consumer and every bedrock:GuardrailIdentifier condition at <GUARDRAIL_ARN>:<VERSION> rather than at DRAFT",
     "AGT-05": "Attach a guardrail to the agent and shorten its idle session TTL: aws bedrock-agent update-agent --agent-id <AGENT_ID> --agent-name <NAME> --agent-resource-role-arn <ROLE_ARN> --foundation-model <MODEL_ID> --guardrail-configuration '{\"guardrailIdentifier\":\"<GUARDRAIL_ID>\",\"guardrailVersion\":\"DRAFT\"}' --idle-session-ttl-in-seconds 600",
+    "TPOIS-01": "Read the description and remove the delimiters -- a field that documents a function has no reason to contain a chat-template token: aws bedrock-agent update-agent-action-group --agent-id <AGENT_ID> --agent-version DRAFT --action-group-id <AG_ID> --action-group-name <NAME> --function-schema '{\"functions\":[{\"name\":\"<FN>\",\"description\":\"<PLAIN TEXT>\"}]}' ; then establish who last edited it, because the field is a write path into the model's context",
+    "TPOIS-02": "Strip the invisible characters, and treat the description as untrusted until you have seen it rendered with them visible: python -c \"import sys,unicodedata as u; print(repr(sys.argv[1]))\" '<DESCRIPTION>' ; then rewrite it with aws bedrock-agent update-agent-action-group as above",
+    "TPOIS-03": "A pattern from your own rule set matched this description. Review it against that rule, and if it is a true positive rewrite the field with aws bedrock-agent update-agent-action-group ; OverWatch attributes the hit to the pattern source rather than asserting it independently",
     "TFLOW-01": "Break the flow at whichever end is cheaper, and do both if the agent is production-facing. Cut the untrusted-content path -- remove the WEB data source, or close the write grant on the bucket feeding it: aws s3api put-bucket-policy --bucket <BUCKET> --policy file://no-external-write.json ; and cut the reach, which is what actually bounds the damage: narrow the execution role (see AISPM-01/AISPM-02) and require confirmation on consequential actions with aws bedrock-agent update-agent-action-group --agent-id <AGENT_ID> --agent-version DRAFT --action-group-id <AG_ID> --action-group-name <NAME> --function-schema '{\"functions\":[{\"name\":\"<FN>\",\"requireConfirmation\":\"ENABLED\"}]}'",
     "TFLOW-02": "No untrusted-content path is visible, so start with the reach rather than the entry -- it is the half that is certainly true. Narrow the execution role (AISPM-01/AISPM-02), require confirmation on consequential actions, and attach a blocking PROMPT_ATTACK guardrail: aws bedrock update-guardrail --guardrail-identifier <ID> --name <NAME> --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\",\"inputAction\":\"BLOCK\"}]}'",
     "AITHR-03": "Treat the identity as compromised and bound it before deciding it was only inference: aws iam update-access-key --access-key-id <AKID> --status Inactive --user-name <USER> ; then aws guardduty get-findings --detector-id <DETECTOR_ID> --finding-ids <FINDING_ID> to see the models and the deviation, and reduce the reach that made it consequential (see AISPM-01/AISPM-02)",
@@ -1960,6 +1972,10 @@ class AWSLiveScanner:
         # before BEDROCK_AGENTS) so an agent can be asked whether the guardrail it
         # names actually blocks anything.
         self._guardrail_grades = {}
+        # Slice 3.2 — an operator-supplied tool-description pattern set. Empty
+        # unless --tool-patterns names one, and deliberately so: OverWatch does not
+        # author injection phrasings.
+        self._tool_patterns = aws_toolpoison.load_patterns(None)
         # knowledgeBaseId -> injection surface, from the data sources AGT-03 reads.
         self._kb_surface = {}
         self._perm_ledger = None            # set by _preflight_permissions()
@@ -5715,6 +5731,9 @@ class AWSLiveScanner:
                 # Slice 3.1 — the same assessment, kept for the toxic-flow computation
                 # so it is not recomputed from a second fetch.
                 self._stash_flow_inputs(ba, aid, aname, detail, agency_groups)
+                # TPOIS-01/02/03 — the same descriptions, read for what they say
+                # to the MODEL rather than for what they document.
+                self._emit_tool_poisoning(aname, agency_groups)
             except Exception as e:
                 self._add("WARN", "AGT-04", "BEDROCK_AGENTS", aname,
                           f"Could not audit action groups for "
@@ -11262,6 +11281,38 @@ class AWSLiveScanner:
             "workload_identity_arn": ident["workload_identity_arn"],
         })
 
+    def _emit_tool_poisoning(self, aname, groups):
+        """TPOIS-01/02/03 — instructions hiding in the field that describes a tool.
+
+        A model reads a tool's description to decide when to call it, which makes the
+        description an instruction channel: whoever can edit it addresses the model
+        directly, while the person reviewing the agent sees a field that looks like
+        documentation.
+
+        OverWatch deliberately authors no injection phrasings -- they are unbounded,
+        multilingual and adversarially chosen, and a regex list here would be a detection
+        product whose every miss reads as a clean bill of health. What it reports instead
+        is two facts (published chat-template tokens; codepoints invisible to a reviewer)
+        and the hits of a pattern set the operator supplies and OverWatch attributes."""
+        for grp in groups or []:
+            for f in aws_toolpoison.assess_group(grp, self._tool_patterns):
+                where = f["where"]
+                why = aws_toolpoison.summarize(f)
+                if f["template_tokens"]:
+                    self._add("FAIL", "TPOIS-01", "BEDROCK_AGENTS", where,
+                              f"Tool description '{where}' on agent '{aname}' "
+                              f"{why} | {where}")
+                if f["hidden"]:
+                    self._add("FAIL", "TPOIS-02", "BEDROCK_AGENTS", where,
+                              f"Tool description '{where}' on agent '{aname}' "
+                              f"{aws_toolpoison.summarize({'hidden': f['hidden']})} "
+                              f"| {where}")
+                if f["pattern_hits"]:
+                    self._add("FAIL", "TPOIS-03", "BEDROCK_AGENTS", where,
+                              f"Tool description '{where}' on agent '{aname}' "
+                              f"{aws_toolpoison.summarize({'pattern_hits': f['pattern_hits'], 'pattern_source': f['pattern_source']})} "
+                              f"| {where}")
+
     def _emit_agency(self, aname, groups):
         """AGY-01/02/03 — what an agent can do, and what nobody has to approve.
 
@@ -13376,6 +13427,18 @@ def _backend_meta_for(args, scheme: str, available: bool, reason: Optional[str] 
 
 def _apply_phase6_config(sc, args) -> None:
     """Copy the Phase-6 side-scan flags onto a scanner before it runs."""
+    # Slice 3.2 — the operator's tool-description pattern set, loaded here because this
+    # helper is the one seam BOTH the org path and the single-account path pass through.
+    # A load failure costs the pattern check and nothing else: aws_toolpoison.load_patterns
+    # returns an empty set with a reason rather than raising.
+    tp = aws_toolpoison.load_patterns(getattr(args, "tool_patterns", None))
+    sc._tool_patterns = tp
+    if tp.get("error"):
+        print(f"{YELLOW}[WARN]{RESET} tool-description patterns not loaded: "
+              f"{tp['error']}")
+    elif tp.get("patterns"):
+        print(f"{BLUE}[*]{RESET} tool-description patterns: "
+              f"{len(tp['patterns'])} rule(s) from {tp['source']}")
     sc.side_scan = args.side_scan
     sc.side_scan_targets = args.side_scan_targets
     sc.side_scan_tags = args.side_scan_tag or []
@@ -13558,6 +13621,13 @@ examples:
     parser.add_argument(
         "--sarif", metavar="FILE",
         help="Save findings as SARIF 2.1.0 to FILE (GitHub code scanning)",
+    )
+    parser.add_argument(
+        "--tool-patterns", metavar="FILE", dest="tool_patterns",
+        help="JSON pattern set for tool-description poisoning (TPOIS-03). "
+             "OverWatch ships none: injection phrasings are unbounded and "
+             "adversarial, so the rules are yours and findings cite your source. "
+             "Shape: {'source','version','patterns':[{'id','regex','note'}]}",
     )
     parser.add_argument(
         "--cbom", metavar="FILE",
