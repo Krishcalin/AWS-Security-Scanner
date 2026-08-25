@@ -105,6 +105,7 @@ Resources:
                   - bedrock:GetKnowledgeBase
                   - bedrock:GetDataSource
                   - bedrock:GetAgentActionGroup
+                  - bedrock:GetGuardrail
                 Resource: '*'
       Tags:
         - { Key: 'cnapp:managed', Value: 'true' }

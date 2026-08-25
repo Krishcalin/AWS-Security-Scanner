@@ -65,7 +65,7 @@ data "aws_iam_policy_document" "extras" {
     ]
     resources = ["*"]
   }
-  # Three Bedrock CONFIG reads SecurityAudit v92 does not grant. Verified against the
+  # Four Bedrock CONFIG reads SecurityAudit v92 does not grant. Verified against the
   # published policy document: it grants GetAgentKnowledgeBase (a KB association on an
   # agent) but not GetKnowledgeBase, ListAgentActionGroups but not GetAgentActionGroup,
   # ListDataSources but not GetDataSource. Without them AGT-03 and AGT-04 are refused
@@ -78,6 +78,7 @@ data "aws_iam_policy_document" "extras" {
       "bedrock:GetKnowledgeBase",
       "bedrock:GetDataSource",
       "bedrock:GetAgentActionGroup",
+      "bedrock:GetGuardrail",
     ]
     resources = ["*"]
   }

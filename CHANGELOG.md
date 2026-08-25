@@ -6,6 +6,59 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Phase 2 · slice 2.1 — guardrail GRADING, and enforcement read from IAM text**
+  (`aws_aiguard.py`). Every CNAPP, this one included, has checked a guardrail as a
+  boolean: `BDR-02` PASSes any guardrail that exists. That boolean is satisfied by
+  configurations which block nothing at all.
+  - **`AIGRD-01`** (HIGH · CM-6) — no `PROMPT_ATTACK` filter, or one that does not block
+    on input, or one below `MEDIUM` strength. Bedrock's six content-filter categories
+    grade what a model *says*; only `PROMPT_ATTACK` addresses what a user makes it *do*.
+    A guardrail can be a thorough content-safety filter and leave a tool-using agent
+    entirely open to instruction hijacking.
+  - **`AIGRD-02`** (HIGH · CM-6) — filters set to detect without blocking. The Bedrock
+    reference defines action `NONE` exactly: *"Take no action but return detection
+    information in the trace response."* Such a guardrail produces telemetry, lets the
+    content through, and passes every presence check in the market.
+  - **`AIGRD-03`** (HIGH · AC-3) — **the guardrail is available but not mandatory.**
+    Attaching one to an agent does not stop a caller invoking the model without it; only
+    the `bedrock:GuardrailIdentifier` condition key does, and only with BOTH halves AWS
+    documents. The Allow half declines to grant when unmet; the *explicit Deny* is what
+    closes the door — it holds *"no matter what other permissions the user might have."*
+    A policy carrying the Allow and not the Deny reads like enforcement to a human
+    reviewing it and is not. **Costs no new permission** — decided from identity-policy
+    statements the scanner already collects.
+  - **`AIGRD-04`** (MEDIUM · CM-5) — guardrail exists only as `DRAFT`: edits reach live
+    traffic with no published artifact to diff, and a condition key cannot pin what has
+    no version number.
+  - Also surfaced as a **WARN, not a FAIL**: a role that enforces a guardrail *and* holds
+    `InvokeAgent` / `InvokeInlineAgent` / `RetrieveAndGenerate`. AWS documents that those
+    make internal `InvokeModel` calls which do not all carry a guardrail, so the Deny
+    rejects them. It is the reason teams switch enforcement back off, and a FAIL here
+    would push an operator to do exactly that.
+  - **A fourth managed-policy gap, found the same way as the first three:**
+    `bedrock:GetGuardrail` is not in SecurityAudit v92 — the same List-without-Get shape
+    (`ListGuardrails` granted, `GetGuardrail` not) that slice 1.2 found three times.
+    `ListGuardrails` returns `GuardrailSummary` only and carries no filter configuration,
+    so strength cannot be read without it. Added to both the CloudFormation and Terraform
+    onboarding paths; one `Get` buys three checks.
+  - Two claims **deliberately not made**, recorded in the module docstring: that a bare
+    guardrail ID in a Condition never matches (every AWS example uses the full ARN, but
+    the reference does not state what the condition key resolves to at evaluation time —
+    flagging it would be an inference about IAM internals dressed as a reading of the
+    policy); and that enforcement is absolute (the same page documents that guardrail
+    input tags can bypass the guardrail on the prompt, though it always applies on the
+    response).
+
+### Fixed
+- A runtime `AccessDenied` on `bedrock:GetGuardrail` recorded only `AIGRD-01` as
+  unevaluated, leaving `AIGRD-02` and `AIGRD-04` — blocked by the very same read —
+  looking clean. That is a phantom pass produced inside the coverage manifest whose
+  purpose is preventing them. The set is now derived from the permission ledger
+  (`_checks_gated_by`), so a fifth check needing the same read is covered the day it is
+  added rather than silently reporting itself as evaluated. The preflight path was
+  already correct, having derived it from the ledger all along.
+
 ### Changed
 - **`AIPATH-01` no longer claims an attack path it never observed.** Slice 0.3 established
   — with the SageMaker API reference quoted verbatim — that every input to

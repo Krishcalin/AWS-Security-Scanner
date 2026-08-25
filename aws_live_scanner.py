@@ -71,6 +71,7 @@ import aws_flowlog
 import aws_secrets
 import aws_leastpriv
 import aws_aispm
+import aws_aiguard
 import aws_airules
 import aws_cdr
 import aws_perm_ledger
@@ -359,6 +360,13 @@ CHECK_SEVERITY = {
     # LLMjacking and AI control tampering (CloudTrail management events)
     "AITHR-01": "HIGH", "AITHR-02": "CRITICAL",
     "AGT-06": "HIGH",
+    # Guardrail STRENGTH, as opposed to guardrail presence. AIGRD-01/02 are HIGH
+    # because each describes a guardrail that satisfies every "is one attached"
+    # check in the market while blocking nothing; AIGRD-03 is HIGH because an
+    # unenforced guardrail is optional at the caller's discretion. AIGRD-04 is
+    # MEDIUM: an unpinned DRAFT is a change-control weakness, not an open door.
+    "AIGRD-01": "HIGH", "AIGRD-02": "HIGH", "AIGRD-03": "HIGH",
+    "AIGRD-04": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
     "COG-05": "HIGH", "COG-06": "CRITICAL",
     "AGW2-01": "MEDIUM", "AGW2-02": "HIGH", "AGW2-03": "LOW",
@@ -604,6 +612,14 @@ COMPLIANCE_MAP = {
     "AGT-04": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "AGT-05": {"PCI-DSS": "6.4.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "CM-6"},
     "AGT-06": {"PCI-DSS": "6.4.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "CM-6"},
+    # Guardrail grading reuses CM-6 (configuration settings), matching AGT-05/BDR-02.
+    # AIGRD-03 is AC-3 (access enforcement) because that is literally what a missing
+    # Deny fails to do, and AIGRD-04 is CM-5 (change restrictions) because an
+    # unversioned DRAFT takes effect without a controlled change.
+    "AIGRD-01": {"PCI-DSS": "6.4.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "CM-6"},
+    "AIGRD-02": {"PCI-DSS": "6.4.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "CM-6"},
+    "AIGRD-03": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "AIGRD-04": {"PCI-DSS": "6.4.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "CM-5"},
     # AI-SPM pillar (NIST reused from the frozen 38-control universe: AC-6/AC-3/SC-7)
     "AISPM-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "AISPM-02": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
@@ -916,6 +932,10 @@ REMEDIATION_MAP = {
     "AGT-03": "Set a customer-managed key on the knowledge base and its data sources: aws bedrock-agent update-knowledge-base --knowledge-base-id <KB_ID> --name <NAME> --role-arn <ROLE_ARN> --knowledge-base-configuration file://kb-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}'",
     "AGT-04": "Restrict the action-group Lambda so only this agent can invoke it, and scope the function's own role: aws lambda add-permission --function-name <FN> --statement-id bedrock-agent --action lambda:InvokeFunction --principal bedrock.amazonaws.com --source-arn <AGENT_ALIAS_ARN>",
     "AGT-06": "Create one guardrail and attach it to every agent that lacks one, then make it mandatory in IAM so it cannot simply be omitted: aws bedrock create-guardrail --name prod-guardrail --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\"}]}'",
+    "AIGRD-01": "Add a PROMPT_ATTACK filter at HIGH input strength — the other five filter types are content-safety categories and do not address injection: aws bedrock update-guardrail --guardrail-identifier <ID> --name <NAME> --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\",\"inputAction\":\"BLOCK\"}]}' ; then aws bedrock create-guardrail-version --guardrail-identifier <ID> so the change is pinned",
+    "AIGRD-02": "Switch the filters from detect to block. inputAction/outputAction 'NONE' means 'take no action but return detection information', so the guardrail is reporting rather than protecting: aws bedrock update-guardrail --guardrail-identifier <ID> --name <NAME> --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\",\"inputAction\":\"BLOCK\"}]}'",
+    "AIGRD-03": "Add the explicit Deny — the Allow half alone does not make a guardrail mandatory. Attach a policy carrying BOTH statements: Allow bedrock:InvokeModel/InvokeModelWithResponseStream with StringEquals on bedrock:GuardrailIdentifier, AND Deny the same actions with StringNotEquals on the same key and value: aws iam put-role-policy --role-name <ROLE> --policy-name enforce-guardrail --policy-document file://enforce.json ; use ArnNotLike with <GUARDRAIL_ARN>:* if any numeric version should be acceptable",
+    "AIGRD-04": "Publish a numeric version so the configuration is pinned and the IAM condition can name it: aws bedrock create-guardrail-version --guardrail-identifier <ID> --description 'pinned for enforcement' ; then point every consumer and every bedrock:GuardrailIdentifier condition at <GUARDRAIL_ARN>:<VERSION> rather than at DRAFT",
     "AGT-05": "Attach a guardrail to the agent and shorten its idle session TTL: aws bedrock-agent update-agent --agent-id <AGENT_ID> --agent-name <NAME> --agent-resource-role-arn <ROLE_ARN> --foundation-model <MODEL_ID> --guardrail-configuration '{\"guardrailIdentifier\":\"<GUARDRAIL_ID>\",\"guardrailVersion\":\"DRAFT\"}' --idle-session-ttl-in-seconds 600",
     "AITHR-01": "Revoke the access key and rotate the identity behind it, then bound what it could reach: aws iam update-access-key --access-key-id <AKID> --status Inactive --user-name <USER> ; aws iam delete-access-key --access-key-id <AKID> --user-name <USER>",
     "AITHR-02": "Restore the deleted or weakened control and deny the tamper actions to application roles: aws bedrock put-model-invocation-logging-configuration --logging-config file://logging.json ; aws iam put-role-policy --role-name <ROLE> --policy-name deny-ai-tamper --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"bedrock:DeleteGuardrail\",\"bedrock:DeleteModelInvocationLoggingConfiguration\"],\"Resource\":\"*\"}]}'",
@@ -1690,6 +1710,19 @@ def _cred_idle_days(last_used: str, created: str) -> Optional[int]:
 
 
 # ─── Scanner ──────────────────────────────────────────────────────────────────
+def _checks_gated_by(action: str) -> tuple:
+    """Every check id the permission ledger says depends on `action`.
+
+    Exists so a runtime AccessDenied can record the FULL set of checks it just cost us.
+    The alternative — naming them at the call site — drifts the moment another check
+    starts needing the same read, and drifts silently, leaving the newly-added check
+    looking evaluated when it was refused."""
+    want = (action or "").lower()
+    return tuple(sorted(
+        cid for cid, reqs in aws_perm_ledger.REQUIREMENTS.items()
+        if any((r.action or "").lower() == want for r in reqs)))
+
+
 class AWSLiveScanner:
     """Live, read-only AWS security audit scanner."""
 
@@ -5221,6 +5254,9 @@ class AWSLiveScanner:
                               f"id={g.get('id')} status={g.get('status')}")
         except Exception as e:
             self._add("WARN", "BDR-02", "BEDROCK", "bedrock", str(e))
+
+        # AIGRD-01/02/04 — grade what BDR-02 only counted.
+        self._grade_guardrails(bedrock)
 
         # BDR-03 — Custom model KMS encryption
         self._log("BDR-03: Bedrock — custom model encryption (KMS)")
@@ -10692,12 +10728,153 @@ class AWSLiveScanner:
         except Exception:
             scp = None          # unreadable org -> fail open, exactly like CIEM
         self._emit_guardrail_coverage(g)
+        self._emit_guardrail_enforcement(principals)
         for res in self._aispm_resources:
             try:
                 self._aispm_emit(g, res, principals, scp_levels=scp)
             except Exception as e:
                 self._add("INFO", "AISPM-00", "DATA", res.get("name", "ai"),
                           f"AI-SPM evaluation error for {res.get('name')}: {e}")
+
+    def _grade_guardrails(self, bedrock):
+        """AIGRD-01/02/04 — how strong each guardrail actually is.
+
+        BDR-02 above PASSes any guardrail that exists, which is the boolean every CNAPP
+        ships. It is satisfied by a guardrail whose every filter is set to take no action
+        — the Bedrock reference defines action NONE as "Take no action but return
+        detection information in the trace response" — and by one with no PROMPT_ATTACK
+        filter at all, which is content safety with nothing aimed at the threat that
+        makes agents different from APIs.
+
+        Regional on purpose: guardrails are regional resources, so each is graded once in
+        its own region. Needs bedrock:GetGuardrail, because ListGuardrails returns only
+        GuardrailSummary (arn/id/name/status/version/description/dates) and carries no
+        filter configuration at all."""
+        try:
+            summaries = bedrock.list_guardrails().get("guardrails", [])
+        except Exception:
+            return                      # BDR-02 above already reported the read failure
+        for gs in summaries:
+            gid = gs.get("id") or gs.get("arn")
+            gname = gs.get("name") or gid or "guardrail"
+            if not gid:
+                continue
+            try:
+                detail = bedrock.get_guardrail(guardrailIdentifier=gid)
+            except Exception as e:
+                if self._is_access_denied(e):
+                    # Every check this one action gates, not just the first. Noting
+                    # AIGRD-01 alone would report one check as unevaluated and leave
+                    # AIGRD-02 and AIGRD-04 looking clean — which is precisely the
+                    # phantom-pass the coverage manifest exists to prevent, reproduced
+                    # inside it. Derived from the ledger rather than listed here so the
+                    # two cannot drift apart when a fifth check needs the same read.
+                    for cid in _checks_gated_by("bedrock:GetGuardrail"):
+                        self._coverage.note_denied(cid, "bedrock:GetGuardrail")
+                    self._add("INFO", "AIGRD-00", "BEDROCK", gname,
+                              f"Guardrail '{gname}' NOT graded — missing permission "
+                              f"bedrock:GetGuardrail. Its presence is known; its strength "
+                              f"is not, and an ungraded guardrail is not a passing one "
+                              f"(no phantom pass)")
+                else:
+                    self._add("WARN", "AIGRD-00", "BEDROCK", gname,
+                              f"Guardrail '{gname}' could not be graded: {e}")
+                continue
+            g = aws_aiguard.grade_guardrail(detail)
+            inj = g["injection"]
+
+            if not inj["effective"]:
+                why = ("has no PROMPT_ATTACK filter" if not inj["present"]
+                       else "has a PROMPT_ATTACK filter that does not block on input"
+                       if not inj["input_blocks"]
+                       else f"blocks prompt attacks only at "
+                            f"{inj['input_strength']} strength (below MEDIUM)")
+                self._add("FAIL", "AIGRD-01", "BEDROCK", gname,
+                          f"Guardrail '{gname}' {why} — it is graded {g['grade']} and "
+                          f"does not defend the injection path, though a presence check "
+                          f"passes on it | {gname}")
+            else:
+                self._add("PASS", "AIGRD-01", "BEDROCK", gname,
+                          f"Guardrail '{gname}' blocks prompt attacks at "
+                          f"{inj['input_strength']} strength | {gname}")
+
+            if g["detect_only"]:
+                named = ", ".join(f"{d['type']} ({'+'.join(d['sides'])})"
+                                  for d in g["detect_only"])
+                verb = ("every filter is" if g["grade"] == aws_aiguard.DETECT_ONLY
+                        else "some filters are")
+                self._add("FAIL", "AIGRD-02", "BEDROCK", gname,
+                          f"Guardrail '{gname}': {verb} set to detect without blocking — "
+                          f"action NONE returns detection information and lets the "
+                          f"content through. Detect-only: {named} | {gname}")
+
+            if g["draft_only"]:
+                self._add("FAIL", "AIGRD-04", "BEDROCK", gname,
+                          f"Guardrail '{gname}' exists only as DRAFT — an edit takes "
+                          f"effect immediately with no published version, and a "
+                          f"bedrock:GuardrailIdentifier condition cannot pin what has no "
+                          f"version number | {gname}")
+
+    def _emit_guardrail_enforcement(self, principals):
+        """AIGRD-03 — is the guardrail MANDATORY, or merely available?
+
+        The differentiator of this slice, and it costs no new permission: the statements
+        are already collected for every principal. Attaching a guardrail to an agent does
+        not stop a caller invoking the model without one; only the explicit Deny does.
+        The Bedrock reference is unambiguous that the Deny is what carries the weight —
+        it holds "no matter what other permissions the user might have" — and every one
+        of its five worked examples pairs Allow with Deny.
+
+        ALLOW_ONLY is the finding worth having. That policy reads, to a human reviewing
+        it, exactly like enforcement.
+
+        Latched by the caller (_collect_aispm), because this is a property of an identity
+        rather than of a region."""
+        allow_only, unenforced, enforced, conflicted = [], [], [], []
+        for prin in (principals or {}).values():
+            name = (prin.get("arn") or prin.get("name") or "?").split("/")[-1]
+            try:
+                v = aws_aiguard.enforcement_verdict(prin.get("statements") or [])
+            except Exception:
+                continue
+            if v["verdict"] == aws_aiguard.NOT_APPLICABLE:
+                continue
+            if v["verdict"] == aws_aiguard.ALLOW_ONLY:
+                allow_only.append(name)
+            elif v["verdict"] == aws_aiguard.UNENFORCED:
+                unenforced.append(name)
+            else:
+                enforced.append(name)
+                if v["delegating"]:
+                    conflicted.append((name, v["delegating"]))
+
+        if not (allow_only or unenforced or enforced):
+            return                       # nobody here can invoke a model
+
+        if allow_only:
+            self._add("FAIL", "AIGRD-03", "DATA", "guardrail-enforcement",
+                      f"{len(allow_only)} principal(s) pin a guardrail with an Allow "
+                      f"condition but no matching explicit Deny, so a caller can still "
+                      f"invoke with no guardrail at all: "
+                      f"{', '.join(sorted(allow_only)[:5])} — this policy reads like "
+                      f"enforcement and is not | guardrail-enforcement")
+        if unenforced:
+            self._add("FAIL", "AIGRD-03", "DATA", "guardrail-enforcement",
+                      f"{len(unenforced)} principal(s) can invoke a model with no "
+                      f"bedrock:GuardrailIdentifier condition on any statement — the "
+                      f"guardrail is optional at the caller's discretion: "
+                      f"{', '.join(sorted(unenforced)[:5])} | guardrail-enforcement")
+        if enforced and not (allow_only or unenforced):
+            self._add("PASS", "AIGRD-03", "DATA", "guardrail-enforcement",
+                      f"All {len(enforced)} model-invoking principal(s) are bound to a "
+                      f"guardrail by an explicit Deny | guardrail-enforcement")
+        for name, acts in conflicted:
+            self._add("WARN", "AIGRD-03", "DATA", "guardrail-enforcement",
+                      f"Principal {name} enforces a guardrail AND holds "
+                      f"{', '.join(acts)} — AWS documents that these APIs make internal "
+                      f"InvokeModel calls that do not all carry a guardrail, so they will "
+                      f"fail with AccessDenied. Split the roles rather than removing the "
+                      f"enforcement | guardrail-enforcement")
 
     def _emit_guardrail_coverage(self, g):
         """AGT-06 — how much of the AI estate sits behind a guardrail.

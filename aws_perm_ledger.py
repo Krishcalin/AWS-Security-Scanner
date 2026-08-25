@@ -87,6 +87,21 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "read each custom model's KMS key — a fine-tuned model embeds its "
              "training data, so its key custody is the training data's key custody"),
     ),
+    "AIGRD-01": (
+        _req("bedrock:GetGuardrail",
+             "read each guardrail's filter strengths and actions — ListGuardrails\n             returns GuardrailSummary only and carries no filter configuration, so\n             without this the scanner can say a guardrail exists but not whether it\n             blocks anything"),
+    ),
+    "AIGRD-02": (
+        _req("bedrock:GetGuardrail",
+             "read inputAction/outputAction — the difference between a guardrail\n             that blocks and one that only reports"),
+    ),
+    "AIGRD-04": (
+        _req("bedrock:GetGuardrail",
+             "read the guardrail version, to tell a pinned guardrail from a DRAFT\n             that changes underneath its consumers"),
+    ),
+    # AIGRD-03 needs NO new action, and that is the point of it: enforcement is
+    # decided from identity-policy statements the scanner already collects.
+    "AIGRD-03": (),
     "AGT-01": (
         _req("bedrock:ListAgents", "find Bedrock agents"),
         _req("bedrock:GetAgent",

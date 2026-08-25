@@ -75,6 +75,7 @@ def test_preflight_computes_the_ledger_from_our_own_role():
     assert s._perm_ledger is not None
     assert s._perm_ledger.missing_actions == (
         "bedrock:GetAgentActionGroup", "bedrock:GetDataSource",
+        "bedrock:GetGuardrail",
         "bedrock:GetKnowledgeBase")
 
 
@@ -94,7 +95,12 @@ def test_preflight_says_what_will_not_be_evaluated_before_it_runs():
 def test_preflight_records_the_blocked_checks_as_not_evaluated():
     s = _scanner(principals=_me())
     s._preflight_permissions()
-    assert set(s._coverage.not_evaluated) == {"AGT-03", "AGT-04"}
+    # Slice 2.1: one more missing action (bedrock:GetGuardrail) blocking three more
+    # checks. The preflight derives this set from the ledger, so it picked all three
+    # up without being told - which is the behaviour the runtime denial path in
+    # _grade_guardrails was corrected to match.
+    assert set(s._coverage.not_evaluated) == {"AGT-03", "AGT-04",
+                                              "AIGRD-01", "AIGRD-02", "AIGRD-04"}
     assert not s._coverage.complete
 
 
@@ -162,6 +168,7 @@ def test_the_scan_result_carries_coverage_and_the_ledger():
     assert payload["permission_ledger"] is not None
     assert payload["permission_ledger"]["missing_actions"] == [
         "bedrock:GetAgentActionGroup", "bedrock:GetDataSource",
+        "bedrock:GetGuardrail",
         "bedrock:GetKnowledgeBase"]
 
 
@@ -185,6 +192,6 @@ def test_the_annotated_policy_reaches_the_payload():
     s.attack_paths = []
     s.choke_points = []
     rows = cnapp_service.serialize_scanner(s)["permission_ledger"]["annotated_policy"]
-    assert len(rows) == 3
+    assert len(rows) == 4
     for row in rows:
         assert row["why"] and row["enables"] and row["forfeited_if_declined"]

@@ -58,12 +58,15 @@ VIEW_ONLY_ALONE = [{
     "resources": {"*"}, "not_resources": set(), "condition": None,
 }]
 
+# Slice 2.1 added the fourth: SecurityAudit grants bedrock:ListGuardrails but not
+# bedrock:GetGuardrail -- the same List-without-Get shape as the other three, and the
+# reason guardrail STRENGTH cannot be read from the managed policies alone.
 EXPECTED_GAP = ("bedrock:GetAgentActionGroup", "bedrock:GetDataSource",
-                "bedrock:GetKnowledgeBase")
+                "bedrock:GetGuardrail", "bedrock:GetKnowledgeBase")
 
 
 # ── the load-bearing assertion ──────────────────────────────────────────────
-def test_the_shipped_role_is_missing_exactly_three_actions():
+def test_the_shipped_role_is_missing_exactly_four_actions():
     """Computed from the policy documents, not recalled. If this number moves, either
     AWS changed SecurityAudit or we added a call — both worth a human looking."""
     led = L.evaluate(SHIPPED_ROLE)
@@ -71,12 +74,19 @@ def test_the_shipped_role_is_missing_exactly_three_actions():
         f"expected exactly {EXPECTED_GAP}, got {led.missing_actions}")
 
 
-def test_only_the_two_knowledge_base_checks_are_blocked():
+def test_the_blocked_checks_are_the_knowledge_base_and_guardrail_grading_ones():
+    """All three guardrail-grading checks block on the SAME single action, which is
+    what makes GetGuardrail cheap to justify: one Get buys three checks. AIGRD-03 is
+    absent on purpose -- enforcement is read from statements already collected."""
     led = L.evaluate(SHIPPED_ROLE)
-    assert set(led.blocked) == {"AGT-03", "AGT-04"}
+    assert set(led.blocked) == {"AGT-03", "AGT-04",
+                                "AIGRD-01", "AIGRD-02", "AIGRD-04"}
     assert led.blocked["AGT-03"] == ("bedrock:GetDataSource",
                                      "bedrock:GetKnowledgeBase")
     assert led.blocked["AGT-04"] == ("bedrock:GetAgentActionGroup",)
+    for cid in ("AIGRD-01", "AIGRD-02", "AIGRD-04"):
+        assert led.blocked[cid] == ("bedrock:GetGuardrail",), cid
+    assert "AIGRD-03" not in led.blocked
 
 
 def test_getagentknowledgebase_is_not_getknowledgebase():
@@ -102,7 +112,10 @@ def test_declining_an_action_names_what_it_costs():
     led = L.evaluate(SHIPPED_ROLE)
     assert led.forfeit(["bedrock:GetKnowledgeBase"]) == ("AGT-03",)
     assert led.forfeit(["bedrock:GetAgentActionGroup"]) == ("AGT-04",)
-    assert set(led.forfeit(EXPECTED_GAP)) == {"AGT-03", "AGT-04"}
+    assert led.forfeit(["bedrock:GetGuardrail"]) == (
+        "AIGRD-01", "AIGRD-02", "AIGRD-04")
+    assert set(led.forfeit(EXPECTED_GAP)) == {"AGT-03", "AGT-04",
+                                              "AIGRD-01", "AIGRD-02", "AIGRD-04"}
 
 
 def test_declining_an_action_a_working_check_depends_on_is_also_counted():
@@ -170,7 +183,8 @@ def test_checks_that_need_no_permission_are_recorded_as_free():
     """AISPM-* reason over already-cached principals and graph edges. Saying so is
     better than staying silent: it tells a reviewer these cost them nothing."""
     led = L.evaluate(SHIPPED_ROLE)
-    assert set(led.free) == {"AISPM-01", "AISPM-02", "AISPM-03", "AIPATH-01"}
+    assert set(led.free) == {"AISPM-01", "AISPM-02", "AISPM-03", "AIPATH-01",
+                             "AIGRD-03"}
     for cid in led.free:
         assert cid in led.evaluable
 

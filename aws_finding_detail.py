@@ -2466,6 +2466,50 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Treat coverage as necessary but not sufficient: assume a determined injection succeeds, and confirm AGT-02 and AGT-04 have bounded what the agent could then do.",
         ],
     },
+    "AIGRD-01": {
+        "risk": "This guardrail does not defend the prompt-injection path. Bedrock content filters cover six categories - SEXUAL, VIOLENCE, HATE, INSULTS, MISCONDUCT and PROMPT_ATTACK - and only the last is aimed at the threat that makes an agent different from an API. The other five grade what a model SAYS; PROMPT_ATTACK grades what a user makes it DO. A guardrail can be a thoroughly configured content-safety filter, pass every 'is a guardrail attached' check in the market, and still leave an agent with tool access completely open to instruction hijacking. OverWatch reports this as a strength grade rather than a boolean because the boolean has no way to express it.",
+        "impact": "An attacker who can place text where the model will read it - a document in a knowledge base, a page an agent fetches, a support ticket, a filename - can redirect the agent's behaviour, and the guardrail will not intervene. Whatever the execution role can reach then becomes reachable through the model.",
+        "steps": [
+            "Add the filter at HIGH input strength: aws bedrock update-guardrail --guardrail-identifier <ID> --name <NAME> --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\",\"inputAction\":\"BLOCK\"}]}'",
+            "Note that PROMPT_ATTACK is an INPUT-side control - an injection arrives in the prompt - so outputStrength NONE is expected and correct here, and it is inputStrength that must not be NONE or LOW.",
+            "Publish a version so the setting is pinned rather than editable in place: aws bedrock create-guardrail-version --guardrail-identifier <ID>",
+            "Confirm the grade changed: aws bedrock get-guardrail --guardrail-identifier <ID> --query 'contentPolicy.filters[?type==`PROMPT_ATTACK`]'",
+            "Treat the filter as necessary and not sufficient. Assume a determined injection eventually succeeds and bound what the agent could then do - AGT-02 and AGT-04 cover the execution role's blast radius, and AIGRD-03 covers whether the guardrail can be skipped entirely.",
+        ],
+    },
+    "AIGRD-02": {
+        "risk": "This guardrail is configured to detect and not to block. Each content filter carries an inputAction and an outputAction, and the Bedrock reference defines the value NONE precisely: 'Take no action but return detection information in the trace response.' A guardrail in that state produces telemetry and lets the content through in both directions. It is worth stating plainly why this matters more than an ordinary misconfiguration: every check that asks whether a guardrail is attached - including this scanner's own BDR-02 and AGT-05 - returns PASS on it. The control appears present in every report while stopping nothing.",
+        "impact": "Harmful or injected content reaches the model and the user unimpeded, while dashboards, compliance evidence and posture scores all record a guardrail as present and healthy.",
+        "steps": [
+            "Switch the affected filters to BLOCK: aws bedrock update-guardrail --guardrail-identifier <ID> --name <NAME> --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\",\"inputAction\":\"BLOCK\"}]}'",
+            "If detect-only was deliberate - a staged rollout measuring false positives before enforcing - record it as a waiver with an end date rather than leaving it indefinite, since nothing else in the estate distinguishes a rollout from an oversight.",
+            "Check the other policy types too: denied topics, PII entities and regexes carry their own actions and can be set to detect-only independently of the content filters.",
+            "Verify: aws bedrock get-guardrail --guardrail-identifier <ID> --query 'contentPolicy.filters[].{type:type,in:inputAction,out:outputAction}'",
+            "Publish a version once the actions are right: aws bedrock create-guardrail-version --guardrail-identifier <ID>",
+        ],
+    },
+    "AIGRD-03": {
+        "risk": "A guardrail is available to these principals but not mandatory for them. Attaching a guardrail to an agent does not prevent a caller invoking the model directly without one; the only mechanism that does is the bedrock:GuardrailIdentifier condition key, and it requires BOTH halves of the pattern AWS documents. The Allow half (StringEquals or ArnLike) declines to grant when the condition is unmet. The Deny half (StringNotEquals or ArnNotLike) is what actually closes the door - the reference states it 'keeps the user request from calling the listed actions with any other GuardrailIdentifier and guardrail version no matter what other permissions the user might have.' A policy carrying the Allow and not the Deny is the specific shape of a team that believes it has enforced a guardrail: it reads like enforcement to a human reviewing it, and any other statement granting bedrock:InvokeModel lets the caller proceed with no guardrail at all. The condition applies to four inference APIs - Converse, ConverseStream, InvokeModel and InvokeModelWithResponseStream - so a Deny on any other Bedrock action is not enforcement however similar it looks.",
+        "impact": "Guardrail coverage becomes nominal. Application code that omits the guardrail parameter - by accident, by refactor, or deliberately - invokes the model unfiltered, and no configuration in the account records that it happened.",
+        "steps": [
+            "Write a policy with BOTH statements over the same actions and the same guardrail value: Allow bedrock:InvokeModel and bedrock:InvokeModelWithResponseStream with Condition StringEquals on bedrock:GuardrailIdentifier = arn:aws:bedrock:<REGION>:<ACCOUNT>:guardrail/<ID>:<VERSION>, and Deny the same actions with StringNotEquals on the same key and value.",
+            "Apply it: aws iam put-role-policy --role-name <ROLE> --policy-name enforce-guardrail --policy-document file://enforce.json",
+            "To accept any published version rather than one pinned number, use ArnLike / ArnNotLike against arn:aws:bedrock:<REGION>:<ACCOUNT>:guardrail/<ID>:* instead of the string operators.",
+            "Do NOT give the same role bedrock:InvokeAgent, bedrock:InvokeInlineAgent or bedrock:RetrieveAndGenerate. AWS documents that these make several internal InvokeModel calls and that not all of them carry a guardrail, so the Deny will reject them - split the enforcing role from the agent-invoking role rather than removing the enforcement when it breaks.",
+            "Understand the residual gap before reporting this closed: the same reference notes 'A user can bypass applying a guardrail in their prompt by using guardrail input tags. However, the guardrail is always applied on the response.' Enforcement guarantees the request cannot omit the guardrail; it does not guarantee every input is inspected.",
+            "Verify from the caller's side rather than from the policy text: invoke the model without a guardrail parameter using the role and confirm AccessDenied.",
+        ],
+    },
+    "AIGRD-04": {
+        "risk": "This guardrail exists only as DRAFT. A DRAFT has no published version number, which has two consequences. Edits take effect against live traffic the moment they are saved, with no review boundary and no artifact to compare against - a strength lowered or a filter removed changes behaviour immediately and leaves nothing to diff. And a bedrock:GuardrailIdentifier condition cannot pin what has no version, so the strongest form of enforcement in AIGRD-03 - naming an exact guardrail AND version - is unavailable while the guardrail stays in DRAFT.",
+        "impact": "Guardrail behaviour can change silently between invocations, and the enforcement policy cannot bind callers to a known-good configuration - only to whatever DRAFT currently contains.",
+        "steps": [
+            "Publish a version: aws bedrock create-guardrail-version --guardrail-identifier <ID> --description 'pinned for enforcement'",
+            "Point consumers at the version rather than at DRAFT - in agent guardrailConfiguration, set guardrailVersion to the published number instead of DRAFT.",
+            "Update the enforcement policy to name it: bedrock:GuardrailIdentifier = arn:aws:bedrock:<REGION>:<ACCOUNT>:guardrail/<ID>:<VERSION>, or ArnLike against ...:guardrail/<ID>:* to accept any published version while still excluding DRAFT.",
+            "Adopt the pattern going forward: edit DRAFT, test, publish a version, move consumers - so that what is running is always an artifact somebody published rather than the current contents of a mutable draft.",
+        ],
+    },
     "AITHR-01": {
         "risk": "CloudTrail shows the shape of LLMjacking: an access key belonging to this account is being used to run model inference by someone who should not have it. The pattern is recognisable — enumerate the available foundation models, confirm the key is live with a deliberately malformed request (which returns ValidationException rather than AccessDenied, so it does not trip credential-abuse alerting), then invoke, usually from a generic HTTP client rather than an AWS SDK and across several regions to spread per-region quota. Stolen keys are resold as cheap inference; the bill lands on the account that leaked the key, and the first sign is usually the invoice.",
         "impact": "Unbounded inference charged to this account — commonly tens of thousands of dollars per day — plus whatever else the key can reach, since a key good enough to invoke a model is rarely scoped to only that.",
