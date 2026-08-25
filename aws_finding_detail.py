@@ -2454,6 +2454,42 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Verify attachment rather than assuming it: aws bedrock-agent get-agent --agent-id <AGENT_ID> and check guardrailConfiguration is populated.",
         ],
     },
+    "AGT-06": {
+        "risk": "Some or all of this account's Bedrock agents have no guardrail in front of them. A guardrail is the only provider-native control that inspects prompts and completions in line — content filters, denied topics, PII filters, and the PROMPT_ATTACK filter aimed at injection specifically. An agent without one has nothing between an untrusted input and a model that can call tools. This finding is a COVERAGE measure rather than a per-agent one: it answers what fraction of the estate is governed, which is the question that still has an answer on an account with no guardrails at all, where a per-agent check simply finds nothing to compare against. Ungoverned agents are ranked by attack-path exposure, so one that is reachable from the internet and can reach crown-jewel data ranks above one that is isolated.",
+        "impact": "Prompt injection and jailbreak attempts reach tool-calling agents unfiltered and unrecorded, and no CloudTrail guardrail-evaluation event is produced — so the cloud-native detection that depends on those events has nothing to analyse either.",
+        "steps": [
+            "Create one guardrail with an explicit prompt-attack filter: aws bedrock create-guardrail --name prod-guardrail --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\"}]}'",
+            "Publish a version so the configuration is pinned rather than drifting: aws bedrock create-guardrail-version --guardrail-identifier <GUARDRAIL_ID>",
+            "Attach it to every ungoverned agent, starting with the highest-ranked gap in this finding: aws bedrock-agent update-agent --agent-id <AGENT_ID> --agent-name <NAME> --agent-resource-role-arn <ROLE_ARN> --foundation-model <MODEL_ID> --guardrail-configuration '{\"guardrailIdentifier\":\"<GUARDRAIL_ID>\",\"guardrailVersion\":\"DRAFT\"}'",
+            "Prepare each agent so the change is live: aws bedrock-agent prepare-agent --agent-id <AGENT_ID>",
+            "Make the guardrail MANDATORY rather than merely attached — add a Condition on bedrock:InvokeModel requiring bedrock:GuardrailIdentifier — otherwise a caller can omit it and coverage becomes nominal.",
+            "Treat coverage as necessary but not sufficient: assume a determined injection succeeds, and confirm AGT-02 and AGT-04 have bounded what the agent could then do.",
+        ],
+    },
+    "AITHR-01": {
+        "risk": "CloudTrail shows the shape of LLMjacking: an access key belonging to this account is being used to run model inference by someone who should not have it. The pattern is recognisable — enumerate the available foundation models, confirm the key is live with a deliberately malformed request (which returns ValidationException rather than AccessDenied, so it does not trip credential-abuse alerting), then invoke, usually from a generic HTTP client rather than an AWS SDK and across several regions to spread per-region quota. Stolen keys are resold as cheap inference; the bill lands on the account that leaked the key, and the first sign is usually the invoice.",
+        "impact": "Unbounded inference charged to this account — commonly tens of thousands of dollars per day — plus whatever else the key can reach, since a key good enough to invoke a model is rarely scoped to only that.",
+        "steps": [
+            "Disable the key immediately; investigate afterwards: aws iam update-access-key --access-key-id <AKID> --status Inactive --user-name <USER>",
+            "Establish the blast radius before deciding it was 'only' inference: aws iam get-access-key-last-used --access-key-id <AKID> and review what the owning identity is permitted to do.",
+            "Look for the leak: a key used from a generic HTTP client on a VPS is usually one committed to a repository, embedded in a mobile or desktop build, or pasted into a third-party tool.",
+            "Delete the key once traffic has stopped: aws iam delete-access-key --access-key-id <AKID> --user-name <USER>",
+            "Move the workload off long-lived keys entirely — IAM Roles Anywhere, IRSA, or an instance/task role — so there is no static credential left to steal.",
+            "Cap the damage a future leak can do: apply a Bedrock invocation budget and scope bedrock:InvokeModel to the specific model ARNs the application actually uses.",
+        ],
+    },
+    "AITHR-02": {
+        "risk": "A control that protects the AI estate was deleted, weakened or redirected — a guardrail removed, invocation logging switched off, a knowledge base deleted, or an agent's action-group Lambda repointed. This is defense evasion rather than misconfiguration: each of these makes some other check pass while meaning nothing. A guardrail set to NONE still satisfies 'a guardrail is attached'. Disabled invocation logging leaves nothing for GuardDuty AI Protection to analyse, and nothing for an investigation afterwards. OverWatch rates a reconfiguration higher when the same actor read the current configuration minutes beforehand: checking whether you will be recorded before changing where the record goes is what makes the change deliberate.",
+        "impact": "The controls that detect and constrain AI abuse are removed, so subsequent activity is neither blocked nor recorded — and the checks that assert those controls exist continue to pass.",
+        "steps": [
+            "Establish whether this was change management or an attack: aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=<EVENT> and check the principal, source IP and user agent. An IaC user agent during a release window is not this finding — OverWatch already excludes those.",
+            "Restore the control. Logging: aws bedrock put-model-invocation-logging-configuration --logging-config file://logging.json ; guardrail: re-create and re-attach it to every invocation path.",
+            "Confirm the restoration took: aws bedrock get-model-invocation-logging-configuration and aws bedrock-agent get-agent --agent-id <AGENT_ID>",
+            "Deny the tamper actions to application roles so only a change-management identity can perform them: aws iam put-role-policy --role-name <ROLE> --policy-name deny-ai-tamper --policy-document file://deny.json",
+            "Make the guardrail mandatory rather than merely present — a Condition on bedrock:InvokeModel requiring bedrock:GuardrailIdentifier — so removing it breaks invocation instead of silently lowering protection.",
+            "Alarm on the control plane, not only on the outcome: a CloudWatch metric filter on DeleteGuardrail and DeleteModelInvocationLoggingConfiguration turns the next attempt into a page rather than a scan finding.",
+        ],
+    },
     "AISPM-01": {
         "risk": "The IAM execution role that a SageMaker notebook/Studio domain or Bedrock agent runs AS grants full administrative access (* on *) or a known privilege-escalation primitive (iam:PassRole, iam:AttachRolePolicy, iam:CreatePolicyVersion, iam:CreateAccessKey, sts:AssumeRole, ...) on an unscoped resource. Unlike a caller-side policy, this role is assumed automatically by the AI runtime, so anyone who reaches the model host — through a leaked notebook URL, a prompt-injected agent action group, a vulnerable inference container, or a stolen credential — inherits that privilege and can pivot to account takeover. The AI resource becomes a high-value compromise anchor rather than a sandboxed workload.",
         "impact": "Compromise of the model/agent yields administrative or privilege-escalation-capable credentials, turning a single AI resource into a path to full account takeover and lateral movement.",

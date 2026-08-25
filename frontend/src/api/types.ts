@@ -144,6 +144,36 @@ export interface OrgOverview {
   top_choke_points: ChokePoint[]
 }
 
+/** What a scan did NOT establish. `complete` is false if anything was refused,
+ *  withheld or skipped — a posture grade beside an incomplete coverage record is a
+ *  grade whose denominator the reader does not know. */
+export interface Coverage {
+  complete: boolean
+  scanned_regions: string[]
+  unscanned_regions: string[]
+  /** check_id -> why it was NOT EVALUATED. Deliberately distinct from a PASS. */
+  not_evaluated: Record<string, string>
+  missing_actions: string[]
+  enumerated: string[]
+  not_enumerable: Record<string, string>
+}
+
+/** One IAM action the scanner would like, what it buys, and what declining costs. */
+export interface LedgerRow {
+  action: string
+  why: string
+  enables: string[]
+  forfeited_if_declined: string[]
+}
+
+export interface PermissionLedger {
+  evaluable: string[]
+  blocked: Record<string, string[]>
+  free: string[]
+  missing_actions: string[]
+  annotated_policy: LedgerRow[]
+}
+
 export interface AccountSummary {
   account: string
   region: string
@@ -155,6 +185,8 @@ export interface AccountSummary {
   graph: GraphStats | null
   attack_paths: AttackPath[]
   choke_points: ChokePoint[]
+  coverage?: Coverage | null
+  permission_ledger?: PermissionLedger | null
 }
 
 export interface Account {

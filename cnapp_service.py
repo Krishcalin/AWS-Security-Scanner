@@ -170,6 +170,13 @@ def serialize_scanner(sc) -> dict:
         **als.compliance_payload(sc.results),
         "graph": sc.graph.stats() if sc.graph else None,
         "graph_full": sc.graph.to_dict() if sc.graph else None,
+        # Negative assurance travels WITH the scan, not alongside it. A consumer that
+        # reads posture_score without reading this is reading a number whose
+        # denominator it does not know.
+        "coverage": (sc._coverage.to_dict()
+                     if getattr(sc, "_coverage", None) else None),
+        "permission_ledger": (sc._perm_ledger.to_dict()
+                              if getattr(sc, "_perm_ledger", None) else None),
         "attack_paths": [p.to_dict() for p in sc.attack_paths],
         "choke_points": [c.to_dict() for c in sc.choke_points],
         "finding_catalog": sc._build_finding_catalog(),
@@ -692,6 +699,10 @@ class PlatformService:
             "graph": p.get("graph"),
             "attack_paths": p.get("attack_paths", [])[:10],
             "choke_points": p.get("choke_points", [])[:10],
+            # What this scan did NOT establish, travelling with the number it did.
+            # A grade rendered without it is a grade whose denominator is unknown.
+            "coverage": p.get("coverage"),
+            "permission_ledger": p.get("permission_ledger"),
         }
 
     def org_overview(self, *, workspace_id: Optional[str] = None) -> dict:

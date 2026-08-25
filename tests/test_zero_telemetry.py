@@ -248,7 +248,7 @@ def test_registry_egress_guard_pinned():
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Every module that turns a THIRD-PARTY payload into something OverWatch stores.
-_INGEST_MODULES = ("aws_cdr.py", "aws_edr.py", "aws_ingest.py")
+_INGEST_MODULES = ("aws_cdr.py", "aws_edr.py", "aws_ingest.py", "aws_airules.py")
 
 # Keys whose value is model input/output. Reading one of these is reading a prompt.
 _CONTENT_KEYS = frozenset({
@@ -263,7 +263,7 @@ _CONTENT_KEYS = frozenset({
 
 # Helpers a normalizer may route an evidence dict through. Each must take a dict
 # LITERAL as its first argument, so the fields are still written out one by one.
-_EVIDENCE_WRAPPERS = ("_wrap_identity",)
+_EVIDENCE_WRAPPERS = ("_wrap_identity", "_wrap_blast_radius")
 
 
 def _ingest_sources():
