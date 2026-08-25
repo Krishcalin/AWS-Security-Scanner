@@ -176,24 +176,37 @@ def describable_fields(group: Optional[dict]) -> List[dict]:
     return out
 
 
+def assess_text(text: Optional[str], where: str = "",
+                patterns: Optional[dict] = None) -> dict:
+    """All three signals over ONE string a model will read.
+
+    Extracted from ``assess_group`` for slice 3.3, which needs the same three questions
+    asked of an MCP gateway's ``instructions`` — a server-level string handed to the
+    model, one level up from a tool's description. Sharing the implementation rather
+    than restating it is the point: the rule that OverWatch authors no injection
+    phrasings is only worth having if every caller inherits it."""
+    toks = template_tokens(text)
+    hidden = hidden_characters(text)
+    hits = pattern_hits(text, patterns)
+    return {
+        "where": where,
+        "length": len(text) if isinstance(text, str) else 0,
+        "template_tokens": toks,
+        "hidden": hidden,
+        "pattern_hits": hits,
+        "pattern_source": (patterns or {}).get("source", ""),
+    }
+
+
 def assess_group(group: Optional[dict],
                  patterns: Optional[dict] = None) -> List[dict]:
     """Findings for one action group's descriptions, one entry per affected field."""
     out = []
     for field in describable_fields(group):
-        toks = template_tokens(field["text"])
-        hidden = hidden_characters(field["text"])
-        hits = pattern_hits(field["text"], patterns)
-        if not (toks or hidden or hits):
+        f = assess_text(field["text"], field["where"], patterns)
+        if not (f["template_tokens"] or f["hidden"] or f["pattern_hits"]):
             continue
-        out.append({
-            "where": field["where"],
-            "length": len(field["text"]),
-            "template_tokens": toks,
-            "hidden": hidden,
-            "pattern_hits": hits,
-            "pattern_source": (patterns or {}).get("source", ""),
-        })
+        out.append(f)
     return out
 
 

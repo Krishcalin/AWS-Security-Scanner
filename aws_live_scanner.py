@@ -82,6 +82,7 @@ import aws_aiprotect
 import aws_cbom
 import aws_airules
 import aws_cdr
+import aws_mcp
 import aws_perm_ledger
 import aws_effperm
 import aws_state
@@ -405,6 +406,18 @@ CHECK_SEVERITY = {
     # because a long window is a choice rather than a defect; AMEM-02 is HIGH for
     # the same custody reason AGC-07 is.
     "AMEM-01": "MEDIUM", "AMEM-02": "HIGH",
+    # MCP provenance. MCP-01 is HIGH rather than CRITICAL because federating a
+    # third-party tool provider is a legitimate design -- the finding is that the
+    # account cannot see inside it, not that it is wrong. MCP-02 is CRITICAL: over
+    # plaintext, anyone on the path rewrites what a tool claims to do, which is
+    # prompt injection with a network position instead of a prompt. MCP-04 is the
+    # blind-spot note and carries LOW, because its job is to be READ, not to rank.
+    "MCP-01": "HIGH", "MCP-02": "CRITICAL", "MCP-03": "HIGH", "MCP-04": "LOW",
+    # MCP-05 needs --state and reports a CHANGE rather than a posture. HIGH because an
+    # unexplained change to who supplies an agent's tools is the visible half of a rug
+    # pull; it is not CRITICAL because a change the operator made themselves is the
+    # common case, and the finding asks them to confirm rather than asserting breach.
+    "MCP-05": "HIGH",
     "PENT-01": "HIGH", "PENT-02": "MEDIUM",
     "AIGRD-04": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
@@ -695,6 +708,19 @@ COMPLIANCE_MAP = {
     # SC-28 for memory: it is data at rest, and both the window and the key custody
     # are questions about how it is protected there. CA-8 for the pen-test ingest --
     # the control is literally penetration testing, performed by the customer.
+    # SA-9 (External System Services) is the on-point NIST control for MCP-01/04 and is
+    # deliberately NOT used: it sits outside the frozen 38-control universe, and adding
+    # it means authoring a sourced mapping for each of the 40+ frameworks in the
+    # crosswalk. That is a real piece of work with its own sourcing burden, not a side
+    # effect of this slice. SI-7 carries them meanwhile, and carries them honestly --
+    # both findings are about acting on information whose integrity cannot be verified,
+    # which is what the SI-7 family is for, and it is the same control TPOIS uses for
+    # the same reason one level down.
+    "MCP-01": {"PCI-DSS": "12.8.1", "HIPAA": "164.308(b)(1)", "SOC2": "CC9.2", "NIST": "SI-7"},
+    "MCP-02": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "MCP-03": {"PCI-DSS": "6.2.4", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.1", "NIST": "SI-7"},
+    "MCP-04": {"PCI-DSS": "12.8.4", "HIPAA": "164.308(b)(1)", "SOC2": "CC9.2", "NIST": "SI-7"},
+    "MCP-05": {"PCI-DSS": "6.5.1", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC8.1", "NIST": "CM-5"},
     "AMEM-01": {"PCI-DSS": "3.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "AMEM-02": {"PCI-DSS": "3.6.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "PENT-01": {"PCI-DSS": "11.4.1", "HIPAA": "164.308(a)(8)", "SOC2": "CC4.1", "NIST": "CA-8"},
@@ -1027,6 +1053,11 @@ REMEDIATION_MAP = {
     "AIGRD-03": "Add the explicit Deny — the Allow half alone does not make a guardrail mandatory. Attach a policy carrying BOTH statements: Allow bedrock:InvokeModel/InvokeModelWithResponseStream with StringEquals on bedrock:GuardrailIdentifier, AND Deny the same actions with StringNotEquals on the same key and value: aws iam put-role-policy --role-name <ROLE> --policy-name enforce-guardrail --policy-document file://enforce.json ; use ArnNotLike with <GUARDRAIL_ARN>:* if any numeric version should be acceptable",
     "AIGRD-04": "Publish a numeric version so the configuration is pinned and the IAM condition can name it: aws bedrock create-guardrail-version --guardrail-identifier <ID> --description 'pinned for enforcement' ; then point every consumer and every bedrock:GuardrailIdentifier condition at <GUARDRAIL_ARN>:<VERSION> rather than at DRAFT",
     "AGT-05": "Attach a guardrail to the agent and shorten its idle session TTL: aws bedrock-agent update-agent --agent-id <AGENT_ID> --agent-name <NAME> --agent-resource-role-arn <ROLE_ARN> --foundation-model <MODEL_ID> --guardrail-configuration '{\"guardrailIdentifier\":\"<GUARDRAIL_ID>\",\"guardrailVersion\":\"DRAFT\"}' --idle-session-ttl-in-seconds 600",
+    "MCP-01": "Confirm this federated MCP server is one you intend to trust with your agent's tool surface, then bound what it can reach: the gateway execution role is the upper bound for any target using GATEWAY_IAM_ROLE (aws bedrock-agentcore-control get-gateway --gateway-identifier <ID>, then narrow the roleArn's policy). Prefer a target kind defined inside the account -- openApiSchema, smithyModel or lambda -- where the tool definitions are yours and are versioned with your infrastructure",
+    "MCP-02": "Re-point the target at an https endpoint: aws bedrock-agentcore-control update-gateway-target --gateway-identifier <ID> --target-id <TID> --target-configuration '{\"mcp\":{\"mcpServer\":{\"endpoint\":\"https://...\"}}}'. Over http the tool definitions the model is handed, and the arguments it sends back, are readable and rewritable by anyone on the path",
+    "MCP-03": "Read the gateway's MCP instructions as the model receives them, not as documentation: aws bedrock-agentcore-control get-gateway --gateway-identifier <ID> --query protocolConfiguration.mcp.instructions. Remove chat-template delimiters and invisible codepoints, then re-set the field with update-gateway. Treat whoever can edit this string as able to address your agents directly",
+    "MCP-04": "No action closes this one -- it is a limit of what AWS records, not a misconfiguration. Compensate rather than remediate: put a human in front of consequential actions (AGY-03), narrow the gateway execution role so a changed tool reaches less (AISPM-01/02), and pin the vendor by contract and version since the account cannot pin them technically. Re-scan after any change to the federation and compare",
+    "MCP-05": "Match the change against your own change record. If it was yours, nothing more is needed and the next scan will read as stable. If it was not, treat the gateway as untrusted until you know who made it: aws bedrock-agentcore-control get-gateway-target --gateway-identifier <ID> --target-id <TID> for the current state, then cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=UpdateGatewayTarget to find who called it and when",
     "AMEM-01": "Decide the window deliberately rather than inheriting it. Bedrock agent: aws bedrock-agent update-agent --agent-id <AGENT_ID> --agent-name <NAME> --foundation-model <MODEL> --memory-configuration '{\"enabledMemoryTypes\":[\"SESSION_SUMMARY\"],\"storageDays\":7}' ; AgentCore: aws bedrock-agentcore-control update-memory --memory-id <ID> --event-expiry-duration 7 ; shorter is not automatically better, but the number should be one somebody chose",
     "AMEM-02": "Re-key the memory store onto a customer-managed key so you can revoke and audit access to what carries between an agent's sessions: aws kms create-key --description 'AgentCore memory' ; then recreate the memory with --encryption-key-arn <KEY_ARN>, and scope the key policy to the memory execution role rather than leaving it account-wide",
     "PENT-01": "This is your own adversarial test result, ingested as reported. Treat the probe as a true positive until you have reviewed it, then bound what a successful probe would reach: aws iam get-role-policy --role-name <ROLE> --policy-name <POLICY> and narrow it (see AISPM-01/AISPM-02), and check TFLOW-01/02 for what this identity reaches once an injection lands",
@@ -1997,6 +2028,10 @@ class AWSLiveScanner:
         # Slice 3.5 — adversarial test verdicts the operator supplies. Empty unless
         # --pentest-results names a file; OverWatch never produces these itself.
         self._pentest_results = {}
+        # Slice 3.3: one entry per gateway, compared against the state DB AFTER the
+        # scan. The scan path stays stateless -- a DB is a --state opt-in, and a check
+        # that needs one to run at all would make the config half hostage to it.
+        self._mcp_surfaces = []
         # knowledgeBaseId -> injection surface, from the data sources AGT-03 reads.
         self._kb_surface = {}
         self._perm_ledger = None            # set by _preflight_permissions()
@@ -11193,6 +11228,11 @@ class AWSLiveScanner:
                     if self._is_access_denied(e):
                         self._coverage.note_denied(
                             "AGC-05", f"{aws_agentcore.IAM_PREFIX}:ListGatewayTargets")
+            # ListGatewayTargets returns TargetSummary -- targetId, name, status,
+            # description, createdAt, updatedAt -- and nothing else. Neither the
+            # credential configuration AGC-05 grades on nor the targetConfiguration
+            # MCP-01 reads is in it, in any SDK version. Both need GetGatewayTarget.
+            targets = self._detail_gateway_targets(ac, gid, targets)
 
             verdict = aws_agentcore.gateway_authorization(gw, targets)
             who = ("unauthenticated callers" if verdict["unauthenticated"]
@@ -11215,6 +11255,10 @@ class AWSLiveScanner:
                 self._add("PASS", "AGC-05", "AGENTCORE", gname,
                           f"MCP gateway '{gname}': {verdict['reason']} | {gname}")
 
+            # MCP-01..04 — who supplies this gateway's tools, and what the gateway
+            # tells the model. Same fetch, no extra call.
+            self._emit_mcp_provenance(gname, gw, targets)
+
             if aws_agentcore.gateway_debug_errors(gw):
                 self._add("FAIL", "AGC-06", "AGENTCORE", gname,
                           f"MCP gateway '{gname}' returns DEBUG exception detail to "
@@ -11233,6 +11277,132 @@ class AWSLiveScanner:
                     "network_checkable": False, "network": {},
                     "data_bearing": False,
                 })
+
+    def _detail_gateway_targets(self, ac, gid, summaries):
+        """Turn TargetSummary rows into full targets via GetGatewayTarget.
+
+        Returns None when the summaries themselves were unreadable, the summaries
+        unchanged when the operation is absent or refused, and the detailed rows
+        otherwise. The unchanged case is deliberately NOT an error: the grader detects
+        ungraded targets and returns UNKNOWN, which is a better outcome than this method
+        deciding on its own what a partial read means."""
+        get_tgt = getattr(ac, "get_gateway_target", None)
+        if summaries is None or get_tgt is None or not summaries:
+            return summaries
+        out, denied = [], False
+        for ts in summaries:
+            tid = ts.get("targetId") if isinstance(ts, dict) else None
+            if not tid:
+                out.append(ts)
+                continue
+            try:
+                out.append(get_tgt(gatewayIdentifier=gid, targetId=tid) or ts)
+            except Exception as e:
+                if self._is_access_denied(e):
+                    denied = True
+                out.append(ts)          # summary preserved; the grader sees it ungraded
+        if denied:
+            for cid in ("AGC-05", "MCP-01", "MCP-02", "MCP-04"):
+                self._coverage.note_denied(
+                    cid, f"{aws_agentcore.IAM_PREFIX}:GetGatewayTarget")
+        return out
+
+    def _emit_mcp_provenance(self, gname, gw, targets):
+        """MCP-01..04 — who supplies a gateway's tools, and what it tells the model.
+
+        An AgentCore Gateway IS an MCP server, and what it publishes to an agent is
+        decided by its targets. Three of the four target kinds describe an API inside
+        this account; the fourth, mcpServer, federates an endpoint somewhere else."""
+        instructions = aws_mcp.gateway_instructions(gw)
+        if instructions:
+            # Same classifier as TPOIS, one level up: 3.2 reads what a TOOL's description
+            # says to the model, this reads what the SERVER says to it. No phrasings are
+            # authored here either -- refusing that once is worth nothing if the next
+            # module does it.
+            f = aws_toolpoison.assess_text(instructions, self._tool_patterns)
+            if f["template_tokens"] or f["hidden"] or f["pattern_hits"]:
+                self._add("FAIL", "MCP-03", "AGENTCORE", gname,
+                          f"MCP gateway '{gname}' instructions {aws_toolpoison.summarize(f)}"
+                          f" — this string is handed to the model as direction, and the "
+                          f"operator reading the console sees a field that documents how "
+                          f"to use the gateway | {gname}")
+
+        assessed = [aws_mcp.assess_target(t) for t in (targets or [])]
+        # Stashed whether or not anything federates -- a gateway that GAINS its first
+        # federated target is the change most worth catching, and a comparison that only
+        # recorded gateways already federating would miss exactly that moment.
+        #
+        # But NOT stashed when the targets could not be read. A fingerprint computed
+        # from summaries, or from a refused list, differs from one computed from the
+        # real thing, so recording it would make the NEXT scan -- the one that reads
+        # successfully -- report a tool surface that "changed". That is a phantom
+        # finding manufactured by our own missing permission, which is the same defect
+        # this slice had to fix in AGC-05 and is not worth reintroducing one method
+        # later. An unreadable surface is simply not evidence about the surface.
+        if targets is not None and all(a["readable"] for a in assessed):
+            self._mcp_surfaces.append({
+                "arn": (gw or {}).get("gatewayArn") or gname,
+                "name": gname,
+                "fingerprint": aws_mcp.surface_fingerprint(gw, targets),
+                "endpoints": [a["endpoint"] for a in assessed if a["endpoint"]],
+                "target_count": len(assessed),
+            })
+
+        for a in assessed:
+            if not a["federated"]:
+                continue
+            where = a["name"] or "target"
+            if a["plaintext"]:
+                self._add("FAIL", "MCP-02", "AGENTCORE", where,
+                          f"Gateway '{gname}' target '{where}': "
+                          f"{aws_mcp.describe(a)} | {where}")
+            self._add("FAIL", "MCP-01", "AGENTCORE", where,
+                      f"Gateway '{gname}' target '{where}': {aws_mcp.describe(a)}. "
+                      f"{a['why']} | {where}")
+            # The blind spot is its own finding rather than a clause, because it is the
+            # thing a reader would otherwise assume was checked.
+            self._add("WARN", "MCP-04", "AGENTCORE", where,
+                      f"Gateway '{gname}' target '{where}': "
+                      f"{aws_mcp.blind_spot_note(a)} | {where}")
+
+    def _emit_mcp_drift(self, store, ts, scan_id=""):
+        """MCP-05 — the tool surface changed since the last scan.
+
+        The half of a rug pull the account CAN see. MCP-04 states the half it cannot:
+        a federated server serving different tools leaves no trace anywhere, so what is
+        detectable is a change to the configuration that decides WHO supplies the tools
+        — a target repointed at a different endpoint, a target added, the gateway's own
+        instructions rewritten.
+
+        A first sighting is not a change. Reporting one would fire on every gateway in
+        the account the first time an operator supplies a state DB, which is exactly the
+        noise that teaches people to ignore a category."""
+        if store is None:
+            return
+        for surf in self._mcp_surfaces or []:
+            try:
+                d = store.record_mcp_surface(
+                    self.account, surf["arn"], name=surf["name"],
+                    fingerprint=surf["fingerprint"], endpoints=surf["endpoints"],
+                    target_count=surf["target_count"], ts=ts, scan_id=scan_id)
+            except Exception:
+                continue
+            if not d.get("changed"):
+                continue
+            moved = []
+            if d["added"]:
+                moved.append("now reaches " + ", ".join(d["added"]))
+            if d["removed"]:
+                moved.append("no longer reaches " + ", ".join(d["removed"]))
+            what = ("; ".join(moved) if moved else
+                    "the endpoints are unchanged, so what moved is the gateway's own "
+                    "configuration — its MCP instructions or its target list")
+            self._add("FAIL", "MCP-05", "AGENTCORE", surf["name"],
+                      f"MCP gateway '{surf['name']}' tool surface CHANGED since the "
+                      f"last scan ({what}). This is change {d['change_count']} on this "
+                      f"gateway. Confirm it was yours — a tool surface that moves "
+                      f"without a corresponding change of your own is the visible half "
+                      f"of a rug pull | {surf['name']}")
 
     def _audit_agentcore_runtime(self, ac, summary):
         """One runtime: AGC-01/02, plus the AI-SPM stash that does everything else."""
@@ -13410,6 +13580,11 @@ def _process_state(store, scanner, args, scan_epoch: int) -> List:
               f"(approver: {args.approver}).")
 
     scan_id = f"{acct}-{scan_epoch}"
+    # Slice 3.3: MCP-05 compares this scan's tool surface against the stored one, and
+    # must run BEFORE classify_and_diff so its findings enter the lifecycle like any
+    # other. This is the only seam that holds both the store and the scan, which is why
+    # the scan path itself stays stateless.
+    scanner._emit_mcp_drift(store, ts, scan_id)
     counts = aws_state.severity_counts(scanner.results)
     store.record_scan(acct, scan_id, ts, compute_risk_score(scanner.results),
                       counts, region=scanner.region, scanner_version=VERSION)

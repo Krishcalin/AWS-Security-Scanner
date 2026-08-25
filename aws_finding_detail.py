@@ -2522,6 +2522,60 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Treat this as necessary and not sufficient - a gate in front of a shell (AGY-01) is better than nothing and is not a reason to keep the shell.",
         ],
     },
+    "MCP-01": {
+        "risk": "This AgentCore Gateway federates a Model Context Protocol server that runs outside your account. An AgentCore Gateway IS an MCP server, and what it publishes to an agent is decided by its targets; three of the four target kinds - openApiSchema, smithyModel, lambda - describe an API you run, version and can read. The fourth, mcpServer, is an endpoint somewhere else. That is a legitimate design and this finding is not that it is wrong: a vendor MCP server is often exactly what you want. What it reports is that the tool definitions your model acts on now come from a party you cannot see inside. The gateway execution role is the upper bound of what any target using GATEWAY_IAM_ROLE can exercise, so the practical question is not whether you trust the vendor's intentions but how much of your account their tool definitions can reach if they are wrong, compromised, or simply changed. Read this next to MCP-04, which states what AWS does and does not record about the server.",
+        "impact": "A tool provider outside your control decides what your agent is told its tools do, bounded by the gateway execution role rather than by anything the provider agreed to.",
+        "steps": [
+            "Confirm the server is one you meant to federate: aws bedrock-agentcore-control get-gateway-target --gateway-identifier <ID> --target-id <TID>",
+            "Bound the reach rather than the vendor. The gateway execution role is the ceiling: aws bedrock-agentcore-control get-gateway --gateway-identifier <ID> --query roleArn, then narrow that role's policy to what these tools actually need.",
+            "Prefer an in-account target kind where you can - openApiSchema, smithyModel or lambda put the tool definitions in your own repository, versioned with your infrastructure and diffable in review.",
+            "If the federation stays, treat the vendor's tool definitions as a supply-chain dependency: pin a version by contract and require notice of changes, because the account cannot pin them technically (MCP-04).",
+            "Put a human in front of consequential actions (AGY-03) so a changed tool definition still meets a person.",
+        ],
+    },
+    "MCP-02": {
+        "risk": "The federated MCP server's endpoint is plaintext http. This is the rare AI finding that needs no AI reasoning: the tool definitions handed to your model, and the arguments your model sends back, cross the network in the clear. Anyone on the path can read them and - the part that matters here - rewrite them. Rewriting a tool description is prompt injection carried out with a network position instead of a prompt, and it is invisible to every control in the AI pillar, because from the gateway's side nothing is misconfigured and from the model's side the instruction arrives through the channel it is supposed to trust. This is the same class as AGC-08's plaintext OAuth return URLs, and the same answer applies: transport security is not an AI control, it is the thing the AI controls assume.",
+        "impact": "An on-path attacker rewrites what your agent believes its tools do, and reads every argument the agent passes to them.",
+        "steps": [
+            "Re-point the target at https with update-gateway-target, setting targetConfiguration.mcp.mcpServer.endpoint to the https URL.",
+            "If the server offers no TLS endpoint, that is a statement about the vendor's engineering, and worth weighing against MCP-01's question of how much of your account their definitions reach.",
+            "Do not solve this with a private network path alone. It reduces who is on the path; it does not make the channel authenticated.",
+            "Rotate anything the agent may have sent through the plaintext target - arguments to a tool are frequently the credentials, identifiers and record contents the tool operates on.",
+        ],
+    },
+    "MCP-03": {
+        "risk": "The gateway's MCP instructions string carries at least one of the three signals slice 3.2 looks for in a tool description: a chat-template delimiter published by a model vendor, a codepoint invisible to a reviewer, or a hit from the pattern set you supplied. This field is one level up from a tool description - it is what the SERVER tells the model about how to use the whole gateway, and it reaches the model as direction while the operator reading the console sees a field that documents how to use the gateway. That asymmetry is the entire mechanism: whoever can edit this string addresses your agents directly, and the review surface shows documentation. As in 3.2, OverWatch authors no injection phrasings and this finding never quotes the string back - a report that prints the payload has moved it into the ticket and the chat window of whoever triages it.",
+        "impact": "Whoever can edit the gateway configuration addresses every agent behind it, through the channel the model is built to follow.",
+        "steps": [
+            "Read the field as the model receives it: aws bedrock-agentcore-control get-gateway --gateway-identifier <ID> --query protocolConfiguration.mcp.instructions",
+            "Remove chat-template delimiters and invisible codepoints, then re-set it with update-gateway. Legitimate guidance needs neither.",
+            "Ask who can call UpdateGateway. That set is the set of people who can address your agents: simulate-principal-policy against bedrock-agentcore:UpdateGateway.",
+            "Check TPOIS-01/02/03 on the same estate - the per-tool descriptions are the same channel one level down, and a poisoned instructions field rarely travels alone.",
+        ],
+    },
+    "MCP-04": {
+        "risk": "This is a blind spot, stated deliberately rather than left implied. For a federated MCP server, AWS records the ENDPOINT and never the tools it serves. There is no API in this account that returns the tool list, which means no scan - not this one, not a deeper one, not one with more permissions - can diff what that server offers today against what it offered last week. The attack this leaves open has a name: a rug pull, where a server presents benign tools until it is trusted and integrated, then changes what those tools tell the model to do. Nothing about that change touches your account, so nothing in your account records it. The finding exists because the alternative is worse: a reader who sees a federated MCP server reported with no mention of its tools will assume the tools were checked and were clean, which is a phantom pass produced by omission rather than by assertion.",
+        "impact": "A federated server can change what your agent's tools claim to do, at any time, leaving no evidence anywhere in this account.",
+        "steps": [
+            "There is nothing to fix here - this is a limit of what AWS records, not a misconfiguration. Compensate instead of remediating.",
+            "Narrow what a changed tool could achieve: AGY-03 puts a human in front of consequential actions, and AISPM-01/AISPM-02 bound what the gateway execution role reaches.",
+            "Pin the vendor contractually and by version, since you cannot pin them technically, and require notice of tool-definition changes.",
+            "Watch the federation itself for change - a target repointed at a different endpoint IS recorded, and re-scanning after any gateway change is how you catch that half.",
+            "Where the tools matter enough, move them in-account: an openApiSchema or lambda target puts the definitions in your repository, where a diff is possible.",
+        ],
+    },
+    "MCP-05": {
+        "risk": "The configuration that decides who supplies this gateway's tools changed between two scans. Read this next to MCP-04, because together they are the whole of what can be said about a rug pull. MCP-04 states the half nobody can see: a federated MCP server that serves different tools tomorrow leaves no trace in your account, because no API here returns its tool list. This finding is the half you CAN see - a target repointed at a different endpoint, a target added or removed, or the gateway's own MCP instructions rewritten. All of those are recorded, so all of them are diffable, and this is the diff. The common case is that you made the change, and the finding says so rather than asserting a breach: it asks you to confirm. What makes it worth raising anyway is that the alternative has no other detection. Nothing else in the account notices that the tool provider your agents trust is not the one you approved.",
+        "impact": "The set of tools your agents are offered, or who supplies them, is not what it was - and if the change was not yours, the model is now acting on definitions somebody else chose.",
+        "steps": [
+            "Match the change against your own change record first. A deployment you ran is the expected case, and the next scan will read as stable.",
+            "If it was not yours, find who: aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=UpdateGatewayTarget (also UpdateGateway, CreateGatewayTarget, DeleteGatewayTarget)",
+            "Read the current state before changing anything: aws bedrock-agentcore-control get-gateway-target --gateway-identifier <ID> --target-id <TID>",
+            "Treat the gateway as untrusted until the change is explained, and remember the reach: the gateway execution role is the upper bound for any target using GATEWAY_IAM_ROLE.",
+            "Narrow who can make this change at all - the set of principals holding bedrock-agentcore:UpdateGateway and UpdateGatewayTarget is the set who can retarget your agents' tools.",
+            "This check needs --state. Without a state DB there is no previous scan to compare against, and the config-half findings (MCP-01..04) are all that can be established from a single run.",
+        ],
+    },
     "AMEM-01": {
         "risk": "This agent has memory enabled with a retention window long enough that an instruction reaching memory keeps being read back into the model's context for that period. Agent memory is what lets a prompt injection outlive the conversation that carried it: everything else OverWatch reports about injection concerns what an agent reaches NOW, and this concerns how long it keeps reaching. There is no correct retention period - a support assistant that remembers a customer for a year may be exactly right - so this finding states the window in days rather than pronouncing on it. What it is really reporting is that a number exists which somebody should have chosen on purpose. Be clear about what this check does NOT do: it does not read memory contents. Whether anything poisoned is actually stored is a question about stored conversation, and reading that is the data-handling escalation decision D2 declined. The window is what configuration can establish.",
         "impact": "An instruction that reached memory once is presented to the model again in later sessions for the length of the window, potentially to different users where the memory is shared. A single successful injection becomes a recurring one.",
