@@ -87,6 +87,7 @@ import aws_perm_ledger
 import aws_sagemaker
 import aws_shadowai
 import aws_ailog
+import aws_evidence
 import aws_vectorstore
 import aws_effperm
 import aws_state
@@ -14491,7 +14492,50 @@ above carries a risk explanation, business impact and step-by-step remediation f
             print(f"{BLUE}[*]{RESET} Audit manifest: {manifest_path}")
         except OSError as e:
             print(f"{YELLOW}[WARN]{RESET} Could not write audit manifest: {e}")
+        self.save_ai_evidence_pack(output_dir)
         print(f"{BLUE}[*]{RESET} Evidence directory: {output_dir}/")
+
+    def save_ai_evidence_pack(self, output_dir: str):
+        """Write the AI compliance evidence pack (slice 4.5).
+
+        Emitted alongside the other evidence artefacts rather than behind a flag: an
+        auditor asking about NIST AI RMF or ISO 42001 wants it in the pack they already
+        received, and a report that has to be requested separately is one nobody knows
+        to request.
+
+        What makes this worth shipping is not the mapping -- every product has a
+        mapping. It is that the pack states which controls OverWatch does NOT reach.
+        The crosswalk maps 12 of the AI RMF's 72 controls, and the summary says so in
+        those words, because a reader who sees only the 12 will take them for the
+        framework."""
+        try:
+            # Imported lazily, as the other call site does: the crosswalk is optional
+            # and its loader fails open, so a missing file must cost this artefact and
+            # nothing else.
+            import compliance_crosswalk as _cc
+            xw, frameworks, digest = _cc.get_crosswalk()
+        except Exception as e:
+            print(f"{YELLOW}[WARN]{RESET} AI evidence pack not written: {e}")
+            return
+        if not xw:
+            return
+        meta = list(frameworks.values()) if isinstance(frameworks, dict) else frameworks
+        pack = aws_evidence.build_pack(
+            xw, COMPLIANCE_MAP, self.results,
+            coverage=self._coverage.to_dict(), framework_meta=meta)
+        pack["crosswalk_digest"] = digest
+        pack["account"] = self.account
+        path = os.path.join(output_dir, "ai_compliance_evidence.json")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(pack, f, indent=2, sort_keys=True)
+            print(f"{BLUE}[*]{RESET} AI compliance evidence pack: {path}")
+            for fw, v in sorted(pack["frameworks"].items()):
+                sm = v["summary"]
+                print(f"    {fw}: mapped {sm['controls_mapped']} of "
+                      f"{sm['controls_in_framework']} control(s)")
+        except OSError as e:
+            print(f"{YELLOW}[WARN]{RESET} Could not write AI evidence pack: {e}")
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────
