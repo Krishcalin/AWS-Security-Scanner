@@ -7,6 +7,50 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 1 · slice 1.5 — a local read-only MCP server** (`cnapp_mcp.py`), closing
+  **decision D6**. An analyst can ask a scan questions in natural language instead of
+  reading JSON. The server cannot scan, cannot change anything, and never talks to AWS —
+  it reads a finished report.
+  - **D6 was ruled "ship it enforced".** The server is inside the OverWatch boundary; an
+    MCP client never is, and there is no version of this product where we control it.
+    The roadmap proposed a warning inside the tool descriptions, but those are read by
+    the *model*, not by the engineer editing a config file — a disclaimer, not a
+    boundary. So the boundary is enforced instead:
+    - **Fail-closed start.** Without `OVERWATCH_MCP_ACK_CLIENT_EGRESS=1` the server
+      refuses to run and explains why on stderr, exiting `2`. This makes nobody safer by
+      itself; it makes the egress a decision somebody made rather than a default nobody
+      noticed.
+    - **Identifiers redacted by default.** ARNs, 12-digit account IDs and IPv4 addresses
+      become stable pseudonyms (`arn:aws:s3:::s3-7f3a2b`). The analysis travels — *"a
+      public bucket reaches a crown datastore"* — and the identity does not. Serving real
+      identifiers needs a second explicit flag, following the "hashed by default" line
+      already drawn for D2. Pseudonyms are stable *within* a process so an analyst can
+      correlate across answers, and different *across* processes so two transcripts
+      cannot be joined on them.
+    - **Every tool call audited** to a JSONL log — tool, arguments, whether identifiers
+      were served, byte count and a SHA-256 of the payload. A digest rather than a second
+      copy of the findings. We cannot audit what the client did with a response; we can
+      say exactly what left the server, and that is the half we can honour.
+  - **Section G of `tests/test_zero_telemetry.py`** pins what is ours to pin: the gate is
+    fail-closed, the module imports neither the scanner nor boto3, redaction is the
+    default *construction*, and nothing calls `print()` (the MCP spec requires that
+    stdout carry protocol messages only). The section header states plainly what it
+    **cannot** prove — that the client kept the data inside the boundary — because
+    Sections A–F prove OverWatch sends nothing, and a local stdio server passes every one
+    of them trivially while being the largest egress decision in the product.
+  - Stdlib only, no MCP SDK: the transport is newline-delimited JSON-RPC 2.0, and a
+    dependency whose transitive imports could reach a network would undercut the very
+    guarantee Section G exists to make testable.
+  - Tools: `overwatch_scan_summary`, `overwatch_coverage`, `overwatch_findings`,
+    `overwatch_attack_paths`, `overwatch_check_reference`. `overwatch_coverage` is
+    deliberately prominent and named in the server's `initialize` instructions, because
+    a model asked "am I secure?" over a partial scan will otherwise answer from what it
+    was handed — **an unevaluated control is not a passing control.**
+  - `docs/MCP.md`, including the local-model configuration that is the only one where
+    output stays inside the operator's boundary, and an explicit note that this is a
+    *convenience* delta rather than a new capability: a scan already writes every finding
+    and ARN to a JSON report that any client could be pointed at today.
+
 - **Phase 2 · slice 2.1 — guardrail GRADING, and enforcement read from IAM text**
   (`aws_aiguard.py`). Every CNAPP, this one included, has checked a guardrail as a
   boolean: `BDR-02` PASSes any guardrail that exists. That boolean is satisfied by
