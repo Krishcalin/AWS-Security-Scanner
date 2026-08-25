@@ -7,6 +7,82 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 3 · slice 3.5 — adversarial-test ingest** (`aws_ingest_pentest.py`,
+  `PENT-01/02`, `--pentest-results`). **Decision D4's third leg.** OverWatch will not
+  probe a customer's models; when the customer probes their own, the **results** land on
+  the same graph as everything else, so a probe that succeeded can be read next to what
+  the probed identity actually reaches.
+  - **`PENT-01`** (HIGH · CA-8) — a probe that got through in **at least half** its
+    attempts. **`PENT-02`** (MEDIUM · CA-8) — one that got through in a minority. A
+    partial rate is a finding rather than noise: a probe that works one time in ten works
+    reliably given ten attempts. A probe that never succeeded is **not** a finding —
+    ingesting every row would turn a 1000-probe garak run into 1000 rows and bury the
+    handful that mattered.
+  - **The operator's own `severity` wins** over the computed one. They know what the
+    probe was aimed at; this module does not. A 1-in-10 success against an agent that
+    reaches production data is not the same finding as a 1-in-10 against a sandbox.
+  - **The verdict is ingested; the transcript is not.** garak's `report.jsonl`
+    interleaves `eval` rows (verdicts) with `attempt` rows (the attack prompt and the
+    model's response). Only the first kind is parsed — **structural**, not a filter — and
+    the count of skipped rows is reported as `PENT-00`, because silence would let a
+    reader conclude the file held no transcript. **D2 in force**: this is the one place a
+    file containing prompts and completions is handed to the product, and it is the place
+    the boundary had to be built rather than assumed. `aws_ingest_pentest.py` is policed
+    by Section F of the zero-telemetry tripwire.
+  - **Provenance is stated in the finding text** — *"this is a result you produced,
+    ingested as reported"*. A row reading like OverWatch's own verdict, in a product that
+    refuses to probe, is a claim it did not earn. For the same reason a generic result
+    file that declares no `tool` is **refused outright**, exactly as `3.2` refuses a
+    pattern set without a `source`.
+  - The format is detected **by content, not by extension**: an operator who renamed the
+    file still gets the right parser, and a wrong guess would read a transcript file as a
+    verdict file. A missing or malformed file costs the ingest and not the scan.
+  - **No new API call and no new IAM permission** — the input is a file the operator
+    supplies.
+- **Phase 3 · slice 3.4 — memory-poisoning exposure, the configuration half**
+  (`aws_agentmemory.py`, `AMEM-01/02`). Agent memory is what lets a prompt injection
+  **outlive the conversation that carried it**: an instruction written in one session is
+  read back in the next. Everything else in Phase 3 asks what an injection reaches *now*;
+  this asks **how long it keeps reaching**.
+  - **`AMEM-01`** (MEDIUM · SC-28) — the **exposure window**, read from
+    `memoryConfiguration.storageDays` on a Bedrock agent and `eventExpiryDuration` on an
+    AgentCore memory. Banded `none` / `short` (< 30d) / `extended` (30–89d) /
+    `long` (≥ 90d), both surfaces capping at a year. There is **no correct retention
+    period** — a support assistant that remembers a customer for a year may be exactly
+    right — so the finding states the number rather than pronouncing on it. What it
+    reports is that a number exists which somebody should have chosen on purpose.
+  - **`AMEM-02`** (HIGH · SC-28) — AgentCore Memory on an **AWS-managed key**. The same
+    custody question `AGC-07` raises for the token vault, and it lands harder here
+    because of what memory holds: the material that carries between sessions, which is
+    precisely the channel an injection uses to persist. In an incident the containment
+    question is whether you can cut access to what the agent remembers; with a
+    service-managed key it has no answer.
+  - **The config half is the whole slice, and the finding says so.** Whether anything
+    poisoned is *stored* is a question about memory **contents**, and reading those is
+    the escalation **D2** declined. A memory finding with no mention of contents would be
+    read as *contents checked, contents clean* — a **phantom pass produced by omission**
+    rather than by assertion — so every one of them states that contents were not read.
+  - **An unreadable window is not a short one.** `storageDays` is optional and the
+    reference states no default, so an agent with memory enabled and no retention value
+    emits `AMEM-00` (INFO) rather than a PASS. Same rule that kept `requireMMDSV2`
+    unknown in `2.2`.
+  - **Namespaces are counted, not interpreted.** A namespace template decides whether
+    memory is per-actor or shared, but the template variables are operator-defined and
+    their semantics are not in the API reference. The count is a fact; a reading of it
+    would be a guess.
+
+### Fixed
+- **The permission ledger no longer reports a phantom *gap*.** `AMEM-01` is the first
+  check spanning **two surfaces** — the Bedrock-agent window (`bedrock:GetAgent`, granted
+  since `1.2`) and the AgentCore one (`bedrock-agentcore:GetMemory`, granted by nothing).
+  `evaluate()` is AND-semantics, so naming `GetMemory` as a requirement made the preflight
+  announce *"AMEM-01 will NOT be evaluated"* into a report that then carried an `AMEM-01`
+  row for every Bedrock agent. That is the **mirror of the phantom pass**: a check
+  reported as unevaluated when it ran. The requirement is now the action the check needs
+  to produce *any* answer, and `CoverageManifest.note_denied()` takes a `scope` so the
+  AgentCore denial reads *"AccessDenied for AgentCore memories"* — narrowing the claim
+  without softening it (coverage is still incomplete).
+
 - **Phase 3 · slice 3.2 — tool-description poisoning** (`aws_toolpoison.py`,
   `TPOIS-01/02/03`, `--tool-patterns`). A model reads a tool's **description** to decide
   when to call it, which makes the description an instruction channel: whoever can edit

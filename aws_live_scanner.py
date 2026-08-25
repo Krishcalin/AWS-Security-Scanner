@@ -76,6 +76,8 @@ import aws_agentcore
 import aws_agency
 import aws_toxicflow
 import aws_toolpoison
+import aws_agentmemory
+import aws_ingest_pentest
 import aws_aiprotect
 import aws_cbom
 import aws_airules
@@ -399,6 +401,11 @@ CHECK_SEVERITY = {
     # Tool-description poisoning. All HIGH: a description carrying instructions is
     # not a weak control, it is a control working exactly as the attacker intended.
     "TPOIS-01": "HIGH", "TPOIS-02": "HIGH", "TPOIS-03": "HIGH",
+    # Memory exposure (config half) and adversarial-test ingest. AMEM-01 is MEDIUM
+    # because a long window is a choice rather than a defect; AMEM-02 is HIGH for
+    # the same custody reason AGC-07 is.
+    "AMEM-01": "MEDIUM", "AMEM-02": "HIGH",
+    "PENT-01": "HIGH", "PENT-02": "MEDIUM",
     "AIGRD-04": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
     "COG-05": "HIGH", "COG-06": "CRITICAL",
@@ -685,6 +692,13 @@ COMPLIANCE_MAP = {
     "TPOIS-01": {"PCI-DSS": "6.5.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC7.1", "NIST": "SI-7"},
     "TPOIS-02": {"PCI-DSS": "6.5.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC7.1", "NIST": "SI-7"},
     "TPOIS-03": {"PCI-DSS": "6.5.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC7.1", "NIST": "SI-7"},
+    # SC-28 for memory: it is data at rest, and both the window and the key custody
+    # are questions about how it is protected there. CA-8 for the pen-test ingest --
+    # the control is literally penetration testing, performed by the customer.
+    "AMEM-01": {"PCI-DSS": "3.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "AMEM-02": {"PCI-DSS": "3.6.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "PENT-01": {"PCI-DSS": "11.4.1", "HIPAA": "164.308(a)(8)", "SOC2": "CC4.1", "NIST": "CA-8"},
+    "PENT-02": {"PCI-DSS": "11.4.1", "HIPAA": "164.308(a)(8)", "SOC2": "CC4.1", "NIST": "CA-8"},
     # AI-SPM pillar (NIST reused from the frozen 38-control universe: AC-6/AC-3/SC-7)
     "AISPM-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "AISPM-02": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
@@ -1013,6 +1027,10 @@ REMEDIATION_MAP = {
     "AIGRD-03": "Add the explicit Deny — the Allow half alone does not make a guardrail mandatory. Attach a policy carrying BOTH statements: Allow bedrock:InvokeModel/InvokeModelWithResponseStream with StringEquals on bedrock:GuardrailIdentifier, AND Deny the same actions with StringNotEquals on the same key and value: aws iam put-role-policy --role-name <ROLE> --policy-name enforce-guardrail --policy-document file://enforce.json ; use ArnNotLike with <GUARDRAIL_ARN>:* if any numeric version should be acceptable",
     "AIGRD-04": "Publish a numeric version so the configuration is pinned and the IAM condition can name it: aws bedrock create-guardrail-version --guardrail-identifier <ID> --description 'pinned for enforcement' ; then point every consumer and every bedrock:GuardrailIdentifier condition at <GUARDRAIL_ARN>:<VERSION> rather than at DRAFT",
     "AGT-05": "Attach a guardrail to the agent and shorten its idle session TTL: aws bedrock-agent update-agent --agent-id <AGENT_ID> --agent-name <NAME> --agent-resource-role-arn <ROLE_ARN> --foundation-model <MODEL_ID> --guardrail-configuration '{\"guardrailIdentifier\":\"<GUARDRAIL_ID>\",\"guardrailVersion\":\"DRAFT\"}' --idle-session-ttl-in-seconds 600",
+    "AMEM-01": "Decide the window deliberately rather than inheriting it. Bedrock agent: aws bedrock-agent update-agent --agent-id <AGENT_ID> --agent-name <NAME> --foundation-model <MODEL> --memory-configuration '{\"enabledMemoryTypes\":[\"SESSION_SUMMARY\"],\"storageDays\":7}' ; AgentCore: aws bedrock-agentcore-control update-memory --memory-id <ID> --event-expiry-duration 7 ; shorter is not automatically better, but the number should be one somebody chose",
+    "AMEM-02": "Re-key the memory store onto a customer-managed key so you can revoke and audit access to what carries between an agent's sessions: aws kms create-key --description 'AgentCore memory' ; then recreate the memory with --encryption-key-arn <KEY_ARN>, and scope the key policy to the memory execution role rather than leaving it account-wide",
+    "PENT-01": "This is your own adversarial test result, ingested as reported. Treat the probe as a true positive until you have reviewed it, then bound what a successful probe would reach: aws iam get-role-policy --role-name <ROLE> --policy-name <POLICY> and narrow it (see AISPM-01/AISPM-02), and check TFLOW-01/02 for what this identity reaches once an injection lands",
+    "PENT-02": "A minority of attempts got through. Review the probe, then reduce the reach rather than only the probe: narrow the execution role (AISPM-01/AISPM-02) and require confirmation on consequential actions with aws bedrock-agent update-agent-action-group --agent-id <AGENT_ID> --agent-version DRAFT --action-group-id <AG_ID> --action-group-name <NAME> --function-schema '{\"functions\":[{\"name\":\"<FN>\",\"requireConfirmation\":\"ENABLED\"}]}'",
     "TPOIS-01": "Read the description and remove the delimiters -- a field that documents a function has no reason to contain a chat-template token: aws bedrock-agent update-agent-action-group --agent-id <AGENT_ID> --agent-version DRAFT --action-group-id <AG_ID> --action-group-name <NAME> --function-schema '{\"functions\":[{\"name\":\"<FN>\",\"description\":\"<PLAIN TEXT>\"}]}' ; then establish who last edited it, because the field is a write path into the model's context",
     "TPOIS-02": "Strip the invisible characters, and treat the description as untrusted until you have seen it rendered with them visible: python -c \"import sys,unicodedata as u; print(repr(sys.argv[1]))\" '<DESCRIPTION>' ; then rewrite it with aws bedrock-agent update-agent-action-group as above",
     "TPOIS-03": "A pattern from your own rule set matched this description. Review it against that rule, and if it is a true positive rewrite the field with aws bedrock-agent update-agent-action-group ; OverWatch attributes the hit to the pattern source rather than asserting it independently",
@@ -1976,6 +1994,9 @@ class AWSLiveScanner:
         # unless --tool-patterns names one, and deliberately so: OverWatch does not
         # author injection phrasings.
         self._tool_patterns = aws_toolpoison.load_patterns(None)
+        # Slice 3.5 — adversarial test verdicts the operator supplies. Empty unless
+        # --pentest-results names a file; OverWatch never produces these itself.
+        self._pentest_results = {}
         # knowledgeBaseId -> injection surface, from the data sources AGT-03 reads.
         self._kb_surface = {}
         self._perm_ledger = None            # set by _preflight_permissions()
@@ -5734,6 +5755,8 @@ class AWSLiveScanner:
                 # TPOIS-01/02/03 — the same descriptions, read for what they say
                 # to the MODEL rather than for what they document.
                 self._emit_tool_poisoning(aname, agency_groups)
+                # AMEM-01 — how long an injected instruction keeps being read back
+                self._emit_agent_memory(aname, detail)
             except Exception as e:
                 self._add("WARN", "AGT-04", "BEDROCK_AGENTS", aname,
                           f"Could not audit action groups for "
@@ -10457,6 +10480,7 @@ class AWSLiveScanner:
                       f"{det.title} (severity {det.severity}, {det.band}) | {actor}")
 
         self._emit_ai_protection()
+        self._emit_pentest_results()
 
     def _identity_reach(self, arn: str) -> dict:
         """What the acting identity can reach — the half of a detection no log carries.
@@ -11051,6 +11075,7 @@ class AWSLiveScanner:
 
         self._audit_agentcore_gateways(ac, estate.get("AgentCoreGateway") or [])
         self._audit_agentcore_credentials(ac, estate)
+        self._audit_agentcore_memory(ac, estate.get("AgentCoreMemory") or [])
 
         for summary in estate.get("AgentCoreRuntime", []):
             self._audit_agentcore_runtime(ac, summary)
@@ -11280,6 +11305,109 @@ class AWSLiveScanner:
             # resources the control cannot apply to stops being believed.
             "workload_identity_arn": ident["workload_identity_arn"],
         })
+
+    def _emit_agent_memory(self, aname, detail):
+        """AMEM-01 — how long an instruction that reached memory keeps being read back.
+
+        The config half only, and the finding says so: whether anything poisoned is
+        stored is a question about memory CONTENTS, and reading those is the escalation
+        decision D2 declined. What configuration establishes is the window."""
+        p = aws_agentmemory.bedrock_agent_memory(detail)
+        if not p["enabled"]:
+            return
+        w = aws_agentmemory.exposure_window(p)
+        if w["band"] in ("none",):
+            return
+        if w["band"] == "unknown":
+            self._add("INFO", "AMEM-00", "BEDROCK_AGENTS", aname,
+                      f"Agent '{aname}' has memory enabled but no retention value — the "
+                      f"exposure window could not be established rather than being "
+                      f"short (no phantom pass)")
+            return
+        status = "FAIL" if w["band"] in ("long", "extended") else "PASS"
+        self._add(status, "AMEM-01", "BEDROCK_AGENTS", aname,
+                  f"Agent '{aname}': {aws_agentmemory.summarize(p, w)} | {aname}")
+
+    def _audit_agentcore_memory(self, ac, memories):
+        """AMEM-01/02 for AgentCore Memory — the window, and who holds the key."""
+        get_mem = getattr(ac, "get_memory", None)
+        if get_mem is None:
+            return
+        for summary in memories or []:
+            mid = (summary.get("id") if isinstance(summary, dict) else None) or ""
+            if not mid:
+                continue
+            try:
+                detail = (get_mem(memoryId=mid) or {}).get("memory") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    # AMEM-01 is scoped: the Bedrock-agent half of the window ran
+                    # from GetAgent, so what this denial cost is the AgentCore half,
+                    # and an unqualified "not evaluated" would erase findings this
+                    # same scan already emitted. AMEM-02 exists only here, so its
+                    # denial is unqualified and true.
+                    self._coverage.note_denied(
+                        "AMEM-01", f"{aws_agentcore.IAM_PREFIX}:GetMemory",
+                        scope="AgentCore memories")
+                    self._coverage.note_denied(
+                        "AMEM-02", f"{aws_agentcore.IAM_PREFIX}:GetMemory")
+                continue
+            p = aws_agentmemory.agentcore_memory(detail)
+            name = p["name"]
+            w = aws_agentmemory.exposure_window(p)
+            if w["band"] in ("long", "extended"):
+                self._add("FAIL", "AMEM-01", "AGENTCORE", name,
+                          f"AgentCore memory '{name}': "
+                          f"{aws_agentmemory.summarize(p, w)} | {name}")
+            elif w["band"] == "short":
+                self._add("PASS", "AMEM-01", "AGENTCORE", name,
+                          f"AgentCore memory '{name}' retains events for "
+                          f"{w['days']} day(s) | {name}")
+            if not p["cmk"]:
+                self._add("FAIL", "AMEM-02", "AGENTCORE", name,
+                          f"AgentCore memory '{name}' is encrypted with an AWS-managed "
+                          f"key — the store that carries instructions between an agent's "
+                          f"sessions has no key you can disable to cut access to it "
+                          f"| {name}")
+
+    def _emit_pentest_results(self):
+        """PENT-01/02 — adversarial test results the operator produced.
+
+        Decision D4's third leg: OverWatch will not probe a customer's models, and when
+        the customer does, their results land on the same graph as everything else so a
+        probe that succeeded can be read next to what the probed identity reaches.
+
+        Only garak `eval` rows and the documented generic shape are read. `attempt` rows
+        hold the prompt and the model's output and are never parsed -- that is structural
+        rather than a filter, and the count of skipped rows is reported so an operator can
+        see the transcript was present and deliberately left alone."""
+        parsed = self._pentest_results
+        if not parsed or not parsed.get("results"):
+            return
+        if parsed.get("skipped_content_rows"):
+            self._add("INFO", "PENT-00", "AI_THREAT", "pentest",
+                      f"Ingested {len(parsed['results'])} adversarial test verdict(s); "
+                      f"{parsed['skipped_content_rows']} transcript row(s) were NOT read "
+                      f"— OverWatch ingests the verdict, never the prompts or the "
+                      f"model's responses")
+        g = self._ensure_graph()
+        for r in parsed["results"]:
+            rating = aws_ingest_pentest.rate_result(r)
+            if not rating["applicable"] or not rating["succeeded"]:
+                continue
+            cid = "PENT-01" if rating["severity"] in ("CRITICAL", "HIGH") else "PENT-02"
+            label = " / ".join(x for x in (r.get("probe"), r.get("detector")) if x)
+            self._add("FAIL", cid, "AI_THREAT", label or r.get("tool", "pentest"),
+                      f"{aws_ingest_pentest.describe(r, rating)}"
+                      f"{' against ' + r['target'] if r.get('target') else ''}. "
+                      f"This is a result you produced, ingested as reported "
+                      f"| {label or r.get('tool')}")
+            try:
+                g.add_node(f"pentest:{r.get('tool')}:{label}", "PentestResult",
+                           tool=r.get("tool", ""), probe=r.get("probe", ""),
+                           failed=rating["failed"], total=rating["total"])
+            except Exception:
+                pass
 
     def _emit_tool_poisoning(self, aname, groups):
         """TPOIS-01/02/03 — instructions hiding in the field that describes a tool.
@@ -13425,6 +13553,40 @@ def _backend_meta_for(args, scheme: str, available: bool, reason: Optional[str] 
     return meta
 
 
+def _load_pentest_results(path) -> dict:
+    """Read an adversarial-test result file (slice 3.5).
+
+    garak's report is newline-delimited JSON; the generic shape is a single object. The
+    format is detected by content rather than by extension, because an operator who
+    renamed the file should still get the right parser and a wrong guess here would read
+    a transcript file as a verdict file."""
+    if not path:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        print(f"{YELLOW}[WARN]{RESET} pen-test results not read: {exc}")
+        return {}
+    stripped = text.lstrip()
+    if stripped.startswith("{") and '"entry_type"' not in stripped[:2000]:
+        try:
+            parsed = aws_ingest_pentest.parse_generic(json.loads(text))
+        except ValueError as exc:
+            print(f"{YELLOW}[WARN]{RESET} pen-test results not parsed: {exc}")
+            return {}
+        if parsed.get("error"):
+            print(f"{YELLOW}[WARN]{RESET} {parsed['error']}")
+            return {}
+    else:
+        parsed = aws_ingest_pentest.parse_garak(text.splitlines())
+    n = len(parsed.get("results") or [])
+    skipped = parsed.get("skipped_content_rows") or 0
+    print(f"{BLUE}[*]{RESET} pen-test results: {n} verdict(s) ingested"
+          + (f", {skipped} transcript row(s) skipped unread" if skipped else ""))
+    return parsed
+
+
 def _apply_phase6_config(sc, args) -> None:
     """Copy the Phase-6 side-scan flags onto a scanner before it runs."""
     # Slice 3.2 — the operator's tool-description pattern set, loaded here because this
@@ -13621,6 +13783,13 @@ examples:
     parser.add_argument(
         "--sarif", metavar="FILE",
         help="Save findings as SARIF 2.1.0 to FILE (GitHub code scanning)",
+    )
+    parser.add_argument(
+        "--pentest-results", metavar="FILE", dest="pentest_results",
+        help="Adversarial test results to ingest (PENT-01/02): a garak report.jsonl, "
+             "or the generic shape {'tool','results':[...]}. OverWatch reads VERDICT "
+             "rows only — garak `attempt` rows carry the prompts and the model's "
+             "responses and are never parsed.",
     )
     parser.add_argument(
         "--tool-patterns", metavar="FILE", dest="tool_patterns",

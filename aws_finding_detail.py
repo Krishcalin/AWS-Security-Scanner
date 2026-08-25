@@ -2522,6 +2522,49 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Treat this as necessary and not sufficient - a gate in front of a shell (AGY-01) is better than nothing and is not a reason to keep the shell.",
         ],
     },
+    "AMEM-01": {
+        "risk": "This agent has memory enabled with a retention window long enough that an instruction reaching memory keeps being read back into the model's context for that period. Agent memory is what lets a prompt injection outlive the conversation that carried it: everything else OverWatch reports about injection concerns what an agent reaches NOW, and this concerns how long it keeps reaching. There is no correct retention period - a support assistant that remembers a customer for a year may be exactly right - so this finding states the window in days rather than pronouncing on it. What it is really reporting is that a number exists which somebody should have chosen on purpose. Be clear about what this check does NOT do: it does not read memory contents. Whether anything poisoned is actually stored is a question about stored conversation, and reading that is the data-handling escalation decision D2 declined. The window is what configuration can establish.",
+        "impact": "An instruction that reached memory once is presented to the model again in later sessions for the length of the window, potentially to different users where the memory is shared. A single successful injection becomes a recurring one.",
+        "steps": [
+            "Decide the window deliberately. Bedrock agent: aws bedrock-agent update-agent --agent-id <AGENT_ID> --agent-name <NAME> --foundation-model <MODEL> --memory-configuration '{\"enabledMemoryTypes\":[\"SESSION_SUMMARY\"],\"storageDays\":7}' ; then aws bedrock-agent prepare-agent --agent-id <AGENT_ID>",
+            "AgentCore: aws bedrock-agentcore-control update-memory --memory-id <ID> --event-expiry-duration 7",
+            "Shorter is not automatically better. Ask what the agent needs to remember and for how long, and set the number to that rather than to the default or the maximum.",
+            "Bound what a remembered instruction could achieve: AGY-03 puts a human in front of consequential actions, and AISPM-01/AISPM-02 narrow what the execution role reaches.",
+            "If the memory is shared rather than scoped per user, treat the window as a cross-user exposure rather than a per-session one - check the namespace configuration on each strategy.",
+        ],
+    },
+    "AMEM-02": {
+        "risk": "AgentCore Memory for this agent is encrypted with an AWS-managed key rather than a customer-managed one. As with the token vault in AGC-07, this is a custody question rather than an encryption one - the data is encrypted either way. What a customer-managed key gives you is a set of levers: you can revoke access to everything in the store by disabling one key, you can see every decrypt in CloudTrail under a key policy you own, and you can narrow who decrypts. What makes those levers matter here specifically is what memory holds: the material that carries between an agent's sessions, which is precisely the channel a prompt injection uses to persist. In an incident, the containment question is whether you can cut access to what the agent remembers, and with a service-managed key it has no answer.",
+        "impact": "The store that carries instructions between sessions has no independent kill switch and no decrypt trail you own.",
+        "steps": [
+            "Create a key scoped to this use: aws kms create-key --description 'AgentCore memory' --key-usage ENCRYPT_DECRYPT",
+            "Recreate the memory with the key attached - encryption cannot be added to an existing memory in place: aws bedrock-agentcore-control create-memory --name <NAME> --encryption-key-arn <KEY_ARN> --event-expiry-duration <DAYS>",
+            "Scope the key policy to the memory execution role rather than leaving it account-wide. The key is only a lever if it is narrower than the account.",
+            "Enable rotation: aws kms enable-key-rotation --key-id <KEY_ID>",
+            "Review AMEM-01 at the same time: custody and window are the two halves of the same question about what an agent remembers.",
+        ],
+    },
+    "PENT-01": {
+        "risk": "An adversarial test YOU ran succeeded against a target in this account, in at least half of its attempts. OverWatch did not produce this result and does not probe your models - decision D4 records why, and the short version is that probing spends your inference budget and produces, in your own CloudTrail, the exact signature AITHR-01 exists to alarm on. What OverWatch does is put your own results on the same graph as everything else, so a probe that succeeded can be read next to what the probed identity actually reaches. Note what was ingested and what was not: garak's report separates verdict rows from transcript rows, and OverWatch reads only the verdicts. The attack prompts and the model's responses are never parsed, which is why this finding can tell you a probe succeeded and cannot tell you what it said.",
+        "impact": "A control you tested did not hold. The consequence is bounded by what the probed identity reaches, which is the question TFLOW-01/02 and AISPM-01/02 answer.",
+        "steps": [
+            "Review the probe and detector named in the finding against your own run. OverWatch reports what your tool reported and adds nothing to it.",
+            "Bound the consequence before chasing the probe: aws iam get-role-policy --role-name <ROLE> --policy-name <POLICY>, then narrow it. A probe that succeeds against a scoped identity is a different problem from one that succeeds against an admin path.",
+            "Check TFLOW-01/TFLOW-02 for this agent - they compute what an injection reaches, which is what turns a successful probe into an impact statement.",
+            "Attach a blocking PROMPT_ATTACK guardrail (AIGRD-01) and make it mandatory (AIGRD-03), then re-run your own probe to see whether the result changes.",
+            "Keep the result file. Re-ingesting after remediation is how you show the control now holds, and it is evidence an auditor will accept in a way a scanner's own assertion is not.",
+        ],
+    },
+    "PENT-02": {
+        "risk": "An adversarial test you ran succeeded in a minority of its attempts against a target in this account. A partial success rate is worth treating as a success rather than as noise: an attacker retries, and a probe that works one time in ten works reliably given ten attempts. As with PENT-01, OverWatch did not produce this result - it ingests the verdict rows of your own run and never the prompts or the model's responses.",
+        "impact": "A control held most of the time. Most of the time is not a security property when the other side can repeat the attempt.",
+        "steps": [
+            "Treat the rate as a floor rather than a measurement. The number of attempts your run made is not the number an attacker would make.",
+            "Reduce the reach rather than only the probe: AISPM-01 and AISPM-02 name what the identity can escalate to and read.",
+            "Require human confirmation on consequential actions (AGY-03) so a probe that occasionally succeeds still meets a person.",
+            "Re-run after remediation and re-ingest, so the change is evidenced rather than asserted.",
+        ],
+    },
     "TPOIS-01": {
         "risk": "A tool description on this agent contains chat-template delimiters - the structural tokens model vendors use to separate system, user and assistant turns. ChatML uses <|im_start|> and <|im_end|>; Llama 2 and Mistral use [INST] and <<SYS>>; Llama 3 uses <|start_header_id|>; Anthropic's legacy Text Completions format used a bare 'Human:' turn marker. A field whose job is to tell the model what a function does has no reason to carry one, in the same way a configuration value has no reason to begin AKIA. What makes this worth a HIGH rather than a curiosity is where the field sits: the model reads tool descriptions to decide when to call a tool, so whoever can edit one is addressing the model directly, while the person reviewing the agent in a console sees something that looks like documentation. OverWatch reports the token and the format it belongs to and deliberately does NOT quote the description back - a report that prints the payload has moved it into the ticket and the chat window of whoever triages it.",
         "impact": "An instruction reaches the model through a field nobody treats as an instruction channel. Anything the agent's tools and execution role can do is a candidate for what that instruction asks for.",

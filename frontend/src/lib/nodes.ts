@@ -81,6 +81,9 @@ const META: Record<string, NodeMeta> = {
   // not like the estate — a reader should not mistake it for something that
   // exists in the account.
   ToxicFlow: { icon: Siren, label: 'Toxic flow', tone: 'var(--crit)' },
+  // An operator's own adversarial-test result. Toned like a finding, and
+  // labelled so a reader knows it came from their run, not from our scan.
+  PentestResult: { icon: Bug, label: 'Pen-test result', tone: 'var(--high)' },
 }
 
 export const nodeMeta = (kind: string): NodeMeta =>

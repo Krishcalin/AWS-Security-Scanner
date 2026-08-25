@@ -248,7 +248,12 @@ def test_registry_egress_guard_pinned():
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Every module that turns a THIRD-PARTY payload into something OverWatch stores.
-_INGEST_MODULES = ("aws_cdr.py", "aws_edr.py", "aws_ingest.py", "aws_airules.py")
+# aws_ingest_pentest.py is here because its INPUT is the most content-dense of any
+# ingest OverWatch performs: a garak report contains the attack prompts and the
+# model's responses verbatim. The module reads verdict rows only, and this is what
+# keeps that true rather than taking its word for it.
+_INGEST_MODULES = ("aws_cdr.py", "aws_edr.py", "aws_ingest.py", "aws_airules.py",
+                   "aws_ingest_pentest.py")
 
 # Keys whose value is model input/output. Reading one of these is reading a prompt.
 _CONTENT_KEYS = frozenset({
