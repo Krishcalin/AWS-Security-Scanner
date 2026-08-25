@@ -2510,6 +2510,28 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Confirm MMDSv2 is required on every such runtime (AGC-01) - a browser that can be steered to any URL is the most direct route to a metadata-service credential theft.",
         ],
     },
+    "AGC-05": {
+        "risk": "This AgentCore MCP gateway admits callers it never authorizes, and then calls its targets using the gateway's OWN credentials. Both halves matter, and neither is a finding alone. AWS supports two permissive inbound modes on purpose: AUTHENTICATE_ONLY verifies a caller's SigV4 signature and deliberately makes no authorization decision so the token can be forwarded and validated downstream, and NONE performs no inbound authentication or authorization at all so an existing system can keep doing it. Used with an outbound type that carries the CALLER's identity - caller IAM credentials, token passthrough, on-behalf-of token exchange - the target's own authorization still applies and the design is sound. What OverWatch reports here is the combination where it does not: a permissive inbound mode together with targets that use the gateway service role or a stored credential. The AgentCore developer guide states the consequence directly - the gateway execution role is shared across all targets configured with GATEWAY_IAM_ROLE, and its permissions are the upper bound for what any authorized caller can exercise through the gateway. Where the inbound mode is NONE, 'any caller' includes unauthenticated ones.",
+        "impact": "Every permission held by the gateway execution role is reachable by anyone the inbound mode admits, through the gateway's own published URL, with no record of which caller did what - because there was no caller identity to record.",
+        "steps": [
+            "Decide which of the two designs you are running, because the fix differs. To authorize AT the gateway: aws bedrock-agentcore-control update-gateway --gateway-identifier <ID> --authorizer-type CUSTOM_JWT --authorizer-configuration '{\"customJWTAuthorizer\":{\"discoveryUrl\":\"<URL>\",\"allowedClients\":[\"<CLIENT_ID>\"]}}'",
+            "To DELEGATE authorization instead, keep the inbound mode and switch the targets so the caller's identity reaches them - caller IAM credentials for AgentCore Runtime targets, or token passthrough with AUTHENTICATE_ONLY - so the target authorizes the original caller rather than trusting the gateway.",
+            "Either way, scope the gateway execution role down. It is shared across every GATEWAY_IAM_ROLE target, so it is the blast radius: aws iam get-role-policy --role-name <ROLE> --policy-name <POLICY> and remove wildcards.",
+            "Split trust boundaries onto separate gateways with distinct execution roles, rather than one gateway fronting targets of different sensitivity.",
+            "On a shared gateway, add a policy engine to control which callers may invoke which targets - it is the control AWS points at for exactly this case.",
+            "Check AISPM-01 and AISPM-02 for the gateway's execution role. What that role can escalate to or read is what a caller reaches through this gateway.",
+        ],
+    },
+    "AGC-06": {
+        "risk": "This gateway sets exceptionLevel to DEBUG. The AgentCore reference is explicit about the effect: if the value is DEBUG, granular exception messages are returned to help a user debug the gateway; if it is omitted, a generic error message is returned to the end user. Granular exception messages from a gateway describe what is behind it - target names, schema mismatches, downstream service errors, and the shape of failures an attacker can provoke deliberately. On a development gateway that is a convenience. On one whose callers are not all trusted, it is a free description of the internal surface, obtainable by sending deliberately malformed requests and reading the replies.",
+        "impact": "An unauthenticated or lightly-authenticated caller can map the targets behind the gateway by provoking errors, without needing to invoke anything successfully.",
+        "steps": [
+            "Omit exceptionLevel so callers receive the generic message: aws bedrock-agentcore-control update-gateway --gateway-identifier <ID> --no-exception-level",
+            "Keep DEBUG only on gateways whose callers are entirely trusted - a development or staging gateway that is not reachable by production traffic.",
+            "If you need the detail for operations, take it from CloudWatch logs on your side rather than from the response on the caller's side.",
+            "Combine with AGC-05: DEBUG detail matters far more on a gateway that admits callers it does not authorize, because provoking errors is then free.",
+        ],
+    },
     "AIGRD-01": {
         "risk": "This guardrail does not defend the prompt-injection path. Bedrock content filters cover six categories - SEXUAL, VIOLENCE, HATE, INSULTS, MISCONDUCT and PROMPT_ATTACK - and only the last is aimed at the threat that makes an agent different from an API. The other five grade what a model SAYS; PROMPT_ATTACK grades what a user makes it DO. A guardrail can be a thoroughly configured content-safety filter, pass every 'is a guardrail attached' check in the market, and still leave an agent with tool access completely open to instruction hijacking. OverWatch reports this as a strength grade rather than a boolean because the boolean has no way to express it.",
         "impact": "An attacker who can place text where the model will read it - a document in a knowledge base, a page an agent fetches, a support ticket, a filename - can redirect the agent's behaviour, and the guardrail will not intervene. Whatever the execution role can reach then becomes reachable through the model.",

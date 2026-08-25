@@ -87,9 +87,6 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "read each custom model's KMS key — a fine-tuned model embeds its "
              "training data, so its key custody is the training data's key custody"),
     ),
-    # AgentCore is a separate service with its own IAM prefix. SecurityAudit
-    # predates it, so none of this is granted by the managed policies -- the ledger
-    # is what makes that visible rather than surprising at runtime.
     # AgentCore is a separate service with its own IAM prefix (bedrock-agentcore, NOT
     # the bedrock-agentcore-control endpoint name). SecurityAudit predates it, so the
     # managed policies grant none of this -- the ledger is what makes that visible
@@ -133,6 +130,16 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
         _req("bedrock-agentcore:ListMemories",
              "find memory stores -- where an injected instruction can be made to "
              "persist across sessions"),
+    ),
+    "AGC-05": (
+        _req("bedrock-agentcore:GetGateway",
+             "read authorizerType and the policy-engine/interceptor configuration -- whether the gateway authorizes its callers, or admits them and lets something else decide"),
+        _req("bedrock-agentcore:ListGatewayTargets",
+             "read each target's outbound credential type, which is what decides whether a permissive inbound mode is a delegated design or an open door"),
+    ),
+    "AGC-06": (
+        _req("bedrock-agentcore:GetGateway",
+             "read exceptionLevel -- whether the gateway returns granular exception detail describing its targets to whoever provoked an error"),
     ),
     "AIGRD-01": (
         _req("bedrock:GetGuardrail",

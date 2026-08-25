@@ -68,20 +68,24 @@ VIEW_ONLY_ALONE = [{
 # draft hung them all on the informational AGC-00 id, which is nine permissions
 # nobody could justify in review wearing the appearance of justification.
 EXPECTED_GAP = ("bedrock-agentcore:GetAgentRuntime",
+                "bedrock-agentcore:GetGateway",
                 "bedrock-agentcore:ListAgentRuntimes",
                 "bedrock-agentcore:ListApiKeyCredentialProviders",
                 "bedrock-agentcore:ListBrowsers",
                 "bedrock-agentcore:ListCodeInterpreters",
+                "bedrock-agentcore:ListGatewayTargets",
                 "bedrock-agentcore:ListGateways",
                 "bedrock-agentcore:ListMemories",
                 "bedrock-agentcore:ListOauth2CredentialProviders",
                 "bedrock-agentcore:ListWorkloadIdentities",
-                "bedrock:GetAgentActionGroup", "bedrock:GetDataSource",
-                "bedrock:GetGuardrail", "bedrock:GetKnowledgeBase")
+                "bedrock:GetAgentActionGroup",
+                "bedrock:GetDataSource",
+                "bedrock:GetGuardrail",
+                "bedrock:GetKnowledgeBase")
 
 
 # ── the load-bearing assertion ──────────────────────────────────────────────
-def test_the_shipped_role_is_missing_exactly_thirteen_actions():
+def test_the_shipped_role_is_missing_exactly_fifteen_actions():
     """Computed from the policy documents, not recalled. If this number moves, either
     AWS changed SecurityAudit or we added a call — both worth a human looking."""
     led = L.evaluate(SHIPPED_ROLE)
@@ -96,7 +100,8 @@ def test_the_blocked_checks_are_the_knowledge_base_and_guardrail_grading_ones():
     led = L.evaluate(SHIPPED_ROLE)
     assert set(led.blocked) == {"AGT-03", "AGT-04",
                                 "AIGRD-01", "AIGRD-02", "AIGRD-04",
-                                "AGC-01", "AGC-02", "AGC-03", "AGC-04"}
+                                "AGC-01", "AGC-02", "AGC-03", "AGC-04",
+                                "AGC-05", "AGC-06"}
     assert led.blocked["AGT-03"] == ("bedrock:GetDataSource",
                                      "bedrock:GetKnowledgeBase")
     assert led.blocked["AGT-04"] == ("bedrock:GetAgentActionGroup",)
@@ -133,7 +138,7 @@ def test_declining_an_action_names_what_it_costs():
     assert set(led.forfeit(EXPECTED_GAP)) == {"AGT-03", "AGT-04",
                                               "AIGRD-01", "AIGRD-02", "AIGRD-04",
                                               "AGC-01", "AGC-02", "AGC-03",
-                                              "AGC-04"}
+                                              "AGC-04", "AGC-05", "AGC-06"}
 
 
 def test_declining_an_action_a_working_check_depends_on_is_also_counted():

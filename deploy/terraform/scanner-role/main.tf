@@ -86,6 +86,8 @@ data "aws_iam_policy_document" "extras" {
       "bedrock-agentcore:ListAgentRuntimes",
       "bedrock-agentcore:GetAgentRuntime",
       "bedrock-agentcore:ListGateways",
+      "bedrock-agentcore:GetGateway",
+      "bedrock-agentcore:ListGatewayTargets",
       "bedrock-agentcore:ListWorkloadIdentities",
       "bedrock-agentcore:ListOauth2CredentialProviders",
       "bedrock-agentcore:ListApiKeyCredentialProviders",

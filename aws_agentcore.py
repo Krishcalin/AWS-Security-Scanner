@@ -192,3 +192,132 @@ def summarize(estate: Optional[Dict[str, list]]) -> str:
         return "no AgentCore resources"
     parts = sorted(((n, k) for k, n in inv["counts"].items() if n), reverse=True)
     return ", ".join(f"{n} {k.replace('AgentCore', '')}" for n, k in parts)
+
+
+# ── gateway authorization (slice 2.3) ───────────────────────────────────────
+# Inbound: who the gateway lets in. From the GetGateway reference, verbatim.
+INBOUND_AUTHORIZERS = ("CUSTOM_JWT", "AWS_IAM", "NONE", "AUTHENTICATE_ONLY")
+
+#: Inbound modes where the GATEWAY decides authorization itself.
+INBOUND_ENFORCING = ("CUSTOM_JWT", "AWS_IAM")
+#: SigV4 verified, no authorization decision made. The developer guide: "the gateway
+#: verifies the caller's SigV4 signature to authenticate the caller, but makes no
+#: authorization decision ... any authenticated caller is forwarded to the target."
+INBOUND_AUTHN_ONLY = "AUTHENTICATE_ONLY"
+#: "the gateway performs no inbound authentication or authorization. Requests can be
+#: unauthenticated, and any caller is forwarded to the target."
+INBOUND_OPEN = "NONE"
+
+#: Outbound credential types that carry the CALLER's identity to the target, so the
+#: target's own authorization still applies. These are what make a permissive inbound
+#: mode a deliberate architecture rather than a hole.
+OUTBOUND_CARRIES_CALLER = ("CALLER_IAM_CREDENTIALS", "JWT_PASSTHROUGH",
+                           "OAUTH_TOKEN_EXCHANGE")
+#: Outbound types that use the GATEWAY's own credentials. The developer guide is explicit
+#: about what this means: "The gateway execution role is shared across all targets
+#: configured with GATEWAY_IAM_ROLE. Its permissions are the upper bound for what any
+#: authorized caller can exercise through the gateway."
+OUTBOUND_GATEWAY_OWN = ("GATEWAY_IAM_ROLE", "OAUTH", "API_KEY", "NONE")
+
+# verdicts
+GW_ENFORCED = "ENFORCED"           # the gateway authorizes
+GW_DELEGATED = "DELEGATED"         # permissive inbound, but the caller's identity flows
+GW_COMPENSATED = "COMPENSATED"     # permissive inbound, a policy engine/interceptor sits in front
+GW_OPEN = "OPEN"                   # permissive inbound AND the gateway's own credentials
+GW_UNKNOWN = "UNKNOWN"             # permissive inbound, targets not readable
+GW_VERDICTS = (GW_ENFORCED, GW_DELEGATED, GW_COMPENSATED, GW_OPEN, GW_UNKNOWN)
+
+
+def _target_outbound_types(targets) -> List[str]:
+    """Every outbound credential type configured across a gateway's targets."""
+    out = []
+    for t in targets or []:
+        if not isinstance(t, dict):
+            continue
+        for cfg in t.get("credentialProviderConfigurations") or []:
+            if isinstance(cfg, dict) and cfg.get("credentialProviderType"):
+                out.append(str(cfg["credentialProviderType"]).upper())
+    return out
+
+
+def gateway_authorization(gateway: Optional[dict],
+                          targets: Optional[Sequence[dict]] = None) -> dict:
+    """Grade a gateway's inbound authorization, in the light of what it does outbound.
+
+    A boolean ``authorizerType == "NONE"`` check would be wrong, and wrong in the
+    direction that gets a scanner distrusted: AWS documents both permissive inbound modes
+    as deliberate architectures when authorization is handled elsewhere. AUTHENTICATE_ONLY
+    exists precisely so the caller's token can be forwarded and validated downstream.
+
+    What actually decides the verdict is whose identity reaches the target:
+
+      * the gateway authorizes (CUSTOM_JWT / AWS_IAM)                     -> ENFORCED
+      * permissive inbound, but the CALLER's identity flows onward, so the
+        target authorizes                                                -> DELEGATED
+      * permissive inbound, but a policy engine or interceptor sits in
+        front of the targets                                             -> COMPENSATED
+      * permissive inbound AND the gateway's own credentials downstream   -> OPEN
+
+    OPEN is the finding. There, any caller the inbound mode admits exercises the gateway
+    execution role, whose permissions the guide names as "the upper bound for what any
+    authorized caller can exercise through the gateway" — and with NONE, "any caller"
+    includes unauthenticated ones."""
+    g = gateway or {}
+    inbound = (g.get("authorizerType") or "").upper()
+    outbound = _target_outbound_types(targets)
+
+    # Compensating controls AWS itself points at for permissive inbound modes.
+    policy_engine = bool((g.get("policyEngineConfiguration") or {}).get("arn"))
+    interceptors = bool(g.get("interceptorConfigurations"))
+
+    if inbound in INBOUND_ENFORCING:
+        return {"verdict": GW_ENFORCED, "inbound": inbound, "outbound": outbound,
+                "unauthenticated": False, "policy_engine": policy_engine,
+                "interceptors": interceptors,
+                "reason": "the gateway authorizes callers itself"}
+
+    unauth = inbound == INBOUND_OPEN
+    carries_caller = [o for o in outbound if o in OUTBOUND_CARRIES_CALLER]
+    gateway_own = [o for o in outbound if o in OUTBOUND_GATEWAY_OWN]
+
+    base = {"inbound": inbound or "(unset)", "outbound": outbound,
+            "unauthenticated": unauth, "policy_engine": policy_engine,
+            "interceptors": interceptors}
+
+    # `targets is None` means we could not read them; `[]` means the gateway has none.
+    # Collapsing the two would report OPEN on the strength of a refused API call, which
+    # is the phantom-finding mirror of a phantom pass.
+    if targets is None:
+        return dict(base, verdict=GW_UNKNOWN,
+                    reason=(f"inbound {inbound} makes no authorization decision, and the "
+                            f"gateway's targets could not be enumerated — whether the "
+                            f"caller's identity reaches them is unknown, not benign"))
+
+    if carries_caller and not gateway_own:
+        return dict(base, verdict=GW_DELEGATED,
+                    reason=(f"inbound {inbound} forwards the caller's own identity "
+                            f"({', '.join(sorted(set(carries_caller)))}), so the target "
+                            f"still authorizes"))
+    if policy_engine or interceptors:
+        which = " and ".join(x for x in (
+            "a policy engine" if policy_engine else "",
+            "an interceptor" if interceptors else "") if x)
+        return dict(base, verdict=GW_COMPENSATED,
+                    reason=(f"inbound {inbound} makes no authorization decision, but "
+                            f"{which} sits in front of the targets — confirm it covers "
+                            f"every target"))
+    return dict(base, verdict=GW_OPEN,
+                reason=(f"inbound {inbound} makes no authorization decision and the "
+                        f"targets use the gateway's own credentials"
+                        f"{' (' + ', '.join(sorted(set(gateway_own))) + ')' if gateway_own else ''}"
+                        f", whose permissions bound what any caller can exercise"))
+
+
+def gateway_debug_errors(gateway: Optional[dict]) -> bool:
+    """``exceptionLevel: DEBUG`` returns granular exception messages to the caller.
+
+    From the reference: "If the value is DEBUG, granular exception messages are returned
+    to help a user debug the gateway. If the value is omitted, a generic error message is
+    returned to the end user." On a gateway whose callers are not all trusted, those
+    messages describe the targets behind it."""
+    return (((gateway or {}).get("exceptionLevel") or "").upper() == "DEBUG")

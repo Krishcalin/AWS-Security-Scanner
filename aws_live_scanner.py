@@ -375,6 +375,10 @@ CHECK_SEVERITY = {
     # the emit and MEDIUM here: nothing is wrong, and an operator who does not know
     # the surface exists cannot have decided it was acceptable.
     "AGC-03": "MEDIUM", "AGC-04": "MEDIUM",
+    # AGC-05 is CRITICAL only when the gateway admits callers it never authorizes
+    # AND hands them the gateway role downstream; the permissive inbound modes are
+    # supported designs on their own, so the grade is what earns the severity.
+    "AGC-05": "CRITICAL", "AGC-06": "MEDIUM",
     "AIGRD-04": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
     "COG-05": "HIGH", "COG-06": "CRITICAL",
@@ -637,6 +641,10 @@ COMPLIANCE_MAP = {
     # CM-7 (least functionality) for an agent tool surface nobody enumerated.
     "AGC-03": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "IA-5"},
     "AGC-04": {"PCI-DSS": "2.2.4", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "CM-7"},
+    # AC-3 (access enforcement) for a gateway that enforces nothing; SI-11 is not in
+    # the frozen universe, so DEBUG error disclosure maps to SC-7 as a boundary leak.
+    "AGC-05": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "AGC-06": {"PCI-DSS": "6.5.5", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     # AI-SPM pillar (NIST reused from the frozen 38-control universe: AC-6/AC-3/SC-7)
     "AISPM-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "AISPM-02": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
@@ -949,6 +957,8 @@ REMEDIATION_MAP = {
     "AGT-03": "Set a customer-managed key on the knowledge base and its data sources: aws bedrock-agent update-knowledge-base --knowledge-base-id <KB_ID> --name <NAME> --role-arn <ROLE_ARN> --knowledge-base-configuration file://kb-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}'",
     "AGT-04": "Restrict the action-group Lambda so only this agent can invoke it, and scope the function's own role: aws lambda add-permission --function-name <FN> --statement-id bedrock-agent --action lambda:InvokeFunction --principal bedrock.amazonaws.com --source-arn <AGENT_ALIAS_ARN>",
     "AGT-06": "Create one guardrail and attach it to every agent that lacks one, then make it mandatory in IAM so it cannot simply be omitted: aws bedrock create-guardrail --name prod-guardrail --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\"}]}'",
+    "AGC-05": "Either authorize at the gateway or carry the caller's identity to the target -- not neither. To authorize at the edge: aws bedrock-agentcore-control update-gateway --gateway-identifier <ID> --authorizer-type CUSTOM_JWT --authorizer-configuration '{\"customJWTAuthorizer\":{\"discoveryUrl\":\"<URL>\",\"allowedClients\":[\"<CLIENT_ID>\"]}}' . To delegate instead, switch the targets to CALLER_IAM_CREDENTIALS so the target's own IAM still applies, and scope the gateway execution role down either way",
+    "AGC-06": "Stop returning granular errors to callers by omitting exceptionLevel: aws bedrock-agentcore-control update-gateway --gateway-identifier <ID> --no-exception-level ; keep DEBUG for a non-production gateway only",
     "AGC-03": "Inventory what each provider opens and scope it: aws bedrock-agentcore-control list-oauth2-credential-providers ; aws bedrock-agentcore-control list-api-key-credential-providers ; then confirm each credential is least-privilege IN THE THIRD-PARTY SYSTEM, because no AWS control bounds it -- and set a rotation owner, since CloudTrail will not show you its use",
     "AGC-04": "Enumerate the tool surface and remove what is unused: aws bedrock-agentcore-control list-code-interpreters ; aws bedrock-agentcore-control list-browsers ; aws bedrock-agentcore-control list-gateways ; delete the ones no agent needs with aws bedrock-agentcore-control delete-code-interpreter --code-interpreter-id <ID>",
     "AGC-01": "Require MMDSv2 on the runtime so the metadata service cannot be read by a request the agent was talked into making: aws bedrock-agentcore-control update-agent-runtime --agent-runtime-id <ID> --metadata-configuration '{\"requireMMDSV2\":true}' ; then confirm with aws bedrock-agentcore-control get-agent-runtime --agent-runtime-id <ID> --query metadataConfiguration",
@@ -10848,8 +10858,94 @@ class AWSLiveScanner:
                       f"carrying the agent's own identity. Confirm each is still used "
                       f"| agentcore")
 
+        self._audit_agentcore_gateways(ac, estate.get("AgentCoreGateway") or [])
+
         for summary in estate.get("AgentCoreRuntime", []):
             self._audit_agentcore_runtime(ac, summary)
+
+    def _audit_agentcore_gateways(self, ac, gateways):
+        """AGC-05/06 — what a gateway lets in, and what it tells callers when it fails.
+
+        Graded against the OUTBOUND configuration on each target, because inbound NONE
+        and AUTHENTICATE_ONLY are both documented, supported designs when the caller's
+        identity is carried onward and the target authorizes. Failing them unconditionally
+        would fire on an architecture AWS recommends."""
+        get_gw = getattr(ac, "get_gateway", None)
+        list_tgt = getattr(ac, "list_gateway_targets", None)
+        if get_gw is None:
+            return                          # operation absent from this SDK version
+
+        for gs in gateways or []:
+            gid = gs.get("gatewayId") or gs.get("gatewayArn")
+            gname = gs.get("name") or gid or "gateway"
+            if not gid:
+                continue
+            try:
+                gw = get_gw(gatewayIdentifier=gid)
+            except Exception as e:
+                if self._is_access_denied(e):
+                    for cid in ("AGC-05", "AGC-06"):
+                        self._coverage.note_denied(
+                            cid, f"{aws_agentcore.IAM_PREFIX}:GetGateway")
+                    self._add("INFO", "AGC-00", "AGENTCORE", gname,
+                              f"Gateway '{gname}' NOT audited — missing "
+                              f"{aws_agentcore.IAM_PREFIX}:GetGateway (no phantom pass)")
+                else:
+                    self._add("WARN", "AGC-00", "AGENTCORE", gname,
+                              f"Gateway '{gname}' could not be read: {e}")
+                continue
+
+            # None (not readable) and [] (none configured) mean different things to the
+            # grader, so the distinction is preserved rather than flattened.
+            targets = None
+            if list_tgt is not None:
+                try:
+                    targets = list((list_tgt(gatewayIdentifier=gid) or {}).get("items")
+                                   or [])
+                except Exception as e:
+                    if self._is_access_denied(e):
+                        self._coverage.note_denied(
+                            "AGC-05", f"{aws_agentcore.IAM_PREFIX}:ListGatewayTargets")
+
+            verdict = aws_agentcore.gateway_authorization(gw, targets)
+            who = ("unauthenticated callers" if verdict["unauthenticated"]
+                   else "any authenticated caller")
+
+            if verdict["verdict"] == aws_agentcore.GW_OPEN:
+                self._add("FAIL", "AGC-05", "AGENTCORE", gname,
+                          f"MCP gateway '{gname}' admits {who} and calls its targets with "
+                          f"the gateway's own credentials — {verdict['reason']}. The "
+                          f"gateway execution role is the upper bound of what any such "
+                          f"caller can exercise | {gname}")
+            elif verdict["verdict"] == aws_agentcore.GW_UNKNOWN:
+                self._add("INFO", "AGC-00", "AGENTCORE", gname,
+                          f"Gateway '{gname}': {verdict['reason']} (no phantom pass)")
+            elif verdict["verdict"] == aws_agentcore.GW_COMPENSATED:
+                self._add("WARN", "AGC-05", "AGENTCORE", gname,
+                          f"MCP gateway '{gname}' admits {who} at the edge — "
+                          f"{verdict['reason']} | {gname}")
+            else:
+                self._add("PASS", "AGC-05", "AGENTCORE", gname,
+                          f"MCP gateway '{gname}': {verdict['reason']} | {gname}")
+
+            if aws_agentcore.gateway_debug_errors(gw):
+                self._add("FAIL", "AGC-06", "AGENTCORE", gname,
+                          f"MCP gateway '{gname}' returns DEBUG exception detail to "
+                          f"callers — granular errors describe the targets behind the "
+                          f"gateway to whoever provoked them | {gname}")
+
+            role = gw.get("roleArn")
+            if role:
+                # Stashed like a runtime so the gateway's execution role gets the same
+                # blast-radius treatment. It is the role every GATEWAY_IAM_ROLE target
+                # runs as, which is exactly what AGC-05 says bounds a caller's reach.
+                self._aispm_resources.append({
+                    "kind": "AgentCoreGateway", "name": gname,
+                    "arn": gw.get("gatewayArn") or gs.get("gatewayArn"),
+                    "role_arn": role,
+                    "network_checkable": False, "network": {},
+                    "data_bearing": False,
+                })
 
     def _audit_agentcore_runtime(self, ac, summary):
         """One runtime: AGC-01/02, plus the AI-SPM stash that does everything else."""

@@ -7,6 +7,39 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 2 · slice 2.3 — gateway authorization posture**, graded rather than counted.
+  - **`AGC-05`** (CRITICAL · AC-3) — a gateway that **admits callers it never authorizes
+    AND calls its targets with the gateway's own credentials.** Both halves are required,
+    and this is the point of the slice: a boolean `authorizerType == "NONE"` check would
+    be wrong in the direction that gets a scanner distrusted. AWS documents *both*
+    permissive inbound modes as deliberate architectures — `AUTHENTICATE_ONLY` exists so a
+    caller's token is verified and forwarded for the target to validate, `NONE` exists so
+    an existing system keeps owning the decision. Paired with an outbound type that
+    carries the caller's identity (`CALLER_IAM_CREDENTIALS`, `JWT_PASSTHROUGH`,
+    on-behalf-of token exchange), the target still authorizes and the design is sound.
+    The finding is the combination where it does not, and the developer guide states the
+    consequence verbatim: *"The gateway execution role is shared across all targets
+    configured with GATEWAY_IAM_ROLE. Its permissions are the upper bound for what any
+    authorized caller can exercise through the gateway."* With inbound `NONE`, "any
+    caller" includes unauthenticated ones.
+    - Four verdicts: `ENFORCED` (gateway authorizes) · `DELEGATED` (caller's identity
+      flows onward) · `COMPENSATED` (a policy engine or interceptor sits in front — WARN,
+      confirm it covers every target) · `OPEN` (FAIL).
+    - `AUTHENTICATE_ONLY` and `NONE` both grade `OPEN` against gateway credentials, and
+      the message still distinguishes them: "any authenticated caller" vs
+      "unauthenticated callers".
+  - **`AGC-06`** (MEDIUM · SC-7) — `exceptionLevel: DEBUG`. Per the reference, *"granular
+    exception messages are returned to help a user debug the gateway"* — which on a
+    gateway whose callers are not all trusted describes the targets behind it to whoever
+    provokes an error.
+  - **An unreadable target list is `UNKNOWN`, not `OPEN`.** Reporting a CRITICAL on the
+    strength of a refused `ListGatewayTargets` is the phantom-*finding* mirror of a
+    phantom pass; empty-because-none and empty-because-refused are kept distinct.
+  - Gateway execution roles are stashed into `_aispm_resources`, so `AISPM-01/02` grade
+    the very role `AGC-05` names as the upper bound of a caller's reach.
+  - Two new IAM actions (`GetGateway`, `ListGatewayTargets`) in both onboarding paths;
+    the ledger's reported gap grows 13 → 15.
+
 - **Phase 2 · slice 2.2 — the AgentCore estate** (`aws_agentcore.py`, new `AGENTCORE`
   section). Amazon Bedrock **AgentCore** is a different service from Bedrock Agents, with
   its own control plane (`bedrock-agentcore-control`) and its own IAM prefix
