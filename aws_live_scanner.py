@@ -345,8 +345,17 @@ CHECK_SEVERITY = {
     "ACM-04": "HIGH", "ACM-05": "MEDIUM",
     "SM-01": "HIGH", "SM-02": "MEDIUM", "SM-03": "MEDIUM", "SM-04": "MEDIUM",
     "SM-05": "HIGH", "SM-06": "MEDIUM", "SM-07": "MEDIUM",
-    # AI-SPM pillar: execution-role blast radius + network isolation + fused AI attack path
-    "AISPM-01": "HIGH", "AISPM-02": "HIGH", "AISPM-03": "MEDIUM", "AIPATH-01": "CRITICAL",
+    # AI-SPM pillar: execution-role blast radius + network isolation, plus the
+    # conditional AIPATH-01 (egress + role reach; no ingress is claimed)
+    "AISPM-01": "HIGH", "AISPM-02": "HIGH", "AISPM-03": "MEDIUM",
+    # AIPATH-01 is HIGH rather than CRITICAL, and the downgrade is the point.
+    # CRITICAL here means every link was observed (ATTACK-01/02) or the primitive
+    # needs no assumption at all (IAMPE-01/03/04). AIPATH-01 fuses two HIGH legs
+    # across a premise OverWatch cannot verify — "assume a compromise lands" —
+    # because no signal it reads is an ingress signal. A CRITICAL derived from an
+    # outbound-access checkbox is precisely what _emit_ai_topology refuses to
+    # manufacture one layer down; asserting it in prose instead is the same error.
+    "AIPATH-01": "HIGH",
     # LLMjacking and AI control tampering (CloudTrail management events)
     "AITHR-01": "HIGH", "AITHR-02": "CRITICAL",
     "AGT-06": "HIGH",
@@ -913,7 +922,7 @@ REMEDIATION_MAP = {
     "AISPM-01": "Scope the AI execution role to least privilege — drop admin/privesc grants (iam:PassRole/*, *:*): aws iam put-role-policy --role-name <AI_EXEC_ROLE> --policy-name aispm-least-priv --policy-document file://scoped.json",
     "AISPM-02": "Restrict the AI execution role's data reach to only the buckets/tables the model needs (remove wildcard s3:GetObject/* grants): aws iam put-role-policy --role-name <AI_EXEC_ROLE> --policy-name aispm-data-scope --policy-document file://data-scope.json",
     "AISPM-03": "Isolate the AI resource on a private VPC subnet and disable direct internet egress: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --subnet-id <SUBNET> ; for a Studio domain: aws sagemaker update-domain --domain-id <DOMAIN_ID> --app-network-access-type VpcOnly",
-    "AIPATH-01": "Break the fused AI attack path — isolate the resource and scope its role: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --direct-internet-access Disabled ; then remove the execution role's crown-data/privesc grants (see AISPM-01/AISPM-02)",
+    "AIPATH-01": "Either leg alone defuses the pair. Closing egress is the faster containment: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --direct-internet-access Disabled ; cutting the role's reach (see AISPM-01/AISPM-02) is the one that actually bounds a compromise, because prompt injection arrives in content and needs no network route at all",
     "COG-01": "Require MFA: aws cognito-idp set-user-pool-mfa-config --user-pool-id <POOL_ID> --mfa-configuration ON --software-token-mfa-configuration Enabled=true",
     "COG-02": "Strengthen password policy: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --policies PasswordPolicy='{MinimumLength=12,RequireUppercase=true,RequireLowercase=true,RequireNumbers=true,RequireSymbols=true}'",
     "COG-03": "Enable threat protection: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --user-pool-add-ons AdvancedSecurityMode=ENFORCED",
@@ -10655,8 +10664,9 @@ class AWSLiveScanner:
         radius: AISPM-01 (privilege-escalation capable), AISPM-02 (reaches a crown
         datastore — a graph query over the CAN_READ_DATA edges the DSPM/Macie passes
         already added earlier in DATA), AISPM-03 (no network isolation), and the
-        fused AIPATH-01 (a network-exposed AI resource whose role can escalate or
-        read crown data — the AI analogue of the flagship toxic path). Runs LAST in
+        conditional AIPATH-01 (an AI resource pairing unrestricted EGRESS with a
+        role that can escalate or read crown data -- capability, not a route; the
+        ingress half is what _emit_ai_topology declines to invent). Runs LAST in
         DATA#42 (post-clobber) so principals + CAN_READ_DATA edges are complete and
         it cannot perturb the flagship/KIEM crown sets; reuses existing edge kinds +
         prop-based crown_nodes -> NO aws_correlate change. Fail-open: an
@@ -10767,8 +10777,8 @@ class AWSLiveScanner:
                               f"| {name}")
                 elif verdict == aws_effperm.CONDITIONED:
                     # Survives only under a Condition. Worth a human's attention,
-                    # not worth a CRITICAL fused path — so it does NOT set `privesc`
-                    # and therefore cannot itself raise AIPATH-01.
+                    # but not enough to assert the pair -- so it does NOT set
+                    # `privesc` and therefore cannot itself raise AIPATH-01.
                     self._add("WARN", "AISPM-01", "DATA", name,
                               f"AI execution role {rolename} for {name} {reason}, but the "
                               f"permission boundary / SCP allows it only under a Condition — "
@@ -10779,13 +10789,23 @@ class AWSLiveScanner:
                               f"{crown} (CAN_READ_DATA) — the model has a standing line to "
                               f"sensitive data | {name}")
 
-        # AIPATH-01 — fused: network-exposed AI resource whose role escalates or reads crown
+        # AIPATH-01 — the two true legs, and the premise that joins them.
+        # Deliberately NOT called an attack path. `exposed` is built only from egress
+        # and isolation signals (see _emit_ai_topology, which refuses to fabricate the
+        # matching inbound edge and cites the SageMaker docs for why), so OverWatch has
+        # observed no route IN and must not imply one. What is real is the PAIR: a role
+        # with reach, and an unimpeded way to move results out. Stating the premise in
+        # the finding rather than assuming it silently is what makes this the first
+        # member of aws_epistemics._CONDITIONAL_IDS.
         if exposed and (privesc or crown):
             leg = "escalate privilege" if privesc else f"read crown data {crown}"
             self._add("FAIL", "AIPATH-01", "DATA", name,
-                      f"FUSED AI ATTACK PATH: network-exposed {kind} {name} -> execution role "
-                      f"can {leg}. Compromise or prompt-injection yields powerful credentials "
-                      f"plus an open egress channel. | {name}")
+                      f"CONDITIONAL AI EXPOSURE: {kind} {name} pairs unrestricted egress "
+                      f"with an execution role that can {leg}. No inbound route is "
+                      f"asserted — every network signal here is an egress signal. IF the "
+                      f"resource is compromised (prompt injection arrives in content, not "
+                      f"over the network), the attacker inherits those credentials AND an "
+                      f"open channel to move the results out. | {name}")
 
     def _dspm_emit(self, g, arn, kind, name, cj, public, encrypted, roles, read_actions,
                    read_probe=None):

@@ -4,6 +4,47 @@ All notable changes to the **AWS Live Security Scanner** (`aws_live_scanner.py`)
 are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **`AIPATH-01` no longer claims an attack path it never observed.** Slice 0.3 established
+  — with the SageMaker API reference quoted verbatim — that every input to
+  `ai_network_exposed` is an **egress or isolation** signal, and made `_emit_ai_topology`
+  refuse to emit the inbound `internet -[EXPOSED_TO]->` edge that would have made the
+  finding enumerate as a real path. That refusal held. The finding's own **prose** did not:
+  it went on opening `FUSED AI ATTACK PATH: network-exposed …`, and its detail page
+  described "an attacker who reaches the model host". The graph and the sentence describing
+  it disagreed for two slices, and only the graph was under test.
+  - The message now leads with the two legs that **are** true — unrestricted egress, and a
+    role that can escalate privilege or read crown data — and states the premise joining
+    them instead of hiding it: *"No inbound route is asserted … IF the resource is
+    compromised (prompt injection arrives in content, not over the network)…"*. The pair is
+    still worth reporting, because the likeliest compromise of an AI resource needs no
+    network route at all.
+  - **Epistemic class `INFERRED` → `CONDITIONAL`.** Both legs are genuinely inferred; what
+    joins them is a premise, not a derivation. `_CONDITIONAL_IDS` was built in slice 0.4 and
+    left empty for Phase 3's toxic flow — its first member turned out to already exist and
+    to have been shipping mislabelled, because **adding a category does not reclassify what
+    came before it**.
+  - **Severity `CRITICAL` → `HIGH`.** `CRITICAL` here means every link was observed
+    (`ATTACK-01/02`) or the primitive needs no assumption (`IAMPE-01/03/04`). Nothing pinned
+    the old value and sample data carries `AIPATH-01` only in the slice-1.1 permission
+    ledger, never as a scored finding, so no fixture or demo output changed.
+  - Remediation and detail steps no longer tell operators to re-scan and watch an
+    `internet -> AI -> role -> crown` path disappear — it never appeared.
+  - The "fused attack path" vocabulary is retired from the severity table, both AI-SPM
+    docstrings and the test names, because that phrase *is* the claim in compressed form:
+    left in place, the next reader finds a docstring describing a fused attack path beside a
+    body that declines to build one, and concludes the body is the bug.
+
+### Added
+- `tests/test_aipath_conditional.py` (14 tests) pins **agreement between the finding and the
+  graph**, which is the invariant that was missing: whenever `AIPATH-01` fires, the graph must
+  carry no inbound edge to the node it names **and** the message must not tell the reader
+  otherwise. Testing only the structure is what allowed the prose to drift. The absence
+  assertion carries its own positive control (the `HAS_ROLE` edge must be found by the same
+  query), so it cannot pass because the graph is empty or the key was misspelled.
+
 ## [2.35.0] — 2026
 
 **Coverage-close Batch 1 — "surface over existing engines"** (from the Wiz use-case gap

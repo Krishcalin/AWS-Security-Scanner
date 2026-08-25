@@ -97,7 +97,7 @@ def test_aipath01_not_fired_when_isolated():
 
 
 def test_aipath01_not_fired_when_role_benign():
-    # exposed but the role neither escalates nor reaches crown -> no fused path (honest)
+    # egress open but the role neither escalates nor reaches crown -> no pair (honest)
     s, g = _svc([_notebook(exposed=True)],
                 principals=[_principal(AI_ROLE, [_stmt({"s3:getobject"}, {"arn:aws:s3:::x/*"})])])
     s._collect_aispm(g)
