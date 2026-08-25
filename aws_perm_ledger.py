@@ -131,6 +131,66 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "find memory stores -- where an injected instruction can be made to "
              "persist across sessions"),
     ),
+    # Slice 2.4 adds NO new action: get_agent_action_group is already called for
+    # AGT-04 and was granted in slice 1.2. Recorded so declining that one action
+    # names everything it costs, which is the whole contract of the ledger.
+    # Slice 3.1 adds NO new action. Every input is already read: GetDataSource for
+    # the entry (granted in 1.2), GetAgent for the role, and the bucket policies the
+    # S3 section already reads. The flagship computation is a composition of things
+    # the scanner holds, which is what made it affordable.
+    "TFLOW-01": (
+        _req("bedrock:GetDataSource",
+             "read each knowledge-base data source type -- a WEB crawler or an "
+             "externally-writable S3 bucket is an OBSERVABLE untrusted-content "
+             "path, which is what separates a proven flow from an assumed one"),
+    ),
+    "TFLOW-02": (
+        _req("bedrock:GetAgent",
+             "resolve the agent execution role whose reach IS the flow -- with no "
+             "observable entry this is the half that is certainly true"),
+    ),
+    "AITHR-03": (
+        _req("guardduty:ListFindings",
+             "find the AI Protection findings the main THREAT query cannot see -- "
+             "it filters at severity >= 4 and all three types ship at Low"),
+        _req("guardduty:GetFindings",
+             "read the acting identity and the models touched, so the Low can be "
+             "re-decided against what that identity can actually reach"),
+    ),
+    "AITHR-04": (
+        _req("guardduty:GetFindings",
+             "read contentPolicyFilters[].action -- whether the guardrail blocked "
+             "the prompt attack it detected, or was configured only to report it"),
+    ),
+    "AGC-07": (
+        _req("bedrock-agentcore:GetTokenVault",
+             "read whether the store holding every agent credential for systems "
+             "outside AWS is on a key the customer can revoke, audit and bound, or "
+             "on one they cannot"),
+    ),
+    "AGC-08": (
+        _req("bedrock-agentcore:GetWorkloadIdentity",
+             "read allowedResourceOauth2ReturnUrls -- where an OAuth flow may hand "
+             "an authorization code back, and whether any of those hand-backs "
+             "happen over plaintext"),
+    ),
+    "AGY-01": (
+        _req("bedrock:GetAgentActionGroup",
+             "read parentActionSignature -- whether an agent holds a shell or "
+             "desktop-control capability, which is excessive agency in the form "
+             "OWASP LLM06 calls excessive functionality"),
+    ),
+    "AGY-02": (
+        _req("bedrock:GetAgentActionGroup",
+             "read parentActionSignature for the code-execution and file-access "
+             "capabilities, whose reach is the execution role rather than the "
+             "sandbox around them"),
+    ),
+    "AGY-03": (
+        _req("bedrock:GetAgentActionGroup",
+             "read requireConfirmation on each function -- the control AWS names as "
+             "the prompt-injection safeguard, and which is DISABLED unless set"),
+    ),
     "AGC-05": (
         _req("bedrock-agentcore:GetGateway",
              "read authorizerType and the policy-engine/interceptor configuration -- whether the gateway authorizes its callers, or admits them and lets something else decide"),

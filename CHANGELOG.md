@@ -7,6 +7,162 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 3 · slice 3.2 — tool-description poisoning** (`aws_toolpoison.py`,
+  `TPOIS-01/02/03`, `--tool-patterns`). A model reads a tool's **description** to decide
+  when to call it, which makes the description an instruction channel: whoever can edit
+  one addresses the model directly, while the reviewer sees a field that looks like
+  documentation.
+  - **`TPOIS-01`** (HIGH · SI-7) — the description contains **chat-template delimiters**:
+    `<|im_start|>` (ChatML), `[INST]`/`<<SYS>>` (Llama 2, Mistral),
+    `<|start_header_id|>` (Llama 3), Anthropic's legacy `Human:` turn marker. These are
+    *structural tokens published by model vendors*, not phrasings — a field describing a
+    function has no reason to carry one, the way a config value has no reason to begin
+    `AKIA`.
+  - **`TPOIS-02`** (HIGH · SI-7) — characters **invisible to a reviewer and visible to a
+    tokenizer**: zero-width spaces, tag characters, bidirectional overrides (Trojan
+    Source applied to a config field). This is the signal most worth having, because the
+    entire premise of description poisoning is that somebody looked at the field and saw
+    nothing wrong. Any Unicode category `Cf` character is caught, not just a named list.
+  - **`TPOIS-03`** (HIGH · SI-7) — a hit from a pattern set **the operator supplies**,
+    attributed to the `source` that file declares. A set without a `source` is refused
+    outright: a finding that cannot say where its rule came from is one nobody can argue
+    with.
+  - **OverWatch authors no injection phrasings, and that is the product position.** They
+    are unbounded, multilingual and adversarially chosen; a list written here would be a
+    detection product whose every miss reads as a clean bill of health and whose every
+    over-match teaches operators to skip the category. A test asserts no phrasing creeps
+    into the module. Same reasoning as **D4** on red teaming and **2.6** on re-ranking
+    rather than re-detecting.
+  - **No finding ever quotes the description back.** A report that prints the payload has
+    moved it into the ticket and the chat window of whoever triages it. Enforced by tests
+    at both the classifier and the scanner surface.
+  - Charter-checked before building: a tool description is **configuration**, not
+    conversation content — `_CONTENT_KEYS` names conversation payloads and deliberately
+    excludes `description`, and `_INGEST_MODULES` covers third-party payload ingest,
+    which a config read is not. **No new API call and no new IAM permission**: it reads
+    the action-group detail `AGT-04` already fetches.
+- **Phase 3 · slice 3.1 — toxic flow** (`aws_toxicflow.py`, `TFLOW-01`, `TFLOW-02`). The
+  in-charter answer to *"do you red team?"* (**decision D4**): rather than probing a
+  customer's model — which spends their inference budget and produces, in their own
+  CloudTrail, the exact signature `AITHR-01` exists to alarm on — compute what an
+  injection **would** reach, from configuration already held.
+  - **The entry is gated, exactly as `ATT&CK-02` gates a data terminal.** Compute the
+    chain always; require a proven entry for the strong finding.
+    - **PROVEN** — a knowledge-base data source of type `WEB` (the reference: *"the
+      configuration of web URLs to crawl"*), or type `S3` whose bucket policy grants a
+      **write** action to a public or external principal. Both are configuration.
+    - **ASSUMED** — everything else, reported as **`CONDITIONAL`** and phrased *"IF an
+      injection reaches…"*, because an agent's injection surface is frequently invisible
+      to a cloud API.
+  - A **publicly readable** knowledge-base bucket is deliberately *not* an entry — that
+    is a data-exposure problem (`S3-09`), and conflating the two would put the flagship
+    finding on every public bucket in the account. Only **write** grants let someone
+    plant content. An **unreadable** bucket policy leaves the source assumed: an
+    unreadable policy is not an open one.
+  - **Attenuation is bounded and never reaches zero.** A guardrail that blocks prompt
+    attacks, one IAM makes mandatory, and human confirmation each reduce the flow — but a
+    guardrail raises the *cost* of an injection rather than making one impossible, and
+    AWS's own reference records that guardrail input tags bypass the input check. A tool
+    that let a control erase a path would teach operators the control is a boundary,
+    which is the belief `AIGRD-01` exists to correct.
+  - **An agent that reaches nothing produces no flow**, however proven its entry. An
+    injection arriving somewhere harmless is not a finding, and a flagship that fired on
+    every agent would be noise with a good name.
+  - `TFLOW-01` is `INFERRED`; **`TFLOW-02` joins `AIPATH-01` in `_CONDITIONAL_IDS`** — the
+    class defined in slice 0.4, reached deliberately this time rather than by correction.
+  - **No new IAM action.** Every input was already read: `GetDataSource` (granted in 1.2)
+    for the entry, the action-group detail for capabilities, the guardrail grades from
+    2.1, and the bucket policies `S3-09`/`S3-10` already read. The one call new to the
+    scanner is `ListAgentKnowledgeBases`, which `SecurityAudit` already grants — without
+    it the injection surface would have to be treated as a property of the region, which
+    would attribute one knowledge base's web crawler to every agent in the account.
+  - The graph gains a `ToxicFlow` node and **no inbound edge**. Fabricating
+    `internet -> agent` is what `_emit_ai_topology` refuses one layer down; doing it here
+    would be the same error at the size of the flagship.
+- **Phase 2 · slices 2.5–2.7 — Phase 2 complete.**
+- **2.5 · agent credential exposure** (`AGC-07`, `AGC-08`).
+  - **`AGC-07`** (HIGH · SC-12) — the AgentCore **token vault** is on a
+    `ServiceManagedKey`. Not an encryption failure — a **custody** one. The vault holds
+    the OAuth2 secrets and API keys agents use to reach systems *outside* AWS, whose logs
+    and permission models this account cannot see. A customer-managed key gives three
+    levers — revoke by disabling one key, see every decrypt in your own CloudTrail, narrow
+    with a key policy — and a service-managed key gives none, for the one store whose use
+    is otherwise invisible.
+  - **`AGC-08`** (HIGH · SC-8) — a workload identity permits an OAuth2 return URL over
+    plaintext `http://`, so an authorization code is handed back in the clear. Only the
+    **scheme** is judged: whether AgentCore matches these by prefix, pattern or equality
+    is undocumented, and a finding whose severity depends on undocumented matching
+    semantics is a guess about someone else's implementation.
+- **2.6 · GuardDuty AI Protection ingest, re-ranked** (`aws_aiprotect.py`, `AITHR-03`,
+  `AITHR-04`).
+  - **The verification pass found why this was needed at all.** `THREAT` already fetched
+    GuardDuty findings — and filtered them at `severity >= 4`. GuardDuty's `Low` band is
+    `< 4.0`, and **all three AI Protection types ship at `Low`**. So the ingest existed
+    and structurally excluded exactly these findings. Fixed with a second, **type-filtered**
+    query rather than a lower floor, which would have pulled in every `Low` in the account.
+  - **`AITHR-03`** (HIGH · SI-4) — an AI Protection finding whose acting identity can
+    escalate privilege or reach crown-jewel data. GuardDuty's `Low` is *correct* for a
+    detector holding the event and not the environment; what changes the answer is the
+    blast radius, which OverWatch already computes. When the identity is scoped, the
+    finding says **the Low stands** — a tool that escalated everything would be as
+    useless as one that escalated nothing.
+  - **`AITHR-04`** (CRITICAL · SI-4) — a prompt injection the guardrail **detected and did
+    not block**. AWS documents `contentPolicyFilters[].action` as `BLOCKED`, or `NONE` if
+    the guardrail "detected the prompt attack but was configured only to report it". This
+    is `AIGRD-02`'s configuration showing up as an outcome that already happened.
+  - Each finding carries **AWS's own MITRE ATLAS technique** (`AML.T0040`, `AML.T0034`,
+    `AML.T0051`), quoted rather than assigned.
+  - Collected in `THREAT` (regional, where the detector is), assessed in `AI_THREAT`
+    (global, after `DATA`, where the crown edges exist). No new IAM grant — `SecurityAudit`
+    already grants `guardduty:Get*`/`List*`.
+- **2.7 · NIST AI RMF, ISO/IEC 42001 and MITRE ATLAS in the compliance crosswalk**
+  (40 → **43 frameworks**, 36 new edges across 20 NIST 800-53 controls).
+  - **Mapped at the granularity each source can actually support**, which is the whole
+    discipline of the slice. AI RMF is public → exact subcategories (`GOVERN 1.6`,
+    `MEASURE 2.7`). ISO 42001 is **paywalled** → **objective level only** (`A.6`, `A.7`,
+    `A.9`); writing `A.6.2.4` would look more precise and be less true, and the person
+    holding the standard is exactly who would notice. ATLAS is a **threat** knowledge base,
+    not a control catalog → an edge means the control **mitigates** the technique, and only
+    the three technique IDs AWS publishes are used.
+  - **No edge claims `high` confidence.** There is no official NIST 800-53 → AI RMF
+    crosswalk; these are OverWatch's reading, and every note says so rather than borrowing
+    an authority that does not exist.
+- **Phase 2 · slice 2.4 — excessive agency and the human-in-the-loop gate**
+  (`aws_agency.py`). OWASP LLM06 splits excessive agency into functionality, permissions
+  and autonomy. The middle one was already covered by `AISPM-01/02`; this covers the
+  other two, both readable from action-group configuration the scanner **already
+  fetches** for `AGT-04`. **No new API call, no new IAM permission.**
+  - **`AGY-01`** (CRITICAL · CM-7) — the agent holds `ANTHROPIC.Bash` (shell execution)
+    or `ANTHROPIC.Computer` (desktop control).
+  - **`AGY-02`** (HIGH · CM-7) — `AMAZON.CodeInterpreter` or `ANTHROPIC.TextEditor`. The
+    sandbox around a code interpreter bounds the filesystem, not the credentials the code
+    runs with; file *write* is how an injected instruction outlives the conversation that
+    delivered it.
+  - **`AGY-03`** (MEDIUM · AC-3) — **no action requires human confirmation.** AWS names
+    `requireConfirmation` as the prompt-injection safeguard — *"You can safeguard your
+    application from malicious prompt injections by requesting confirmation…"* — and
+    states its default: *"By default, user confirmation is DISABLED if this field is not
+    specified."* So the control AWS itself points at is off unless somebody turned it on,
+    and nothing in a cloud inventory shows which agents left it off. Reported as coverage
+    (`N of M gated`), matching the guardrail and EDR feeds.
+  - Severity is split across three check IDs because `CHECK_SEVERITY` is per check ID: one
+    ID would have to price a **shell** and a **text editor** identically, and the wrong
+    one would be the shell. `AMAZON.UserInput` raises nothing — it lets the agent ask a
+    question, which is the agent deferring rather than acting.
+  - **Absent `requireConfirmation` counts as ungated**, and that is a *documented* default
+    rather than an assumption — deliberately the opposite treatment from `requireMMDSV2`
+    in slice 2.2, where the reference states no default and absent therefore stays
+    unknown. Same shape of field, opposite handling, because the documentation differs.
+  - **No consequence is inferred from a function's name.** Flagging `delete_account` while
+    passing `get_weather` is a guess about semantics wearing the clothes of a configuration
+    reading; it fails on any non-English convention, and the first false positive on a
+    read-only `purge_cache` is what teaches an operator to skip the category. A test pins
+    that no such heuristic creeps in.
+  - OpenAPI action groups are reported as **un-assessed**, not ungated:
+    `x-requireConfirmation` lives inside a schema payload that may be an S3 object we do
+    not read. Calling it ungated invents a gap; calling it gated hides one.
+  - The ledger now records that `bedrock:GetAgentActionGroup` buys **four** checks rather
+    than one, so declining it names everything it forfeits.
 - **D3 · a Cryptographic Bill of Materials** (`aws_cbom.py`, emitted on `--cbom FILE`).
   The xBOM skip is reversed **for cryptography only**. The regulatory driver (EO 14412, a
   FAR rule in flight) and the operational question are the same one — *which of this

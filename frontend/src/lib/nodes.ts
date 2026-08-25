@@ -75,6 +75,12 @@ const META: Record<string, NodeMeta> = {
   SageMakerDomain: { icon: BrainCircuit, label: 'SageMaker Studio domain', tone: 'var(--gold)' },
   BedrockAgent: { icon: Bot, label: 'Bedrock agent', tone: 'var(--info)' },
   AIResource: { icon: BrainCircuit, label: 'AI resource', tone: 'var(--info)' },
+  AgentCoreRuntime: { icon: Bot, label: 'AgentCore runtime', tone: 'var(--info)' },
+  AgentCoreGateway: { icon: Waypoints, label: 'AgentCore gateway', tone: 'var(--gold)' },
+  // A computed flow rather than a resource, so it is toned like a finding and
+  // not like the estate — a reader should not mistake it for something that
+  // exists in the account.
+  ToxicFlow: { icon: Siren, label: 'Toxic flow', tone: 'var(--crit)' },
 }
 
 export const nodeMeta = (kind: string): NodeMeta =>
