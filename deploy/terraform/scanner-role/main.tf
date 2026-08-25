@@ -65,7 +65,11 @@ data "aws_iam_policy_document" "extras" {
     ]
     resources = ["*"]
   }
-  # Four Bedrock CONFIG reads SecurityAudit v92 does not grant. Verified against the
+  # Bedrock + AgentCore CONFIG reads SecurityAudit v92 does not grant. The
+  # bedrock-agentcore actions are a SEPARATE service (AgentCore) whose IAM prefix is
+  # bedrock-agentcore, not the bedrock-agentcore-control endpoint name -- a policy
+  # written with the endpoint grants nothing and looks correct in review.
+  # Originally four Bedrock CONFIG reads SecurityAudit v92 does not grant. Verified against the
   # published policy document: it grants GetAgentKnowledgeBase (a KB association on an
   # agent) but not GetKnowledgeBase, ListAgentActionGroups but not GetAgentActionGroup,
   # ListDataSources but not GetDataSource. Without them AGT-03 and AGT-04 are refused
@@ -79,6 +83,15 @@ data "aws_iam_policy_document" "extras" {
       "bedrock:GetDataSource",
       "bedrock:GetAgentActionGroup",
       "bedrock:GetGuardrail",
+      "bedrock-agentcore:ListAgentRuntimes",
+      "bedrock-agentcore:GetAgentRuntime",
+      "bedrock-agentcore:ListGateways",
+      "bedrock-agentcore:ListWorkloadIdentities",
+      "bedrock-agentcore:ListOauth2CredentialProviders",
+      "bedrock-agentcore:ListApiKeyCredentialProviders",
+      "bedrock-agentcore:ListMemories",
+      "bedrock-agentcore:ListBrowsers",
+      "bedrock-agentcore:ListCodeInterpreters",
     ]
     resources = ["*"]
   }

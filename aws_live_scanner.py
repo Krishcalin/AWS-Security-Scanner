@@ -72,6 +72,7 @@ import aws_secrets
 import aws_leastpriv
 import aws_aispm
 import aws_aiguard
+import aws_agentcore
 import aws_airules
 import aws_cdr
 import aws_perm_ledger
@@ -188,7 +189,7 @@ STATUS_ICON  = {"PASS": "[PASS]", "FAIL": "[FAIL]", "WARN": "[WARN]", "INFO": "[
 SECTIONS = [
     "IAM", "S3", "VPC", "LOGGING", "CLOUDWATCH", "KMS", "EC2",
     "AMI", "ECR", "BACKUP", "RDS", "GLACIER", "SNS", "SQS",
-    "CLOUDFRONT", "ROUTE53", "BEDROCK", "BEDROCK_AGENTS",
+    "CLOUDFRONT", "ROUTE53", "BEDROCK", "BEDROCK_AGENTS", "AGENTCORE",
     "LAMBDA", "EKS", "ECS", "SECRETS", "WAF",
     "ELASTICACHE", "OPENSEARCH", "DYNAMODB", "STEPFUNCTIONS",
     "APIGATEWAY", "ELB", "EBS", "REDSHIFT", "EFS", "ACM",
@@ -215,7 +216,8 @@ SECTION_LABELS = {
     "CLOUDFRONT":     "AMAZON CLOUDFRONT",
     "ROUTE53":        "AMAZON ROUTE 53",
     "BEDROCK":        "AWS BEDROCK",
-    "BEDROCK_AGENTS": "AWS BEDROCK AGENT CORE",
+    "BEDROCK_AGENTS": "AWS BEDROCK AGENTS",
+    "AGENTCORE": "AWS BEDROCK AGENTCORE",
     "LAMBDA":         "AWS LAMBDA",
     "EKS":            "AMAZON EKS",
     "ECS":            "AMAZON ECS",
@@ -366,6 +368,13 @@ CHECK_SEVERITY = {
     # unenforced guardrail is optional at the caller's discretion. AIGRD-04 is
     # MEDIUM: an unpinned DRAFT is a change-control weakness, not an open door.
     "AIGRD-01": "HIGH", "AIGRD-02": "HIGH", "AIGRD-03": "HIGH",
+    # AgentCore. AGC-01 matches EC2-04 (IMDSv2) because it is the same failure in a
+    # different microVM; AGC-02 matches LMB-03 (secret in env) for the same reason.
+    "AGC-01": "HIGH", "AGC-02": "HIGH",
+    # AGC-03/04 disclose SURFACE rather than misconfiguration, so they are WARN in
+    # the emit and MEDIUM here: nothing is wrong, and an operator who does not know
+    # the surface exists cannot have decided it was acceptable.
+    "AGC-03": "MEDIUM", "AGC-04": "MEDIUM",
     "AIGRD-04": "MEDIUM",
     "COG-01": "HIGH", "COG-02": "MEDIUM", "COG-03": "MEDIUM", "COG-04": "LOW",
     "COG-05": "HIGH", "COG-06": "CRITICAL",
@@ -620,6 +629,14 @@ COMPLIANCE_MAP = {
     "AIGRD-02": {"PCI-DSS": "6.4.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "CM-6"},
     "AIGRD-03": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "AIGRD-04": {"PCI-DSS": "6.4.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "CM-5"},
+    # Same controls the equivalent non-agent checks already use: CM-6 for IMDSv2
+    # (EC2-04) and SC-28 for a plaintext secret in an environment (LMB-03).
+    "AGC-01": {"PCI-DSS": "2.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "CM-6"},
+    "AGC-02": {"PCI-DSS": "6.5.3", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    # IA-5 (authenticator management) for credentials held outside AWS control;
+    # CM-7 (least functionality) for an agent tool surface nobody enumerated.
+    "AGC-03": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "IA-5"},
+    "AGC-04": {"PCI-DSS": "2.2.4", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "CM-7"},
     # AI-SPM pillar (NIST reused from the frozen 38-control universe: AC-6/AC-3/SC-7)
     "AISPM-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "AISPM-02": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
@@ -932,6 +949,10 @@ REMEDIATION_MAP = {
     "AGT-03": "Set a customer-managed key on the knowledge base and its data sources: aws bedrock-agent update-knowledge-base --knowledge-base-id <KB_ID> --name <NAME> --role-arn <ROLE_ARN> --knowledge-base-configuration file://kb-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}'",
     "AGT-04": "Restrict the action-group Lambda so only this agent can invoke it, and scope the function's own role: aws lambda add-permission --function-name <FN> --statement-id bedrock-agent --action lambda:InvokeFunction --principal bedrock.amazonaws.com --source-arn <AGENT_ALIAS_ARN>",
     "AGT-06": "Create one guardrail and attach it to every agent that lacks one, then make it mandatory in IAM so it cannot simply be omitted: aws bedrock create-guardrail --name prod-guardrail --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\"}]}'",
+    "AGC-03": "Inventory what each provider opens and scope it: aws bedrock-agentcore-control list-oauth2-credential-providers ; aws bedrock-agentcore-control list-api-key-credential-providers ; then confirm each credential is least-privilege IN THE THIRD-PARTY SYSTEM, because no AWS control bounds it -- and set a rotation owner, since CloudTrail will not show you its use",
+    "AGC-04": "Enumerate the tool surface and remove what is unused: aws bedrock-agentcore-control list-code-interpreters ; aws bedrock-agentcore-control list-browsers ; aws bedrock-agentcore-control list-gateways ; delete the ones no agent needs with aws bedrock-agentcore-control delete-code-interpreter --code-interpreter-id <ID>",
+    "AGC-01": "Require MMDSv2 on the runtime so the metadata service cannot be read by a request the agent was talked into making: aws bedrock-agentcore-control update-agent-runtime --agent-runtime-id <ID> --metadata-configuration '{\"requireMMDSV2\":true}' ; then confirm with aws bedrock-agentcore-control get-agent-runtime --agent-runtime-id <ID> --query metadataConfiguration",
+    "AGC-02": "Move the value into Secrets Manager and pass a reference instead of a literal: aws secretsmanager create-secret --name <NAME> --secret-string <VALUE> ; then aws bedrock-agentcore-control update-agent-runtime --agent-runtime-id <ID> --environment-variables '{\"SECRET_ARN\":\"<SECRET_ARN>\"}' and have the agent resolve it at runtime. Rotate the exposed credential -- it has been readable by everyone who could describe the runtime",
     "AIGRD-01": "Add a PROMPT_ATTACK filter at HIGH input strength — the other five filter types are content-safety categories and do not address injection: aws bedrock update-guardrail --guardrail-identifier <ID> --name <NAME> --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\",\"inputAction\":\"BLOCK\"}]}' ; then aws bedrock create-guardrail-version --guardrail-identifier <ID> so the change is pinned",
     "AIGRD-02": "Switch the filters from detect to block. inputAction/outputAction 'NONE' means 'take no action but return detection information', so the guardrail is reporting rather than protecting: aws bedrock update-guardrail --guardrail-identifier <ID> --name <NAME> --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\",\"inputAction\":\"BLOCK\"}]}'",
     "AIGRD-03": "Add the explicit Deny — the Allow half alone does not make a guardrail mandatory. Attach a policy carrying BOTH statements: Allow bedrock:InvokeModel/InvokeModelWithResponseStream with StringEquals on bedrock:GuardrailIdentifier, AND Deny the same actions with StringNotEquals on the same key and value: aws iam put-role-policy --role-name <ROLE> --policy-name enforce-guardrail --policy-document file://enforce.json ; use ArnNotLike with <GUARDRAIL_ARN>:* if any numeric version should be acceptable",
@@ -1710,6 +1731,15 @@ def _cred_idle_days(last_used: str, created: str) -> Optional[int]:
 
 
 # ─── Scanner ──────────────────────────────────────────────────────────────────
+def _op_action(op: str) -> str:
+    """boto3 operation name -> the IAM action it authorizes against.
+
+    ``list_agent_runtimes`` -> ``ListAgentRuntimes``. Needed so a refused read can name
+    the exact action the operator withheld, which is the whole contract of the coverage
+    manifest."""
+    return "".join(p.title() for p in (op or "").split("_"))
+
+
 def _checks_gated_by(action: str) -> tuple:
     """Every check id the permission ledger says depends on `action`.
 
@@ -10581,7 +10611,7 @@ class AWSLiveScanner:
 
     # AI sections that enumerate REGIONAL resources. Scanned from one region, each
     # sees only that region's estate — and reports success either way.
-    _AI_REGIONAL_SECTIONS = ("BEDROCK", "BEDROCK_AGENTS", "SAGEMAKER")
+    _AI_REGIONAL_SECTIONS = ("BEDROCK", "BEDROCK_AGENTS", "SAGEMAKER", "AGENTCORE")
 
     def _aispm_region_coverage_note(self):
         """Emit AISPM-00 naming the regions this scan did not examine.
@@ -10735,6 +10765,163 @@ class AWSLiveScanner:
             except Exception as e:
                 self._add("INFO", "AISPM-00", "DATA", res.get("name", "ai"),
                           f"AI-SPM evaluation error for {res.get('name')}: {e}")
+
+    def _check_agentcore(self):
+        """AGENTCORE — inventory the Amazon Bedrock AgentCore estate and audit its runtimes.
+
+        A different service from Bedrock Agents, with its own control plane
+        (``bedrock-agentcore-control``) and its own IAM prefix (``bedrock-agentcore``).
+        An account can run a whole agent estate here that a Bedrock Agents inventory
+        never sees.
+
+        Runtimes are STASHED into ``_aispm_resources`` rather than audited for blast
+        radius here, so AISPM-01/02/03, the graph fusion and the guardrail coverage feed
+        all apply to them through the one implementation that already exists.
+
+        Regional: AgentCore resources are regional, so each is inventoried in its own
+        region. Fail-open throughout — an unavailable service or a refused read is
+        recorded, never a phantom pass."""
+        try:
+            ac = self._client("bedrock-agentcore-control")
+        except Exception as e:
+            # The service model ships in botocore 1.40.51, but an older pinned SDK or an
+            # unsupported region has no such client. Say so rather than reporting an
+            # account with no agents.
+            self._add("INFO", "AGC-00", "AGENTCORE", "agentcore",
+                      f"AgentCore NOT evaluated — no bedrock-agentcore-control client "
+                      f"in this SDK/region: {e} (no phantom pass)")
+            return
+
+        estate = {}
+        denied = False
+        for op, result_key, kind in aws_agentcore.LIST_OPERATIONS:
+            fn = getattr(ac, op, None)
+            if fn is None:
+                continue                    # operation absent from this SDK version
+            try:
+                estate[kind] = list((fn() or {}).get(result_key) or [])
+            except Exception as e:
+                if self._is_access_denied(e):
+                    denied = True
+                    self._coverage.note_denied(
+                        "AGC-00", f"{aws_agentcore.IAM_PREFIX}:{_op_action(op)}")
+                estate[kind] = []
+
+        inv = aws_agentcore.inventory_counts(estate)
+        if denied:
+            self._add("INFO", "AGC-00", "AGENTCORE", "agentcore",
+                      f"AgentCore only partly enumerated — some reads were refused "
+                      f"(missing {aws_agentcore.IAM_PREFIX}:List*). What was seen: "
+                      f"{aws_agentcore.summarize(estate)}. An absence here is not "
+                      f"evidence of absence (no phantom pass)")
+        elif not inv["total"]:
+            self._add("INFO", "AGC-00", "AGENTCORE", "agentcore",
+                      "No AgentCore resources in this region")
+            return
+        else:
+            extra = (f", including {inv['credential_providers']} credential provider(s) "
+                     f"holding access to systems outside AWS"
+                     if inv["credential_providers"] else "")
+            self._add("INFO", "AGC-00", "AGENTCORE", "agentcore",
+                      f"AgentCore estate: {aws_agentcore.summarize(estate)}{extra}")
+
+        # AGC-03 — credentials that reach OUTSIDE AWS entirely
+        cred = [r for k in aws_agentcore.CREDENTIAL_KINDS for r in estate.get(k) or []]
+        if cred:
+            self._add("WARN", "AGC-03", "AGENTCORE", "agentcore",
+                      f"{len(cred)} AgentCore credential provider(s) hold access to "
+                      f"systems OUTSIDE AWS — no IAM policy bounds them, no CloudTrail "
+                      f"records their use, and no KMS key protects what they open. "
+                      f"Their least-privilege posture lives in the third-party system "
+                      f"| agentcore")
+
+        # AGC-04 — the tool surface: fetch arbitrary URLs, run arbitrary code
+        tools = {k: len(estate.get(k) or [])
+                 for k in ("AgentCoreCodeInterpreter", "AgentCoreBrowser",
+                           "AgentCoreGateway", "AgentCoreMemory")}
+        exec_surface = tools["AgentCoreCodeInterpreter"] + tools["AgentCoreBrowser"]
+        if exec_surface:
+            self._add("WARN", "AGC-04", "AGENTCORE", "agentcore",
+                      f"AgentCore tool surface: {tools['AgentCoreCodeInterpreter']} code "
+                      f"interpreter(s) and {tools['AgentCoreBrowser']} browser(s) — "
+                      f"arbitrary code execution and arbitrary URL fetching, both "
+                      f"carrying the agent's own identity. Confirm each is still used "
+                      f"| agentcore")
+
+        for summary in estate.get("AgentCoreRuntime", []):
+            self._audit_agentcore_runtime(ac, summary)
+
+    def _audit_agentcore_runtime(self, ac, summary):
+        """One runtime: AGC-01/02, plus the AI-SPM stash that does everything else."""
+        rid = summary.get("agentRuntimeId") or summary.get("agentRuntimeArn")
+        name = summary.get("agentRuntimeName") or rid or "runtime"
+        if not rid:
+            return
+        try:
+            rt = ac.get_agent_runtime(agentRuntimeId=rid)
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("AGC-01", "AGC-02"):
+                    self._coverage.note_denied(
+                        cid, f"{aws_agentcore.IAM_PREFIX}:GetAgentRuntime")
+                self._add("INFO", "AGC-00", "AGENTCORE", name,
+                          f"AgentCore runtime '{name}' NOT audited — missing "
+                          f"{aws_agentcore.IAM_PREFIX}:GetAgentRuntime. Its existence is "
+                          f"known; its configuration is not (no phantom pass)")
+            else:
+                self._add("WARN", "AGC-00", "AGENTCORE", name,
+                          f"AgentCore runtime '{name}' could not be read: {e}")
+            return
+
+        net = aws_agentcore.network_posture(rt)
+        ident = aws_agentcore.runtime_identity(rt)
+
+        # AGC-01 — the microVM metadata service
+        meta = aws_agentcore.metadata_posture(rt)
+        if meta["required"] is False:
+            self._add("FAIL", "AGC-01", "AGENTCORE", name,
+                      f"AgentCore runtime '{name}' does not require MMDSv2 — a request "
+                      f"the agent can be persuaded to make can read the microVM metadata "
+                      f"service and return the execution role's credentials. Persuading "
+                      f"an agent to fetch a URL is what prompt injection already does "
+                      f"| {name}")
+        elif meta["required"] is True:
+            self._add("PASS", "AGC-01", "AGENTCORE", name,
+                      f"AgentCore runtime '{name}' requires MMDSv2 | {name}")
+        else:
+            # Absent is not False. The reference states no default, so an omitted block
+            # is unknown, and an unknown reported as a failure is an invented finding.
+            self._add("INFO", "AGC-00", "AGENTCORE", name,
+                      f"AgentCore runtime '{name}' returned no metadataConfiguration — "
+                      f"MMDSv2 posture unknown, not assumed")
+
+        # AGC-02 — secret-shaped environment variables (names only, never values)
+        keys = aws_agentcore.env_secret_keys(rt)
+        if keys:
+            self._add("FAIL", "AGC-02", "AGENTCORE", name,
+                      f"AgentCore runtime '{name}' carries secret-shaped environment "
+                      f"variable(s): {', '.join(keys[:5])} — a literal credential in a "
+                      f"runtime's environment is readable by anyone who can describe it, "
+                      f"and travels with every version of the agent | {name}")
+
+        # The stash: everything else about this runtime is answered by the AI-SPM
+        # pipeline that already exists. `network` is mapped into the shape
+        # aws_aispm.ai_network_exposed reads, so AISPM-03 describes AgentCore's egress
+        # in the same already-honest words it uses for SageMaker.
+        self._aispm_resources.append({
+            "kind": "AgentCoreRuntime",
+            "name": name,
+            "arn": rt.get("agentRuntimeArn") or summary.get("agentRuntimeArn"),
+            "role_arn": ident["role_arn"] or None,
+            "network_checkable": True,
+            "network": {"in_vpc": net["vpc_attached"],
+                        "public_egress": net["mode"] == "PUBLIC"},
+            "data_bearing": False,
+            # AgentCore runtimes carry no Bedrock guardrail association, so they are
+            # deliberately NOT counted by AGT-06: a coverage percentage that counts
+            # resources the control cannot apply to stops being believed.
+            "workload_identity_arn": ident["workload_identity_arn"],
+        })
 
     def _grade_guardrails(self, bedrock):
         """AIGRD-01/02/04 — how strong each guardrail actually is.
@@ -11712,6 +11899,7 @@ class AWSLiveScanner:
             "ROUTE53":        self._check_route53,
             "BEDROCK":        self._check_bedrock,
             "BEDROCK_AGENTS": self._check_bedrock_agents,
+            "AGENTCORE": self._check_agentcore,
             "LAMBDA":         self._check_lambda,
             "EKS":            self._check_eks,
             "ECS":            self._check_ecs,

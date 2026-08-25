@@ -87,6 +87,53 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "read each custom model's KMS key — a fine-tuned model embeds its "
              "training data, so its key custody is the training data's key custody"),
     ),
+    # AgentCore is a separate service with its own IAM prefix. SecurityAudit
+    # predates it, so none of this is granted by the managed policies -- the ledger
+    # is what makes that visible rather than surprising at runtime.
+    # AgentCore is a separate service with its own IAM prefix (bedrock-agentcore, NOT
+    # the bedrock-agentcore-control endpoint name). SecurityAudit predates it, so the
+    # managed policies grant none of this -- the ledger is what makes that visible
+    # before a scan, rather than surprising at runtime.
+    "AGC-01": (
+        _req("bedrock-agentcore:ListAgentRuntimes",
+             "find AgentCore runtimes -- an entire agent estate that a Bedrock Agents "
+             "inventory never sees"),
+        _req("bedrock-agentcore:GetAgentRuntime",
+             "read metadataConfiguration.requireMMDSV2 -- whether the microVM metadata "
+             "service answers a request the agent was induced to make, which is the "
+             "credential-theft path prompt injection already walks"),
+    ),
+    "AGC-02": (
+        _req("bedrock-agentcore:ListAgentRuntimes",
+             "reach each runtime whose environment must be checked for a pasted "
+             "credential -- there is no way to read one without first listing them"),
+        _req("bedrock-agentcore:GetAgentRuntime",
+             "read environmentVariables to find secret-SHAPED names -- names only, "
+             "never values"),
+    ),
+    "AGC-03": (
+        _req("bedrock-agentcore:ListOauth2CredentialProviders",
+             "count the OAuth2 credentials the agent estate holds for systems OUTSIDE "
+             "AWS, where no IAM policy, CloudTrail record or KMS key applies"),
+        _req("bedrock-agentcore:ListApiKeyCredentialProviders",
+             "count the raw API keys the estate stores for third-party systems -- the "
+             "same exposure as the OAuth2 providers, without even a token lifetime"),
+        _req("bedrock-agentcore:ListWorkloadIdentities",
+             "resolve the agent identities those credentials bind to"),
+    ),
+    "AGC-04": (
+        _req("bedrock-agentcore:ListCodeInterpreters",
+             "find code-interpreter sandboxes -- arbitrary code execution carrying the "
+             "agent's own identity"),
+        _req("bedrock-agentcore:ListBrowsers",
+             "find headless browsers -- arbitrary URL fetching, and the most direct "
+             "route from an injected instruction to an outbound request"),
+        _req("bedrock-agentcore:ListGateways",
+             "find the gateways that publish tools to agents"),
+        _req("bedrock-agentcore:ListMemories",
+             "find memory stores -- where an injected instruction can be made to "
+             "persist across sessions"),
+    ),
     "AIGRD-01": (
         _req("bedrock:GetGuardrail",
              "read each guardrail's filter strengths and actions — ListGuardrails\n             returns GuardrailSummary only and carries no filter configuration, so\n             without this the scanner can say a guardrail exists but not whether it\n             blocks anything"),

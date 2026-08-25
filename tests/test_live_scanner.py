@@ -104,7 +104,11 @@ class TestDataStructures(unittest.TestCase):
         # 45: +AI_THREAT (Phase 1 slice 1.3 — LLMjacking + AI control tampering).
         # Pinned on purpose: a new section changes scan cost and ordering, so it should
         # be a conscious edit here rather than something that appears unnoticed.
-        self.assertEqual(len(SECTIONS), 45)
+        # 46: +AGENTCORE (Phase 2 slice 2.2). Amazon Bedrock AgentCore is a
+        # separate service from Bedrock Agents, with its own control plane and
+        # its own IAM prefix, so an account's whole agent estate can live there
+        # unseen by the BEDROCK_AGENTS section.
+        self.assertEqual(len(SECTIONS), 46)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

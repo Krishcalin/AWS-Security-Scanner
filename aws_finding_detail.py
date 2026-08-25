@@ -2466,6 +2466,50 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Treat coverage as necessary but not sufficient: assume a determined injection succeeds, and confirm AGT-02 and AGT-04 have bounded what the agent could then do.",
         ],
     },
+    "AGC-01": {
+        "risk": "This AgentCore Runtime does not require version 2 of the microVM Metadata Service (MMDS). It is the EC2 IMDSv1 problem moved inside an agent, and it is worse there for one specific reason: exploiting IMDSv1 requires finding a way to make the workload issue an attacker-chosen HTTP request, and making a workload issue an attacker-chosen request is precisely what prompt injection does as its normal mode of operation. A document in a knowledge base, a web page an agent fetches, a support ticket it reads - any of these can carry an instruction to retrieve the metadata endpoint and include the response in its output. With v1 permitted, that single GET returns the runtime's execution-role credentials. MMDSv2's session-token handshake is what makes the same request fail, because a naive fetch cannot perform the PUT that obtains the token.",
+        "impact": "The runtime's execution role is stolen without any compromise of AWS itself - the agent hands over its own credentials because it was asked to. Whatever that role can reach, the attacker now reaches directly, outside the agent and outside whatever guardrails sit in front of it.",
+        "steps": [
+            "Require v2: aws bedrock-agentcore-control update-agent-runtime --agent-runtime-id <ID> --metadata-configuration '{\"requireMMDSV2\":true}'",
+            "Confirm it took: aws bedrock-agentcore-control get-agent-runtime --agent-runtime-id <ID> --query metadataConfiguration",
+            "Treat this as necessary, not sufficient. MMDSv2 raises the cost of stealing the credential; it does not reduce what the credential can do. Check AISPM-01 and AISPM-02 for this runtime's execution role - the two together are what bound the damage.",
+            "Apply the same standard to the rest of the estate: every runtime, and every EC2 instance and launch template (EC2-04, LT-01, ASG-01) which carry the identical exposure.",
+            "Where the agent has no need to reach the network at all, put it in a VPC (networkMode VPC with subnets) so egress is mediated as well.",
+        ],
+    },
+    "AGC-02": {
+        "risk": "An AgentCore Runtime carries an environment variable whose NAME looks like a credential and whose value is a non-empty literal. A runtime may hold up to 50 variables with values up to 5000 characters, which is comfortable room for a pasted API key, database password or token. OverWatch reports the variable NAME and never its value - the value is not read into any finding, log or report. Two things make this worse than the equivalent on a Lambda function. The value travels with every version of the runtime, so rotating it means updating each one. And an agent is a machine specifically designed to be talked into revealing what it can see, so a credential inside its environment is reachable by prompt injection as well as by anyone holding a describe permission.",
+        "impact": "A credential readable by every principal that can describe the runtime, and quotable by the agent itself if it is induced to read its own environment. Its blast radius is whatever the credential opens, which is frequently a system outside AWS where none of this account's controls apply.",
+        "steps": [
+            "Put the value where it belongs: aws secretsmanager create-secret --name <NAME> --secret-string <VALUE>",
+            "Pass a REFERENCE rather than the literal, and resolve it in the agent at runtime: aws bedrock-agentcore-control update-agent-runtime --agent-runtime-id <ID> --environment-variables '{\"SECRET_ARN\":\"<SECRET_ARN>\"}'",
+            "Grant the runtime's execution role secretsmanager:GetSecretValue on that one secret ARN and nothing wider.",
+            "ROTATE the exposed credential. It has been readable by everyone able to describe this runtime for as long as it has been set, and removing it from the environment does not un-disclose it.",
+            "If the credential is for a third-party system, consider an AgentCore credential provider instead: it binds the credential to the workload identity rather than leaving it in the environment.",
+        ],
+    },
+    "AGC-03": {
+        "risk": "This AgentCore estate holds credential providers - OAuth2 or API-key - which store credentials for systems OUTSIDE AWS and bind them to agent workload identities. The security property worth noticing is not that they exist, which is what they are for, but where their blast radius lives. An IAM role's reach is bounded by policy you can read, logged in CloudTrail you can query, and revocable in one call. A stored GitHub token, Salesforce key or payment-provider credential has none of that: its permissions are defined in the third party's model, its use produces no record in this account, and revoking it means an action somewhere you do not control. An agent that can be talked into misusing a tool can be talked into misusing these, and the evidence trail ends at the AWS boundary.",
+        "impact": "Access to third-party systems, exercised with the agent's identity, invisible to this account's logging and unbounded by its policies. In an incident the question 'what did it touch' has no answer inside AWS.",
+        "steps": [
+            "Enumerate what exists: aws bedrock-agentcore-control list-oauth2-credential-providers and aws bedrock-agentcore-control list-api-key-credential-providers",
+            "For each, establish what the credential opens in the THIRD-PARTY system and scope it there - this is the only place the permission can be reduced.",
+            "Name a rotation owner and a rotation interval per provider. Nothing in AWS will tell you the credential has leaked, because nothing in AWS sees it used.",
+            "Check which workload identity each binds to, and which runtimes carry that identity: aws bedrock-agentcore-control list-workload-identities",
+            "Delete providers no agent uses. An unused credential is pure liability - it can still be stolen and nothing breaks when it goes.",
+        ],
+    },
+    "AGC-04": {
+        "risk": "This AgentCore estate includes code interpreters and/or browsers. Both are legitimate agent tools and both are, precisely, the two capabilities that convert an injected instruction into action: a browser fetches an attacker-chosen URL, and a code interpreter executes attacker-chosen code. Each runs with the agent's own identity, so anything the execution role can reach is reachable through them. This finding is a disclosure of surface rather than a misconfiguration - it is here because an agent tool surface is not visible in any conventional cloud inventory, and an operator who does not know it exists has not decided it is acceptable.",
+        "impact": "The estate's capability ceiling is higher than a conventional inventory suggests. A successful prompt injection against a runtime with these tools is not limited to producing misleading text; it can fetch, execute, and reach whatever the execution role reaches.",
+        "steps": [
+            "Enumerate the surface: aws bedrock-agentcore-control list-code-interpreters ; aws bedrock-agentcore-control list-browsers ; aws bedrock-agentcore-control list-gateways",
+            "Delete what no agent uses: aws bedrock-agentcore-control delete-code-interpreter --code-interpreter-id <ID> (and delete-browser --browser-id <ID>)",
+            "For what remains, bound the identity rather than the tool: check AISPM-01 and AISPM-02 for the execution roles of the runtimes that use them, since the tool's reach IS the role's reach.",
+            "Put runtimes with these tools in a VPC (networkMode VPC with subnets) so their egress passes through controls you can observe.",
+            "Confirm MMDSv2 is required on every such runtime (AGC-01) - a browser that can be steered to any URL is the most direct route to a metadata-service credential theft.",
+        ],
+    },
     "AIGRD-01": {
         "risk": "This guardrail does not defend the prompt-injection path. Bedrock content filters cover six categories - SEXUAL, VIOLENCE, HATE, INSULTS, MISCONDUCT and PROMPT_ATTACK - and only the last is aimed at the threat that makes an agent different from an API. The other five grade what a model SAYS; PROMPT_ATTACK grades what a user makes it DO. A guardrail can be a thoroughly configured content-safety filter, pass every 'is a guardrail attached' check in the market, and still leave an agent with tool access completely open to instruction hijacking. OverWatch reports this as a strength grade rather than a boolean because the boolean has no way to express it.",
         "impact": "An attacker who can place text where the model will read it - a document in a knowledge base, a page an agent fetches, a support ticket, a filename - can redirect the agent's behaviour, and the guardrail will not intervene. Whatever the execution role can reach then becomes reachable through the model.",

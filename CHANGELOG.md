@@ -7,6 +7,51 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 2 · slice 2.2 — the AgentCore estate** (`aws_agentcore.py`, new `AGENTCORE`
+  section). Amazon Bedrock **AgentCore** is a different service from Bedrock Agents, with
+  its own control plane (`bedrock-agentcore-control`) and its own IAM prefix
+  (`bedrock-agentcore`). An account can run an entire agent estate there — runtimes,
+  gateways, memory stores, browsers, code interpreters, workload identities, stored
+  third-party credentials — and none of it appears in a Bedrock Agents inventory.
+  - **`AGC-01`** (HIGH · CM-6) — the microVM metadata service does not require **MMDSv2**.
+    This is EC2's IMDSv1 problem moved inside an agent, and worse there for one reason:
+    exploiting IMDSv1 requires making the workload issue an attacker-chosen HTTP request,
+    and *making a workload issue an attacker-chosen request is what prompt injection does
+    as its normal mode of operation*. One induced GET returns the execution role's
+    credentials. Matches `EC2-04`'s severity and control, because it is the same failure.
+  - **`AGC-02`** (HIGH · SC-28) — secret-shaped environment variables on a runtime (up to
+    50 vars × 5000 chars). Reports **names only, never values**, reusing
+    `aws_secrets.env_secret_findings`. Worse than the Lambda equivalent because an agent
+    is a machine designed to be talked into revealing what it can see.
+  - **`AGC-03`** (MEDIUM · IA-5) — the estate's **external credential surface**. OAuth2
+    and API-key providers hold credentials for systems outside AWS, where no IAM policy
+    bounds them, no CloudTrail records their use and no KMS key protects what they open.
+  - **`AGC-04`** (MEDIUM · CM-7) — the **code-execution surface**: browsers fetch
+    arbitrary URLs, code interpreters run arbitrary code, both as the agent's identity.
+  - **Runtimes are stashed into `_aispm_resources`** rather than given a parallel
+    pipeline, so `AISPM-01/02/03`, the attack-path graph fusion and the guardrail
+    coverage feed all apply to AgentCore for free — one implementation of "what can this
+    agent's role do" instead of two that drift.
+  - **Nine new IAM actions**, all `List`/`Get` config reads, added to both onboarding
+    paths. SecurityAudit predates AgentCore entirely and grants none of them. The gap the
+    ledger reports grows 4 → 13.
+  - Renames the `BEDROCK_AGENTS` section label, which read **"AWS BEDROCK AGENT CORE"**
+    while auditing the older `bedrock-agent` API — with a real AgentCore section present,
+    two sections would have claimed the same name.
+  - Two things checked rather than assumed, both of which changed the code: the published
+    API reference is **ahead of the botocore we pin** (it documents Harnesses,
+    PaymentConnectors, PolicyEngines and Registries, none of which exist in 1.40.51), so
+    the operation set is taken from the pinned service model's own paginator file; and the
+    `List` **result keys are not uniform** (`items` for gateways, `browserSummaries` for
+    browsers, `memories` for memory), where one wrong guess yields a silently empty
+    inventory that reads exactly like a clean account.
+  - `network_posture()` deliberately exposes **no** `exposed`/`public`/`ingress` field and
+    a test enforces that. The reference gives `networkMode` as `PUBLIC | VPC` and says
+    nothing about inbound reachability; who may invoke a runtime is
+    `authorizerConfiguration`'s question. This is the AIPATH-01 lesson applied before the
+    mistake instead of after it.
+
+### Added
 - **Phase 1 · slice 1.5 — a local read-only MCP server** (`cnapp_mcp.py`), closing
   **decision D6**. An analyst can ask a scan questions in natural language instead of
   reading JSON. The server cannot scan, cannot change anything, and never talks to AWS —
