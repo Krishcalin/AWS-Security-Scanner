@@ -321,3 +321,52 @@ def gateway_debug_errors(gateway: Optional[dict]) -> bool:
     returned to the end user." On a gateway whose callers are not all trusted, those
     messages describe the targets behind it."""
     return (((gateway or {}).get("exceptionLevel") or "").upper() == "DEBUG")
+
+
+# ── credential exposure (slice 2.5) ─────────────────────────────────────────
+#: GetTokenVault.kmsConfiguration.keyType, from the pinned service model.
+KEY_TYPES = ("CustomerManagedKey", "ServiceManagedKey")
+
+
+def token_vault_posture(vault: Optional[dict]) -> dict:
+    """Who holds the key to the store that holds every agent credential.
+
+    The token vault is where AgentCore keeps the OAuth2 client secrets and API keys an
+    agent uses to reach systems outside AWS. ``ServiceManagedKey`` is not an encryption
+    failure — the data is encrypted either way — it is a CUSTODY one. With a
+    customer-managed key the operator can revoke access by disabling the key, can see
+    every decrypt in CloudTrail through their own key policy, and can bound who decrypts
+    with a key policy. With a service-managed key none of those levers exist, and for the
+    store holding credentials to systems AWS controls nothing about, that asymmetry is
+    the point."""
+    v = vault or {}
+    cfg = v.get("kmsConfiguration") or {}
+    ktype = cfg.get("keyType") or ""
+    return {
+        "vault_id": v.get("tokenVaultId") or "",
+        "key_type": ktype,
+        "known_key_type": ktype in KEY_TYPES,
+        "customer_managed": ktype == "CustomerManagedKey",
+        "kms_key_arn": cfg.get("kmsKeyArn") or "",
+        # Absent rather than assumed: an empty kmsConfiguration is a response we could
+        # not interpret, not a service-managed key.
+        "known": bool(ktype),
+    }
+
+
+def unsafe_return_urls(identity: Optional[dict]) -> List[str]:
+    """OAuth2 return URLs that carry the authorization code over plaintext.
+
+    ``allowedResourceOauth2ReturnUrls`` is where an OAuth flow may hand the code back.
+    An ``http://`` entry means that hand-back is unencrypted, and an authorization code
+    observed in transit is an authorization code an attacker can redeem.
+
+    Only the scheme is judged. It would be easy to also flag a URL containing ``*`` as a
+    wildcard, but whether AgentCore matches these by prefix, pattern or equality is not
+    documented in the API reference, and a finding whose severity depends on undocumented
+    matching semantics is a guess about someone else's implementation."""
+    urls = (identity or {}).get("allowedResourceOauth2ReturnUrls") or []
+    if not isinstance(urls, (list, tuple)):
+        return []
+    return sorted({u for u in urls
+                   if isinstance(u, str) and u.lower().startswith("http://")})

@@ -7,6 +7,54 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 2 · slices 2.5–2.7 — Phase 2 complete.**
+- **2.5 · agent credential exposure** (`AGC-07`, `AGC-08`).
+  - **`AGC-07`** (HIGH · SC-12) — the AgentCore **token vault** is on a
+    `ServiceManagedKey`. Not an encryption failure — a **custody** one. The vault holds
+    the OAuth2 secrets and API keys agents use to reach systems *outside* AWS, whose logs
+    and permission models this account cannot see. A customer-managed key gives three
+    levers — revoke by disabling one key, see every decrypt in your own CloudTrail, narrow
+    with a key policy — and a service-managed key gives none, for the one store whose use
+    is otherwise invisible.
+  - **`AGC-08`** (HIGH · SC-8) — a workload identity permits an OAuth2 return URL over
+    plaintext `http://`, so an authorization code is handed back in the clear. Only the
+    **scheme** is judged: whether AgentCore matches these by prefix, pattern or equality
+    is undocumented, and a finding whose severity depends on undocumented matching
+    semantics is a guess about someone else's implementation.
+- **2.6 · GuardDuty AI Protection ingest, re-ranked** (`aws_aiprotect.py`, `AITHR-03`,
+  `AITHR-04`).
+  - **The verification pass found why this was needed at all.** `THREAT` already fetched
+    GuardDuty findings — and filtered them at `severity >= 4`. GuardDuty's `Low` band is
+    `< 4.0`, and **all three AI Protection types ship at `Low`**. So the ingest existed
+    and structurally excluded exactly these findings. Fixed with a second, **type-filtered**
+    query rather than a lower floor, which would have pulled in every `Low` in the account.
+  - **`AITHR-03`** (HIGH · SI-4) — an AI Protection finding whose acting identity can
+    escalate privilege or reach crown-jewel data. GuardDuty's `Low` is *correct* for a
+    detector holding the event and not the environment; what changes the answer is the
+    blast radius, which OverWatch already computes. When the identity is scoped, the
+    finding says **the Low stands** — a tool that escalated everything would be as
+    useless as one that escalated nothing.
+  - **`AITHR-04`** (CRITICAL · SI-4) — a prompt injection the guardrail **detected and did
+    not block**. AWS documents `contentPolicyFilters[].action` as `BLOCKED`, or `NONE` if
+    the guardrail "detected the prompt attack but was configured only to report it". This
+    is `AIGRD-02`'s configuration showing up as an outcome that already happened.
+  - Each finding carries **AWS's own MITRE ATLAS technique** (`AML.T0040`, `AML.T0034`,
+    `AML.T0051`), quoted rather than assigned.
+  - Collected in `THREAT` (regional, where the detector is), assessed in `AI_THREAT`
+    (global, after `DATA`, where the crown edges exist). No new IAM grant — `SecurityAudit`
+    already grants `guardduty:Get*`/`List*`.
+- **2.7 · NIST AI RMF, ISO/IEC 42001 and MITRE ATLAS in the compliance crosswalk**
+  (40 → **43 frameworks**, 36 new edges across 20 NIST 800-53 controls).
+  - **Mapped at the granularity each source can actually support**, which is the whole
+    discipline of the slice. AI RMF is public → exact subcategories (`GOVERN 1.6`,
+    `MEASURE 2.7`). ISO 42001 is **paywalled** → **objective level only** (`A.6`, `A.7`,
+    `A.9`); writing `A.6.2.4` would look more precise and be less true, and the person
+    holding the standard is exactly who would notice. ATLAS is a **threat** knowledge base,
+    not a control catalog → an edge means the control **mitigates** the technique, and only
+    the three technique IDs AWS publishes are used.
+  - **No edge claims `high` confidence.** There is no official NIST 800-53 → AI RMF
+    crosswalk; these are OverWatch's reading, and every note says so rather than borrowing
+    an authority that does not exist.
 - **Phase 2 · slice 2.4 — excessive agency and the human-in-the-loop gate**
   (`aws_agency.py`). OWASP LLM06 splits excessive agency into functionality, permissions
   and autonomy. The middle one was already covered by `AISPM-01/02`; this covers the

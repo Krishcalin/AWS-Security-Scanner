@@ -2466,6 +2466,28 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Treat coverage as necessary but not sufficient: assume a determined injection succeeds, and confirm AGT-02 and AGT-04 have bounded what the agent could then do.",
         ],
     },
+    "AGC-07": {
+        "risk": "The AgentCore token vault is encrypted with a service-managed key. This is not an encryption failure - the credentials are encrypted either way - it is a CUSTODY one, and the distinction matters more here than almost anywhere else in an AWS estate. The vault holds the OAuth2 client secrets and API keys that agents use to reach systems OUTSIDE AWS: a source-control token, a CRM key, a payment provider credential. Those systems have their own permission models, their own logs and their own revocation paths, and none of them are visible from this account. With a customer-managed key you retain three levers over the store: you can revoke access to everything in it by disabling one key, you can see every decrypt in CloudTrail through your own key policy, and you can bound who decrypts with a key policy. With a service-managed key you have none of them, for the one store whose contents you cannot otherwise observe being used.",
+        "impact": "The credential store for systems beyond this account's control has no independent kill switch, no decrypt audit trail you own, and no key policy you can narrow. In an incident, the containment question 'can we cut access to all of it at once' has no answer.",
+        "steps": [
+            "Create a key with a scoped policy: aws kms create-key --description 'AgentCore token vault' --key-usage ENCRYPT_DECRYPT",
+            "Move the vault onto it: aws bedrock-agentcore-control set-token-vault-cmk --token-vault-id default --kms-configuration '{\"keyType\":\"CustomerManagedKey\",\"kmsKeyArn\":\"<KEY_ARN>\"}'",
+            "Scope the key policy to the roles that legitimately decrypt - the gateway service role and the agent runtimes - rather than leaving it account-wide. The key is only a lever if it is narrower than the account.",
+            "Enable rotation: aws kms enable-key-rotation --key-id <KEY_ID>",
+            "Confirm the decrypts now appear in CloudTrail under your key, which is what makes 'who used which credential' answerable at all.",
+            "Separately, review AGC-03: the least-privilege posture of each stored credential lives in the third-party system, and the vault's key custody does not change that.",
+        ],
+    },
+    "AGC-08": {
+        "risk": "A workload identity permits an OAuth2 return URL over plaintext http. The return URL is where an OAuth flow hands the authorization code back after the user approves access, and a code returned over http travels unencrypted: anyone positioned to observe that hop - a proxy, a shared network, a logging intermediary - sees a value they can redeem for a token. The token then grants whatever the agent's third-party credential grants, in a system whose logs this account cannot see. OverWatch judges only the SCHEME here. It would be easy to also flag a URL containing a wildcard, but whether AgentCore matches these by prefix, pattern or equality is not documented in the API reference, and a finding whose severity depends on undocumented matching semantics would be a guess about someone else's implementation.",
+        "impact": "An authorization code observable in transit, redeemable by whoever observes it, for access to a system outside this account's visibility.",
+        "steps": [
+            "Replace the plaintext entry: aws bedrock-agentcore-control update-workload-identity --name <NAME> --allowed-resource-oauth2-return-urls '[\"https://<HOST>/<CALLBACK>\"]'",
+            "ROTATE any credential whose authorization code may have been returned over http. Removing the URL stops the next exposure; it does not undo one that already happened.",
+            "Keep the list as short as the flows require. Every additional entry is another place a code may legitimately land, and the list is the whole of the control.",
+            "If the http entry was for local development, use a separate workload identity for it rather than widening the production one.",
+        ],
+    },
     "AGY-01": {
         "risk": "This agent holds a built-in capability that lets it execute shell commands or operate a machine directly - ANTHROPIC.Bash or ANTHROPIC.Computer. These are not tools the agent calls through a Lambda you wrote and can reason about; they are general-purpose capabilities, and their reach is whatever the surrounding execution context can reach. OWASP LLM06 calls this excessive functionality, and the reason it sits at the top of the agentic risk list is the interaction with prompt injection: an agent's normal mode of operation is to be persuaded by text. A document in a knowledge base, a page it fetches, a ticket it reads - any of these can carry an instruction, and with a shell attached the instruction becomes a command. AWS notes that computer use is a beta capability; that is a maturity statement about the feature, not a bound on what it can do.",
         "impact": "An instruction delivered as content becomes execution. Anything the runtime's identity and network can reach is reachable this way, and the action leaves the audit trail of the agent rather than of an attacker.",
@@ -2608,6 +2630,30 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Point consumers at the version rather than at DRAFT - in agent guardrailConfiguration, set guardrailVersion to the published number instead of DRAFT.",
             "Update the enforcement policy to name it: bedrock:GuardrailIdentifier = arn:aws:bedrock:<REGION>:<ACCOUNT>:guardrail/<ID>:<VERSION>, or ArnLike against ...:guardrail/<ID>:* to accept any published version while still excluding DRAFT.",
             "Adopt the pattern going forward: edit DRAFT, test, publish a version, move consumers - so that what is running is always an artifact somebody published rather than the current contents of a mutable draft.",
+        ],
+    },
+    "AITHR-03": {
+        "risk": "GuardDuty raised an AI Protection finding against an identity that can escalate privilege or reach crown-jewel data, and rated it Low. The Low is not a mistake on GuardDuty's part - it is the correct default for a detector that holds the event and not the environment. GuardDuty can see that an identity invoked a model from an unseen IP, with an unseen user agent, or at token volumes far above its own baseline. What it cannot see is what that identity is able to do next, and that is the difference between an anomalous call by a scoped read-only role and the same call by a role that can assume an admin path or read a production PII bucket. OverWatch computes the second half from the account's own IAM policies and the CAN_READ_DATA edges in the attack-path graph, which is why this finding exists at a different severity from the one AWS assigned. Note also that this finding would previously have been invisible here: OverWatch's own GuardDuty query filters at severity >= 4, and every AI Protection type ships at Low.",
+        "impact": "A credential behaving anomalously against a model, held by an identity whose reach makes that anomaly consequential. If the credential is compromised, the model invocation is the least of what follows.",
+        "steps": [
+            "Treat the identity as potentially compromised and establish the blast radius before deciding it was 'only' inference: aws iam get-access-key-last-used --access-key-id <AKID> and review what the owning identity is permitted to do.",
+            "Disable the key while you investigate rather than after: aws iam update-access-key --access-key-id <AKID> --status Inactive --user-name <USER>",
+            "Read the finding's own detail for the models touched and the deviation observed: aws guardduty get-findings --detector-id <DETECTOR_ID> --finding-ids <FINDING_ID>",
+            "Reduce the reach that made this consequential - AISPM-01 and AISPM-02 name the escalation path and the crown-jewel access for this identity.",
+            "Scope model invocation to the principals and models that need it, using bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream, bedrock:Converse and bedrock:ConverseStream, or deny it organization-wide with an SCP where it is not needed.",
+            "If the identity is a long-lived user key, move the workload to a role - IAM Roles Anywhere, IRSA or an instance/task role - so there is no static credential to steal.",
+        ],
+    },
+    "AITHR-04": {
+        "risk": "A Bedrock guardrail detected a HIGH-confidence prompt attack in a live invocation and did not block it. GuardDuty records this in the finding's contentPolicyFilters, where AWS documents the action value precisely: BLOCKED if the guardrail blocked the content, or NONE if the guardrail 'detected the prompt attack but was configured only to report it'. NONE means the malicious prompt reached the model. This is the runtime counterpart of AIGRD-02, which reports the same defect as a configuration: there it is a guardrail that will not block, here it is a guardrail that did not block, on a request that already happened. The distinction from every other finding on this page is worth stating: this is not a weakness that could be exploited. It is an attempt that was recognised, allowed through, and logged.",
+        "impact": "A prompt attack reached the model with the guardrail watching. Whatever the model could then be induced to do - call a tool, quote data it can read, act with the execution role's permissions - it had the opportunity to do.",
+        "steps": [
+            "Read what was actually sent and what the model did with it: aws guardduty get-findings --detector-id <DETECTOR_ID> --finding-ids <FINDING_ID>, and review the invocation in your Bedrock model-invocation logs if BDR-01 shows they are enabled.",
+            "Switch the filter from detect to block: aws bedrock update-guardrail --guardrail-identifier <ID> --name <NAME> --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\",\"inputAction\":\"BLOCK\"}]}'",
+            "Check whether the same guardrail is detect-only elsewhere - AIGRD-02 reports this as configuration across every guardrail in the account, and a single detect-only filter usually means a policy applied consistently.",
+            "Treat the acting identity as suspect: a prompt attack arriving through a legitimate credential is either an external input the application forwarded, or a caller who should not be there.",
+            "Assume the injection may have succeeded in part and check what the agent could have reached - AGY-01/02 for its capabilities, AISPM-01/02 for its role.",
+            "Make the guardrail mandatory rather than merely attached (AIGRD-03), so the next request cannot simply omit it.",
         ],
     },
     "AITHR-01": {

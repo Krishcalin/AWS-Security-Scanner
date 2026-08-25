@@ -46,6 +46,11 @@ SHIPPED_ROLE = [{
     "actions": SECURITY_AUDIT_BEDROCK | {
         "sagemaker:describe*", "sagemaker:list*",     # SecurityAudit grants both
         "lambda:getpolicy", "ec2:describe*", "iam:get*", "iam:list*",
+        # SecurityAudit grants guardduty:Get*/List* — the THREAT section has always
+        # relied on that, and slice 2.6 relies on the same grant for the AI Protection
+        # findings THREAT's own severity filter excludes. Added here because the fixture
+        # was incomplete, not because the requirement is new.
+        "guardduty:get*", "guardduty:list*",
     },
     "resources": {"*"}, "not_resources": set(), "condition": None,
 }]
@@ -69,6 +74,8 @@ VIEW_ONLY_ALONE = [{
 # nobody could justify in review wearing the appearance of justification.
 EXPECTED_GAP = ("bedrock-agentcore:GetAgentRuntime",
                 "bedrock-agentcore:GetGateway",
+                "bedrock-agentcore:GetTokenVault",
+                "bedrock-agentcore:GetWorkloadIdentity",
                 "bedrock-agentcore:ListAgentRuntimes",
                 "bedrock-agentcore:ListApiKeyCredentialProviders",
                 "bedrock-agentcore:ListBrowsers",
@@ -85,7 +92,7 @@ EXPECTED_GAP = ("bedrock-agentcore:GetAgentRuntime",
 
 
 # ── the load-bearing assertion ──────────────────────────────────────────────
-def test_the_shipped_role_is_missing_exactly_fifteen_actions():
+def test_the_shipped_role_is_missing_exactly_seventeen_actions():
     """Computed from the policy documents, not recalled. If this number moves, either
     AWS changed SecurityAudit or we added a call — both worth a human looking."""
     led = L.evaluate(SHIPPED_ROLE)
@@ -98,13 +105,7 @@ def test_the_blocked_checks_are_the_knowledge_base_and_guardrail_grading_ones():
     what makes GetGuardrail cheap to justify: one Get buys three checks. AIGRD-03 is
     absent on purpose -- enforcement is read from statements already collected."""
     led = L.evaluate(SHIPPED_ROLE)
-    assert set(led.blocked) == {"AGT-03", "AGT-04",
-                                "AIGRD-01", "AIGRD-02", "AIGRD-04",
-                                "AGC-01", "AGC-02", "AGC-03", "AGC-04",
-                                "AGC-05", "AGC-06",
-                                # slice 2.4 rides on GetAgentActionGroup, which
-                                # the managed policies also do not grant
-                                "AGY-01", "AGY-02", "AGY-03"}
+    assert set(led.blocked) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04"}
     assert led.blocked["AGT-03"] == ("bedrock:GetDataSource",
                                      "bedrock:GetKnowledgeBase")
     assert led.blocked["AGT-04"] == ("bedrock:GetAgentActionGroup",)
@@ -141,11 +142,7 @@ def test_declining_an_action_names_what_it_costs():
         "AGT-04", "AGY-01", "AGY-02", "AGY-03"}
     assert led.forfeit(["bedrock:GetGuardrail"]) == (
         "AIGRD-01", "AIGRD-02", "AIGRD-04")
-    assert set(led.forfeit(EXPECTED_GAP)) == {"AGT-03", "AGT-04",
-                                              "AIGRD-01", "AIGRD-02", "AIGRD-04",
-                                              "AGC-01", "AGC-02", "AGC-03",
-                                              "AGC-04", "AGC-05", "AGC-06",
-                                              "AGY-01", "AGY-02", "AGY-03"}
+    assert set(led.forfeit(EXPECTED_GAP)) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04"}
 
 
 def test_declining_an_action_a_working_check_depends_on_is_also_counted():
