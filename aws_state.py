@@ -35,7 +35,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-SCHEMA_VERSION = 14  # v14: four-tier RBAC (auditor/ingest/analyst/admin)
+SCHEMA_VERSION = 15  # v15: mcp_surface (slice 3.3 rug-pull anchor)
 KEY_VERSION = 1
 
 # Caller-injected scan timestamp (one per run). epoch = arithmetic column,
@@ -122,6 +122,22 @@ CREATE TABLE IF NOT EXISTS scans(
 CREATE TABLE IF NOT EXISTS scan_coverage(
   scan_id TEXT NOT NULL, account TEXT NOT NULL, region TEXT NOT NULL, check_id TEXT NOT NULL,
   PRIMARY KEY(scan_id,account,region,check_id));
+
+-- ── MCP tool surface (slice 3.3) ─────────────────────────────────────────────
+-- One row per AgentCore Gateway: a digest of everything CONFIGURATION says decides
+-- the agent's tool surface. A change to the digest between scans is a change to who
+-- supplies the tools, which is the half of a rug pull the account can see. The half
+-- it cannot -- the same server serving different tools -- is why MCP-04 exists, and
+-- why this table is an anchor rather than an answer.
+CREATE TABLE IF NOT EXISTS mcp_surface(
+  account TEXT NOT NULL, gateway_arn TEXT NOT NULL, gateway_name TEXT,
+  fingerprint TEXT NOT NULL, federated_endpoints TEXT NOT NULL DEFAULT '[]',
+  target_count INTEGER NOT NULL DEFAULT 0,
+  first_seen_epoch INTEGER NOT NULL, last_seen_epoch INTEGER NOT NULL,
+  last_changed_epoch INTEGER, change_count INTEGER NOT NULL DEFAULT 0,
+  last_scan_id TEXT,
+  PRIMARY KEY(account, gateway_arn));
+CREATE INDEX IF NOT EXISTS ix_mcp_acct ON mcp_surface(account);
 
 CREATE TABLE IF NOT EXISTS principal_usage(
   account TEXT NOT NULL, arn TEXT NOT NULL, source TEXT,
@@ -489,6 +505,13 @@ SCAN_UPDATE = SCAN_COLS[1:]
 SCAN_COUNTER_RESET = {"total_open": "0", "new_count": "0", "resolved_count": "0",
                       "reopened_count": "0", "suppressed_count": "0"}
 COVERAGE_COLS = ["scan_id", "account", "region", "check_id"]
+MCP_COLS = ["account", "gateway_arn", "gateway_name", "fingerprint",
+            "federated_endpoints", "target_count", "first_seen_epoch",
+            "last_seen_epoch", "last_changed_epoch", "change_count", "last_scan_id"]
+#: first_seen_epoch is NOT in the update set -- it is the one column that must survive
+#: every later scan, and including it would reset the age of every gateway on each run.
+MCP_UPDATE = [c for c in MCP_COLS[2:] if c != "first_seen_epoch"]
+
 USAGE_COLS = ["account", "arn", "source", "last_used_epoch", "last_used_iso", "dormant",
               "granted_services", "used_services", "unused_services_json",
               "unused_actions_json", "window_days", "collected_epoch", "slad_job_status",
@@ -852,6 +875,52 @@ class StateStore:
         return [dict(r) for r in rows]
 
     # ── unused-access persistence (Phase 5C) ──────────────────────────────────
+    # ── MCP tool surface (v15, slice 3.3) ────────────────────────────────────
+    def get_mcp_surface(self, account: str, gateway_arn: str) -> Optional[Dict]:
+        """The previously-recorded surface for one gateway, or None if never seen."""
+        row = self._be.query_one(
+            "SELECT * FROM mcp_surface WHERE account=? AND gateway_arn=?",
+            (account, gateway_arn))
+        return dict(row) if row else None
+
+    def record_mcp_surface(self, account: str, gateway_arn: str, *, name: str,
+                           fingerprint: str, endpoints: Sequence[str],
+                           target_count: int, ts: ScanTs,
+                           scan_id: str = "") -> Dict:
+        """Record this scan's surface and report what changed since the last one.
+
+        Returns ``{"first_seen","changed","previous_fingerprint","added","removed"}``.
+        ``first_seen`` and ``changed`` are deliberately distinct: a gateway seen for the
+        first time has not *changed*, and reporting it as a rug pull would fire on every
+        gateway in the account the first time a state DB is used -- the same reason
+        aws_state's own lifecycle projects NEW rather than storing it."""
+        prev = self.get_mcp_surface(account, gateway_arn)
+        now = list(endpoints or [])
+        before = []
+        if prev:
+            try:
+                before = list(json.loads(prev.get("federated_endpoints") or "[]"))
+            except (TypeError, ValueError):
+                before = []
+        first_seen = prev is None
+        changed = bool(prev) and prev.get("fingerprint") != fingerprint
+        self._be.upsert(
+            "mcp_surface", MCP_COLS, ["account", "gateway_arn"], MCP_UPDATE,
+            (account, gateway_arn, name, fingerprint,
+             json.dumps(sorted(now), separators=(",", ":")), int(target_count),
+             ts.epoch, ts.epoch,
+             ts.epoch if changed else (prev or {}).get("last_changed_epoch"),
+             int((prev or {}).get("change_count") or 0) + (1 if changed else 0),
+             scan_id))
+        return {
+            "first_seen": first_seen,
+            "changed": changed,
+            "previous_fingerprint": (prev or {}).get("fingerprint", ""),
+            "added": sorted(set(now) - set(before)),
+            "removed": sorted(set(before) - set(now)),
+            "change_count": int((prev or {}).get("change_count") or 0) + (1 if changed else 0),
+        }
+
     def record_usage(self, account: str, arn: str, sig: Dict, collected_epoch: int) -> None:
         """Persist a right-sizing signal (24h TTL keyed by collected_epoch)."""
         self._be.upsert(

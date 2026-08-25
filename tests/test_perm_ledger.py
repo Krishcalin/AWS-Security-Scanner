@@ -74,6 +74,7 @@ VIEW_ONLY_ALONE = [{
 # nobody could justify in review wearing the appearance of justification.
 EXPECTED_GAP = ("bedrock-agentcore:GetAgentRuntime",
                 "bedrock-agentcore:GetGateway",
+                "bedrock-agentcore:GetGatewayTarget",
                 "bedrock-agentcore:GetMemory",
                 "bedrock-agentcore:GetTokenVault",
                 "bedrock-agentcore:GetWorkloadIdentity",
@@ -93,7 +94,7 @@ EXPECTED_GAP = ("bedrock-agentcore:GetAgentRuntime",
 
 
 # ── the load-bearing assertion ──────────────────────────────────────────────
-def test_the_shipped_role_is_missing_exactly_eighteen_actions():
+def test_the_shipped_role_is_missing_exactly_nineteen_actions():
     """Computed from the policy documents, not recalled. If this number moves, either
     AWS changed SecurityAudit or we added a call — both worth a human looking."""
     led = L.evaluate(SHIPPED_ROLE)
@@ -106,7 +107,7 @@ def test_the_blocked_checks_are_the_knowledge_base_and_guardrail_grading_ones():
     what makes GetGuardrail cheap to justify: one Get buys three checks. AIGRD-03 is
     absent on purpose -- enforcement is read from statements already collected."""
     led = L.evaluate(SHIPPED_ROLE)
-    assert set(led.blocked) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AMEM-02", "TFLOW-01"}
+    assert set(led.blocked) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AMEM-02", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "TFLOW-01"}
     assert led.blocked["AGT-03"] == ("bedrock:GetDataSource",
                                      "bedrock:GetKnowledgeBase")
     # Slice 3.1: GetDataSource now also buys TFLOW-01, because the data
@@ -147,7 +148,7 @@ def test_declining_an_action_names_what_it_costs():
         "AGT-04", "AGY-01", "AGY-02", "AGY-03"}
     assert led.forfeit(["bedrock:GetGuardrail"]) == (
         "AIGRD-01", "AIGRD-02", "AIGRD-04")
-    assert set(led.forfeit(EXPECTED_GAP)) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AMEM-02", "TFLOW-01"}
+    assert set(led.forfeit(EXPECTED_GAP)) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AMEM-02", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "TFLOW-01"}
 
 
 def test_declining_an_action_a_working_check_depends_on_is_also_counted():

@@ -45,10 +45,12 @@ def gw(authorizer="CUSTOM_JWT", **over):
     return d
 
 
-def target(cred_type):
-    return {"targetId": "t1", "name": "lambda-tools",
-            "credentialProviderConfigurations": [
-                {"credentialProviderType": cred_type}]}
+def target(cred_type, tid="t1", name="lambda-tools", **over):
+    t = {"targetId": tid, "name": name,
+         "credentialProviderConfigurations": [
+             {"credentialProviderType": cred_type}]}
+    t.update(over)
+    return t
 
 
 # ── the grading ─────────────────────────────────────────────────────────────
@@ -148,17 +150,42 @@ def _scanner(ac):
     return s
 
 
-def _ac(gateway, targets=None, *, get_denied=False, targets_denied=False):
+def _ac(gateway, targets=None, *, get_denied=False, targets_denied=False,
+        detail_denied=False, no_detail_op=False):
+    """A client shaped like the real API rather than like the grader's input.
+
+    The distinction matters and cost a CRITICAL false positive: ListGatewayTargets
+    returns TargetSummary -- targetId, name, status, description, createdAt, updatedAt --
+    which carries NEITHER credentialProviderConfigurations nor targetConfiguration. Both
+    live only on GetGatewayTarget. The earlier fixture returned full targets from the
+    list call, so every test here passed against a response AWS never sends.
+    """
     c = MagicMock()
     if get_denied:
         c.get_gateway.side_effect = Exception("AccessDeniedException")
     else:
         c.get_gateway.return_value = gateway
+    full = list(targets or [])
     if targets_denied:
         c.list_gateway_targets.side_effect = Exception("AccessDeniedException")
     else:
-        c.list_gateway_targets.return_value = {"items": targets or []}
+        c.list_gateway_targets.return_value = {"items": [_summary(t) for t in full]}
+    if no_detail_op:
+        del c.get_gateway_target          # an SDK that predates the operation
+    elif detail_denied:
+        c.get_gateway_target.side_effect = Exception("AccessDeniedException")
+    else:
+        by_id = {t.get("targetId"): t for t in full}
+        c.get_gateway_target.side_effect = (
+            lambda gatewayIdentifier, targetId: by_id[targetId])
     return c
+
+
+def _summary(t):
+    """What ListGatewayTargets actually returns for a target."""
+    return {k: v for k, v in t.items()
+            if k in ("targetId", "name", "status", "description",
+                     "createdAt", "updatedAt")}
 
 
 def _ids(s, cid, status=None):

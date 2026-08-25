@@ -180,6 +180,16 @@ POSTGRES_DDL: List[str] = [
     """CREATE TABLE IF NOT EXISTS scan_coverage(
        scan_id TEXT NOT NULL, account TEXT NOT NULL, region TEXT NOT NULL, check_id TEXT NOT NULL,
        PRIMARY KEY(scan_id,account,region,check_id))""",
+    # sqlite twin in aws_state._DDL. Only diff: the *_epoch columns are BIGINT.
+    """CREATE TABLE IF NOT EXISTS mcp_surface(
+       account TEXT NOT NULL, gateway_arn TEXT NOT NULL, gateway_name TEXT,
+       fingerprint TEXT NOT NULL, federated_endpoints TEXT NOT NULL DEFAULT '[]',
+       target_count INTEGER NOT NULL DEFAULT 0,
+       first_seen_epoch BIGINT NOT NULL, last_seen_epoch BIGINT NOT NULL,
+       last_changed_epoch BIGINT, change_count INTEGER NOT NULL DEFAULT 0,
+       last_scan_id TEXT,
+       PRIMARY KEY(account,gateway_arn))""",
+    """CREATE INDEX IF NOT EXISTS ix_mcp_acct ON mcp_surface(account)""",
     """CREATE TABLE IF NOT EXISTS principal_usage(
        account TEXT NOT NULL, arn TEXT NOT NULL, source TEXT, last_used_epoch BIGINT,
        last_used_iso TEXT, dormant INTEGER, granted_services INTEGER, used_services INTEGER,

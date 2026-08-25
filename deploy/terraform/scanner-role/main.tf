@@ -94,6 +94,7 @@ data "aws_iam_policy_document" "extras" {
       "bedrock-agentcore:ListOauth2CredentialProviders",
       "bedrock-agentcore:ListApiKeyCredentialProviders",
       "bedrock-agentcore:ListMemories",
+      "bedrock-agentcore:GetGatewayTarget",
       "bedrock-agentcore:GetMemory",
       "bedrock-agentcore:ListBrowsers",
       "bedrock-agentcore:ListCodeInterpreters",

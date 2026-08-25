@@ -185,6 +185,14 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "read contentPolicyFilters[].action -- whether the guardrail blocked "
              "the prompt attack it detected, or was configured only to report it"),
     ),
+    # MCP-03 adds NO new action: the instructions string is on GetGateway, already
+    # bought for AGC-05/06. Recorded so declining that one action names everything it
+    # costs, which is the whole contract of the ledger.
+    "MCP-03": (
+        _req("bedrock-agentcore:GetGateway",
+             "read protocolConfiguration.mcp.instructions -- the server-level string "
+             "handed to the model as direction, which a reviewer sees as documentation"),
+    ),
     "AGC-07": (
         _req("bedrock-agentcore:GetTokenVault",
              "read whether the store holding every agent credential for systems "
@@ -215,10 +223,35 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "the prompt-injection safeguard, and which is DISABLED unless set"),
     ),
     "AGC-05": (
+        _req("bedrock-agentcore:GetGatewayTarget",
+             "read each target's credentialProviderConfigurations -- the field the "
+             "verdict actually turns on, and which appears on NO other response"),
         _req("bedrock-agentcore:GetGateway",
              "read authorizerType and the policy-engine/interceptor configuration -- whether the gateway authorizes its callers, or admits them and lets something else decide"),
         _req("bedrock-agentcore:ListGatewayTargets",
              "read each target's outbound credential type, which is what decides whether a permissive inbound mode is a delegated design or an open door"),
+    ),
+    # Slice 3.3. GetGatewayTarget is the ONLY response carrying
+    # credentialProviderConfigurations and targetConfiguration -- ListGatewayTargets
+    # returns TargetSummary, which has neither. AGC-05 is listed here because it grades
+    # on the credential field: without this action it can no longer be graded, which is
+    # a correction to a check that previously read the field off the summaries and got
+    # [] for every gateway in existence.
+    "MCP-01": (
+        _req("bedrock-agentcore:GetGatewayTarget",
+             "read targetConfiguration.mcp.mcpServer.endpoint -- whether a gateway "
+             "federates a tool provider from outside this account, which is the only "
+             "provenance record AWS keeps for one"),
+    ),
+    "MCP-02": (
+        _req("bedrock-agentcore:GetGatewayTarget",
+             "read the federated endpoint's scheme -- over plaintext, anyone on the "
+             "path rewrites what a tool claims to do"),
+    ),
+    "MCP-04": (
+        _req("bedrock-agentcore:GetGatewayTarget",
+             "establish that a target federates at all, which is what makes the "
+             "un-recorded tool list a blind spot worth declaring"),
     ),
     "AGC-06": (
         _req("bedrock-agentcore:GetGateway",

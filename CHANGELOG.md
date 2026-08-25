@@ -7,6 +7,76 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 3 · slice 3.3 — MCP server provenance** (`aws_mcp.py`, `MCP-01/02/03/04`). An
+  AgentCore Gateway **is** an MCP server, and what it publishes to an agent is decided by
+  its targets. Three of the four target kinds — `openApiSchema`, `smithyModel`, `lambda`
+  — describe an API inside the account. The fourth, `mcpServer`, is an endpoint somewhere
+  else, and that asymmetry is the slice.
+  - **`MCP-01`** (HIGH · SI-7) — the gateway **federates a third-party MCP server**. Not
+    a defect: a vendor MCP server is often exactly what you want. What it reports is that
+    the tool definitions the model acts on now come from a party the account cannot see
+    inside, bounded by the gateway execution role rather than by anything the provider
+    agreed to.
+  - **`MCP-02`** (CRITICAL · SC-8) — that endpoint is **plaintext `http`**. The rare AI
+    finding needing no AI reasoning: rewriting a tool description on the wire is prompt
+    injection carried out with a network position instead of a prompt, and it is
+    invisible to every control in the pillar — nothing is misconfigured on the gateway
+    side, and the instruction reaches the model through the channel it is built to trust.
+  - **`MCP-03`** (HIGH · SI-7) — the gateway's **`instructions`** string carries a
+    chat-template delimiter, an invisible codepoint, or a hit from the operator's pattern
+    set. This is `3.2`'s channel one level up: what the *server* tells the model about
+    using the whole gateway, while the operator reading the console sees a field that
+    documents how to use it. `aws_toolpoison.assess_text()` was extracted so the same
+    classifier serves both — the rule that **OverWatch authors no injection phrasings** is
+    only worth having if every caller inherits it. The finding never quotes the string
+    back.
+  - **`MCP-04`** (LOW · SI-7) — **the blind spot, stated rather than implied.** For a
+    federated server AWS records the *endpoint* and never the *tools it serves*. No API
+    in the account returns the tool list, so no scan — not this one, not a deeper one,
+    not one with more permissions — can diff what that server offers today against last
+    week. That is precisely the **rug pull**: benign tools until trusted, then changed.
+    The finding exists because the alternative is worse: a reader who sees a federated
+    server reported with no mention of its tools assumes the tools were checked and were
+    clean — a phantom pass produced by omission. It carries LOW because its job is to be
+    **read**, not to rank; nobody can remediate a limit of what AWS records.
+  - **Verified against the pinned model, and the pin decided the design.** Read from
+    botocore **1.40.51**'s own `service-2.json`, not the published API reference:
+    `McpServerTargetConfiguration` has exactly one member, `endpoint`. **`ListingMode`
+    (`DEFAULT`/`DYNAMIC`) does not exist in 1.40.51** — it arrives in 1.43.51, where AWS
+    documents DYNAMIC targets as having their tool list *"dynamically retrieved when
+    listing tools"* rather than cached at the control plane, which would have made
+    rug-pull exposure a pure config read. Neither does the **Registry** and its
+    `DRAFT/PENDING_APPROVAL/APPROVED/REJECTED` lifecycle. Bumping the pin is a dependency
+    decision beyond this slice — the CHANGELOG already records `botocore==1.43.51`
+    breaking the offline build once, since `boto3==1.40.51` requires `botocore<1.41.0`.
+  - **`MCP-05`** (HIGH · CM-5) — **the rug-pull half, behind `--state`.** MCP-04 states
+    what nobody can see; this is what the account *can*: a target repointed, added or
+    removed, or the gateway's own instructions rewritten. All are recorded, so all are
+    diffable. New table `mcp_surface` (schema **v15**, sqlite + Postgres twins) holds one
+    digest per gateway.
+    - **A first sighting is not a change.** Reporting one would light up every gateway in
+      the account the first time an operator passes `--state` — the noise that teaches
+      people to ignore a category. Same distinction `aws_state` already makes by
+      projecting `NEW` rather than storing it.
+    - **The finding asks rather than asserts.** The common case is the operator's own
+      deployment, so it says *"confirm it was yours"* — a finding that announced a breach
+      on every deployment would be wrong far more often than right.
+    - **The scan path stays stateless.** The comparison runs in `_process_state`, the one
+      seam that already holds the store, and before `classify_and_diff` so MCP-05 enters
+      the lifecycle like any other finding. Without a state DB the check simply does not
+      run, and MCP-01..04 are unaffected — the config half is never hostage to an opt-in
+      flag. `first_seen_epoch` is deliberately excluded from the update set: including it
+      would reset every gateway's age on each run.
+    - Every gateway is stashed, **federated or not**, so a gateway that gains its *first*
+      federated target is caught — a comparison that only stored gateways already
+      federating would miss precisely that moment.
+  - `surface_fingerprint()` is the anchor, and a test pins its limit: identical
+    configuration digests identically no matter what the far end is actually serving, so
+    nobody later reads it as covering more than it does.
+  - **One new action**: `bedrock-agentcore:GetGatewayTarget`, added to the ledger and both
+    deploy paths. `MCP-03` adds none — `instructions` is on `GetGateway`, already bought
+    for `AGC-05/06`.
+
 - **Phase 3 · slice 3.5 — adversarial-test ingest** (`aws_ingest_pentest.py`,
   `PENT-01/02`, `--pentest-results`). **Decision D4's third leg.** OverWatch will not
   probe a customer's models; when the customer probes their own, the **results** land on
@@ -85,6 +155,37 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
     would be a guess.
 
 ### Fixed
+- **`AGC-05` was a phantom finding — a CRITICAL false positive on the architecture AWS
+  documents as correct.** `credentialProviderConfigurations` lives on **`GetGatewayTarget`
+  and on no other response**; `ListGatewayTargets` returns `TargetSummary` — `targetId`,
+  `name`, `status`, `description`, `createdAt`, `updatedAt` — in *every* SDK version
+  checked. The scanner fed the grader those summaries, so `_target_outbound_types()`
+  returned `[]` for every gateway in existence, the `DELEGATED` branch was unreachable,
+  and **every** gateway with permissive inbound and at least one target drew a CRITICAL
+  claiming its targets "use the gateway's own credentials" — a claim nothing had
+  established. That is the mirror of the phantom pass, on exactly the case slice 2.3's own
+  docstring says the check exists to avoid failing.
+  - The scanner now calls `GetGatewayTarget` per target; `targets_are_graded()` detects
+    summaries-where-details-were-needed and resolves to **`UNKNOWN`**, never to `OPEN` —
+    the same treatment the refused-read path already gave, for the same reason.
+  - `OUTBOUND_CARRIES_CALLER` was **invented**. Read off `CredentialProviderType` in the
+    service model: pinned 1.40.51 is `GATEWAY_IAM_ROLE | OAUTH | API_KEY` and has **no
+    caller-carrying value at all**; 1.43.51 adds exactly `CALLER_IAM_CREDENTIALS` and
+    `JWT_PASSTHROUGH`. `OAUTH_TOKEN_EXCHANGE` exists in neither and is gone. Under the pin
+    a gateway therefore *cannot* be graded DELEGATED — a limit of what is knowable, which
+    is why it resolves to UNKNOWN.
+  - **The tests passed because the fixture was wrong.** `_ac()` returned full targets from
+    the *list* call — a response AWS never sends — so every gateway test exercised a shape
+    that does not occur. The fixture now returns `TargetSummary` from the list call and
+    full detail from `GetGatewayTarget`, and a regression test pins summaries-alone to
+    UNKNOWN.
+- **`SA-9` (External System Services) is the on-point NIST control for `MCP-01/04` and is
+  deliberately not used** — it sits outside the frozen 38-control universe, and adding it
+  means authoring a sourced mapping for each of the 40+ frameworks in the crosswalk. That
+  is its own work with its own sourcing burden. `SI-7` carries them meanwhile and carries
+  them honestly: both findings are about acting on information whose integrity cannot be
+  verified, which is the same reason `TPOIS` uses it one level down.
+
 - **`--pentest-results` was inert.** The flag parsed into `args.pentest_results` and was
   never read: `_load_pentest_results` had no caller, `_pentest_results` stayed `{}`, and
   `_emit_pentest_results` returned immediately — the whole of `3.5` was unreachable from

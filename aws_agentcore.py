@@ -211,8 +211,18 @@ INBOUND_OPEN = "NONE"
 #: Outbound credential types that carry the CALLER's identity to the target, so the
 #: target's own authorization still applies. These are what make a permissive inbound
 #: mode a deliberate architecture rather than a hole.
-OUTBOUND_CARRIES_CALLER = ("CALLER_IAM_CREDENTIALS", "JWT_PASSTHROUGH",
-                           "OAUTH_TOKEN_EXCHANGE")
+#:
+#: Read off ``CredentialProviderType`` in the service model rather than recalled, after
+#: the first authoring of this tuple invented all three names. The pinned 1.40.51 enum is
+#: ``GATEWAY_IAM_ROLE | OAUTH | API_KEY`` -- it has NO caller-carrying value at all --
+#: and 1.43.51 adds exactly ``CALLER_IAM_CREDENTIALS`` and ``JWT_PASSTHROUGH``.
+#: ``OAUTH_TOKEN_EXCHANGE`` exists in neither and is gone.
+#:
+#: The consequence under the pin is worth stating: a gateway CANNOT be graded DELEGATED,
+#: because no value the SDK can return means "the caller's identity flows onward". That
+#: is a limit of what is knowable, so it resolves to UNKNOWN rather than to OPEN -- see
+#: gateway_authorization.
+OUTBOUND_CARRIES_CALLER = ("CALLER_IAM_CREDENTIALS", "JWT_PASSTHROUGH")
 #: Outbound types that use the GATEWAY's own credentials. The developer guide is explicit
 #: about what this means: "The gateway execution role is shared across all targets
 #: configured with GATEWAY_IAM_ROLE. Its permissions are the upper bound for what any
@@ -229,7 +239,13 @@ GW_VERDICTS = (GW_ENFORCED, GW_DELEGATED, GW_COMPENSATED, GW_OPEN, GW_UNKNOWN)
 
 
 def _target_outbound_types(targets) -> List[str]:
-    """Every outbound credential type configured across a gateway's targets."""
+    """Every outbound credential type configured across a gateway's targets.
+
+    ``credentialProviderConfigurations`` lives on **GetGatewayTarget** and on no other
+    response. ``ListGatewayTargets`` returns ``TargetSummary``, which is
+    ``targetId, name, status, description, createdAt, updatedAt`` -- and nothing else, in
+    every SDK version checked. Feeding this the list results, as the caller originally
+    did, therefore returned ``[]`` for every gateway in existence."""
     out = []
     for t in targets or []:
         if not isinstance(t, dict):
@@ -238,6 +254,22 @@ def _target_outbound_types(targets) -> List[str]:
             if isinstance(cfg, dict) and cfg.get("credentialProviderType"):
                 out.append(str(cfg["credentialProviderType"]).upper())
     return out
+
+
+def targets_are_graded(targets) -> bool:
+    """Whether the targets handed in can actually decide the outbound question.
+
+    A non-empty target list carrying no credential configuration at all is the signature
+    of summaries passed where details were needed. Distinguishing that from "read in full
+    and genuinely has none" is what stops a fetch mistake from being reported as a
+    CRITICAL finding about the customer's architecture."""
+    raw = list(targets or [])
+    if not raw:
+        return True                     # [] means no targets; nothing to grade
+    # Filtering to dicts FIRST would be the bug this function exists to catch: a list of
+    # things that are not dicts is a list we could not read, not an absence of targets.
+    return any(isinstance(t, dict) and "credentialProviderConfigurations" in t
+               for t in raw)
 
 
 def gateway_authorization(gateway: Optional[dict],
@@ -292,6 +324,18 @@ def gateway_authorization(gateway: Optional[dict],
                     reason=(f"inbound {inbound} makes no authorization decision, and the "
                             f"gateway's targets could not be enumerated — whether the "
                             f"caller's identity reaches them is unknown, not benign"))
+
+    # Summaries where details were needed: every target lacks the credential field
+    # entirely. Grading OPEN on that is a claim about the customer's architecture built
+    # on a fetch mistake, and OPEN is this module's CRITICAL. It is the phantom finding
+    # -- the mirror of the phantom pass -- so it resolves to UNKNOWN, which is what the
+    # refused-read path above already does for the same reason.
+    if not targets_are_graded(targets):
+        return dict(base, verdict=GW_UNKNOWN,
+                    reason=(f"inbound {inbound} makes no authorization decision, and the "
+                            f"targets carry no credential configuration to grade — "
+                            f"whether the caller's identity reaches them is unknown, not "
+                            f"benign and not proven open"))
 
     if carries_caller and not gateway_own:
         return dict(base, verdict=GW_DELEGATED,
