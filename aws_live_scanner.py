@@ -73,6 +73,7 @@ import aws_leastpriv
 import aws_aispm
 import aws_aiguard
 import aws_agentcore
+import aws_cbom
 import aws_airules
 import aws_cdr
 import aws_perm_ledger
@@ -1907,6 +1908,10 @@ class AWSLiveScanner:
         # as the scan goes rather than reconstructed afterwards, because the only
         # moment we know a check was denied is when it is denied.
         self._coverage = aws_perm_ledger.CoverageManifest()
+        # D3 — cryptographic material for the CBOM, collected from reads the
+        # scanner already performs. Populated only as those sections run, so a
+        # --sections subset produces a CBOM scoped to what was actually looked at.
+        self._crypto_material = {"kms": [], "acm": [], "tls": []}
         self._perm_ledger = None            # set by _preflight_permissions()
         # Action-group Lambda names, collected while auditing agents. Without
         # them the UpdateFunctionCode rule stays silent rather than firing on
@@ -3039,6 +3044,7 @@ class AWSLiveScanner:
                     kid = key["KeyId"]
                     try:
                         meta = kms.describe_key(KeyId=kid)["KeyMetadata"]
+                        self._crypto_material["kms"].append(meta)
                         # KMS-03 — CMK pending deletion / disabled (data-access risk)
                         if meta.get("KeyManager") == "CUSTOMER":
                             _st = meta.get("KeyState")
@@ -7351,6 +7357,9 @@ class AWSLiveScanner:
                 # ELB-03 — Weak TLS policy on HTTPS/TLS listeners
                 if proto in ("HTTPS", "TLS"):
                     policy = ls.get("SslPolicy", "")
+                    self._crypto_material["tls"].append({
+                        "ref": f"tls/elbv2/{name}/{port}", "name": llabel,
+                        "service": "elbv2", "policy": policy})
                     if policy in self._WEAK_TLS_POLICIES:
                         self._add("FAIL", "ELB-03", "ELB", llabel,
                                   f"Weak TLS policy '{policy}' | {llabel}")
@@ -7793,6 +7802,7 @@ class AWSLiveScanner:
             except Exception as e:
                 self._add("WARN", "ACM-01", "ACM", arn, str(e))
                 continue
+            self._crypto_material["acm"].append(cert)
 
             domain = cert.get("DomainName", arn)
 
@@ -12244,6 +12254,33 @@ class AWSLiveScanner:
             json.dump(data, f, indent=2, default=str)
         print(f"{BLUE}[*]{RESET} JSON report saved: {path}")
 
+    def save_cbom(self, path: str) -> None:
+        """Write the CycloneDX 1.6 Cryptographic Bill of Materials (decision D3).
+
+        An artifact, not a set of checks. RSA-2048 and P-256 are the correct choice today
+        and the wrong choice eventually; what an operator needs from this document is the
+        inventory and the dates, so a post-quantum migration can be planned against a
+        horizon they choose rather than one a scanner asserts.
+
+        The timestamp is passed in rather than read inside the builder, so two scans of an
+        unchanged estate produce byte-identical documents and a diff means the estate
+        moved."""
+        doc = aws_cbom.build_cbom(
+            account=self.account or "",
+            region=getattr(self, "region", "") or "",
+            generated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            kms_keys=self._crypto_material["kms"],
+            certificates=self._crypto_material["acm"],
+            tls_endpoints=self._crypto_material["tls"],
+            tool_version=VERSION,
+        )
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2, default=str)
+        exp = aws_cbom.quantum_exposure(doc)
+        print(f"{BLUE}[*]{RESET} CBOM saved: {path} "
+              f"({exp['total']} cryptographic asset(s), "
+              f"{exp['quantum_vulnerable']} quantum-vulnerable)")
+
     # ── Human-readable rule title for a check_id (used by SARIF) ──────────────
     @staticmethod
     def _rule_title(check_id: str) -> str:
@@ -13079,6 +13116,12 @@ examples:
         help="Save findings as SARIF 2.1.0 to FILE (GitHub code scanning)",
     )
     parser.add_argument(
+        "--cbom", metavar="FILE",
+        help="Save a CycloneDX 1.6 Cryptographic Bill of Materials to FILE "
+             "(KMS keys, ACM certificates and TLS endpoints, with post-quantum "
+             "exposure marked). Decision D3 — see docs/DECISIONS.md",
+    )
+    parser.add_argument(
         "--asff", metavar="FILE",
         help="Save findings as AWS Security Finding Format (ASFF) JSON to FILE "
              "for Security Hub batch-import-findings",
@@ -13463,6 +13506,8 @@ examples:
         scanner.save_sarif(args.sarif)
     if args.asff:
         scanner.save_asff(args.asff)
+    if args.cbom:
+        scanner.save_cbom(args.cbom)
     if args.baseline:
         scanner.print_diff(args.baseline)
     if args.graph:

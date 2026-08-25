@@ -7,6 +7,79 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **D3 · a Cryptographic Bill of Materials** (`aws_cbom.py`, emitted on `--cbom FILE`).
+  The xBOM skip is reversed **for cryptography only**. The regulatory driver (EO 14412, a
+  FAR rule in flight) and the operational question are the same one — *which of this
+  estate's cryptography does a quantum computer break* — and nobody can migrate what they
+  have not enumerated.
+  - **CycloneDX 1.6**, because `cryptoProperties` does not exist before it. The rest of
+    the product emits 1.5 and that stays correct for those documents.
+  - KMS keys become `related-crypto-material` (with `state` mapped from `KeyState` —
+    `PendingDeletion` is `deactivated`, not `destroyed`, because ciphertext is still
+    decryptable until the window closes), ACM certificates become `certificate`, and TLS
+    listeners become `protocol`. Algorithms are emitted once and referenced.
+  - **No new API call and no new IAM permission.** The material was already being read —
+    `kms.describe_key` for KMS-02/03/04, `acm.describe_certificate` for ACM-01..05,
+    `elb.describe_listeners` for ELB-02/03 — so the CBOM is a re-projection of responses
+    the scanner already holds. A test pins that, so a future dedicated fetch is reminded
+    the slice was approved on that basis.
+  - **An inventory, not a verdict.** RSA-2048 and P-256 are the correct choice today and
+    the wrong choice eventually; reporting them as failures would teach operators to
+    dismiss the category. No check IDs, no severity, no posture-score impact — a document
+    plus `quantum_exposure()` giving the count and the names, so a migration can be planned
+    against a horizon the customer chooses. A test asserts the module emits no verdicts.
+  - The document **states its own scope limit** in `metadata.properties`: an agentless scan
+    cannot see cryptography inside a workload, and a CBOM that does not say so reads as a
+    complete inventory to whoever did not build it.
+  - `tests/fixtures/cyclonedx_1_6_crypto.json` holds the enums and property names
+    **extracted verbatim** from the published schema, and `aws_cbom`'s constants are
+    asserted against it. This is not ceremony: a *summary* of the schema gave
+    `parameterizedBy` (real name `parameterSetIdentifier`), an `assetType` of `key` (there
+    is none — keys are `related-crypto-material`), a `primitive` enum of algorithm names
+    like "AES" (it is crypto primitives: `block-cipher`, `signature`, `kem`), and
+    `executionEnvironment` values of `software`/`hybrid` (they are `software-plain-ram`,
+    `software-tee`, `hardware`). Each would have produced a document that validates against
+    nothing, and none would have failed a test written from the same summary.
+
+- **`docs/DECISIONS.md` — the open product decisions, answered and enforced.** All six
+  roadmap decisions (D1–D4, D6, D7; there is no D5) now have a recorded answer, the
+  reasoning behind it, and — where one exists — the test that keeps it true.
+  - **D2 · does customer prompt text enter the graph? — NO.** Deliberate, not merely
+    not-yet-built. The wedge is the sovereign estate, where the security review is
+    currently *one line*; reading prompt text turns that into a data-processing
+    agreement. The detection value is already delivered by `AITHR-01`/`AITHR-02` from
+    **CloudTrail management events alone** — no content, no new permission. Reversal
+    conditions are recorded, including that the tripwire ships **before** the capability.
+  - **D4 · AI red teaming — OUT OF SCOPE**, recorded as a declared non-goal rather than
+    an answered question, under a new **Declared non-goals** section. Both forms are
+    named, and the second is the one that matters more: *active probing of live
+    endpoints* (whose CloudTrail signature **is** LLMjacking's — we would generate the
+    exact events `AITHR-01` alarms on), and ***agentic* red teaming**, driving the
+    customer's own tool-executing agent, which causes real **writes** by construction —
+    an agent under test does not know the instruction is a drill, and neither does what
+    it writes to. Not behind a flag: a flag makes it a supported capability with a
+    support burden and an incident path. The section also states what we offer instead
+    (toxic flow, graph-proven exploitability, pen-test ingest), because a non-goal that
+    only says no reads as a gap.
+    The roadmap's remaining charter-breaking items are **referenced, not ruled on** —
+    promoting a recommendation to a decision nobody made is how a scope document stops
+    being worth reading.
+  - **D7 · the Guardrail sibling dependency — DECOUPLED.** Measured rather than recalled:
+    11 commits, 2,524 LOC, no Dockerfile, no console entry point, no release workflow.
+    OverWatch contains **zero** references to it, and `aws_airules.py` imports only
+    `aws_cdr` and `aws_deepplane`. If ever integrated it is an *optional* detection source
+    behind the connector plane, never a prerequisite.
+  - **D3 · CBOM — BUILT.** Recorded first as deferred, then overruled: build it. The
+    reversal covers **cryptography only**; AIBOM/HBOM/QBOM stay skipped.
+  - **D1 and D6** are recorded as already taken (slices 1.2 and 1.5) so the file is the
+    complete register rather than a list of leftovers.
+- **`tests/test_decisions.py`** (10 tests) enforces the answers that have code
+  consequences. D4's check is an **AST walk**, not a grep: `aws_aiguard` holds
+  `"bedrock:invokemodel"` as a string because it analyses *policy text*, and `aws_airules`
+  matches `InvokeModel` as a *CloudTrail event name* — a substring check would flag both
+  and force someone to weaken the guard to get a green suite. Both the D4 and D7 guards
+  were verified by planting a violation and confirming they fail.
+
 - **Phase 2 · slice 2.3 — gateway authorization posture**, graded rather than counted.
   - **`AGC-05`** (CRITICAL · AC-3) — a gateway that **admits callers it never authorizes
     AND calls its targets with the gateway's own credentials.** Both halves are required,

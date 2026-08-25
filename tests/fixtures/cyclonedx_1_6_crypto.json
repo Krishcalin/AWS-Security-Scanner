@@ -1,0 +1,179 @@
+{
+  "_provenance": {
+    "source": "https://raw.githubusercontent.com/CycloneDX/specification/master/schema/bom-1.6.schema.json",
+    "why": "The crypto-relevant slice of the official CycloneDX 1.6 schema, extracted verbatim rather than transcribed by hand. aws_cbom.py's constants are asserted against this. A summary of the schema gave four wrong field names and three wrong enums; this file is what stops that happening again.",
+    "extracted_fields": "enums and property names only; the full schema is 268KB"
+  },
+  "component_types": [
+    "application",
+    "framework",
+    "library",
+    "container",
+    "platform",
+    "operating-system",
+    "device",
+    "device-driver",
+    "firmware",
+    "file",
+    "machine-learning-model",
+    "data",
+    "cryptographic-asset"
+  ],
+  "component_required": [
+    "type",
+    "name"
+  ],
+  "cryptoProperties_fields": [
+    "algorithmProperties",
+    "assetType",
+    "certificateProperties",
+    "oid",
+    "protocolProperties",
+    "relatedCryptoMaterialProperties"
+  ],
+  "assetType": [
+    "algorithm",
+    "certificate",
+    "protocol",
+    "related-crypto-material"
+  ],
+  "algorithmProperties_fields": [
+    "certificationLevel",
+    "classicalSecurityLevel",
+    "cryptoFunctions",
+    "curve",
+    "executionEnvironment",
+    "implementationPlatform",
+    "mode",
+    "nistQuantumSecurityLevel",
+    "padding",
+    "parameterSetIdentifier",
+    "primitive"
+  ],
+  "primitive": [
+    "drbg",
+    "mac",
+    "block-cipher",
+    "stream-cipher",
+    "signature",
+    "hash",
+    "pke",
+    "xof",
+    "kdf",
+    "key-agree",
+    "kem",
+    "ae",
+    "combiner",
+    "other",
+    "unknown"
+  ],
+  "executionEnvironment": [
+    "software-plain-ram",
+    "software-encrypted-ram",
+    "software-tee",
+    "hardware",
+    "other",
+    "unknown"
+  ],
+  "implementationPlatform": [
+    "generic",
+    "x86_32",
+    "x86_64",
+    "armv7-a",
+    "armv7-m",
+    "armv8-a",
+    "armv8-m",
+    "armv9-a",
+    "armv9-m",
+    "s390x",
+    "ppc64",
+    "ppc64le",
+    "other",
+    "unknown"
+  ],
+  "cryptoFunctions": [
+    "generate",
+    "keygen",
+    "encrypt",
+    "decrypt",
+    "digest",
+    "tag",
+    "keyderive",
+    "sign",
+    "verify",
+    "encapsulate",
+    "decapsulate",
+    "other",
+    "unknown"
+  ],
+  "certificateProperties_fields": [
+    "certificateExtension",
+    "certificateFormat",
+    "issuerName",
+    "notValidAfter",
+    "notValidBefore",
+    "signatureAlgorithmRef",
+    "subjectName",
+    "subjectPublicKeyRef"
+  ],
+  "relatedCryptoMaterialProperties_fields": [
+    "activationDate",
+    "algorithmRef",
+    "creationDate",
+    "expirationDate",
+    "format",
+    "id",
+    "securedBy",
+    "size",
+    "state",
+    "type",
+    "updateDate",
+    "value"
+  ],
+  "relatedCryptoMaterial_type": [
+    "private-key",
+    "public-key",
+    "secret-key",
+    "key",
+    "ciphertext",
+    "signature",
+    "digest",
+    "initialization-vector",
+    "nonce",
+    "seed",
+    "salt",
+    "shared-secret",
+    "tag",
+    "additional-data",
+    "password",
+    "credential",
+    "token",
+    "other",
+    "unknown"
+  ],
+  "relatedCryptoMaterial_state": [
+    "pre-activation",
+    "active",
+    "suspended",
+    "deactivated",
+    "compromised",
+    "destroyed"
+  ],
+  "protocolProperties_fields": [
+    "cipherSuites",
+    "cryptoRefArray",
+    "ikev2TransformTypes",
+    "type",
+    "version"
+  ],
+  "protocol_type": [
+    "tls",
+    "ssh",
+    "ipsec",
+    "ike",
+    "sstp",
+    "wpa",
+    "other",
+    "unknown"
+  ]
+}
