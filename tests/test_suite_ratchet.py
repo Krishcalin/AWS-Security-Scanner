@@ -149,6 +149,7 @@ FLOORS = {
     "test_effperm.py": 32,
     "test_engine_eol.py": 15,
     "test_evidence.py": 28,
+    "test_evidence_bundle.py": 42,
     "test_evidence_wiring.py": 8,
     "test_exposure.py": 56,
     "test_extsvc.py": 51,
