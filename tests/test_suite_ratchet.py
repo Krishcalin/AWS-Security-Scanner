@@ -168,6 +168,7 @@ FLOORS = {
     "test_graph_from_dict.py": 9,
     "test_graph_neptune.py": 14,
     "test_graph_reverse.py": 10,
+    "test_guardrail.py": 42,
     "test_guardrail_coverage.py": 11,
     "test_iam_surface.py": 11,
     "test_ingest_aidr.py": 21,
