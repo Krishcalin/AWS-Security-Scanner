@@ -135,6 +135,19 @@ data "aws_iam_policy_document" "extras" {
       "managedblockchain:ListNetworks",
       "managedblockchain:ListMembers",
       "managedblockchain:GetMember",
+      # Batch 5. Mail Manager signs as `ses`; CodeGuru Profiler's
+      # IAM prefix is `codeguru-profiler`. Byte-identical to CFN.
+      "workmail:ListOrganizations",
+      "workmail:ListAccessControlRules",
+      "workmail:GetDefaultRetentionPolicy",
+      "workmail:ListMobileDeviceAccessRules",
+      "iotsitewise:DescribeDefaultEncryptionConfiguration",
+      "iotsitewise:DescribeLoggingOptions",
+      "iotmanagedintegrations:GetDefaultEncryptionConfiguration",
+      "ses:ListTrafficPolicies",
+      "ses:GetTrafficPolicy",
+      "codeguru-profiler:ListProfilingGroups",
+      "codeguru-profiler:GetPolicy",
     ]
     resources = ["*"]
   }

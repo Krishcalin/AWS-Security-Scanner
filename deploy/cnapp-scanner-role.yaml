@@ -102,6 +102,26 @@ Resources:
               # MediaStore was in the requested set and is absent on purpose: AWS
               # ended support for it on 2025-11-13, so its checks could never fire.
               # All read-only.
+              # ── Batch 5 ──────────────────────────────────────────────────
+              # Two client-name traps here, both caught by test_iam_surface:
+              # Mail Manager signs as `ses`, and CodeGuru Profiler's IAM
+              # prefix is `codeguru-profiler` with a hyphen. All read-only.
+              - Sid: Batch5ServiceReads
+                Effect: Allow
+                Action:
+                  - workmail:ListOrganizations
+                  - workmail:ListAccessControlRules
+                  - workmail:GetDefaultRetentionPolicy
+                  - workmail:ListMobileDeviceAccessRules
+                  - iotsitewise:DescribeDefaultEncryptionConfiguration
+                  - iotsitewise:DescribeLoggingOptions
+                  - iotmanagedintegrations:GetDefaultEncryptionConfiguration
+                  - ses:ListTrafficPolicies
+                  - ses:GetTrafficPolicy
+                  - codeguru-profiler:ListProfilingGroups
+                  - codeguru-profiler:GetPolicy
+                Resource: '*'
+
               - Sid: Batch4ServiceReads
                 Effect: Allow
                 Action:

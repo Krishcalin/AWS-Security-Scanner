@@ -7,6 +7,35 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Extended service coverage, batch 5** (`aws_extsvc5.py`, 5 sections, 8 checks) — the
+  first batch authored *after* the SDK pin moved, so the models these were verified
+  against are finally the models the product ships.
+  - **Amazon WorkMail** (`WM-01/02/03`) — a mailbox is a credential store with a login
+    page: password resets, MFA enrolment and signed approvals all arrive there, which is
+    why mailbox compromise is usually the first step rather than the objective. Without
+    access control rules any protocol is reachable from any network; without mobile
+    device rules any personal phone holds a **persistent offline replica that survives
+    credential revocation**; without retention, a compromise today exposes the entire
+    history, because nothing that was never deleted can be un-exposed.
+  - **AWS IoT SiteWise** (`SW-01/02`) — industrial telemetry from physical plant: asset
+    hierarchies describing how a facility is built, process values that are evidentiary
+    in a regulated plant. Logging defaults to `OFF`, and tampering with telemetry
+    surfaces first as an ingestion anomaly — with nowhere to appear.
+  - **AWS IoT Managed Integrations** (`IMI-01`) — a 2025 API that ships with its own
+    default key, so an account arrives there by not choosing. It holds connection
+    material for **third-party device clouds**: an outward path into systems whose logs
+    you cannot read.
+  - **SES Mail Manager** (`MM-01`) — `DefaultAction=ALLOW` fails **open**. A policy with
+    a long list of DENY statements reads as filtering, when it is filtering an
+    enumerated set and delivering everything else.
+  - **Amazon CodeGuru Profiler** (`CGP-01`) — profiles are production stack traces, so
+    the method names in them are a map of the application's internals assembled from the
+    running system.
+  - **Two more client-name/IAM-prefix traps, both caught automatically this time.** Mail
+    Manager signs as **`ses`**, and CodeGuru Profiler's prefix is **`codeguru-profiler`**
+    with a hyphen. These are the fourth and fifth instances; every previous one needed a
+    human to notice, and `test_iam_surface` validated both without being asked.
+
 - **Extended service coverage, batch 4** (`aws_extsvc4.py`, 5 sections, 8 checks).
   - **AWS Lake Formation** (`LF-01/02`) — the most consequential setting in the batch.
     `IAM_ALLOWED_PRINCIPALS` in the default database or table permissions means Lake
@@ -729,6 +758,38 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
     would be a guess.
 
 ### Fixed
+- **The SDK pin: botocore 1.40.51 -> 1.43.51, both SDKs moving together.** The pin had
+  been deferred twice as "a dependency decision beyond this slice", and investigating it
+  turned up something larger than a stale version.
+  - **The development environment was already on 1.43.51.** Every service model consulted
+    while authoring checks — including the entire 426-service gap analysis behind four
+    coverage batches — was read from a botocore three minor versions ahead of what a
+    fresh install would get. Nothing compared the declared pin to the installed one, so
+    nothing said so. (`boto3` was not installed at all; the scanner's `HAS_BOTO3` guard
+    meant that never surfaced.)
+  - **The pair must move together.** The CHANGELOG records `botocore==1.43.51` breaking
+    the offline build once, because `boto3==1.40.51` caps `botocore<1.41.0`. `boto3
+    1.43.51` requires `botocore>=1.43.51,<1.44.0`, so pinning both at 1.43.51 is
+    internally consistent — verified against PyPI rather than assumed, since boto3 and
+    botocore do **not** track patch-for-patch (the latest boto3 is 1.43.80).
+  - **What the bump unlocks**: `ListingMode` (`DEFAULT`/`DYNAMIC`) and the AgentCore
+    **Registry** with its `DRAFT/PENDING_APPROVAL/APPROVED/REJECTED` lifecycle. Both were
+    unreadable rather than absent under the old pin — the distinction this codebase
+    enforces everywhere else.
+  - **`MCP-04`'s premise moved with the pin, and is written down rather than left
+    standing.** That finding exists because a federated MCP server's tool list could not
+    be read, so its absence had to be *stated* rather than passed over. Under 1.43.51 it
+    partly can be. The check's **behaviour is deliberately unchanged** — bumping a
+    dependency and redesigning a finding are separate pieces of work, and doing both at
+    once ships a rewritten finding nobody reviewed — but the module now says so instead
+    of asserting a blind spot that no longer holds. Reading `ListingMode` and the
+    Registry approval state is the follow-on.
+  - **`tests/test_sdk_pin.py`** guards both failure modes: the two pins must name the
+    same version, the two requirements files must agree, the **installed** botocore must
+    match the pin, and the Registry and `ListingMode` must actually be present in the
+    installed models — asserted against the models, not inferred from a version string.
+    A further test fails if any module still describes 1.40.51 as the current pin.
+
 - **The credential-report poll cost roughly two thirds of every test run.**
   `_get_credential_report` polls an asynchronous AWS API. Against a mocked client the
   state never reaches `COMPLETE`, so every test reaching the method burned the full
