@@ -374,6 +374,94 @@ ATTACK_PATH_REDUCTION = MetricDef(
 
 KRAS: Tuple[MetricDef, ...] = (CRITICAL_CLOSURE, EXPOSED_CRITICAL, MFA_COVERAGE,
                                DISCOVERY_COVERAGE, ATTACK_PATH_REDUCTION)
+"""The five declared in OW2-KM-001."""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Review defect D4 — the exception workflow can carry the headline KRA.
+#
+# OW2-AR-031 pauses the SLA clock under an approved exception; OW2-KM-003 routes
+# CRITICAL exceptions to the CISO. So a CRITICAL finding remediated on day 200
+# against a 15-day window counts as closed-within-SLA when an exception covered
+# the gap. Measured: one approval moves OW2-KM-001(a) from 0% to 100%.
+#
+# OW2-KM-004 keeps excepted findings in a register visible to audit. That is right
+# and it is not sufficient: a register is not a metric, and the BBSC hand-off
+# under OW2-KM-002 carries metrics. So the counter-metrics are declared as KRAs,
+# not as a report.
+#
+# BOTH TARGETS ARE ZERO, AND NEITHER IS ARBITRARY. These do not measure "too many
+# exceptions", which would need a threshold nobody can defend. They measure the
+# two places where an approval changes what a number SAYS rather than what the
+# estate IS -- and the defensible target for that is none.
+# ══════════════════════════════════════════════════════════════════════════════
+
+EXCEPTION_ASSISTED_CLOSURES = MetricDef(
+    id="KRA-F", label="Exception-assisted closures",
+    definition=("Count of CRITICAL findings counted as closed-within-SLA that "
+                "exceeded the SLA window in wall-clock time, and met the deadline "
+                "only because an approved exception paused the clock. This is not "
+                "a judgement on whether the exceptions were justified; it is the "
+                "portion of OW2-KM-001(a) that reflects an approval rather than a "
+                "remediation, and it is reported so the two cannot be confused."),
+    source="aws_sla.ClosureRate.exception_assisted (raw vs paused elapsed time)",
+    cadence="recomputed every scan; reported monthly beside OW2-KM-001(a)",
+    target=0.0, direction=LOWER_IS_BETTER, unit=UNIT_COUNT,
+    srs_ref="proposed OW2-KM-001(f) — review defect D4")
+
+DEFERRED_BREACHES = MetricDef(
+    id="KRA-G", label="Deferred SLA breaches",
+    definition=("Count of open findings already past their SLA window in "
+                "wall-clock time whose breach is not reported because a live "
+                "approved exception is pausing the clock. These are breaches held "
+                "off the books: OW2-KM-004 keeps them visible to audit in a "
+                "register, and this makes them visible in the metric layer that "
+                "actually reaches the BBSC."),
+    source="aws_sla.SlaState.breach_deferred",
+    cadence="recomputed every scan; reported monthly beside OW2-KM-001(a)",
+    target=0.0, direction=LOWER_IS_BETTER, unit=UNIT_COUNT,
+    srs_ref="proposed OW2-KM-001(g) — review defect D4")
+
+EXCEPTION_KRAS: Tuple[MetricDef, ...] = (EXCEPTION_ASSISTED_CLOSURES,
+                                         DEFERRED_BREACHES)
+"""Proposed additions to OW2-KM-001. See ``docs/KRA_METRICS.md`` section 6."""
+
+ALL_KRAS: Tuple[MetricDef, ...] = KRAS + EXCEPTION_KRAS
+
+#: KRA-A may never be rendered without these beside it. A closure rate quoted
+#: alone is the defect; the pairing is what makes the exception contribution
+#: impossible to drop on the way to a slide.
+PAIRED_WITH: Mapping[str, Tuple[str, ...]] = {
+    CRITICAL_CLOSURE.id: (EXCEPTION_ASSISTED_CLOSURES.id, DEFERRED_BREACHES.id),
+}
+
+
+def closure_kras(rate) -> Tuple[Metric, ...]:
+    """Build KRA-A, KRA-F and KRA-G together from one ``aws_sla.ClosureRate``.
+
+    Returned as a triple deliberately: there is no function here that yields the
+    closure rate on its own, because a caller that can ask for the flattering
+    number alone eventually will.
+    """
+    return (
+        ratio(CRITICAL_CLOSURE, compliant=rate.in_sla, counted=rate.considered),
+        count(EXCEPTION_ASSISTED_CLOSURES, observed=rate.exception_assisted),
+        count(DEFERRED_BREACHES, observed=rate.deferred_breaches),
+    )
+
+
+def unpaired(metrics: Sequence[Metric]) -> Tuple[str, ...]:
+    """Metric ids present without a companion PAIRED_WITH requires.
+
+    A scorecard export should treat a non-empty result as a build error rather
+    than shipping a headline whose counter-metric was dropped in assembly.
+    """
+    present = {m.definition.id for m in metrics}
+    missing: List[str] = []
+    for mid, needs in PAIRED_WITH.items():
+        if mid in present:
+            missing.extend(n for n in needs if n not in present)
+    return tuple(sorted(set(missing)))
 
 
 def metric_dictionary(metrics: Sequence[MetricDef] = KRAS) -> dict:

@@ -140,16 +140,105 @@ which is why it can be met on day one rather than being a commitment to build:
 | Evidence packs | Coverage sits inside the **signed** root, so stripping the record of what the scan could not reach breaks verification. |
 | Posture score | The letter grade is **withheld** below 90% check coverage, and the unassessed penalty band is published beside the score. |
 | Risk model | An unmeasured factor is excluded and its weight redistributed, never scored `0.0`; below 50% weight coverage the composite is refused. See [`RISK_MODEL.md`](RISK_MODEL.md) §3. |
+| Closure rate | The exception-adjusted and unadjusted rates render together, so the headline cannot be quoted without the approvals that produced it. See §5. |
 
 ---
 
-## 5. What is being asked for
+## 5. The exception workflow can carry the headline KRA (review defect D4)
+
+### 5.1 The gap
+
+`OW2-AR-031` pauses the SLA clock under an approved exception. `OW2-KM-003` routes
+CRITICAL exceptions to the CISO for approval. Together they mean:
+
+> A CRITICAL finding remediated on **day 200** against a **15-day** window counts as
+> *closed within SLA*, provided an approved exception covered the gap.
+
+Measured against the implementation, **one approval moves `OW2-KM-001(a)` from 0% to
+100%**.
+
+`OW2-KM-004` requires excepted findings to be reported in a separate register visible
+to audit, and never hidden. That is the right instinct and it is **not sufficient**: a
+register is not a metric, and `OW2-KM-002` hands *metrics* to the BBSC. The register
+is read by auditors; the metric is read by the board.
+
+### 5.2 What is not being proposed
+
+Pausing is not the defect and must not be removed. Exceptions exist for real reasons
+— a vendor patch that does not exist yet, a change freeze, a compensating control
+pending — and `OW2-AR-031` requires them. A tool that refused to honour an approved
+exception would simply be wrong, and would push the workflow into spreadsheets where
+nobody can measure it at all.
+
+### 5.3 What is proposed: the adjustment travels inside the number
+
+The closure rate is reported as a pair that cannot be separated:
+
+| Field | Meaning |
+|---|---|
+| `pct` | as measured, with exception pauses honoured |
+| `unadjusted_pct` | the same rate with no clock ever paused |
+
+The gap between them is precisely how much of the headline is exception-derived. If
+they agree, exceptions are doing no work. The rendered headline contains both, so
+there is no code path that emits the flattering figure alone:
+
+> Critical findings closed within SLA: 100.0% (1 of 1) — but 100.0 points of that
+> come from 1 closure that met the deadline only because an approved exception paused
+> the clock. Unadjusted, the rate is 0.0%.
+
+### 5.4 Two new KRAs, both with a defensible target of zero
+
+> **Proposed `OW2-KM-001(f)` — Exception-assisted closures.** Count of CRITICAL
+> findings counted as closed-within-SLA that exceeded the window in wall-clock time
+> and met the deadline only because an approved exception paused the clock.
+> **Target: 0.**
+>
+> **Proposed `OW2-KM-001(g)` — Deferred SLA breaches.** Count of open findings
+> already past their window in wall-clock time whose breach is unreported because a
+> live approved exception is pausing the clock. **Target: 0.**
+
+Neither measures "too many exceptions", which would need a threshold nobody can
+defend. They measure the two places where an approval changes **what a number says
+rather than what the estate is** — and the defensible target for that is none.
+
+Neither is a judgement on whether individual exceptions were justified. A programme
+can legitimately score above zero here and explain why; what it cannot do is report
+100% closure and leave the reader unaware that an approval produced it.
+
+### 5.5 Renewal chains
+
+`OW2-KM-003` requires a mandatory expiry and automatic re-opening on it. That stops
+an exception being *formally* permanent. It does not stop **serial renewal**, which
+is a permanent exception with better paperwork, assembled from decisions that each
+looked reasonable in isolation.
+
+`ExceptionLoad` therefore reports the longest renewal chain and flags any finding
+whose cumulative exception time exceeds a multiple (default 2×) of its own SLA
+window. The chain is visible in the approval windows already stored — provided they
+are counted **unmerged**, since merging back-to-back renewals collapses six
+approvals into one.
+
+Suggested companion amendment:
+
+* **`OW2-KM-004`** — append: "the exception register shall record the renewal count
+  and cumulative excepted duration per finding, and the metric layer shall report
+  both."
+
+---
+
+## 6. What is being asked for
 
 1. **Adopt `OW2-KM-007`** as an M-priority requirement in FR-8. (§2)
 2. **Ratify the three-verdict vocabulary** — `MET` / `NOT_MET` / `NOT_ESTABLISHED`
    — and the rule that NOT ESTABLISHED occupies its own column in every report,
    export and board pack. (§3.1, §3.4)
-3. **Confirm the BBSC hand-off carries all three**, not a two-state pass/fail
-   collapse. This is Appendix D open item 5, and it is the point at which the
-   requirement is most likely to be quietly lost: a spreadsheet with a red/green
-   column has nowhere to put "nobody knows".
+3. **Adopt `OW2-KM-001(f)` and `(g)`**, and the rule that `OW2-KM-001(a)` is never
+   published without them. (§5.4)
+4. **Amend `OW2-KM-004`** to carry renewal count and cumulative excepted duration.
+   (§5.5)
+5. **Confirm the BBSC hand-off carries all three verdicts**, not a two-state
+   pass/fail collapse. This is Appendix D open item 5, and it is where both
+   requirements are most likely to be quietly lost: a spreadsheet with a red/green
+   column has nowhere to put "nobody knows", and a single closure-rate cell has
+   nowhere to put the approval that produced it.

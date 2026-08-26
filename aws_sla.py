@@ -149,6 +149,7 @@ class SlaState:
     first_seen_epoch: int
     window_seconds: Optional[int]
     elapsed_seconds: int          # net of paused time
+    raw_elapsed_seconds: int      # wall-clock since first detection, pauses ignored
     paused_seconds: int
     remaining_seconds: Optional[int]
     due_epoch: Optional[int]      # shifted forward by paused time
@@ -168,6 +169,27 @@ class SlaState:
     @property
     def breached(self) -> bool:
         return self.state in (BREACHED, CLOSED_LATE)
+
+    @property
+    def exception_assisted(self) -> bool:
+        """Closed inside SLA ONLY because an exception paused the clock.
+
+        This is review defect D4 made countable. The finding took longer than the
+        window in wall-clock time; an approval is the sole reason it is not a
+        breach. Legitimate or not, it must not be indistinguishable from a
+        remediation that actually met the deadline."""
+        return (self.state == CLOSED_IN_SLA and self.window_seconds is not None
+                and self.raw_elapsed_seconds > self.window_seconds)
+
+    @property
+    def breach_deferred(self) -> bool:
+        """Open, already past its window in wall-clock time, and paused.
+
+        A breach being held off the books. OW2-KM-004 keeps these visible to audit
+        in a register, but a register is not a metric and only metrics reach the
+        BBSC."""
+        return (self.state == PAUSED and self.window_seconds is not None
+                and self.raw_elapsed_seconds > self.window_seconds)
 
 
 def evaluate(
@@ -191,26 +213,27 @@ def evaluate(
     if status == "resolved" and closed is None:
         # Resolved without a timestamp: the clock cannot be computed, and guessing
         # "now" would invent a remediation date that flatters the metric.
-        return SlaState(key, sev, NO_POLICY, first, None, 0, 0, None, None, None,
+        return SlaState(key, sev, NO_POLICY, first, None, 0, 0, 0, None, None, None,
                         reason="finding is resolved but carries no resolved_epoch; "
                                "elapsed time is unknown and was not inferred")
 
     window = policy.window(sev)
     if window is None:
-        return SlaState(key, sev, NO_POLICY, first, None, 0, 0, None, None, closed,
+        return SlaState(key, sev, NO_POLICY, first, None, 0, 0, 0, None, None, closed,
                         reason="no SLA policy for severity %r; no default was "
                                "assumed" % (sev or "<empty>"))
 
     end = closed if closed is not None else int(now_epoch)
     paused = paused_seconds(exception_windows, first, end)
+    raw_elapsed = max(0, end - first)
     elapsed = max(0, end - first - paused)
     due = first + window + paused
     remaining = due - end
 
     if closed is not None:
         state = CLOSED_IN_SLA if elapsed <= window else CLOSED_LATE
-        return SlaState(key, sev, state, first, window, elapsed, paused,
-                        remaining, due, closed)
+        return SlaState(key, sev, state, first, window, elapsed, raw_elapsed,
+                        paused, remaining, due, closed)
 
     # Open. A live exception freezes the clock; it does not clear the breach that
     # already happened, so the breach check comes first (OW2-KM-004: an exception
@@ -225,8 +248,8 @@ def evaluate(
                   % round(policy.escalate_at * 100))
     else:
         state, reason = WITHIN, ""
-    return SlaState(key, sev, state, first, window, elapsed, paused, remaining,
-                    due, None, reason)
+    return SlaState(key, sev, state, first, window, elapsed, raw_elapsed, paused,
+                    remaining, due, None, reason)
 
 
 def _under_live_exception(windows: Sequence[Tuple[int, Optional[int]]],
@@ -381,20 +404,181 @@ def breached(states: Iterable[SlaState]) -> Tuple[SlaState, ...]:
     return tuple(out)
 
 
-def closure_rate(states: Iterable[SlaState], severity: str = "CRITICAL") -> Tuple[float, int, int]:
+@dataclass(frozen=True)
+class ClosureRate:
+    """OW2-KM-001(a), reported so it cannot be quoted without its adjustment.
+
+    Review defect D4: the SLA clock pauses under an approved exception
+    (OW2-AR-031), so a CRITICAL finding remediated on day 200 against a 15-day
+    window counts as closed-within-SLA when an exception covered the gap.
+    Measured: one approval moves this metric from 0% to 100%.
+
+    OW2-KM-004 keeps excepted findings in a register visible to audit, which is
+    right and is not sufficient -- a register is not a metric, and only the metric
+    reaches the BBSC under OW2-KM-002.
+
+    The fix is not to forbid pausing; exceptions exist for real reasons and
+    OW2-AR-031 requires them. It is that BOTH NUMBERS TRAVEL TOGETHER: `pct`
+    honours exceptions, `unadjusted_pct` ignores them, and the gap between them is
+    exactly how much of the headline is exception-derived. If they agree,
+    exceptions are doing no work. :meth:`headline` renders both, so there is no
+    code path that emits the flattering figure alone.
+    """
+
+    severity: str
+    in_sla: int
+    considered: int
+    exception_assisted: int
+    deferred_breaches: int
+
+    @property
+    def pct(self) -> float:
+        """As measured, with exception pauses honoured."""
+        return 0.0 if not self.considered else round(
+            100.0 * self.in_sla / self.considered, 1)
+
+    @property
+    def unadjusted_pct(self) -> float:
+        """What the rate would be if no exception had paused any clock."""
+        if not self.considered:
+            return 0.0
+        return round(100.0 * (self.in_sla - self.exception_assisted)
+                     / self.considered, 1)
+
+    @property
+    def exception_derived_points(self) -> float:
+        """Percentage points of the headline attributable to approvals.
+
+        Computed from the raw counts, not by subtracting two already-rounded
+        percentages -- that route reports 33.4 where the answer is 33.3."""
+        if not self.considered:
+            return 0.0
+        return round(100.0 * self.exception_assisted / self.considered, 1)
+
+    def headline(self) -> str:
+        if not self.considered:
+            return ("No %s findings with an SLA policy in scope, so no closure rate "
+                    "can be computed." % self.severity)
+        line = ("%s findings closed within SLA: %.1f%% (%d of %d)"
+                % (self.severity.title(), self.pct, self.in_sla, self.considered))
+        if self.exception_assisted:
+            line += (" -- but %.1f points of that come from %d closure%s that met "
+                     "the deadline only because an approved exception paused the "
+                     "clock. Unadjusted, the rate is %.1f%%."
+                     % (self.exception_derived_points, self.exception_assisted,
+                        "" if self.exception_assisted == 1 else "s",
+                        self.unadjusted_pct))
+        if self.deferred_breaches:
+            line += (" A further %d open finding%s already past the window %s held "
+                     "off the books by a live exception."
+                     % (self.deferred_breaches,
+                        "" if self.deferred_breaches == 1 else "s",
+                        "is" if self.deferred_breaches == 1 else "are"))
+        return line
+
+    def to_dict(self) -> dict:
+        return {"severity": self.severity, "pct": self.pct,
+                "unadjusted_pct": self.unadjusted_pct,
+                "exception_derived_points": self.exception_derived_points,
+                "in_sla": self.in_sla, "considered": self.considered,
+                "exception_assisted": self.exception_assisted,
+                "deferred_breaches": self.deferred_breaches,
+                "headline": self.headline()}
+
+
+def closure_rate(states: Iterable[SlaState],
+                 severity: str = "CRITICAL") -> ClosureRate:
     """OW2-KM-001(a): share of findings in a band closed inside the SLA window.
 
-    Returns ``(pct, closed_in_sla, considered)``. ``considered`` counts every
-    finding in the band that has a policy — open ones included — because a rate
-    computed only over closed findings reaches 100% the moment nothing closes.
+    ``considered`` counts every finding in the band that has a policy -- open ones
+    included -- because a rate computed only over closed findings reaches 100% the
+    moment nothing closes.
     """
     sev = (severity or "").upper()
-    considered = in_sla = 0
+    considered = in_sla = assisted = deferred = 0
     for s in states:
         if s.severity != sev or s.state == NO_POLICY:
             continue
         considered += 1
         if s.state == CLOSED_IN_SLA:
             in_sla += 1
-    pct = 0.0 if not considered else round(100.0 * in_sla / considered, 1)
-    return pct, in_sla, considered
+            if s.exception_assisted:
+                assisted += 1
+        elif s.breach_deferred:
+            deferred += 1
+    return ClosureRate(sev, in_sla, considered, assisted, deferred)
+
+
+@dataclass(frozen=True)
+class ExceptionLoad:
+    """How much SLA time the exception workflow is buying, and for whom.
+
+    OW2-KM-003 requires a mandatory expiry and automatic re-opening on it. That
+    stops an exception being FORMALLY permanent; it does not stop one being
+    serially renewed, which is a permanent exception with better paperwork. The
+    renewal chain is the pattern worth surfacing, and it is visible in the windows
+    already stored -- a finding with six approvals had six separate decisions that
+    each looked reasonable in isolation.
+    """
+
+    findings: int
+    under_exception: int
+    days_granted: int
+    longest_chain: int
+    perpetual: Tuple[str, ...] = ()
+    perpetual_multiple: float = 2.0
+
+    @property
+    def rate(self) -> float:
+        return 0.0 if not self.findings else round(
+            100.0 * self.under_exception / self.findings, 1)
+
+    def headline(self) -> str:
+        if not self.findings:
+            return "No findings in scope."
+        bits = ["%d of %d findings are under an approved exception (%.1f%%), "
+                "totalling %d exception-days granted."
+                % (self.under_exception, self.findings, self.rate,
+                   self.days_granted)]
+        if self.longest_chain > 1:
+            bits.append("The longest renewal chain is %d approvals on one finding."
+                        % self.longest_chain)
+        if self.perpetual:
+            bits.append(
+                "%d finding%s accumulated more than %.0fx %s SLA window in "
+                "exception time, which is a permanent exception granted "
+                "incrementally: %s."
+                % (len(self.perpetual), "" if len(self.perpetual) == 1 else "s",
+                   self.perpetual_multiple,
+                   "its" if len(self.perpetual) == 1 else "their",
+                   ", ".join(self.perpetual[:5])))
+        return " ".join(bits)
+
+
+def exception_load(
+    states: Iterable[SlaState],
+    windows_by_key: Optional[Mapping[str, Sequence[Tuple[int, Optional[int]]]]] = None,
+    perpetual_multiple: float = 2.0,
+) -> ExceptionLoad:
+    """Aggregate the exception workflow's effect across a set of findings.
+
+    ``windows_by_key`` maps finding_key to its raw (UNMERGED) exception windows;
+    the count of windows is the renewal chain, so they must not be pre-merged.
+    """
+    windows_by_key = windows_by_key or {}
+    total = under = granted = 0
+    longest = 0
+    perpetual: List[str] = []
+    for s in states:
+        if s.state == NO_POLICY:
+            continue
+        total += 1
+        if s.paused_seconds > 0:
+            under += 1
+            granted += s.paused_seconds // DAY
+        longest = max(longest, len(windows_by_key.get(s.finding_key, ())))
+        if (s.window_seconds
+                and s.paused_seconds > perpetual_multiple * s.window_seconds):
+            perpetual.append(s.finding_key)
+    return ExceptionLoad(total, under, int(granted), longest,
+                         tuple(sorted(perpetual)), perpetual_multiple)
