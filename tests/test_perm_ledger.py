@@ -100,6 +100,8 @@ EXPECTED_GAP = ("aoss:BatchGetCollection",
                 "cloudtrail:DescribeTrails",
                 "cloudtrail:GetEventSelectors",
                 "cloudtrail:LookupEvents",
+                "organizations:DescribePolicy",
+                "organizations:ListPoliciesForTarget",
                 "s3:GetBucketPolicy",
                 "s3vectors:GetVectorBucket",
                 "s3vectors:GetVectorBucketPolicy",
@@ -107,7 +109,7 @@ EXPECTED_GAP = ("aoss:BatchGetCollection",
 
 
 # ── the load-bearing assertion ──────────────────────────────────────────────
-def test_the_shipped_role_is_missing_exactly_thirtytwo_actions():
+def test_the_shipped_role_is_missing_exactly_thirtyfour_actions():
     """Computed from the policy documents, not recalled. If this number moves, either
     AWS changed SecurityAudit or we added a call — both worth a human looking."""
     led = L.evaluate(SHIPPED_ROLE)
@@ -120,7 +122,7 @@ def test_the_blocked_checks_are_the_knowledge_base_and_guardrail_grading_ones():
     what makes GetGuardrail cheap to justify: one Get buys three checks. AIGRD-03 is
     absent on purpose -- enforcement is read from statements already collected."""
     led = L.evaluate(SHIPPED_ROLE)
-    assert set(led.blocked) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MART-01", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "SHAI-01", "SHAI-02", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
+    assert set(led.blocked) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MART-01", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "PERIM-01", "PERIM-02", "PERIM-03", "SHAI-01", "SHAI-02", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
     assert led.blocked["AGT-03"] == ("bedrock:GetDataSource",
                                      "bedrock:GetKnowledgeBase")
     # Slice 3.1: GetDataSource now also buys TFLOW-01, because the data
@@ -161,7 +163,7 @@ def test_declining_an_action_names_what_it_costs():
         "AGT-04", "AGY-01", "AGY-02", "AGY-03"}
     assert led.forfeit(["bedrock:GetGuardrail"]) == (
         "AIGRD-01", "AIGRD-02", "AIGRD-04")
-    assert set(led.forfeit(EXPECTED_GAP)) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MART-01", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "SHAI-01", "SHAI-02", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
+    assert set(led.forfeit(EXPECTED_GAP)) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MART-01", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "PERIM-01", "PERIM-02", "PERIM-03", "SHAI-01", "SHAI-02", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
 
 
 def test_declining_an_action_a_working_check_depends_on_is_also_counted():

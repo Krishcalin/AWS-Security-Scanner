@@ -297,6 +297,48 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
     # from their own detector. Recorded as a deliberate absence rather than an omission,
     # the same way slice 3.5's pen-test ingest is -- a reader checking why AIDR-01 has no
     # entry should find the reason here rather than assume it was forgotten.
+    # Slice 5.2 -- the data perimeter. ListPoliciesForTarget/DescribePolicy are
+    # normally callable only from the management or a delegated-admin account, so a
+    # member-account scan will legitimately be denied these and report the perimeter as
+    # UNREADABLE. That is the correct outcome and the reason these are recorded: a
+    # declined grant must name what it costs rather than silently becoming a clean pass.
+    "PERIM-01": (
+        _req("organizations:ListPoliciesForTarget",
+             "list the Resource Control Policies attached from the account up to the "
+             "org root -- the policy type AWS names for the trusted-identities "
+             "perimeter (an SCP cannot implement it)"),
+        _req("organizations:DescribePolicy",
+             "read each policy's document to see whether it carries aws:PrincipalOrgID"),
+    ),
+    "PERIM-02": (
+        _req("organizations:ListPoliciesForTarget",
+             "list the Service Control Policies attached up to the org root -- the "
+             "policy type AWS names for the trusted-resources perimeter"),
+        _req("organizations:DescribePolicy",
+             "read each policy's document to see whether it carries aws:ResourceOrgID"),
+    ),
+    "PERIM-03": (
+        _req("organizations:ListPoliciesForTarget",
+             "list SCPs and RCPs -- both implement the expected-networks perimeter, and "
+             "only an RCP reaches AWS service principals"),
+        _req("organizations:DescribePolicy",
+             "read each policy's document for aws:SourceIp / aws:SourceVpc"),
+    ),
+    # Slice 5.3 needs no NEW action: ec2:DescribeInstanceTypes falls under
+    # SecurityAudit's ec2:Describe*. Recorded so declining it names what it costs, and
+    # because the ZTMM Networks/Traffic encryption function depends on these two.
+    "NITRO-01": (
+        _req("ec2:DescribeInstanceTypes",
+             "read NetworkInfo.EncryptionInTransitSupported -- whether the instance "
+             "TYPE automatically encrypts in-transit traffic between instances, which "
+             "is the only readable answer to whether east-west traffic is encrypted "
+             "below the application"),
+    ),
+    "NITRO-02": (
+        _req("ec2:DescribeInstanceTypes",
+             "read Hypervisor -- whether the instance predates the Nitro platform "
+             "generation and its isolation guarantees"),
+    ),
     "MART-01": (
         _req("sagemaker:DescribeModel",
              "read ModelDataUrl and ModelDataSource.S3Uri -- WHERE the container loads "

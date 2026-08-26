@@ -348,6 +348,12 @@ ZTMM_MAPPING: Dict[Tuple[str, str], Dict[str, List[str]]] = {
     ("Networks", "Network segmentation"): {
         INITIAL: ["SEG-01"],
         ADVANCED: ["SEG-02", "VPC-01"],
+        # Slice 5.2's network perimeter. SEG-01/02 and VPC-01 segment INSIDE the estate,
+        # rule by rule; PERIM-03 asks whether the estate constrains where a request may
+        # originate at all, which is the enterprise-wide version of the same question.
+        # SEGREC-01 is deliberately NOT here: it is an INFO recommendation rather than a
+        # pass/fail control, and a function cannot be scored on advice.
+        OPTIMAL: ["PERIM-03"],
     },
     ("Networks", "Network traffic management"): {
         INITIAL: ["SEG-05"],
@@ -355,6 +361,13 @@ ZTMM_MAPPING: Dict[Tuple[str, str], Dict[str, List[str]]] = {
     ("Networks", "Traffic encryption"): {
         INITIAL: ["ELB-01"],
         ADVANCED: ["ACM-01", "ACM-02"],
+        # Slice 5.3 composes here rather than merely stacking. CISA's Optimal for this
+        # function is encryption applied "as appropriate ... to the extent possible",
+        # and TLS at an edge does not reach it: the traffic BETWEEN instances is the
+        # part an edge certificate never touches. NITRO-01/02 are the only readable
+        # evidence about that layer, which is why this function could not have reached
+        # Optimal before 5.3 existed.
+        OPTIMAL: ["NITRO-01", "NITRO-02"],
     },
     ("Networks", "Visibility and analytics"): {
         INITIAL: ["VPC-03"],
@@ -388,6 +401,13 @@ ZTMM_MAPPING: Dict[Tuple[str, str], Dict[str, List[str]]] = {
     ("Data", "Data access"): {
         INITIAL: ["S3-01", "S3-09"],
         ADVANCED: ["S3-10", "EXTACCESS-02"],
+        # Slice 5.2 composes here rather than merely stacking. Everything above is a
+        # PER-RESOURCE control: this bucket policy, that external grant. CISA's Optimal
+        # for this function is access governed by enterprise-wide rules rather than
+        # resource by resource, and a data perimeter is exactly that rule -- the
+        # organization-wide floor under every individual policy. PERIM-01 is who may
+        # reach your data; PERIM-02 is which data your principals may reach.
+        OPTIMAL: ["PERIM-01", "PERIM-02"],
     },
     ("Data", "Data encryption"): {
         INITIAL: ["S3-03", "EBS-01"],
