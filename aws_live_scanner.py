@@ -92,6 +92,7 @@ import aws_perimeter
 import aws_checkdef
 import aws_extsvc
 import aws_extsvc2
+import aws_extsvc3
 import aws_segmentation
 import aws_shadowai
 import aws_ailog
@@ -237,6 +238,9 @@ SECTIONS = [
     # Batch 2. Declared via aws_checkdef rather than five hand-edited literals.
     "NETWORKFIREWALL", "LIGHTSAIL", "PRIVATECA", "QUICKSIGHT",
     "IDENTITYCENTER", "GLUE",
+    # Batch 3.
+    "S3TABLES", "VPCLATTICE", "CODEARTIFACT", "DIRECTORYSERVICE",
+    "PROMETHEUS", "XRAY",
     "CORRELATE",
 ]
 
@@ -277,6 +281,12 @@ SECTION_LABELS = {
     "QUICKSIGHT":     "AMAZON QUICKSIGHT",
     "IDENTITYCENTER": "IAM IDENTITY CENTER",
     "GLUE":           "AWS GLUE",
+    "S3TABLES":       "AMAZON S3 TABLES",
+    "VPCLATTICE":     "AMAZON VPC LATTICE",
+    "CODEARTIFACT":   "AWS CODEARTIFACT",
+    "DIRECTORYSERVICE": "AWS DIRECTORY SERVICE",
+    "PROMETHEUS":     "AMAZON MANAGED PROMETHEUS",
+    "XRAY":           "AWS X-RAY",
     "ELASTICACHE":    "AMAZON ELASTICACHE",
     "OPENSEARCH":     "AMAZON OPENSEARCH",
     "DYNAMODB":       "AMAZON DYNAMODB",
@@ -8803,6 +8813,259 @@ class AWSLiveScanner:
                 break
         return out
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # BATCH 3 — declared via aws_checkdef (see aws_extsvc3)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_s3tables(self):
+        """S3T-01/02 — S3 Tables buckets carry their OWN policy and encryption, which
+        no existing S3 check inspects."""
+        self._section_header("S3TABLES")
+        try:
+            c = self._client("s3tables")
+            buckets = self._tokens(c.list_table_buckets, "tableBuckets",
+                                   token_key="continuationToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("S3T-01", "S3T-02"):
+                    self._coverage.note_denied(cid, "s3tables:ListTableBuckets")
+            return
+
+        for b in buckets:
+            arn = (b or {}).get("arn")
+            if not arn:
+                continue
+            try:
+                pol = (c.get_table_bucket_policy(tableBucketARN=arn) or {}
+                       ).get("resourcePolicy")
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("S3T-01", "s3tables:GetTableBucketPolicy")
+                pol = None
+            r = aws_extsvc3.table_bucket_policy(arn, pol)
+            if r["public"]:
+                self._add("FAIL", "S3T-01", "S3TABLES", arn, f"{r['statement']} | {arn}")
+            else:
+                self._add("PASS", "S3T-01", "S3TABLES", arn,
+                          f"S3 Tables bucket {arn} has no wildcard-principal policy "
+                          f"| {arn}")
+
+            try:
+                enc = (c.get_table_bucket_encryption(tableBucketARN=arn) or {}
+                       ).get("encryptionConfiguration") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("S3T-02",
+                                               "s3tables:GetTableBucketEncryption")
+                continue
+            r = aws_extsvc3.table_bucket_encryption(arn, enc)
+            if r["known"] and not r["kms"]:
+                self._add("FAIL", "S3T-02", "S3TABLES", arn, f"{r['statement']} | {arn}")
+            elif r["kms"]:
+                self._add("PASS", "S3T-02", "S3TABLES", arn,
+                          f"S3 Tables bucket {arn} uses a customer-managed KMS key "
+                          f"| {arn}")
+
+    def _check_vpclattice(self):
+        """LATT-01/02 — authType NONE means no caller identity at all."""
+        self._section_header("VPCLATTICE")
+        try:
+            c = self._client("vpc-lattice")
+            services = self._tokens(c.list_services, "items", token_key="nextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("LATT-01", "LATT-02"):
+                    self._coverage.note_denied(cid, "vpc-lattice:ListServices")
+            return
+
+        for svc in services:
+            sid = (svc or {}).get("id") or (svc or {}).get("arn")
+            if not sid:
+                continue
+            try:
+                full = c.get_service(serviceIdentifier=sid) or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("LATT-01", "vpc-lattice:GetService")
+                continue
+            r = aws_extsvc3.lattice_auth(full)
+            nm = r["name"] or sid
+            if r["unauthenticated"]:
+                self._add("FAIL", "LATT-01", "VPCLATTICE", nm, f"{r['statement']} | {nm}")
+            elif r["known"]:
+                self._add("PASS", "LATT-01", "VPCLATTICE", nm,
+                          f"VPC Lattice service {nm} requires {r['auth_type']} "
+                          f"authentication | {nm}")
+                try:
+                    pol = (c.get_auth_policy(resourceIdentifier=sid) or {}).get("policy")
+                except Exception as e:
+                    if self._is_access_denied(e):
+                        self._coverage.note_denied("LATT-02",
+                                                   "vpc-lattice:GetAuthPolicy")
+                    continue
+                p = aws_extsvc3.lattice_auth_policy(nm, pol)
+                if p["permissive"]:
+                    self._add("FAIL", "LATT-02", "VPCLATTICE", nm,
+                              f"{p['statement']} | {nm}")
+                elif p["has_policy"]:
+                    self._add("PASS", "LATT-02", "VPCLATTICE", nm,
+                              f"VPC Lattice service {nm} has a scoped auth policy | {nm}")
+
+    def _check_codeartifact(self):
+        """CART-01 — the internal package registry, and the dependency graph it reveals."""
+        self._section_header("CODEARTIFACT")
+        try:
+            c = self._client("codeartifact")
+            domains = self._tokens(c.list_domains, "domains", token_key="nextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("CART-01", "codeartifact:ListDomains")
+            return
+
+        for d in domains:
+            dname = (d or {}).get("name")
+            if not dname:
+                continue
+            try:
+                pol = (c.get_domain_permissions_policy(domain=dname) or {}
+                       ).get("policy", {}).get("document")
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied(
+                        "CART-01", "codeartifact:GetDomainPermissionsPolicy")
+                pol = None
+            r = aws_extsvc3.codeartifact_policy("domain", dname, pol)
+            if r["public"]:
+                self._add("FAIL", "CART-01", "CODEARTIFACT", dname,
+                          f"{r['statement']} | {dname}")
+            else:
+                self._add("PASS", "CART-01", "CODEARTIFACT", dname,
+                          f"CodeArtifact domain {dname} has no wildcard-principal "
+                          f"policy | {dname}")
+
+            try:
+                repos = self._tokens(c.list_repositories_in_domain, "repositories",
+                                     token_key="nextToken", domain=dname)
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("CART-01",
+                                               "codeartifact:ListRepositories")
+                continue
+            for rp in repos:
+                rname = (rp or {}).get("name")
+                if not rname:
+                    continue
+                try:
+                    rpol = (c.get_repository_permissions_policy(
+                        domain=dname, repository=rname) or {}
+                    ).get("policy", {}).get("document")
+                except Exception as e:
+                    if self._is_access_denied(e):
+                        self._coverage.note_denied(
+                            "CART-01", "codeartifact:GetRepositoryPermissionsPolicy")
+                    continue
+                rr = aws_extsvc3.codeartifact_policy("repository", rname, rpol)
+                if rr["public"]:
+                    self._add("FAIL", "CART-01", "CODEARTIFACT", rname,
+                              f"{rr['statement']} | {rname}")
+
+    def _check_directoryservice(self):
+        """DIRSVC-01/02 — the authentication layer under everything joined to it."""
+        self._section_header("DIRECTORYSERVICE")
+        try:
+            ds = self._client("ds")
+            dirs = self._tokens(ds.describe_directories, "DirectoryDescriptions")
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("DIRSVC-01", "DIRSVC-02"):
+                    self._coverage.note_denied(cid, "ds:DescribeDirectories")
+            return
+
+        for d in dirs:
+            did = (d or {}).get("DirectoryId")
+            if not did:
+                continue
+            try:
+                settings = (ds.describe_ldaps_settings(DirectoryId=did) or {}
+                            ).get("LDAPSSettingsInfo") or []
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("DIRSVC-01", "ds:DescribeLDAPSSettings")
+                settings = None
+            if settings is not None:
+                r = aws_extsvc3.directory_ldaps(did, settings)
+                if r["disabled"] or r["failed"]:
+                    self._add("FAIL", "DIRSVC-01", "DIRECTORYSERVICE", did,
+                              f"{r['statement']} | {did}")
+                elif r["known"]:
+                    self._add("PASS", "DIRSVC-01", "DIRECTORYSERVICE", did,
+                              f"Directory {did} has LDAPS enabled | {did}")
+
+            try:
+                shared = (ds.describe_shared_directories(OwnerDirectoryId=did) or {}
+                          ).get("SharedDirectories") or []
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("DIRSVC-02",
+                                               "ds:DescribeSharedDirectories")
+                continue
+            r = aws_extsvc3.directory_sharing(did, shared, [self.account])
+            if r["shared"]:
+                self._add("WARN", "DIRSVC-02", "DIRECTORYSERVICE", did,
+                          f"{r['statement']} | {did}")
+            else:
+                self._add("PASS", "DIRSVC-02", "DIRECTORYSERVICE", did,
+                          f"Directory {did} is not shared outside this account | {did}")
+
+    def _check_prometheus(self):
+        """AMP-01 — metric LABELS are a map of the estate."""
+        self._section_header("PROMETHEUS")
+        try:
+            c = self._client("amp")
+            workspaces = self._tokens(c.list_workspaces, "workspaces",
+                                      token_key="nextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("AMP-01", "aps:ListWorkspaces")
+            return
+
+        for w in workspaces:
+            wid = (w or {}).get("workspaceId")
+            if not wid:
+                continue
+            try:
+                full = (c.describe_workspace(workspaceId=wid) or {}
+                        ).get("workspace") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("AMP-01", "aps:DescribeWorkspace")
+                continue
+            r = aws_extsvc3.amp_workspace(full)
+            if not r["cmk"]:
+                self._add("FAIL", "AMP-01", "PROMETHEUS", wid, f"{r['statement']} | {wid}")
+            else:
+                self._add("PASS", "AMP-01", "PROMETHEUS", wid,
+                          f"Prometheus workspace {wid} uses a customer-managed KMS key "
+                          f"| {wid}")
+
+    def _check_xray(self):
+        """XRAY-01 — traces are a readable log of what the application does."""
+        self._section_header("XRAY")
+        try:
+            cfg = (self._client("xray").get_encryption_config() or {}
+                   ).get("EncryptionConfig") or {}
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("XRAY-01", "xray:GetEncryptionConfig")
+            return
+        r = aws_extsvc3.xray_encryption(cfg)
+        if r["known"] and not r["cmk"]:
+            self._add("FAIL", "XRAY-01", "XRAY", "encryption",
+                      f"{r['statement']} | encryption")
+        elif r["cmk"]:
+            self._add("PASS", "XRAY-01", "XRAY", "encryption",
+                      f"X-Ray traces are encrypted with a customer-managed key "
+                      f"| encryption")
+
     def _check_networkfirewall(self):
         """NFW-01/02/03 — AWS Network Firewall."""
         self._section_header("NETWORKFIREWALL")
@@ -15109,6 +15372,12 @@ class AWSLiveScanner:
             "QUICKSIGHT":     self._check_quicksight,
             "IDENTITYCENTER": self._check_identitycenter,
             "GLUE":           self._check_glue,
+            "S3TABLES":       self._check_s3tables,
+            "VPCLATTICE":     self._check_vpclattice,
+            "CODEARTIFACT":   self._check_codeartifact,
+            "DIRECTORYSERVICE": self._check_directoryservice,
+            "PROMETHEUS":     self._check_prometheus,
+            "XRAY":           self._check_xray,
             "ELASTICACHE":    self._check_elasticache,
             "OPENSEARCH":     self._check_opensearch,
             "DYNAMODB":       self._check_dynamodb,

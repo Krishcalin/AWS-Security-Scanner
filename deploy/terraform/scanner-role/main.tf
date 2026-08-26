@@ -103,6 +103,24 @@ data "aws_iam_policy_document" "extras" {
       "sso:GetInlinePolicyForPermissionSet",
       "glue:GetDataCatalogEncryptionSettings",
       "glue:GetDevEndpoints",
+      # Batch 3. IAM prefix for Managed Prometheus is `aps`, not
+      # the `amp` client name. Byte-identical to the CFN template.
+      "s3tables:ListTableBuckets",
+      "s3tables:GetTableBucketPolicy",
+      "s3tables:GetTableBucketEncryption",
+      "vpc-lattice:ListServices",
+      "vpc-lattice:GetService",
+      "vpc-lattice:GetAuthPolicy",
+      "codeartifact:ListDomains",
+      "codeartifact:GetDomainPermissionsPolicy",
+      "codeartifact:ListRepositories",
+      "codeartifact:GetRepositoryPermissionsPolicy",
+      "ds:DescribeDirectories",
+      "ds:DescribeLDAPSSettings",
+      "ds:DescribeSharedDirectories",
+      "aps:ListWorkspaces",
+      "aps:DescribeWorkspace",
+      "xray:GetEncryptionConfig",
     ]
     resources = ["*"]
   }

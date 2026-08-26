@@ -115,7 +115,10 @@ class TestDataStructures(unittest.TestCase):
         # 58: +NETWORKFIREWALL, LIGHTSAIL, PRIVATECA, QUICKSIGHT,
         # IDENTITYCENTER, GLUE -- batch 2, and the first batch declared via
         # aws_checkdef rather than five hand-edited map literals.
-        self.assertEqual(len(SECTIONS), 58)
+        # 64: +S3TABLES, VPCLATTICE, CODEARTIFACT, DIRECTORYSERVICE,
+        # PROMETHEUS, XRAY -- batch 3, the first written on aws_checkdef from
+        # the start rather than retrofitted onto it.
+        self.assertEqual(len(SECTIONS), 64)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

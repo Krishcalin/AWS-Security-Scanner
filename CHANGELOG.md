@@ -7,6 +7,41 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Extended service coverage, batch 3** (`aws_extsvc3.py`, 6 sections, 9 checks) — the
+  first batch written on `aws_checkdef` from the start rather than retrofitted onto it.
+  Both the check-map lockstep and the CFN/Terraform parity test **passed on the first
+  run**; batches 1 and 2 each needed a corrective pass for one of those.
+  - **S3 Tables** (`S3T-01/02`) — a table bucket is a distinct resource with its **own**
+    policy API and its own encryption settings, so an account can pass every existing S3
+    check while its analytical data is world-readable. What sits behind one is usually
+    the joined and enriched end of the estate, which makes a single table more revealing
+    than the sources it was built from.
+  - **VPC Lattice** (`LATT-01/02`) — `authType` has two values and one is `NONE`: no
+    caller identity at all. Lattice exists to connect services *across* VPC and account
+    boundaries, so "anything that can reach it" is a far wider set than one VPC.
+    `LATT-02` is the subtler case — `AWS_IAM` with a wildcard auth policy looks correct
+    in review, and answers authentication properly while leaving authorization open.
+  - **CodeArtifact** (`CART-01`) — a permissive domain or repository policy exposes
+    private packages, and more durably the **dependency graph and internal library
+    names**. That is the reconnaissance dependency confusion needs, and unlike the code
+    it cannot be un-learned once seen.
+  - **Directory Service** (`DIRSVC-01/02`) — `LDAPSStatus` of `Disabled` means plain
+    LDAP: bind credentials in cleartext for the authentication layer under every joined
+    system. `EnableFailed` is reported too, because it looks configured and protects
+    nothing. Sharing is reported as WARN — it is a normal pattern, but it extends an
+    **authentication** boundary rather than sharing one resource.
+  - **Managed Prometheus** (`AMP-01`) — a workspace with no CMK. The numeric values are
+    not the sensitive part; the **labels** are: hostnames, service topology, tenant
+    identifiers — a continuously-updated map of the estate.
+  - **X-Ray** (`XRAY-01`) — traces routinely carry full request URLs, headers and
+    annotated SQL fragments, so a trace store is a readable log of what the application
+    does with its data. The setting is Region-wide, which makes it easy to set once and
+    forget elsewhere.
+  - 16 read actions added to **both** deploy templates. Note the IAM prefix for Managed
+    Prometheus is **`aps`**, not the `amp` client name — the third instance of that trap
+    in this codebase after `bedrock-agentcore` and `sso`/`sso-admin`, and each time a
+    policy written with the client name would grant nothing while looking correct.
+
 - **`aws_checkdef.py` — declare a check once, derive every map from it.** A new check
   cost edits in five places: `CHECK_SEVERITY`, `COMPLIANCE_MAP` and `REMEDIATION_MAP` in
   `aws_live_scanner`, `FINDING_DETAIL` in `aws_finding_detail`, and `REQUIREMENTS` in

@@ -94,6 +94,31 @@ Resources:
               # client name `sso-admin`. Same shape as the bedrock-agentcore trap: a
               # policy written with the client/endpoint name grants nothing and looks
               # correct in review. All read-only.
+              # ── Batch 3 ──────────────────────────────────────────────────
+              # NOTE the IAM prefix for Managed Prometheus is `aps`, NOT the boto3
+              # client name `amp` -- the third instance of that trap in this file
+              # (bedrock-agentcore, sso, now aps). All read-only.
+              - Sid: Batch3ServiceReads
+                Effect: Allow
+                Action:
+                  - s3tables:ListTableBuckets
+                  - s3tables:GetTableBucketPolicy
+                  - s3tables:GetTableBucketEncryption
+                  - vpc-lattice:ListServices
+                  - vpc-lattice:GetService
+                  - vpc-lattice:GetAuthPolicy
+                  - codeartifact:ListDomains
+                  - codeartifact:GetDomainPermissionsPolicy
+                  - codeartifact:ListRepositories
+                  - codeartifact:GetRepositoryPermissionsPolicy
+                  - ds:DescribeDirectories
+                  - ds:DescribeLDAPSSettings
+                  - ds:DescribeSharedDirectories
+                  - aps:ListWorkspaces
+                  - aps:DescribeWorkspace
+                  - xray:GetEncryptionConfig
+                Resource: '*'
+
               - Sid: Batch2ServiceReads
                 Effect: Allow
                 Action:
