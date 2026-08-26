@@ -207,6 +207,19 @@ RESET  = "\033[0m"
 STATUS_COLOR = {"PASS": GREEN, "FAIL": RED, "WARN": YELLOW, "INFO": BLUE}
 STATUS_ICON  = {"PASS": "[PASS]", "FAIL": "[FAIL]", "WARN": "[WARN]", "INFO": "[INFO]"}
 
+# ─── Credential-report polling ────────────────────────────────────────────────
+# generate_credential_report is asynchronous, so the report has to be polled rather than
+# slept on: a fresh account is not COMPLETE immediately. These are module constants so
+# the test suite can zero them (see tests/conftest.py) WITHOUT changing what ships --
+# the defaults below are the shipped behaviour and a test pins them.
+#
+# They are worth the ceremony: at the shipped values a mocked client burns 9x2s in the
+# poll plus 5s in the retry, which cost roughly four minutes of every full suite run and
+# once made the suite look hung.
+CRED_REPORT_ATTEMPTS = 10          # ~18s bounded, so a never-COMPLETE state cannot stall
+CRED_REPORT_POLL_SECONDS = 2
+CRED_REPORT_RETRY_SECONDS = 5      # one retry: get_credential_report can be InProgress
+
 # ─── Section registry ─────────────────────────────────────────────────────────
 SECTIONS = [
     "IAM", "S3", "VPC", "LOGGING", "CLOUDWATCH", "KMS", "EC2",
@@ -2441,12 +2454,19 @@ class AWSLiveScanner:
             # generate_credential_report is async; poll its State rather than a fixed
             # sleep (a fresh account is not COMPLETE immediately). Bounded to ~18s so a
             # never-COMPLETE state can't stall the scan (old fixed sleep was 6s).
-            for attempt in range(10):
+            for attempt in range(CRED_REPORT_ATTEMPTS):
                 state = iam.generate_credential_report().get("State", "")
                 if state == "COMPLETE":
                     break
-                if attempt < 9:
-                    time.sleep(2)
+                # A State that is not a string can never become "COMPLETE", so there is
+                # nothing to wait for. In production State is always a string (an absent
+                # one defaults to "" and legitimately keeps polling); this only
+                # short-circuits a non-string, which is how a mocked client burned the
+                # whole retry budget in every test that reached this method.
+                if not isinstance(state, str):
+                    break
+                if attempt < CRED_REPORT_ATTEMPTS - 1:
+                    time.sleep(CRED_REPORT_POLL_SECONDS)
             resp    = iam.get_credential_report()
             content = base64.b64decode(resp["Content"]).decode("utf-8")
             self._cred_report = list(csv.DictReader(io.StringIO(content)))
@@ -2454,7 +2474,7 @@ class AWSLiveScanner:
         except Exception as e:
             # one retry: get_credential_report can still be ReportInProgress
             try:
-                time.sleep(5)
+                time.sleep(CRED_REPORT_RETRY_SECONDS)
                 resp    = iam.get_credential_report()
                 content = base64.b64decode(resp["Content"]).decode("utf-8")
                 self._cred_report = list(csv.DictReader(io.StringIO(content)))

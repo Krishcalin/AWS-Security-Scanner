@@ -618,6 +618,29 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
     would be a guess.
 
 ### Fixed
+- **The credential-report poll cost roughly two thirds of every test run.**
+  `_get_credential_report` polls an asynchronous AWS API. Against a mocked client the
+  state never reaches `COMPLETE`, so every test reaching the method burned the full
+  retry budget — nine two-second polls plus a five-second retry, about **23 seconds
+  each**. `tests/test_exposure.py` alone took **3m50s**.
+  - It also cost real debugging time: the suite stalled at the same 29% mark on three
+    consecutive runs and *looked hung*. That was misdiagnosed as a product bug and two
+    runs were killed before anyone profiled it. The profile put 23 of 23.6 seconds in
+    `time.sleep`.
+  - The timings are now module constants (`CRED_REPORT_ATTEMPTS`,
+    `CRED_REPORT_POLL_SECONDS`, `CRED_REPORT_RETRY_SECONDS`) which
+    `tests/conftest.py` zeroes for the session. **Shipped behaviour is unchanged** and
+    `test_credential_report_timing.py` pins the shipped values, so a test-only speedup
+    cannot quietly become what ships — a scan that stopped waiting would read the report
+    before it is ready on exactly the fresh accounts where it takes longest.
+  - A **non-string `State` now short-circuits the poll**: it can never become
+    `"COMPLETE"`, so there is nothing to wait for. An *absent* State still polls, because
+    it defaults to `""` — which is a string, and a report that is genuinely still
+    generating is the case that must keep waiting.
+  - A guard asserts no unparameterised `time.sleep` remains in the scanner, so a new
+    fixed sleep cannot reintroduce the tax.
+  - **Full suite: 369s -> 120s.** `test_exposure.py`: 230.33s -> 0.32s.
+
 - **A new check silently overwrote an existing one's remediation.** Slice 5.4 was first
   written as `SEG-01`, which is already a real check (world-open sensitive port on a
   security group). Python dict literals accept duplicate keys with no error and the
