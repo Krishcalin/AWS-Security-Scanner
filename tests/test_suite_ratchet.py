@@ -269,6 +269,7 @@ FLOORS = {
     "test_registry_scan.py": 10,
     "test_registry_sidescan.py": 6,
     "test_remediate.py": 14,
+    "test_riskscore.py": 49,
     "test_sagemaker_depth.py": 38,
     "test_sagemaker_wiring.py": 29,
     "test_sbom_diff.py": 8,
