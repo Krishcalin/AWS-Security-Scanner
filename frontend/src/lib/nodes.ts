@@ -126,3 +126,44 @@ const REL: Record<string, string> = {
   PROBED: 'probed',
 }
 export const prettyRel = (rel: string): string => REL[rel] ?? rel.toLowerCase().replace(/_/g, ' ')
+
+// ── ATT&CK tactic per traversable edge kind ──────────────────────────────────
+// OURS, not AWS's and not the scanner's: the correlator records a capability
+// (`CAN_READ_DATA`), never a tactic. This maps each capability to the tactic an
+// adversary exercising it would be performing, so a path reads as a sequence of
+// intents rather than a sequence of graph relations.
+//
+// It is deliberately shallow — tactic only, no technique id. A technique claims
+// a specific procedure, and the graph does not observe procedures; asserting
+// T1078.004 from the existence of a CAN_ASSUME edge would be a fabrication.
+// Annotation edge kinds (HAS_VULN, THREAT_ON, PROBED) are absent because they
+// are not hops: nothing is being *done* along them.
+const TACTIC: Record<string, string> = {
+  EXPOSED_TO: 'Initial Access',
+  TARGETS: 'Initial Access',
+  ATTACHED_TO: 'Discovery',
+  HAS_INSTANCE_PROFILE: 'Privilege Escalation',
+  HAS_ROLE: 'Privilege Escalation',
+  CAN_ASSUME: 'Defense Evasion',
+  CAN_PRIVESC_TO: 'Privilege Escalation',
+  CAN_READ_DATA: 'Collection',
+  RUNS_IMAGE: 'Execution',
+}
+
+/** ATT&CK tactic for a hop, or '' when we have no honest mapping for it. */
+export const hopTactic = (rel: string): string => TACTIC[rel] ?? ''
+
+/** Verb phrase for the narrative: "<subject> <verb> <object>". */
+const HOP_VERB: Record<string, string> = {
+  EXPOSED_TO: 'can be reached from',
+  TARGETS: 'is targeted from',
+  ATTACHED_TO: 'is attached to',
+  HAS_INSTANCE_PROFILE: 'carries the instance profile',
+  HAS_ROLE: 'runs as',
+  CAN_ASSUME: 'can assume',
+  CAN_PRIVESC_TO: 'can escalate to',
+  CAN_READ_DATA: 'can read',
+  RUNS_IMAGE: 'runs the image',
+}
+export const hopVerb = (rel: string): string =>
+  HOP_VERB[rel] ?? prettyRel(rel)

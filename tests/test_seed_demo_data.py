@@ -299,6 +299,60 @@ def test_graph_edges_only_reference_nodes_the_graph_declares(rows):
             assert edge["source"] in declared and edge["target"] in declared
 
 
+def test_every_path_node_exists_in_the_graph(rows):
+    """The property the graph docstring CLAIMED and the code did not have.
+
+    `_attack_paths` used to invent `ec2/i-demo<random>` and `role/arn:...` ids
+    while `_graph` invented a different `i-demo<random>` and used full ARNs, so
+    only `internet` appeared in both -- 1 of 11 path node ids existed in the
+    graph. Nothing looked broken because the old renderer drew the path's own
+    node list and never looked anything up; the moment a view wanted a node's
+    kind, its crown-jewel prop, or why a hop was possible, it got nothing.
+
+    Adjacent to test_graph_edges_only_reference_nodes_the_graph_declares, which
+    checks the graph against ITSELF and therefore passed throughout."""
+    for _a, payload_json, _s, _t in rows["scan_results"]:
+        payload = json.loads(payload_json)
+        declared = {n["id"] for n in payload["graph"]["nodes"]}
+        for path in payload["attack_paths"]:
+            missing = [n for n in path["nodes"] if n not in declared]
+            assert not missing, (
+                f"attack path references nodes the graph does not declare: "
+                f"{missing}. Paths are walked out of the graph -- if this fails, "
+                f"something is inventing node ids again.")
+
+
+def test_every_path_edge_is_a_real_graph_edge(rows):
+    """A path hop must be an edge the graph declares, with the same kind.
+
+    Node identity alone is not enough: a path could name two real nodes with no
+    relationship between them, which reads as a capability the estate does not
+    have."""
+    for _a, payload_json, _s, _t in rows["scan_results"]:
+        payload = json.loads(payload_json)
+        real = {(e["source"], e["target"], e["kind"])
+                for e in payload["graph"]["edges"]}
+        for path in payload["attack_paths"]:
+            for edge in path["edges"]:
+                assert len(edge) == 3, (
+                    f"path edge {edge} carries no relationship kind -- the "
+                    f"console can only draw an unlabelled arrow for it")
+                assert tuple(edge) in real, (
+                    f"path claims a hop the graph does not declare: {edge}")
+
+
+def test_every_path_hop_kind_is_one_the_correlator_traverses(rows):
+    """A demo that traverses an edge kind the real engine treats as an
+    annotation would teach a viewer a path shape that cannot occur."""
+    import aws_correlate
+    for _a, payload_json, _s, _t in rows["scan_results"]:
+        for path in json.loads(payload_json)["attack_paths"]:
+            for edge in path["edges"]:
+                assert edge[2] in aws_correlate.E_PATH, (
+                    f"path hop kind {edge[2]!r} is not in aws_correlate.E_PATH, "
+                    f"so the real correlator would never walk it")
+
+
 def test_a_choke_point_is_on_more_than_one_path(rows):
     """A node on a single path is not a choke point — fixing it breaks one
     path, which is just a finding."""

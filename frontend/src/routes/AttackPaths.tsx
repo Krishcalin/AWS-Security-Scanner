@@ -1,17 +1,18 @@
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
-import { X, ArrowRight, Waypoints, Scissors, Zap, ShieldCheck, Radar } from 'lucide-react'
+import { X, ArrowRight, Waypoints, Scissors, Zap, ShieldCheck, Radar, Expand } from 'lucide-react'
 import { useScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'
 import { api } from '../api/client'
 import { Card, Loader, ErrorNote, Empty } from '../components/ui'
 import { SeverityChip, PathBadges, PathChain, ChokeRow } from '../components/paths'
 import { PathGraph } from '../components/PathGraph'
+import { AttackPathCanvas } from '../components/AttackPathCanvas'
 import { BlastRadius } from '../components/BlastRadius'
 import { sevColor } from '../lib/format'
 import { shortLabel } from '../lib/nodes'
 import { useDeepLinkPanel, pathId, matchPath } from '../lib/deeplink'
-import type { OrgOverview, AccountSummary, AttackPath, ChokePoint } from '../api/types'
+import type { OrgOverview, AccountSummary, AttackPath, ChokePoint, GraphFull, FindingCatalogEntry } from '../api/types'
 
 // ── filter pill ───────────────────────────────────────────────────────────────
 function Toggle({ active, onClick, children, tone }: { active: boolean; onClick: () => void; children: ReactNode; tone?: string }) {
@@ -82,7 +83,7 @@ function FactorBar({ label, hint, value }: { label: string; hint: string; value:
 }
 
 // ── detail slide-over ─────────────────────────────────────────────────────────
-function PathDetail({ p, chokes, onClose, onFocusNode }: { p: AttackPath; chokes: ChokePoint[]; onClose: () => void; onFocusNode?: (nodeId: string) => void }) {
+function PathDetail({ p, chokes, onClose, onFocusNode, onExpand }: { p: AttackPath; chokes: ChokePoint[]; onClose: () => void; onFocusNode?: (nodeId: string) => void; onExpand?: () => void }) {
   const onPath = chokes.filter((c) => p.nodes.includes(c.node_id))
   return (
     <div className="fixed inset-0 z-40">
@@ -96,9 +97,20 @@ function PathDetail({ p, chokes, onClose, onFocusNode }: { p: AttackPath; chokes
             <div className="text-sm font-bold text-ink">Attack path</div>
             <div className="text-xs text-ink3">to {shortLabel(p.terminal)} · {p.terminal_kind === 'data' ? 'crown-jewel data' : 'admin'}</div>
           </div>
-          <button onClick={onClose} className="ml-auto h-8 w-8 grid place-items-center rounded-lg border border-line text-ink3 hover:text-ink">
-            <X size={16} />
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            {onExpand && (
+              <button
+                onClick={onExpand}
+                data-tour="path-expand"
+                className="flex items-center gap-1.5 h-8 rounded-lg border border-line px-2.5 text-xs font-semibold text-ink2 hover:text-ink hover:border-accent/40 transition-colors"
+              >
+                <Expand size={13} /> Full screen
+              </button>
+            )}
+            <button onClick={onClose} className="h-8 w-8 grid place-items-center rounded-lg border border-line text-ink3 hover:text-ink">
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
         <div className="p-6 flex flex-col gap-5">
@@ -164,6 +176,36 @@ function PathDetail({ p, chokes, onClose, onFocusNode }: { p: AttackPath; chokes
   )
 }
 
+// ── full-screen canvas host ───────────────────────────────────────────────────
+// The canvas JOINS the path against the stored graph (for node props and the basis
+// of each hop) and the finding catalog (for the evidence under each node). Both are
+// fetched here rather than inside the canvas so the canvas stays a pure view, and so
+// a FAILED fetch arrives as `null` and is reported by the canvas rather than being
+// indistinguishable from "this estate has nothing to show".
+function CanvasHost({ path, account, onClose, onFocusNode }: {
+  path: AttackPath; account: string | null; onClose: () => void; onFocusNode?: (nodeId: string) => void
+}) {
+  const { data } = useFetch<{ graph: GraphFull | null; catalog: FindingCatalogEntry[] | null }>(
+    async () => {
+      if (!account) return { graph: null, catalog: null }
+      const [graph, catalog] = await Promise.all([
+        api.graph(account).catch(() => null),
+        api.findings(account).catch(() => null),
+      ])
+      return { graph, catalog }
+    }, [account])
+  return (
+    <AttackPathCanvas
+      path={path}
+      graph={data?.graph ?? null}
+      catalog={data?.catalog ?? []}
+      catalogLoaded={data ? data.catalog !== null : true}
+      onClose={onClose}
+      onFocusNode={onFocusNode}
+    />
+  )
+}
+
 // ── page ──────────────────────────────────────────────────────────────────────
 export function AttackPaths() {
   const { scope } = useScope()
@@ -171,6 +213,7 @@ export function AttackPaths() {
   const { data, loading, error } = useFetch<OrgOverview | AccountSummary>(
     () => (isOrg ? api.orgOverview() : api.accountSummary(scope)), [scope])
 
+  const [canvas, setCanvas] = useState<AttackPath | null>(null)
   const [sev, setSev] = useState<Set<string>>(new Set())
   const [kevOnly, setKevOnly] = useState(false)
   const [threatOnly, setThreatOnly] = useState(false)
@@ -270,11 +313,23 @@ export function AttackPaths() {
           p={open}
           chokes={chokes}
           onClose={() => setOpenId(null)}
+          onExpand={() => setCanvas(open)}
           onFocusNode={
             // resolve the account for the per-account blast-radius query: an org path
             // carries its own account; in account scope it's the current scope.
             (() => { const acct = open.account ?? (isOrg ? null : scope); return acct ? (node: string) => setBlast({ account: acct, node }) : undefined })()
           }
+        />
+      )}
+      {canvas && (
+        <CanvasHost
+          path={canvas}
+          account={canvas.account ?? (isOrg ? null : scope)}
+          onClose={() => setCanvas(null)}
+          onFocusNode={(() => {
+            const acct = canvas.account ?? (isOrg ? null : scope)
+            return acct ? (node: string) => setBlast({ account: acct, node }) : undefined
+          })()}
         />
       )}
       {blast && <BlastRadius account={blast.account} node={blast.node} onClose={() => setBlast(null)} />}

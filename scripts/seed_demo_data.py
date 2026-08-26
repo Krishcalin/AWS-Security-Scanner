@@ -400,13 +400,17 @@ def _payload_row(rng, profile, account_id, findings, all_scans, now, weight=1.0)
     for row in findings:
         if row[10] == "open" and row[8] in counts:
             counts[row[8]] += 1
-    paths = _attack_paths(rng, profile, account_id, counts)
+    # ORDER MATTERS. The graph is the estate; the paths are walks THROUGH it.
+    # Building them the other way round (or side by side) is what produced a
+    # console where a path referenced instances the graph had never heard of.
+    wanted_paths = min(9, max(0, counts.get("CRITICAL", 0) // 2))
+    graph = _graph(rng, account_id, profile, wanted_paths)
+    paths = _attack_paths(rng, profile, graph, wanted_paths)
     # CIEM cards are display-only additions to the catalog: they carry no
     # compliance tags and have no row in the findings table, so they are
     # excluded from the scorecard input rather than silently widening it.
     failing_checks = sorted({c["check_id"] for c in catalog
                              if not c["check_id"].startswith("CIEM-")})
-    graph = _graph(rng, account_id, paths, profile)
 
     payload = {
         "account": account_id,
@@ -519,42 +523,101 @@ def _finding_catalog(findings):
     return out
 
 
-def _attack_paths(rng, profile, account_id, counts):
-    """Toxic-combination paths, in the shape the Attack Paths screen renders.
+def _attack_paths(rng, profile, graph, wanted):
+    """Toxic-combination paths, WALKED OUT OF THE GRAPH rather than invented.
 
-    Count scales with the estate's criticals, so the org seeded to look bad is
-    the org whose graph is busy — a demo where every tenant shows three paths
-    demonstrates nothing.
+    Every node id below comes from `graph` and every edge is one the graph
+    declares, which is the property `test_every_path_node_exists_in_the_graph`
+    now holds this function to. The previous version generated its own
+    `ec2/i-demo<random>` ids while `_graph` generated different ones, so the
+    two disagreed about the estate and any view that joined them rendered
+    empty.
+
+    The walk is the canonical shape a real correlation produces:
+
+        internet --EXPOSED_TO--> instance --HAS_ROLE--> role --CAN_READ_DATA--> store
+                                                             --CAN_PRIVESC_TO-> admin
+
+    Count still scales with the estate's criticals, so the org seeded to look
+    bad is the org whose graph is busy.
     """
-    wanted = min(9, max(0, counts.get("CRITICAL", 0) // 2))
-    terminals = (("data", "rds", "customers-db"), ("data", "s3", "finance-exports"),
-                 ("admin", "iam", "OrgAdminRole"), ("data", "dynamodb", "patients"))
+    by_id = {n["id"]: n for n in graph["nodes"]}
+    out_edges = {}
+    for e in graph["edges"]:
+        out_edges.setdefault(e["source"], []).append(e)
+
+    def first(src, kind, pred=None):
+        for e in out_edges.get(src, []):
+            if e["kind"] == kind and (pred is None or pred(by_id.get(e["target"], {}))):
+                return e
+        return None
+
+    # entry points: everything the internet is EXPOSED_TO that is an instance
+    entries = [e for e in out_edges.get("internet", [])
+               if e["kind"] == E_EXPOSED
+               and by_id.get(e["target"], {}).get("kind") == KIND_INSTANCE]
+
     out = []
-    for i in range(wanted):
-        kind, service, name = terminals[i % len(terminals)]
-        terminal = f"arn:aws:{service}:us-east-1:{account_id}:{name}"
-        host = f"i-demo{rng.randint(10000, 99999)}"
-        nodes = ["internet", f"ec2/{host}",
-                 f"role/arn:aws:iam::{account_id}:role/app-role", terminal]
+    for index, entry_edge in enumerate(entries[:wanted]):
+        instance = entry_edge["target"]
+        role_edge = first(instance, E_HAS_ROLE)
+        if role_edge is None:
+            continue                      # an instance with no role reaches nothing
+        role = role_edge["target"]
+
+        # Alternate the two terminal shapes so the console shows both a
+        # crown-jewel-data path and an admin-takeover path.
+        want_admin = index % 4 == 2
+        last_edge = None
+        if want_admin:
+            last_edge = first(role, E_PRIVESC)
+        if last_edge is None:
+            last_edge = first(role, E_READ,
+                              lambda n: n.get("crown_jewel") is True)
+        if last_edge is None:
+            continue                      # a role that reaches no crown is not a path
+
+        terminal = last_edge["target"]
+        terminal_kind = "admin" if last_edge["kind"] == E_PRIVESC else "data"
+        chain = [entry_edge, role_edge, last_edge]
+        nodes = ["internet", instance, role, terminal]
+
         kev = rng.random() < profile.kev_rate * 2
+        cve = rng.choice(_KEV_DEMO_CVES) if kev else None
+        public_crown = bool(by_id.get(terminal, {}).get("public"))
         score = min(100, 55 + (20 if kev else 0) + rng.randint(0, 20))
+
+        driving = ["ATTACK-02" if public_crown else "ATTACK-01"]
+        if cve:
+            driving.append(f"VULN-02:{cve}")
+        exploit = 1.0 if kev else 0.6
         out.append({
-            "entry": "internet", "terminal": terminal, "terminal_kind": kind,
+            "entry": "internet", "terminal": terminal,
+            "terminal_kind": terminal_kind,
             "nodes": nodes,
-            "edges": [[nodes[i], nodes[i + 1]] for i in range(len(nodes) - 1)],
+            # THREE-element edges: the frontend reads edge[2] as the relationship
+            # and could only ever show "→" while this emitted pairs.
+            "edges": [[e["source"], e["target"], e["kind"]] for e in chain],
             "score": score,
             "severity": "CRITICAL" if score >= 80 else "HIGH",
-            "conditioned": False, "vuln_pivot": kev, "kev": kev,
+            "conditioned": False, "vuln_pivot": bool(cve), "kev": kev,
             "active_threat": kev and rng.random() < 0.4,
-            "direct_public_crown": False, "hard_floor_applied": kev,
-            "factors": {"exposure": 0.9, "exploitability": 1.0 if kev else 0.6,
+            "direct_public_crown": public_crown, "hard_floor_applied": kev,
+            "factors": {"exposure": 0.9, "exploitability": exploit,
                         "privilege": 0.6, "impact": 1.0, "reach": 0.85},
-            "driving_findings": ["ATTACK-01"] + (["VULN-02"] if kev else []),
+            "driving_findings": driving,
             "rationale": (f"score {score} = exposure 0.90 x exploit "
-                          f"{'1.00' if kev else '0.60'} x impact 1.00"),
+                          f"{exploit:.2f} x impact 1.00 x reach 0.85"),
         })
     out.sort(key=lambda p: -p["score"])
     return out
+
+
+#: CVEs used for the demo's vulnerability pivot. Real, KEV-listed, and drawn from
+#: the same pool the vulnerability screens use so a reader who clicks through
+#: finds the same CVE rather than a second invented one.
+_KEV_DEMO_CVES = ("CVE-2021-44228", "CVE-2023-50164", "CVE-2022-22965",
+                  "CVE-2023-38545", "CVE-2021-45046")
 
 
 def _choke_points(paths):
@@ -585,8 +648,11 @@ def _choke_points(paths):
         if entry["severed"] < 2:
             continue
         node_id = entry["node_id"]
-        kind = ("IamRole" if node_id.startswith("role/") else
-                "EC2Instance" if node_id.startswith("ec2/") else "Resource")
+        # Path nodes are graph node ids (full ARNs) now that paths are walked out
+        # of the graph, so the old `role/` and `ec2/` prefix sniffing matched
+        # nothing and every choke point rendered as a generic "Resource".
+        kind = ("IAMRole" if ":role/" in node_id else
+                "EC2Instance" if ":instance/" in node_id else "Resource")
         out.append({
             "node_id": node_id,
             "node_kind": kind,
@@ -624,7 +690,7 @@ E_PRIVESC = "CAN_PRIVESC_TO"
 E_READ = "CAN_READ_DATA"
 
 
-def _graph(rng, account_id, paths, profile):
+def _graph(rng, account_id, profile, want_instances):
     """The security graph the engines read, in `SecurityGraph.to_dict` shape.
 
     NODES carry their props merged at the top level; EDGES carry `kind`. Three
@@ -636,9 +702,9 @@ def _graph(rng, account_id, paths, profile):
         counts CAN_READ_DATA edges into each crown.
       * `aws_correlate.crown_nodes` selects on the `crown_jewel` prop alone.
 
-    Built around the paths so the graph and the Attack Paths screen agree, then
-    extended with the identity and data structure those two engines need — a
-    path alone has no roles that can escalate and no store anybody reads.
+    This is THE estate, and it is built first. `_attack_paths` then walks it, so
+    the graph and the Attack Paths screen cannot disagree about which instances
+    exist -- they did, for as long as each invented its own.
     """
     nodes, edges, seen_nodes, seen_edges = [], [], set(), set()
 
@@ -711,7 +777,9 @@ def _graph(rng, account_id, paths, profile):
                 edge(role_id, store_id, E_READ, basis="s3:GetObject")
 
     # ── the workloads the paths run through, wired to identity ──────────────
-    for index, path in enumerate(paths):
+    # Internet-reachable workloads. At least two, so a choke point (a node on
+    # more than one path) is possible at all.
+    for index in range(max(2, want_instances)):
         host = f"i-demo{rng.randint(10000, 99999)}"
         instance = node(f"arn:aws:ec2:us-east-1:{account_id}:instance/{host}",
                         KIND_INSTANCE, name=host, account=account_id)
