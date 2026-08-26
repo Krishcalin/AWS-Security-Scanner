@@ -258,6 +258,7 @@ FLOORS = {
     "test_registry_api.py": 6,
     "test_registry_connector_service.py": 8,
     "test_registry_connectors.py": 19,
+    "test_registry_import_order.py": 3,
     "test_registry_oci.py": 24,
     "test_registry_persist.py": 5,
     "test_registry_sbom.py": 5,

@@ -7,6 +7,24 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **`tests/test_registry_import_order.py`** — registry projections must not depend on
+  import order. `aws_checkdef` is populated as a *side effect* of importing the modules
+  that declare checks, and the three consumer modules merge that registry at import
+  time. A consumer that fails to import a declaring module therefore merges a **partial**
+  registry, and which projections exist depends on what happened to be imported first.
+  - That is the `MCP-06` defect, generalised: neither `aws_finding_detail` nor
+    `aws_perm_ledger` imported `aws_mcp`, and the first verification imported `aws_mcp`
+    first, so it reported everything present. A registry merge is invisible to the
+    dict-literal ratchets, so this is the only place the coupling can be caught.
+  - The check imports each consumer **alone, in a fresh interpreter** — the condition
+    that actually failed — and separately asserts, from source, that every declaring
+    module is imported by every consumer.
+  - **Verified by reintroducing the defect**, and that verification needed fixing too:
+    the first attempt reported success while changing nothing, because the injection
+    string did not match and the script printed unconditionally. It now asserts the
+    mutation applied before drawing any conclusion. A guard that has only been seen to
+    pass is not a guard.
+
 - **`MCP-06` — AgentCore registry approval state**, the other half of what the SDK pin
   unlocked. A registry exists to put a review between an agent component and the fleet
   that will use it, so a record in `DRAFT`, `PENDING_APPROVAL` or `REJECTED` is a
