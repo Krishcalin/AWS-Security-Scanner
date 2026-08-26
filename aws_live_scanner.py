@@ -88,6 +88,8 @@ import aws_perm_ledger
 import aws_sagemaker
 import aws_modelartifact
 import aws_nitro
+import aws_perimeter
+import aws_segmentation
 import aws_shadowai
 import aws_ailog
 import aws_evidence
@@ -475,6 +477,17 @@ CHECK_SEVERITY = {
     # picked the type, and the application may well encrypt anyway. These are evidence
     # for the ZTMM Networks/Traffic encryption function first and findings second.
     "NITRO-01": "LOW", "NITRO-02": "LOW",
+    # Slice 5.2 -- AWS's three data-perimeter objectives. MEDIUM, not HIGH: an estate
+    # without a data perimeter is not misconfigured, it is un-guardrailed, and plenty of
+    # single-account estates have no Organization to hang one on. The finding is a
+    # posture gap that a reviewer should see, not an incident.
+    "PERIM-01": "MEDIUM", "PERIM-02": "MEDIUM", "PERIM-03": "MEDIUM",
+    # Slice 5.4 -- a segmentation RECOMMENDATION, not a defect. The underlying exposure
+    # is already reported by EXPOSURE-01/02 and the paths by PATHS-01; this says which
+    # single network cut would leave the most of them with no route. INFO, because
+    # emitting advice as a failure would double-count an exposure already counted and
+    # inflate the finding total with something that is not itself wrong.
+    "SEGREC-01": "INFO",
     "MART-01": "CRITICAL",
     # Unpinned and cross-account are MEDIUM: both are preconditions rather than
     # exploitation, and a team that deliberately shares an artifact bucket with a
@@ -834,6 +847,10 @@ COMPLIANCE_MAP = {
     "SM-27": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
     "SM-28": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
     "AIDR-01": {"PCI-DSS": "10.6.1", "HIPAA": "164.308(a)(1)(ii)(D)", "SOC2": "CC7.2", "NIST": "SI-4"},
+    "SEGREC-01": {"PCI-DSS": "1.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "PERIM-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "PERIM-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "PERIM-03": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "NITRO-01": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "NITRO-02": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "MART-01": {"PCI-DSS": "6.3.2", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.8", "NIST": "SI-7"},
@@ -1216,6 +1233,10 @@ REMEDIATION_MAP = {
     "SM-27": "Tag the app image configuration so it can be attributed and governed: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Tags with the aws: prefix are system tags and do not satisfy the control. Never put personally identifiable or sensitive information in a tag -- tags are readable from many AWS services",
     "SM-28": "Tag the image: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Same caveats as SM-27 -- system aws: tags do not count, and tags are not a place for sensitive values",
     "AIDR-01": "Your own detector recognised this and the request reached the model anyway, so treat the detector as reporting rather than enforcing: check whether it is deployed in blocking mode, and put an AWS-side control behind it -- aws bedrock get-guardrail --guardrail-identifier <ID> --guardrail-version DRAFT to confirm a PROMPT_ATTACK filter is set to BLOCK rather than NONE (AIGRD-01), and aws bedrock-agent update-agent to attach the guardrail if the agent has none. Then bound what a successful injection reaches with AISPM-01/02",
+    "SEGREC-01": "Find the rule that admits the named ports on the named security group(s): aws ec2 describe-security-groups --group-ids <SG_ID> --query SecurityGroups[].IpPermissions . Prefer narrowing the source over deleting the rule where the port is legitimately in use: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0 then aws ec2 authorize-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr <TRUSTED_CIDR>. Verify against the attack-path list rather than this line alone -- the count is derived from the paths in THIS scan, and a path OverWatch could not see is not in it. Paths reported as identity-only are unaffected by any network change and need a permissions fix instead",
+    "PERIM-01": "Attach a Resource Control Policy (RCP) at the organization root requiring aws:PrincipalOrgID, which is how AWS describes implementing the trusted-identities perimeter -- an SCP cannot do this job, because an SCP bounds what YOUR principals may do rather than who may reach your resources. Exempt AWS service principals with aws:PrincipalIsAWSService (you cannot write NotPrincipal against a service principal) and constrain service-on-your-behalf access with aws:SourceOrgID. Start from the AWS data-perimeter policy examples repo rather than from scratch",
+    "PERIM-02": "Attach a Service Control Policy requiring aws:ResourceOrgID so your principals can reach only resources your organization owns, and pair it with VPC endpoint policies for the paths SCPs do not cover (SCPs do not apply to service-linked roles or AWS service principals). Where a genuine external resource is needed -- Amazon Linux repos, public SSM parameters -- exempt the specific ACTIONS with NotAction in the SCP and allow the specific RESOURCES in the endpoint policy, rather than opening a broad aws:ViaAWSService exception",
+    "PERIM-03": "Constrain where requests may originate: aws:SourceIp / aws:SourceVpc in an SCP for your own principals, and the same in an RCP for access to your resources (only an RCP reaches AWS service principals, since SCPs do not apply to them). Exempt AWS acting on your behalf with aws:ViaAWSService, which covers forward access sessions. Note that Lambda and SageMaker can run in AWS-owned networks -- enforce VPC configuration for those separately rather than assuming the network condition covers them",
     "NITRO-01": "Move the workload to an instance type that automatically encrypts in-transit traffic between instances, if east-west confidentiality matters for it: aws ec2 describe-instance-types --filters Name=network-info.encryption-in-transit-supported,Values=true --query InstanceTypes[].InstanceType to list the ones that do. If the type cannot change, the application must provide the encryption -- the platform will not",
     "NITRO-02": "This instance runs on the Xen hypervisor rather than Nitro, so it predates the platform generation that provides automatic in-transit encryption and hardware-rooted isolation. Plan a migration to a current-generation type: aws ec2 describe-instance-types --filters Name=hypervisor,Values=nitro --query InstanceTypes[].InstanceType . Xen types are also excluded from Nitro Enclaves and NitroTPM",
     "MART-01": "Close write access to the artifact bucket immediately -- whoever can write it executes code inside your endpoint on the next deploy: aws s3api get-bucket-policy --bucket <BUCKET> and remove every external or wildcard principal holding a write action, then aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true. Then verify the artifact currently there is the one you published",
@@ -2064,6 +2085,14 @@ def _checks_gated_by(action: str) -> tuple:
         if any((r.action or "").lower() == want for r in reqs)))
 
 
+#: slice 5.2 — one check per AWS data-perimeter objective.
+_PERIM_CHECK = {
+    aws_perimeter.OBJ_IDENTITY: "PERIM-01",
+    aws_perimeter.OBJ_RESOURCE: "PERIM-02",
+    aws_perimeter.OBJ_NETWORK: "PERIM-03",
+}
+
+
 class AWSLiveScanner:
     """Live, read-only AWS security audit scanner."""
 
@@ -2384,6 +2413,10 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     def _check_iam(self):
         self._section_header("IAM")
+        # Slice 5.2 -- AWS's three data-perimeter objectives. Run first so the estate's
+        # perimeter posture heads the section: it is the ceiling every per-principal
+        # finding below sits under.
+        self._check_data_perimeter()
         iam = self._client("iam")
 
         # IAM-01 / IAM-02 — Root account MFA and access keys
@@ -8609,6 +8642,137 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 33: RAG VECTOR STORES (slice 4.2)
     # ══════════════════════════════════════════════════════════════════════════
+    def _org_policy_docs(self, org, nodes, filt, denied):
+        """Every policy document of one type attached from the account up to the root.
+
+        Returns None when ANY level was unreadable — an unread level cannot be reported
+        as an absent control, and a partial walk would understate the perimeter. Only a
+        complete walk returning nothing means "no policy of this type"."""
+        docs = []
+        for node in nodes:
+            try:
+                # NOT _paginate_all: it swallows every exception and returns [], which
+                # would turn a denied ListPoliciesForTarget into "no policies exist" --
+                # a finding manufactured out of a permission error. Paginate by hand so
+                # the denial actually reaches the caller.
+                pols, token, guard = [], None, 0
+                while guard < 100:              # bounded: never loop on a bad token
+                    guard += 1
+                    kw = {"TargetId": node, "Filter": filt}
+                    if token:
+                        kw["NextToken"] = token
+                    resp = org.list_policies_for_target(**kw) or {}
+                    pols += list(resp.get("Policies") or [])
+                    token = resp.get("NextToken")
+                    # A continuation token is a STRING. Anything else -- notably a
+                    # MagicMock, which is truthy -- ends the walk instead of spinning
+                    # forever: an unguarded `if not token` hung every mocked test that
+                    # reaches this section.
+                    if not isinstance(token, str) or not token:
+                        break
+            except Exception as e:
+                if self._is_access_denied(e):
+                    denied.append("organizations:ListPoliciesForTarget")
+                return None
+            for pol in pols:
+                pid = pol.get("Id")
+                if not pid:
+                    continue
+                try:
+                    docs.append(org.describe_policy(
+                        PolicyId=pid)["Policy"]["Content"])
+                except Exception as e:
+                    if self._is_access_denied(e):
+                        denied.append("organizations:DescribePolicy")
+                    return None
+        return docs
+
+    def _check_data_perimeter(self):
+        """PERIM-00..03 — AWS's three data-perimeter objectives (slice 5.2).
+
+        OverWatch recommends aws:PrincipalOrgID in some twenty remediation strings and
+        has never checked whether the estate has one. This reads the policies that would
+        constitute a perimeter and reports which objectives have controls.
+
+        Presence and shape, never effect: establishing that a perimeter HOLDS requires
+        evaluating authorization for every principal, resource and path, which no
+        configuration read can do.
+
+        This deliberately does NOT reuse the cached _scp_context(). That cache fails open
+        to None for the management account and for any unreadable level — correct for the
+        privesc solver it feeds, wrong here, where 'unreadable' must surface as a
+        coverage note rather than vanish."""
+        layers, denied = {}, []
+
+        # ── Organizations: SCPs and RCPs ────────────────────────────────────
+        org = None
+        try:
+            org = self._client("organizations")
+            org.describe_organization()
+        except Exception as e:
+            if self._is_access_denied(e):
+                denied.append("organizations:DescribeOrganization")
+            org = None
+
+        nodes = []
+        if org is not None:
+            child, guard = self.account, 0
+            nodes = [self.account] if self.account else []
+            try:
+                while guard < 20 and child:
+                    guard += 1
+                    parents = org.list_parents(ChildId=child).get("Parents", [])
+                    if not parents or not parents[0].get("Id"):
+                        break
+                    nodes.append(parents[0]["Id"])
+                    if parents[0].get("Type") == "ROOT":
+                        break
+                    child = parents[0]["Id"]
+            except Exception:
+                nodes = []
+
+        if not nodes:
+            layers[aws_perimeter.SCP] = None
+            layers[aws_perimeter.RCP] = None
+        else:
+            for ptype, filt in ((aws_perimeter.SCP, "SERVICE_CONTROL_POLICY"),
+                                (aws_perimeter.RCP, "RESOURCE_CONTROL_POLICY")):
+                layers[ptype] = self._org_policy_docs(org, nodes, filt, denied)
+
+        # ── VPC endpoint policies (this Region only — they are per-Region) ──
+        try:
+            eps = (self._client("ec2").describe_vpc_endpoints() or {}).get(
+                "VpcEndpoints") or []
+            layers[aws_perimeter.VPCE] = [e["PolicyDocument"] for e in eps
+                                          if e.get("PolicyDocument")]
+        except Exception as e:
+            if self._is_access_denied(e):
+                denied.append("ec2:DescribeVpcEndpoints")
+            layers[aws_perimeter.VPCE] = None
+
+        estate = aws_perimeter.assess_estate(layers)
+
+        # A perimeter that could not be read anywhere is a coverage gap, not a finding.
+        for row in estate["objectives"]:
+            cid = _PERIM_CHECK[row["objective"]]
+            if row["verdict"] == aws_perimeter.UNREADABLE:
+                for action in sorted(set(denied)) or ["organizations:ListPoliciesForTarget"]:
+                    self._coverage.note_denied(cid, action)
+                continue
+            res = row["objective"]
+            if row["verdict"] == aws_perimeter.MET:
+                self._add("PASS", cid, "IAM", res, f"{row['statement']} | {res}")
+            else:
+                self._add("FAIL", cid, "IAM", res,
+                          f"{aws_perimeter.describe_objective(row)} | {res}")
+
+        note = ""
+        if layers.get(aws_perimeter.VPCE) is not None:
+            note = (f" VPC endpoint policies are per-Region and were read for "
+                    f"{self.region} only.")
+        self._add("INFO", "PERIM-00", "IAM", "data-perimeter",
+                  f"{estate['statement']}.{note} | data-perimeter")
+
     def _check_platform_encryption(self):
         """NITRO-01/02 — whether the platform encrypts east-west traffic (slice 5.3).
 
@@ -10625,8 +10789,13 @@ class AWSLiveScanner:
 
             eni_id = eni.get("NetworkInterfaceId", "eni-?")
             instance_id = (eni.get("Attachment") or {}).get("InstanceId", "")
+            # sg_ids added for slice 5.4: a segmentation recommendation that cannot
+            # name the security group to change is advice an operator cannot act on.
+            # They are already in hand here (perms above is built from exactly these).
             g.add_node(eni_id, "NetworkInterface", subnet_id=subnet_id,
-                       vpc_id=vpc_id, ipv4_kind=ipkind["ipv4"])
+                       vpc_id=vpc_id, ipv4_kind=ipkind["ipv4"],
+                       sg_ids=[gr.get("GroupId") for gr in eni.get("Groups", [])
+                               if gr.get("GroupId")])
             if instance_id:
                 target_arn = self._instance_arn(instance_id)
                 g.add_node(target_arn, "EC2Instance", instance_id=instance_id, vpc_id=vpc_id)
@@ -13920,6 +14089,49 @@ class AWSLiveScanner:
                       f"{c.paths_severed}/{c.total_paths} attack path(s) "
                       f"({len(crit_hi)} CRITICAL/HIGH){blocked}. {c.remediation_hint} "
                       f"| {c.label}")
+
+        # ── slice 5.4: which network cut would actually sever the most paths ──
+        self._recommend_segmentation(paths, g)
+
+    def _recommend_segmentation(self, paths, g):
+        """SEG-00/01 — segmentation derived from the ranked paths (slice 5.4).
+
+        Choke points answer "which node is central". The trouble is you usually cannot
+        delete a choke point: it is a production role or an instance serving traffic.
+        This answers the adjacent question that converts into action — which network
+        boundary would you cut, and what actually dies if you cut it.
+
+        Every candidate is VERIFIED rather than asserted: a path counts as severed only
+        when nothing else reaches the same (entry, terminal) pair without the cut edge.
+        The naive count over-claims wherever a parallel route exists, and the gap is
+        reported rather than hidden."""
+        if not paths:
+            return
+        nodes, edge_props = {}, {}
+        try:
+            for p in paths:
+                for e in aws_segmentation.network_hops(p):
+                    # Graph props are NESTED under "props" on both nodes and edges;
+                    # handing over the outer dict silently yields no sg_ids and no
+                    # ports, and the recommendation degrades to naming neither.
+                    if e[1] not in nodes:
+                        nodes[e[1]] = dict((g.node(e[1]) or {}).get("props") or {})
+                    if e not in edge_props:
+                        for ed in g.out_edges(e[0], {e[2]}):
+                            if ed.get("dst") == e[1]:
+                                edge_props[e] = dict(ed.get("props") or {})
+                                break
+        except Exception:
+            nodes, edge_props = {}, {}
+
+        recs = aws_segmentation.recommend(paths, nodes=nodes, edge_props=edge_props,
+                                          top=3)
+        summary = aws_segmentation.summarize(paths, recs)
+        self._add("INFO", "SEGREC-00", "CORRELATE", "segmentation",
+                  f"{summary['statement']} | segmentation")
+        for r in recs:
+            self._add("INFO", "SEGREC-01", "CORRELATE", r["dst"],
+                      f"{r['statement']} | {r['dst']}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 41: AGENTLESS WORKLOAD SIDE-SCAN  (Phase 6 · CWPP)

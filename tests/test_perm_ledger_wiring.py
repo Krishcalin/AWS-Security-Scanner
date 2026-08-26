@@ -109,6 +109,8 @@ def test_preflight_computes_the_ledger_from_our_own_role():
         "cloudtrail:LookupEvents",
         "ec2:DescribeInstanceTypes",
         "ec2:DescribeVpcEndpoints",
+        "organizations:DescribePolicy",
+        "organizations:ListPoliciesForTarget",
         "s3:GetBucketPolicy",
         "s3vectors:GetVectorBucket",
         "s3vectors:GetVectorBucketPolicy",
@@ -135,7 +137,7 @@ def test_preflight_records_the_blocked_checks_as_not_evaluated():
     # checks. The preflight derives this set from the ledger, so it picked all three
     # up without being told - which is the behaviour the runtime denial path in
     # _grade_guardrails was corrected to match.
-    assert set(s._coverage.not_evaluated) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MART-01", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "NITRO-01", "NITRO-02", "SHAI-01", "SHAI-02", "SHAI-03", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
+    assert set(s._coverage.not_evaluated) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MART-01", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "NITRO-01", "NITRO-02", "PERIM-01", "PERIM-02", "PERIM-03", "SHAI-01", "SHAI-02", "SHAI-03", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
     assert not s._coverage.complete
 
 
@@ -232,6 +234,8 @@ def test_the_scan_result_carries_coverage_and_the_ledger():
         "cloudtrail:LookupEvents",
         "ec2:DescribeInstanceTypes",
         "ec2:DescribeVpcEndpoints",
+        "organizations:DescribePolicy",
+        "organizations:ListPoliciesForTarget",
         "s3:GetBucketPolicy",
         "s3vectors:GetVectorBucket",
         "s3vectors:GetVectorBucketPolicy",
@@ -263,6 +267,6 @@ def test_the_annotated_policy_reaches_the_payload():
     # 15: slice 2.3 added GetGateway and ListGatewayTargets, which are what let
     # AGC-05 grade inbound authorization against the OUTBOUND configuration
     # rather than reporting authorizerType as a boolean.
-    assert len(rows) == 34
+    assert len(rows) == 36
     for row in rows:
         assert row["why"] and row["enables"] and row["forfeited_if_declined"]

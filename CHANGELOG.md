@@ -7,6 +7,68 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Phase 5 · slice 5.2 — data-perimeter posture** (`aws_perimeter.py`,
+  `PERIM-01/02/03`). OverWatch has been *recommending* `aws:PrincipalOrgID` in some
+  twenty remediation strings and has never once **checked** whether the estate has one.
+  This reads the policies that would constitute a data perimeter and reports which of
+  AWS's three objectives actually have controls.
+  - **The matrix is AWS's, and it is asymmetric** — verified against the *Building a
+    Data Perimeter on AWS* whitepaper rather than drawn from intuition, which would have
+    produced a symmetric 3x3 and been confidently wrong:
+    trusted **identities** -> RCP + VPC endpoint policy (*not* SCP);
+    trusted **resources** -> SCP + VPC endpoint policy (*not* RCP);
+    expected **networks** -> SCP + RCP.
+    The asymmetry follows from what each type governs: an SCP bounds what *your*
+    principals may do, so it cannot say who may reach your resources. **A control in the
+    wrong policy type is not a weaker perimeter — it is not that perimeter**, and an SCP
+    carrying `aws:PrincipalOrgID` is reported as *absent*, not partial.
+  - **Presence and shape, never effect.** Establishing that a perimeter *holds* means
+    evaluating authorization for every principal, resource and path — not a configuration
+    read. A test asserts no emitted string ever says *enforced*, *prevented* or
+    *blocked*.
+  - **Absence requires a complete read, presence does not.** Positive evidence from one
+    layer proves the control exists; claiming it is *missing* requires having read every
+    policy type AWS names for that objective. A member-account scan reads the empty
+    endpoint layer and is denied Organizations — calling that "no perimeter" would be a
+    finding manufactured out of a permission error.
+  - Four limits from AWS's own model are **stated in the output** rather than left for
+    the reader to know: SCPs do not apply to the management account, service-linked roles
+    or service principals; VPC endpoint policies only evaluate on same-Region calls;
+    `aws:PrincipalIsAWSService` exceptions are *expected* rather than weaknesses; and
+    unreadable is not absent.
+  - `aws:VpcSourceIp` is **deliberately excluded** — verification against the
+    condition-keys reference came back inconclusive, and asserting a key on a failed
+    verification is the phantom the module exists to avoid.
+  - **Composes with `5.1`**: `Data / Data access` and `Networks / Network segmentation`
+    now reach **Optimal** through the perimeter. Everything previously mapped to those
+    functions is a *per-resource* control; CISA's Optimal asks for enterprise-wide rules,
+    which is exactly what a data perimeter is.
+
+- **Phase 5 · slice 5.4 — segmentation derived from attack paths**
+  (`aws_segmentation.py`, `SEGREC-00/01`). OverWatch already ranks **choke points**, but
+  a choke point is usually something you cannot delete — a production role, an instance
+  serving traffic. "This node is central" converts into no action. A **network hop** is
+  different: a security-group rule is a thing an operator can change on a Tuesday
+  afternoon without deleting anything.
+  - **Verified, not asserted.** The naive number — count the paths crossing an edge —
+    over-claims every time a parallel route exists, because removing the hop leaves the
+    same target reachable another way. A path counts as severed only when no surviving
+    path reaches the same `(entry, terminal)` pair without the cut edge, and **the gap
+    between the naive count and the verified one is reported** rather than absorbed.
+  - **Only two of the seven traversable edge kinds are cuttable** (`EXPOSED_TO`,
+    `TARGETS`). No firewall rule severs an IAM trust policy. Paths made only of identity
+    edges are counted and reported separately — "cutting X severs 8 of 10" while the
+    other two are permanently untouchable by segmentation is true and misleading. A test
+    asserts the two edge classes still exactly partition `E_PATH`, so a new edge kind
+    cannot go silently unclassified.
+  - `sg_ids` added to `NetworkInterface` graph nodes: advice that cannot name the
+    security group to change is advice nobody can act on. Nothing is invented when the
+    props are absent.
+  - Emitted as **INFO**: the exposure is already reported by `EXPOSURE-01/02` and the
+    paths by `PATHS-01`, so emitting advice as a failure would double-count and inflate
+    the finding total with something that is not itself wrong. It is deliberately **not**
+    mapped into ZTMM — a function cannot be scored on advice.
+
 - **Phase 5 · slice 5.3 — platform traffic-encryption evidence** (`aws_nitro.py`,
   `NITRO-01/02`). Almost every answer a CNAPP gives about traffic encryption is about TLS
   at an **edge** — a listener, a certificate, a viewer policy. This is the layer
@@ -445,6 +507,26 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
     would be a guess.
 
 ### Fixed
+- **A new check silently overwrote an existing one's remediation.** Slice 5.4 was first
+  written as `SEG-01`, which is already a real check (world-open sensitive port on a
+  security group). Python dict literals accept duplicate keys with no error and the
+  **last one wins**, so the new remediation string replaced the real check's and nothing
+  failed anywhere. Renamed to `SEGREC-01`, and a **ratchet now parses the check maps as
+  source** and fails on any *new* duplicate id. Auditing for it turned up 43
+  pre-existing duplicates: 40 are harmless repeats of an identical value, one
+  (`REMEDIATION_MAP` / `DDB-04`) likewise, and `SM-02`/`SM-04` are a deliberate
+  CHANGELOG-documented severity override that uses last-wins shadowing on purpose. Those
+  are frozen as a baseline rather than cleaned up — reverting someone else's intentional
+  decision is not this slice's business; catching the next accidental collision is.
+- **`_paginate_all` swallows every exception and returns `[]`.** Routing the
+  Organizations walk through it would have turned a denied `ListPoliciesForTarget` into
+  "no policies exist" — a clean-looking absence produced by a permission error. The
+  perimeter section paginates by hand so denials actually reach the caller and become
+  coverage notes.
+- **Graph props are nested under `props`** on both nodes and edges. Reading the outer
+  dict yielded no `sg_ids` and no `ports`, and the segmentation recommendation quietly
+  degraded to naming neither — a silent loss of specificity rather than an error.
+
 - **The botocore wheel ships nine EC2 API versions, and the first one is from 2014.**
   Reading the service model by taking the first `/ec2/` match landed on `2014-09-01`,
   which predates `DescribeInstanceTypes` entirely — so the operation and the
