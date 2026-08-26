@@ -7,6 +7,46 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **The pinned permission expectations are generated, not hand-typed**
+  (`tests/perm_ledger_baseline.py`). `test_perm_ledger` and `test_perm_ledger_wiring`
+  pin the exact IAM actions the shipped role lacks and the checks that are blocked as a
+  result. Pinning is right — the permission surface is what a customer approves — but
+  *hand-maintaining* the lists produced the same class of mistake in all three
+  service-coverage batches: `rds` sorts before `s3`, `codebuild` before `ec2`, and a
+  block pattern that would not match a trailing bracket silently orphaned the last entry
+  of every list it touched. Twice the lists had to be restored from git.
+  - The data is now generated and committed, exactly like `test_suite_ratchet`:
+    `python tests/perm_ledger_baseline.py --update`. **The ratchet survives** — a change
+    lands in the diff where a reviewer sees it — while sorting, commas and brackets stop
+    being anybody's problem.
+  - Deliberately **not** a self-deriving assertion. Computing the expectation at test
+    time would make it tautological and delete the thing it protects; instead the
+    committed baseline is compared against a live evaluation, and adding a check fails
+    the suite until somebody regenerates.
+  - `--update` is checked for **idempotence**, because the suite ratchet's own `--update`
+    once corrupted its file with an off-by-two slice.
+  - Test names no longer state counts. `..._is_missing_exactly_thirtytwo_actions` became
+    `thirtyfour`, then `fiftyone`, then `eightytwo` in a single session — a name that
+    states a number is a durable lie waiting to happen, and a test now forbids the shape.
+  - The literals were replaced using **`ast` node spans** rather than pattern matching.
+    Three regex attempts produced three different corruptions; `ast` was correct first
+    time, which is the lesson.
+
+- **IAM prefixes are checked against botocore** (`tests/test_iam_surface.py`). Three
+  times a boto3 *client name* has been mistaken for an IAM *prefix*:
+  `bedrock-agentcore-control` vs `bedrock-agentcore`, `sso-admin` vs `sso`, and `amp` vs
+  `aps`. Each would have produced a policy that **grants nothing while reading correctly
+  in review**, and all three were caught by hand. botocore already knows the answer, so
+  the fourth is caught by a test.
+  - `signingName` **wins**, with `endpointPrefix` only as a fallback for services that
+    omit it (EMR's client dir is `emr`; only `endpointPrefix` reveals the IAM prefix is
+    `elasticmapreduce`). Taking both would have defeated the guard entirely — `amp` and
+    `bedrock-agentcore-control` are their own `endpointPrefix`, so the table would have
+    accepted exactly the spellings the test exists to reject. A negative test caught
+    that in the first draft.
+  - Also re-asserts the read-only charter over the **legacy** `REQUIREMENTS` literals,
+    which predate `aws_checkdef` and so were never validated at declaration.
+
 - **Extended service coverage, batch 3** (`aws_extsvc3.py`, 6 sections, 9 checks) — the
   first batch written on `aws_checkdef` from the start rather than retrofitted onto it.
   Both the check-map lockstep and the CFN/Terraform parity test **passed on the first
