@@ -4568,6 +4568,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
 # produced their severity and remediation, so a check cannot exist with one and not the
 # other. merge_detail refuses to shadow an id already present above.
 import aws_checkdef          # noqa: E402
+import aws_nhi
 import aws_extsvc2
 import aws_extsvc3
 import aws_extsvc4
