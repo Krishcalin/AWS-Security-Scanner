@@ -125,7 +125,10 @@ class TestDataStructures(unittest.TestCase):
         # 74: +WORKMAIL, SITEWISE, IOTMANAGEDINT, MAILMANAGER,
         # CODEGURUPROFILER -- batch 5, the first authored after the SDK pin
         # moved to botocore 1.43.51.
-        self.assertEqual(len(SECTIONS), 74)
+        # 80: +VERIFIEDPERMISSIONS, CLOUDHSM, CLOUDWAN, MANAGEDGRAFANA,
+        # AURORADSQL, FLEETWISE -- batch 6. Three services ranked ABOVE these
+        # were declined as discontinued (MediaStore, WAF Classic x2).
+        self.assertEqual(len(SECTIONS), 80)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

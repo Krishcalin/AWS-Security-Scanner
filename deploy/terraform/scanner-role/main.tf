@@ -148,6 +148,20 @@ data "aws_iam_policy_document" "extras" {
       "ses:GetTrafficPolicy",
       "codeguru-profiler:ListProfilingGroups",
       "codeguru-profiler:GetPolicy",
+      # Batch 6. CloudHSM's IAM prefix is `cloudhsm`, not the
+      # cloudhsmv2 client name. Byte-identical to CFN.
+      "verifiedpermissions:ListPolicyStores",
+      "verifiedpermissions:GetPolicyStore",
+      "cloudhsm:DescribeClusters",
+      "cloudhsm:GetResourcePolicy",
+      "networkmanager:DescribeGlobalNetworks",
+      "networkmanager:GetResourcePolicy",
+      "grafana:ListWorkspaces",
+      "grafana:DescribeWorkspace",
+      "dsql:ListClusters",
+      "dsql:GetCluster",
+      "iotfleetwise:GetEncryptionConfiguration",
+      "iotfleetwise:GetLoggingOptions",
     ]
     resources = ["*"]
   }

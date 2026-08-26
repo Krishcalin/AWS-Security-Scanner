@@ -106,6 +106,27 @@ Resources:
               # Two client-name traps here, both caught by test_iam_surface:
               # Mail Manager signs as `ses`, and CodeGuru Profiler's IAM
               # prefix is `codeguru-profiler` with a hyphen. All read-only.
+              # ── Batch 6 ──────────────────────────────────────────────────
+              # CloudHSM's IAM prefix is `cloudhsm`, NOT the cloudhsmv2
+              # client name -- the sixth instance of that trap, caught by
+              # test_iam_surface. All read-only.
+              - Sid: Batch6ServiceReads
+                Effect: Allow
+                Action:
+                  - verifiedpermissions:ListPolicyStores
+                  - verifiedpermissions:GetPolicyStore
+                  - cloudhsm:DescribeClusters
+                  - cloudhsm:GetResourcePolicy
+                  - networkmanager:DescribeGlobalNetworks
+                  - networkmanager:GetResourcePolicy
+                  - grafana:ListWorkspaces
+                  - grafana:DescribeWorkspace
+                  - dsql:ListClusters
+                  - dsql:GetCluster
+                  - iotfleetwise:GetEncryptionConfiguration
+                  - iotfleetwise:GetLoggingOptions
+                Resource: '*'
+
               - Sid: Batch5ServiceReads
                 Effect: Allow
                 Action:
