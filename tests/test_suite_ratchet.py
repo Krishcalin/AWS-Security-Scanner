@@ -138,6 +138,7 @@ FLOORS = {
     "test_cost_findings.py": 11,
     "test_cra_crosswalk.py": 11,
     "test_credential_report_timing.py": 10,
+    "test_custom_controls.py": 24,
     "test_decisions.py": 15,
     "test_deepplane.py": 44,
     "test_dspm.py": 12,
