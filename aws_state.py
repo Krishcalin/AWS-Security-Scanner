@@ -35,7 +35,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-SCHEMA_VERSION = 15  # v15: mcp_surface (slice 3.3 rug-pull anchor)
+SCHEMA_VERSION = 16  # v16: custom_controls (user-authored saved-WQL Controls)
 KEY_VERSION = 1
 
 # Caller-injected scan timestamp (one per run). epoch = arithmetic column,
@@ -129,6 +129,24 @@ CREATE TABLE IF NOT EXISTS scan_coverage(
 -- supplies the tools, which is the half of a rug pull the account can see. The half
 -- it cannot -- the same server serving different tools -- is why MCP-04 exists, and
 -- why this table is an anchor rather than an answer.
+CREATE TABLE IF NOT EXISTS custom_controls(
+  control_id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  section TEXT NOT NULL DEFAULT '',
+  severity TEXT NOT NULL CHECK(severity IN ('CRITICAL','HIGH','MEDIUM','LOW')),
+  query_json TEXT NOT NULL,
+  compliance_json TEXT NOT NULL DEFAULT '{}',
+  remediation_cmd TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+-- Name uniqueness is PER WORKSPACE, not global: two tenants may each have a
+-- control called "Public buckets" and neither should block the other.
+CREATE UNIQUE INDEX IF NOT EXISTS ix_cc_ws_name ON custom_controls(workspace_id, name);
+CREATE INDEX IF NOT EXISTS ix_cc_ws ON custom_controls(workspace_id);
+
 CREATE TABLE IF NOT EXISTS mcp_surface(
   account TEXT NOT NULL, gateway_arn TEXT NOT NULL, gateway_name TEXT,
   fingerprint TEXT NOT NULL, federated_endpoints TEXT NOT NULL DEFAULT '[]',

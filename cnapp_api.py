@@ -220,6 +220,29 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     class CopilotReq(BaseModel):
         question: str = Field(min_length=1, max_length=2000)
 
+    class CustomControlReq(BaseModel):
+        """An authored Control. `query` is a WQL object; cnapp_customcontrol.validate runs
+        aws_wql.parse on it at WRITE time, so a malformed query is a 400 here rather than a
+        control that silently matches nothing forever."""
+        name: str
+        query: dict
+        severity: str = Field(default="MEDIUM", pattern=r"^(CRITICAL|HIGH|MEDIUM|LOW)$")
+        description: str = ""
+        section: str = ""
+        remediation_cmd: str = ""
+        compliance: dict = Field(default_factory=dict)
+        enabled: bool = True
+
+    class CustomControlUpdateReq(BaseModel):
+        name: Optional[str] = None
+        query: Optional[dict] = None
+        severity: Optional[str] = Field(default=None, pattern=r"^(CRITICAL|HIGH|MEDIUM|LOW)$")
+        description: Optional[str] = None
+        section: Optional[str] = None
+        remediation_cmd: Optional[str] = None
+        compliance: Optional[dict] = None
+        enabled: Optional[bool] = None
+
     class WqlReq(BaseModel):
         query: dict                                  # a WQL query object (validated by aws_wql.parse)
 
@@ -432,6 +455,63 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     @app.get("/controls")
     def controls(scope: Scope = Depends(require("auditor"))):
         return service.list_controls(workspace_id=scope.workspace_id)
+
+    # ── Authored Controls (v16): CRUD over the same object GET /controls rolls up ──
+    # Writes are ws-admin gated: a Control becomes a finding in every account in the
+    # workspace, so authoring one is an administrative act, not a viewer action.
+    def _control_store():
+        store = getattr(service, "custom_controls", None)
+        if store is None:
+            raise HTTPException(status_code=501,
+                                detail="authored controls are not enabled on this deployment")
+        return store
+
+    def _control_ws(scope) -> str:
+        # A control must belong to exactly one workspace. A superadmin operating with no
+        # workspace selected has no unambiguous home for it, so refuse rather than guess.
+        if not scope.workspace_id:
+            raise HTTPException(status_code=400,
+                                detail="select a workspace before authoring a control")
+        return scope.workspace_id
+
+    @app.post("/controls", status_code=201)
+    def create_control(body: CustomControlReq,
+                       scope: Scope = Depends(require("admin"))):
+        import cnapp_customcontrol
+        try:
+            return _control_store().create(_control_ws(scope), body.model_dump(),
+                                           created_by=scope.principal.subject)
+        except cnapp_customcontrol.ControlError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.put("/controls/{control_id}")
+    def update_control(control_id: str, body: CustomControlUpdateReq,
+                       scope: Scope = Depends(require("admin"))):
+        import cnapp_customcontrol
+        try:
+            out = _control_store().update(_control_ws(scope), control_id,
+                                          body.model_dump(exclude_none=True))
+        except cnapp_customcontrol.ControlError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if out is None:
+            raise HTTPException(status_code=404, detail="control not found")
+        return out
+
+    @app.delete("/controls/{control_id}", status_code=204)
+    def delete_control(control_id: str, scope: Scope = Depends(require("admin"))):
+        if not _control_store().delete(_control_ws(scope), control_id):
+            raise HTTPException(status_code=404, detail="control not found")
+
+    @app.post("/controls/preview")
+    def preview_control(body: WqlReq, scope: Scope = Depends(require("auditor"))):
+        """Run a candidate query WITHOUT saving it, so an author sees what their control
+        would match before committing. Read-only and account-scoped to the caller's
+        workspace, so preview can never surface another tenant's resources."""
+        try:
+            return service.preview_control_query(body.query,
+                                                 workspace_id=scope.workspace_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     # ── Policies (policy-as-code custom rules; read-only org roll-up) ───────────
     @app.get("/policies")

@@ -219,6 +219,7 @@ class PlatformService:
                  trail_reader: Optional[Callable] = None,
                  projects: Optional[List[dict]] = None,
                  controls: Optional[List[dict]] = None,
+                 custom_controls=None,
                  policies: Optional[List[dict]] = None,
                  registry_connectors: Optional[List[dict]] = None,
                  registry_request: Optional[Callable] = None,
@@ -274,6 +275,14 @@ class PlatformService:
         # time → aws_correlate stays byte-frozen). No DB table (no schema churn). Fail-safe per
         # control: a bad/unsafe saved query is inert, never an error.
         self.controls = controls or []
+        # ── User-authored Controls (v16) ───────────────────────────────────────
+        # The same object as above, but AUTHORED rather than configured: persisted per
+        # workspace and edited through the API instead of an env var read once at boot.
+        # Optional and fail-open -- with no store wired, `_all_controls` returns the config
+        # list unchanged, so every pre-v16 deployment and test behaves identically.
+        # Authored controls keep the SAME display-only discipline: WARN, never FAIL, so a
+        # customer's own query can never move the posture score it is being compared on.
+        self.custom_controls = custom_controls
         # ── Policies (policy-as-code; the custom-rule engine) ─────────────────
         # Read-only, config-driven rules ({id,name,match:{op?,graph?,finding?},...}) that combine a
         # graph condition (WQL) and/or a finding-catalog condition (compliance-as-code). Same
@@ -789,7 +798,8 @@ class PlatformService:
         touches the FAIL-only posture score). The graph is rehydrated ONCE and every control is
         evaluated against it. Fail-safe per control: a bad/unsafe saved query is inert, never an
         error. Empty when no controls, no scan, or nothing matches."""
-        if not self.controls:
+        controls = self._controls_for_workspace_of(account_id)
+        if not controls:
             return []
         gd = self.get_graph(account_id)
         if gd is None:
@@ -798,7 +808,7 @@ class PlatformService:
         import aws_wql
         g = self._graph_with_runtime(account_id, gd)         # runtime_monitored-aware for EDR controls
         out: List[dict] = []
-        for ctrl in self.controls:
+        for ctrl in controls:
             try:
                 rows = aws_wql.evaluate(ctrl.get("query"), g)
             except aws_wql.WQLError:
@@ -807,21 +817,94 @@ class PlatformService:
                 out.append(aws_controls.control_finding(ctrl, account_id, rows))
         return out
 
+    def preview_control_query(self, query, *, workspace_id: Optional[str] = None,
+                              max_accounts: int = 25) -> dict:
+        """Evaluate a candidate control query across the workspace's active accounts
+        WITHOUT persisting anything.
+
+        The point is that an author sees the blast radius before they commit: a query that
+        matches every node in the estate is a control that will bury its own findings, and
+        that should be visible at authoring time rather than discovered afterwards.
+
+        Bounded on purpose -- `max_accounts` caps the sweep so a preview cannot become an
+        expensive org-wide scan triggered by an unauthenticated-ish viewer action, and the
+        response SAYS when it stopped early rather than presenting a partial count as total."""
+        import aws_wql
+        try:
+            aws_wql.parse(query)                       # 400 on malformed, before any work
+        except aws_wql.WQLError as e:
+            raise ValueError(f"query is not valid WQL: {e}") from e
+
+        accounts = self.registry.list_accounts(
+            onboarding_status="active", workspace_id=self._scoped_ws(workspace_id))
+        truncated = len(accounts) > max_accounts
+        matches, per_account = [], []
+        for a in accounts[:max_accounts]:
+            gd = self.get_graph(a["account_id"])
+            if gd is None:
+                continue
+            g = self._graph_with_runtime(a["account_id"], gd)
+            try:
+                rows = aws_wql.evaluate(query, g)
+            except aws_wql.WQLError:
+                continue
+            if rows:
+                per_account.append({"account": a["account_id"], "count": len(rows)})
+                matches.extend({"account": a["account_id"], **r} for r in rows[:20])
+        return {
+            "total": sum(p["count"] for p in per_account),
+            "accounts_matched": len(per_account),
+            "accounts_scanned": min(len(accounts), max_accounts),
+            "accounts_total": len(accounts),
+            "truncated": truncated,
+            "per_account": per_account,
+            "sample": matches[:100],
+        }
+
+    def _all_controls(self, workspace_id: Optional[str]) -> List[dict]:
+        """Config-file controls PLUS this workspace's authored ones.
+
+        Config controls came from an env var, which has no tenant, so they apply
+        everywhere; authored controls are scoped to the workspace that owns them and must
+        never leak across that boundary. A store read that fails degrades to the config
+        list rather than emptying the catalog -- the same fail-safe posture the per-control
+        evaluation already takes."""
+        base = list(self.controls or [])
+        if self.custom_controls is None:
+            return base
+        try:
+            authored = self.custom_controls.list(workspace_id, enabled_only=True)
+        except Exception:
+            return base
+        # An authored control whose stored query failed to decode is inert, not fatal.
+        return base + [c for c in authored if c.get("query") is not None]
+
+    def _controls_for_workspace_of(self, account_id: str) -> List[dict]:
+        """Controls in scope for ONE account, resolved through its workspace."""
+        ws = None
+        if getattr(self, "workspaces", None) is not None:
+            try:
+                ws = self.workspaces.workspace_of_account(account_id)
+            except Exception:
+                ws = None
+        return self._all_controls(ws)
+
     def list_controls(self, *, workspace_id: Optional[str] = None) -> List[dict]:
         """All configured controls with an org-wide roll-up: how many nodes each matches and in
         which active accounts. ``status`` is WARN when a control matches anything, else PASS (the
         control is satisfied). Empty when no controls are configured. Read-only; scoped to a tenant."""
-        if not self.controls:
+        controls = self._all_controls(workspace_id)
+        if not controls:
             return []
         import aws_controls
         import aws_wql
-        agg = {str(c.get("id")): {"count": 0, "accounts": []} for c in self.controls}
+        agg = {str(c.get("id")): {"count": 0, "accounts": []} for c in controls}
         for a in self.registry.list_accounts(onboarding_status="active", workspace_id=self._scoped_ws(workspace_id)):
             gd = self.get_graph(a["account_id"])
             if gd is None:
                 continue
             g = self._graph_with_runtime(a["account_id"], gd)
-            for ctrl in self.controls:
+            for ctrl in controls:
                 try:
                     rows = aws_wql.evaluate(ctrl.get("query"), g)
                 except aws_wql.WQLError:

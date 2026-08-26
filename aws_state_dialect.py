@@ -180,6 +180,22 @@ POSTGRES_DDL: List[str] = [
     """CREATE TABLE IF NOT EXISTS scan_coverage(
        scan_id TEXT NOT NULL, account TEXT NOT NULL, region TEXT NOT NULL, check_id TEXT NOT NULL,
        PRIMARY KEY(scan_id,account,region,check_id))""",
+    # sqlite twin in aws_state._DDL. Only diff: created_at/updated_at are BIGINT.
+    """CREATE TABLE IF NOT EXISTS custom_controls(
+       control_id TEXT PRIMARY KEY,
+       workspace_id TEXT NOT NULL,
+       name TEXT NOT NULL,
+       description TEXT NOT NULL DEFAULT '',
+       section TEXT NOT NULL DEFAULT '',
+       severity TEXT NOT NULL CHECK(severity IN ('CRITICAL','HIGH','MEDIUM','LOW')),
+       query_json TEXT NOT NULL,
+       compliance_json TEXT NOT NULL DEFAULT '{}',
+       remediation_cmd TEXT NOT NULL DEFAULT '',
+       enabled INTEGER NOT NULL DEFAULT 1,
+       created_by TEXT,
+       created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS ix_cc_ws_name ON custom_controls(workspace_id, name)""",
+    """CREATE INDEX IF NOT EXISTS ix_cc_ws ON custom_controls(workspace_id)""",
     # sqlite twin in aws_state._DDL. Only diff: the *_epoch columns are BIGINT.
     """CREATE TABLE IF NOT EXISTS mcp_surface(
        account TEXT NOT NULL, gateway_arn TEXT NOT NULL, gateway_name TEXT,
