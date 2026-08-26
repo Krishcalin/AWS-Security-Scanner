@@ -61,15 +61,38 @@ tooling without changing a single exposure — and OW2-KM-001(b), which targets
 *zero* internet-exposed critical workloads, then disagrees with the composite
 about the same estate.
 
-So the credit is a **bounded multiplier, and it is gated**:
+So the credit is a **bounded multiplier applied only to the factors a control can
+legitimately modulate**, and it is additionally gated:
 
-    risk = raw_risk × (1 − credit),  credit ≤ MAX_CONTROL_CREDIT
-    credit = 0 whenever the exposure gate is tripped
+    risk   = Σ contributions, creditable ones × (1 − credit)
+    credit ≤ MAX_CONTROL_CREDIT
+    credit = 0 when the exposure gate is tripped, OR when no gate verdict exists
 
-The 15% magnitude Appendix B intended is preserved. What changes is that no
-quantity of tooling can buy down a live unconditioned exposure, because at that
-point the control sits downstream of a compromise that has already succeeded.
-This mirrors the gated-multiplicative shape the attack-path score already uses.
+:data:`CREDITABLE_FACTORS` is ``(findings,)`` alone. Detection and containment
+genuinely reduce the risk carried by a population of open issues — they are found
+sooner and contained faster. They do not touch the other four:
+
+* **exposure** — definitionally. This is the whole of the objection above.
+* **exploitability** — a KEV entry is a property of the vulnerability, not of the
+  response to it.
+* **criticality** — a property of the asset.
+* **hygiene trend** — a measurement of the process, not a credit against it.
+
+**This deliberately does not preserve Appendix B's 15-point magnitude, and that is
+the point.** Against the Appendix B weights the maximum effective credit is
+0.15 × 31.58% ≈ **4.7 points**, not 15. The 15 was attached to the wrong
+instrument; keeping its size while fixing the instrument would have been having it
+both ways. :meth:`RiskModel.methodology` publishes the effective ceiling, so nobody
+has to discover it by subtraction.
+
+TWO GUARDS, NOT ONE. Restricting the credit to creditable factors is the
+principled fix. The exposure gate is a second, stricter one: on a live
+unconditioned exposure even the findings credit is withheld, because there the
+control sits downstream of a compromise that has already succeeded. And **a
+missing gate verdict withholds the credit rather than granting it** — "nobody
+evaluated exposure" must never read as "exposure is fine", which is the same
+phantom pass this module refuses everywhere else. A caller that wants credit
+supplies a verdict.
 
 ────────────────────────────────────────────────────────────────────────────────
 A FACTOR WITH NO DATA IS NOT A FACTOR WORTH ZERO
@@ -137,7 +160,23 @@ APPENDIX_B_BANDS: Tuple[Tuple[str, float], ...] = (
 )
 
 MAX_CONTROL_CREDIT = 0.15
-"""The −15% Appendix B intended, as a multiplier ceiling rather than a weight."""
+"""The −15% Appendix B intended, as a multiplier ceiling rather than a weight.
+
+Note this is a ceiling on the *creditable* portion, not on the composite. See
+:data:`CREDITABLE_FACTORS` and :meth:`RiskModel.max_effective_credit`."""
+
+CREDITABLE_FACTORS: Tuple[str, ...] = (FINDINGS,)
+"""The only factors a compensating control may reduce.
+
+Detection and containment genuinely lower the risk carried by a population of open
+issues. They do not make an asset less reachable (exposure), a CVE less exploited
+in the wild (exploitability), a database less valuable (criticality), or a
+remediation trend less bad (hygiene). Crediting any of those is how an estate
+improves its published score by buying tooling."""
+
+NO_GATE_VERDICT = (
+    "no exposure verdict was supplied, so credit was withheld rather than assumed "
+    "safe — an unevaluated exposure is not a cleared one")
 
 SCOPES = ("estate", "account", "business-unit", "application")
 """OW2-CC-001. The engine is scope-agnostic; the label travels with the result."""
@@ -176,6 +215,7 @@ class RiskModel:
     max_control_credit: float = MAX_CONTROL_CREDIT
     bands: Tuple[Tuple[str, float], ...] = APPENDIX_B_BANDS
     min_weight_coverage: float = 0.5
+    creditable: Tuple[str, ...] = CREDITABLE_FACTORS
     label: str = "Appendix B v1 (corrected)"
 
     def __post_init__(self) -> None:
@@ -198,6 +238,16 @@ class RiskModel:
             raise ValueError("min_weight_coverage must be in (0, 1]")
         if not self.bands:
             raise ValueError("at least one band is required")
+        cred = tuple(self.creditable or ())
+        bad = sorted(set(cred) - set(FACTOR_KEYS))
+        if bad:
+            raise ValueError("unknown creditable factor(s): %s" % ", ".join(bad))
+        if EXPOSURE in cred:
+            raise ValueError(
+                "exposure cannot be creditable: a compensating control does not make "
+                "an asset less reachable, and crediting it lets an estate improve its "
+                "published score by buying tooling (OW2-CC-002(e), review defect D2)")
+        object.__setattr__(self, "creditable", cred)
 
     # ── normalisation: the fix for defect 1 ──────────────────────────────────
     def normalized(self, over: Optional[Iterable[str]] = None) -> Dict[str, float]:
@@ -216,6 +266,15 @@ class RiskModel:
             return {}
         return {k: float(self.weights[k]) / total for k in keys}
 
+    def max_effective_credit(self) -> float:
+        """The largest share of the composite the credit can actually remove.
+
+        Published rather than left to be discovered by subtraction: against the
+        Appendix B weights this is 0.15 × 31.58% ≈ 4.7 points, not 15.
+        """
+        norm = self.normalized()
+        return self.max_control_credit * sum(norm.get(k, 0.0) for k in self.creditable)
+
     @property
     def version(self) -> str:
         """Short digest of everything that decides a score.
@@ -229,6 +288,7 @@ class RiskModel:
         canonical = json.dumps({
             "weights": {k: float(self.weights[k]) for k in sorted(self.weights)},
             "max_control_credit": round(float(self.max_control_credit), 6),
+            "creditable": sorted(self.creditable),
             "bands": [[g, float(t)] for g, t in self.bands],
             "min_weight_coverage": round(float(self.min_weight_coverage), 6),
         }, sort_keys=True, separators=(",", ":"))
@@ -268,12 +328,24 @@ class RiskModel:
                 "to sum to 1.0 before use. Appendix B as drafted sums to 95, which is "
                 "why this is done by the engine rather than by hand."),
             "compensating_controls": {
-                "instrument": "bounded multiplier applied to the composite",
+                "instrument": ("bounded multiplier applied ONLY to the creditable "
+                               "factors, never to the composite"),
+                "creditable_factors": [FACTOR_LABELS[k] for k in self.creditable],
+                "not_creditable": [FACTOR_LABELS[k] for k in FACTOR_KEYS
+                                   if k not in self.creditable],
                 "max_credit_pct": round(100.0 * self.max_control_credit, 2),
+                "max_effective_credit_points": round(
+                    100.0 * self.max_effective_credit(), 2),
+                "rationale": (
+                    "Detection and containment reduce the risk carried by a "
+                    "population of open findings. They do not make an asset less "
+                    "reachable, a CVE less exploited in the wild, a database less "
+                    "valuable, or a remediation trend less bad. Appendix B's 15 "
+                    "points were attached to the wrong instrument; the effective "
+                    "ceiling above is what a control can actually remove."),
                 "gate": ("Credit is withheld entirely when the exposure gate is "
-                         "tripped. A compensating control reduces the consequence of "
-                         "a compromise; it does not make a reachable asset less "
-                         "reachable, so it may never offset a live exposure."),
+                         "tripped, and also when no gate verdict was supplied — an "
+                         "unevaluated exposure is not a cleared one."),
             },
             "bands": [{"grade": g, "min_posture": t} for g, t in self.bands],
             "unavailable_factors": (
@@ -348,6 +420,7 @@ class RiskScore:
     credit_gated: bool = False
     gate_reason: str = ""
     excluded: Tuple[Tuple[str, str], ...] = ()
+    credited_factors: Tuple[str, ...] = ()
     weight_coverage: float = 1.0
     refused: bool = False
     refusal_reason: str = ""
@@ -371,11 +444,23 @@ class RiskScore:
                 % (100.0 * self.weight_coverage, names,
                    "its" if len(self.excluded) == 1 else "their"))
         if self.credit_gated:
-            bits.append("Compensating-control credit withheld — %s" % self.gate_reason)
-        elif self.control_credit:
-            bits.append("Compensating controls reduced the composite by %.1f%%."
-                        % (100.0 * self.control_credit))
+            bits.append("Compensating-control credit withheld — %s." % self.gate_reason)
+        elif self.control_credit and self.credited_factors:
+            names = ", ".join(FACTOR_LABELS[k].lower() for k in self.credited_factors)
+            bits.append(
+                "Compensating controls reduced %s by %.1f%%, removing %.1f points. "
+                "Exposure, exploitability and asset criticality are not creditable — "
+                "a control changes how fast a compromise is caught, not how "
+                "reachable the asset is."
+                % (names, 100.0 * self.control_credit, self.credit_points))
         return " ".join(bits)
+
+    @property
+    def credit_points(self) -> float:
+        """Points the credit actually removed. Never inferred from the ceiling."""
+        creditable = set(self.credited_factors)
+        return round(sum(c.points for c in self.contributions
+                         if c.key in creditable) * self.control_credit, 2)
 
     def to_dict(self) -> dict:
         return {
@@ -384,6 +469,8 @@ class RiskScore:
             "risk": self.risk, "posture": self.posture, "grade": self.grade,
             "raw_risk": round(self.raw_risk, 2),
             "control_credit_pct": round(100.0 * self.control_credit, 2),
+            "credit_points_removed": self.credit_points,
+            "credited_factors": list(self.credited_factors),
             "credit_gated": self.credit_gated, "gate_reason": self.gate_reason,
             "weight_coverage_pct": round(100.0 * self.weight_coverage, 2),
             "excluded": [{"factor": k, "reason": r} for k, r in self.excluded],
@@ -413,7 +500,6 @@ def score(
     coverage; it is clamped to the model ceiling and zeroed by a tripped gate.
     """
     model = model or RiskModel()
-    gate = exposure_gate or ExposureGate()
     if scope not in SCOPES:
         raise ValueError("scope must be one of %s" % ", ".join(SCOPES))
 
@@ -459,11 +545,25 @@ def score(
     )
     raw = sum(c.points for c in contributions)
 
+    # Credit resolution. Two independent guards, and BOTH default to withholding:
+    # a missing gate verdict is not a clearance, and a non-creditable factor is
+    # never reduced no matter what the gate says.
     credit = max(0.0, min(float(control_credit), model.max_control_credit))
-    if gate.tripped:
-        credit = 0.0
+    gated = False
+    gate_reason = ""
+    if exposure_gate is None:
+        if credit > 0.0:
+            gated, gate_reason, credit = True, NO_GATE_VERDICT, 0.0
+    elif exposure_gate.tripped:
+        gated, gate_reason, credit = True, exposure_gate.reason, 0.0
 
-    risk_f = max(0.0, min(100.0, raw * (1.0 - credit)))
+    # The principled half of the D2 fix: the multiplier touches only the factors a
+    # control can legitimately modulate. Exposure is never among them, so no volume
+    # of tooling moves the exposure share of the score.
+    creditable = set(model.creditable)
+    risk_f = sum(c.points * (1.0 - credit) if c.key in creditable else c.points
+                 for c in contributions)
+    risk_f = max(0.0, min(100.0, risk_f))
     risk = int(round(risk_f))
     posture = 100 - risk
 
@@ -471,8 +571,9 @@ def score(
         scope=scope, scope_id=scope_id, model_version=model.version,
         risk=risk, posture=posture, grade=model.band(float(posture)),
         contributions=contributions, raw_risk=raw,
-        control_credit=credit, credit_gated=bool(gate.tripped),
-        gate_reason=gate.reason, excluded=tuple(excluded),
+        control_credit=credit, credit_gated=gated,
+        gate_reason=gate_reason, excluded=tuple(excluded),
+        credited_factors=tuple(k for k in model.creditable if k in used),
         weight_coverage=round(coverage, 6))
 
 

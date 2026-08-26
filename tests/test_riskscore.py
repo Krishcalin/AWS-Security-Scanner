@@ -13,7 +13,14 @@ asserts a well-defined 0-100 result. If a later refactor reintroduces an assumpt
 that weights are already percentages, that test fails and this docstring explains why.
 
 The other two defects get their own sections: a maximally bad estate must not earn
-an A (direction), and buying tooling must not buy down a live exposure (the gate).
+an A (direction), and compensating controls must not reduce exposure.
+
+`test_the_credit_never_touches_the_exposure_component` is the D2 regression, and it
+exists because the first version of this module got it wrong and passed its own
+tests. That version applied the credit as a multiplier over the WHOLE composite,
+gated on live exposure -- which still let tooling shave the exposure contribution on
+every estate whose gate did not happen to trip. The gate is a useful second guard;
+it was never the fix. Restricting the credit to CREDITABLE_FACTORS is.
 """
 from __future__ import annotations
 
@@ -139,25 +146,116 @@ def test_methodology_states_the_direction_explicitly():
 
 # ═══ DEFECT 3 — compensating controls were the wrong instrument ══════════════
 
-def test_control_credit_is_a_multiplier_capped_at_fifteen_percent():
-    base = R.score(all_at(0.8))
-    credited = R.score(all_at(0.8), control_credit=0.15)
-    assert credited.risk == int(round(base.raw_risk * 0.85))
+CLEAR = R.ExposureGate(False)          # exposure was evaluated and is not live
+
+
+def test_the_credit_never_touches_the_exposure_component():
+    # THE D2 REGRESSION. A multiplier over the whole composite would reduce the
+    # exposure contribution, which is precisely the behaviour D2 objects to. An
+    # earlier version of this module did exactly that and passed its own tests.
+    factors = [fv(R.FINDINGS, 0.3), fv(R.EXPLOITABILITY, 0.2), fv(R.EXPOSURE, 0.8),
+               fv(R.CRITICALITY, 0.3), fv(R.HYGIENE, 0.2)]
+    base = R.score(factors, exposure_gate=CLEAR)
+    cred = R.score(factors, control_credit=0.15, exposure_gate=CLEAR)
+
+    exposure_points = [c for c in base.contributions if c.key == R.EXPOSURE][0].points
+    # Everything the credit removed must be attributable to creditable factors only.
+    assert cred.credit_points == pytest.approx(base.raw_risk - _exact(cred), abs=0.01)
+    assert cred.credit_points < exposure_points * 0.15, (
+        "credit removed more than a whole-composite multiplier would have taken from "
+        "exposure alone, so exposure is still being credited")
+
+
+def _exact(s):
+    creditable = set(s.credited_factors)
+    return sum(c.points * (1 - s.control_credit) if c.key in creditable else c.points
+               for c in s.contributions)
+
+
+def test_only_findings_is_creditable():
+    assert R.CREDITABLE_FACTORS == (R.FINDINGS,)
+    assert R.EXPOSURE not in R.CREDITABLE_FACTORS
+    assert R.EXPLOITABILITY not in R.CREDITABLE_FACTORS
+    assert R.CRITICALITY not in R.CREDITABLE_FACTORS
+
+
+def test_a_model_cannot_declare_exposure_creditable():
+    with pytest.raises(ValueError, match="exposure cannot be creditable"):
+        R.RiskModel(creditable=(R.FINDINGS, R.EXPOSURE))
+
+
+def test_unknown_creditable_factor_is_rejected():
+    with pytest.raises(ValueError, match="unknown creditable factor"):
+        R.RiskModel(creditable=("vibes",))
+
+
+def test_control_credit_is_capped_at_fifteen_percent_of_the_creditable_share():
+    base = R.score(all_at(0.8), exposure_gate=CLEAR)
+    credited = R.score(all_at(0.8), control_credit=0.15, exposure_gate=CLEAR)
+    findings_points = [c for c in base.contributions if c.key == R.FINDINGS][0].points
     assert credited.control_credit == 0.15
+    assert credited.credit_points == pytest.approx(findings_points * 0.15, abs=0.01)
+
+
+def test_the_effective_ceiling_is_published_not_left_to_subtraction():
+    # Appendix B intended 15 points. Against its weights the honest ceiling is ~4.7,
+    # because only the findings factor is creditable. Publishing it is the point.
+    m = R.RiskModel()
+    assert m.max_effective_credit() == pytest.approx(0.15 * 30.0 / 95.0, abs=1e-6)
+    doc = m.methodology()["compensating_controls"]
+    assert doc["max_credit_pct"] == 15.0
+    assert doc["max_effective_credit_points"] == pytest.approx(4.74, abs=0.01)
+    assert "Exposure" in doc["not_creditable"]
 
 
 def test_credit_above_the_ceiling_is_clamped_not_honoured():
-    s = R.score(all_at(0.8), control_credit=0.9)
+    s = R.score(all_at(0.8), control_credit=0.9, exposure_gate=CLEAR)
     assert s.control_credit == R.MAX_CONTROL_CREDIT
 
 
 def test_tooling_cannot_buy_down_a_live_exposure():
     gate = R.ExposureGate(True, "an internet-reachable host carries a KEV-listed CVE")
-    ungated = R.score(all_at(0.8), control_credit=0.15)
+    ungated = R.score(all_at(0.8), control_credit=0.15, exposure_gate=CLEAR)
     gated = R.score(all_at(0.8), control_credit=0.15, exposure_gate=gate)
     assert gated.risk > ungated.risk
     assert gated.control_credit == 0.0
     assert gated.credit_gated
+
+
+# ── the second guard: a missing verdict is not a clearance ───────────────────
+
+def test_no_gate_verdict_withholds_the_credit_rather_than_granting_it():
+    # Defaulting an unevaluated gate to "not tripped" would hand out credit on the
+    # strength of nobody having looked.
+    s = R.score(all_at(0.8), control_credit=0.15)
+    assert s.credit_gated
+    assert s.control_credit == 0.0
+    assert "not a cleared one" in s.gate_reason
+
+
+def test_no_gate_verdict_is_harmless_when_no_credit_is_claimed():
+    s = R.score(all_at(0.8))
+    assert not s.credit_gated and s.control_credit == 0.0
+
+
+def test_an_evaluated_clear_gate_does_grant_the_credit():
+    s = R.score(all_at(0.8), control_credit=0.15, exposure_gate=CLEAR)
+    assert not s.credit_gated
+    assert s.control_credit == 0.15
+
+
+def test_the_caveat_names_what_is_not_creditable():
+    s = R.score(all_at(0.5), control_credit=0.15, exposure_gate=CLEAR)
+    c = s.caveat()
+    assert "not creditable" in c
+    assert "how reachable the asset is" in c
+
+
+def test_credit_points_are_measured_not_inferred_from_the_ceiling():
+    s = R.score(all_at(0.2), control_credit=0.15, exposure_gate=CLEAR)
+    findings = [c for c in s.contributions if c.key == R.FINDINGS][0]
+    assert s.credit_points == pytest.approx(findings.points * 0.15, abs=0.01)
+    assert s.credit_points < 100 * R.RiskModel().max_effective_credit()
 
 
 def test_a_tripped_gate_must_be_explainable():
@@ -172,7 +270,7 @@ def test_gated_credit_is_surfaced_in_the_caveat():
 
 
 def test_credit_can_never_drive_risk_below_zero():
-    s = R.score(all_at(0.0), control_credit=0.15)
+    s = R.score(all_at(0.0), control_credit=0.15, exposure_gate=CLEAR)
     assert s.risk == 0
 
 
@@ -341,13 +439,17 @@ def test_explain_of_a_refused_score_says_so_rather_than_inventing_a_number():
 # ── reproducibility ──────────────────────────────────────────────────────────
 
 def test_scoring_is_a_pure_function_of_its_inputs():
-    a = R.score(all_at(0.44), control_credit=0.1, scope="account", scope_id="1")
-    b = R.score(all_at(0.44), control_credit=0.1, scope="account", scope_id="1")
+    a = R.score(all_at(0.44), control_credit=0.1, scope="account", scope_id="1",
+                exposure_gate=CLEAR)
+    b = R.score(all_at(0.44), control_credit=0.1, scope="account", scope_id="1",
+                exposure_gate=CLEAR)
     assert a == b, "a published score must be recomputable by anyone with the inputs"
 
 
 def test_to_dict_round_trips_the_whole_decomposition():
-    d = R.score(all_at(0.5), control_credit=0.1).to_dict()
-    assert d["risk"] == 45 and d["posture"] == 55
+    d = R.score(all_at(0.5), control_credit=0.1, exposure_gate=CLEAR).to_dict()
+    assert d["posture"] == 100 - d["risk"]
     assert len(d["contributions"]) == 5
     assert d["control_credit_pct"] == 10.0
+    assert d["credited_factors"] == ["findings"]
+    assert d["credit_points_removed"] > 0

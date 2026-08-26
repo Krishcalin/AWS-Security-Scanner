@@ -61,9 +61,10 @@ composite about the same estate.
 ### 2.1 Two numbers, one relationship
 
 ```
-risk    = Σ (normalised weightᵢ × factorᵢ) × 100 × (1 − control credit)
-posture = 100 − risk
-grade   = band(posture)
+contributionᵢ = normalised weightᵢ × factorᵢ × 100
+risk          = Σ contributionᵢ, creditable ones × (1 − control credit)   [§2.3]
+posture       = 100 − risk
+grade         = band(posture)
 ```
 
 * **Risk** — 0–100, **higher is worse**. This is the FR-1 "Cloud Risk Score".
@@ -98,25 +99,52 @@ because nobody is doing arithmetic.
 A consequence worth stating: **ratifying a tidier 100-sum table will not move
 anybody's published score.** `30/20/20/15/10` and `6/4/4/3/2` are the same model.
 
-### 2.3 Compensating controls: a gated multiplier
+### 2.3 Compensating controls: a bounded multiplier on the creditable factors only
 
 ```
-risk   = raw_risk × (1 − credit)
+risk   = Σ contributions, creditable ones × (1 − credit)
 credit = 0                              if the exposure gate is tripped
+       = 0                              if no gate verdict was supplied
        = min(control_coverage, 0.15)    otherwise
 ```
 
-The 15% magnitude Appendix B intended is preserved. What changes is that the credit
-is a multiplier against a well-defined 0–100 composite rather than a weight in a set
-that does not sum, **and it is gated**: no quantity of tooling can buy down a live
-exposure, because at that point the control sits downstream of a compromise that has
-already succeeded.
+**Only `findings` is creditable.** Detection and containment genuinely reduce the
+risk carried by a population of open issues — they are found sooner and contained
+faster. They do not touch the other four:
 
-**Gate condition.** Credit is withheld whenever the scope contains at least one
-internet-reachable asset carrying a KEV-listed or CRITICAL finding on an
-unconditioned path. A tripped gate must carry a reason — the engine refuses to
-construct one without it, because a withheld credit has to be explainable to whoever
-asks why their score did not move.
+| Factor | Creditable | Why not |
+|---|---|---|
+| Severity-weighted open findings | **yes** | detection and containment shrink the exposure window of an open issue |
+| Exposure | no | a control does not make an asset less reachable — this is the whole objection |
+| Exploitability | no | a KEV entry is a property of the vulnerability, not of the response to it |
+| Asset criticality | no | a property of the asset |
+| Hygiene trend | no | a measurement of the process, not a credit against it |
+
+**This does not preserve Appendix B's 15-point magnitude, deliberately.** Against
+the Appendix B weights the maximum *effective* credit is 0.15 × 31.58% ≈ **4.7
+points**, not 15. The 15 was attached to the wrong instrument; keeping its size
+while fixing the instrument would have been having it both ways. The effective
+ceiling is published in `methodology()` so nobody discovers it by subtraction.
+
+**Two guards, not one.** Restricting the credit to creditable factors is the
+principled fix. The exposure gate is a second, stricter one:
+
+* **Gate condition.** Credit is withheld entirely whenever the scope contains at
+  least one internet-reachable asset carrying a KEV-listed or CRITICAL finding on an
+  unconditioned path — there, even the findings credit is wrong, because the control
+  sits downstream of a compromise that has already succeeded.
+* **A tripped gate must carry a reason.** The engine refuses to construct one
+  without it: a withheld credit has to be explainable to whoever asks why their
+  score did not move.
+* **A missing verdict withholds the credit rather than granting it.** "Nobody
+  evaluated exposure" must never read as "exposure is fine". A caller requesting
+  credit without supplying a gate verdict gets zero credit and a stated reason.
+
+> **Wiring status.** `ExposureGate` is a caller-supplied verdict and **nothing
+> computes it yet** — the score engine is not yet wired to live factor inputs. Until
+> it is, every real call path supplies no verdict, which withholds credit. That is
+> the safe direction to be un-wired in, but it is un-wired, and the producer is part
+> of the "wire the score engine to live factor inputs" item in the Phase II plan.
 
 ### 2.4 Banding (unchanged from Appendix B)
 
@@ -174,7 +202,7 @@ weight and leave the version behind: **every published score carries proof of wh
 model produced it**, satisfying the requirement that historical scores are never
 silently recomputed.
 
-Current model version: `m5736262b80bf`.
+Current model version: `mf8d9d9a02860`.
 
 Rescaling the weights produces the same score but a different version. Flagging a
 no-op recalculation is the safe direction to be wrong in.
@@ -188,6 +216,7 @@ no-op recalculation is the safe direction to be wrong in.
 2. **The declared weights** — Appendix B's own `30/20/20/15/10`, carried forward
    unchanged, now with a defined normalisation. Retuning them is an
    `OW2-CC-004` configuration change, not a code change. (§2.2)
-3. **Compensating controls as a gated multiplier**, and the gate condition. (§2.3)
+3. **Compensating controls creditable against `findings` only**, the ~4.7-point
+   effective ceiling that follows, and the gate condition. (§2.3)
 4. **The 50% weight-coverage floor** below which a score is refused. (§3)
 5. **`E` vs `F`** for the lowest band. (§2.4)
