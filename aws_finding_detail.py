@@ -3794,7 +3794,8 @@ import aws_extsvc2
 import aws_extsvc3
 import aws_extsvc4
 import aws_extsvc5
-import aws_extsvc6           # noqa: E402,F401  (imported for its registrations)
+import aws_extsvc6
+import aws_extsvc7           # noqa: E402,F401  (imported for its registrations)
 
 aws_checkdef.merge_detail(FINDING_DETAIL)
 

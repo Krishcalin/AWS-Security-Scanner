@@ -128,7 +128,11 @@ class TestDataStructures(unittest.TestCase):
         # 80: +VERIFIEDPERMISSIONS, CLOUDHSM, CLOUDWAN, MANAGEDGRAFANA,
         # AURORADSQL, FLEETWISE -- batch 6. Three services ranked ABOVE these
         # were declined as discontinued (MediaStore, WAF Classic x2).
-        self.assertEqual(len(SECTIONS), 80)
+        # 86: +CLOUDFORMATION, FIREWALLMANAGER, ECRPUBLIC,
+        # MULTIPARTYAPPROVAL, WICKR, MEDIAPACKAGE -- batch 7, chosen against
+        # the ranking. CloudFormation's checks are STACK-*, because CFN-* is
+        # already CloudFront.
+        self.assertEqual(len(SECTIONS), 86)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

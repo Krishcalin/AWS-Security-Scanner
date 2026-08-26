@@ -96,6 +96,7 @@ import aws_extsvc3
 import aws_extsvc4
 import aws_extsvc5
 import aws_extsvc6
+import aws_extsvc7
 import aws_segmentation
 import aws_shadowai
 import aws_ailog
@@ -256,6 +257,12 @@ SECTIONS = [
     # services (MediaStore, and WAF Classic's two clients) -- see aws_extsvc6.
     "VERIFIEDPERMISSIONS", "CLOUDHSM", "CLOUDWAN", "MANAGEDGRAFANA",
     "AURORADSQL", "FLEETWISE",
+    # Batch 7 -- chosen AGAINST the ranking. By this point the score heuristic,
+    # which reads operation NAMES, put CloudFormation and Firewall Manager below
+    # Wickr: their significance is not visible in a method name.
+    # NOTE CloudFormation is STACK-*, not CFN-* -- CFN-01..06 are CLOUDFRONT.
+    "CLOUDFORMATION", "FIREWALLMANAGER", "ECRPUBLIC", "MULTIPARTYAPPROVAL",
+    "WICKR", "MEDIAPACKAGE",
     "CORRELATE",
 ]
 
@@ -318,6 +325,12 @@ SECTION_LABELS = {
     "MANAGEDGRAFANA": "AMAZON MANAGED GRAFANA",
     "AURORADSQL":     "AMAZON AURORA DSQL",
     "FLEETWISE":      "AWS IOT FLEETWISE",
+    "CLOUDFORMATION": "AWS CLOUDFORMATION",
+    "FIREWALLMANAGER": "AWS FIREWALL MANAGER",
+    "ECRPUBLIC":      "AMAZON ECR PUBLIC",
+    "MULTIPARTYAPPROVAL": "AWS MULTI-PARTY APPROVAL",
+    "WICKR":          "AWS WICKR",
+    "MEDIAPACKAGE":   "AWS ELEMENTAL MEDIAPACKAGE",
     "ELASTICACHE":    "AMAZON ELASTICACHE",
     "OPENSEARCH":     "AMAZON OPENSEARCH",
     "DYNAMODB":       "AMAZON DYNAMODB",
@@ -8856,6 +8869,234 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     # BATCH 6 — declared via aws_checkdef (see aws_extsvc6)
     # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
+    # BATCH 7 — declared via aws_checkdef (see aws_extsvc7)
+    # NOTE: CloudFormation's checks are STACK-*. CFN-01..06 are CLOUDFRONT.
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_cloudformation(self):
+        """STACK-01/02 — a stack is the definition of its infrastructure."""
+        self._section_header("CLOUDFORMATION")
+        try:
+            cf = self._client("cloudformation")
+            stacks = self._tokens(cf.describe_stacks, "Stacks", token_key="NextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("STACK-01", "STACK-02"):
+                    self._coverage.note_denied(cid, "cloudformation:ListStacks")
+            return
+
+        for st in stacks:
+            name = (st or {}).get("StackName")
+            if not name:
+                continue
+            r = aws_extsvc7.stack_service_role(st)
+            if not r["has_role"]:
+                self._add("FAIL", "STACK-02", "CLOUDFORMATION", name,
+                          f"{r['statement']} | {name}")
+            else:
+                self._add("PASS", "STACK-02", "CLOUDFORMATION", name,
+                          f"CloudFormation stack {name} runs under service role "
+                          f"{r['role']} | {name}")
+            try:
+                body = (cf.get_stack_policy(StackName=name) or {}).get("StackPolicyBody")
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("STACK-01",
+                                               "cloudformation:GetStackPolicy")
+                continue
+            p = aws_extsvc7.stack_policy(name, body)
+            if not p["has_policy"]:
+                self._add("FAIL", "STACK-01", "CLOUDFORMATION", name,
+                          f"{p['statement']} | {name}")
+            else:
+                self._add("PASS", "STACK-01", "CLOUDFORMATION", name,
+                          f"CloudFormation stack {name} has a stack policy | {name}")
+
+    def _check_firewallmanager(self):
+        """FMS-01/02 — a control that reports without enforcing, and without telling."""
+        self._section_header("FIREWALLMANAGER")
+        try:
+            fms = self._client("fms")
+            policies = self._tokens(fms.list_policies, "PolicyList",
+                                    token_key="NextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("FMS-01", "fms:ListPolicies")
+            policies = None
+
+        for p in (policies or []):
+            pid = (p or {}).get("PolicyId")
+            if not pid:
+                continue
+            try:
+                full = (fms.get_policy(PolicyId=pid) or {}).get("Policy") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("FMS-01", "fms:GetPolicy")
+                continue
+            r = aws_extsvc7.fms_policy({**full, **(p or {})})
+            nm = r["name"] or pid
+            if r["known"] and not r["remediates"]:
+                self._add("FAIL", "FMS-01", "FIREWALLMANAGER", nm,
+                          f"{r['statement']} | {nm}")
+            elif r["remediates"]:
+                self._add("PASS", "FMS-01", "FIREWALLMANAGER", nm,
+                          f"Firewall Manager policy {nm} remediates non-compliance "
+                          f"| {nm}")
+
+        try:
+            ch = fms.get_notification_channel() or {}
+            r = aws_extsvc7.fms_notification(ch)
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("FMS-02", "fms:GetNotificationChannel")
+                return
+            # ResourceNotFound means no channel is set, which IS the finding.
+            r = aws_extsvc7.fms_notification(None,
+                                             readable="NotFound" in str(e))
+        if not r["configured"] and r["known"]:
+            self._add("FAIL", "FMS-02", "FIREWALLMANAGER", "notifications",
+                      f"{r['statement']} | notifications")
+        elif r["configured"]:
+            self._add("PASS", "FMS-02", "FIREWALLMANAGER", "notifications",
+                      f"Firewall Manager notifies {r['topic']} | notifications")
+
+    def _check_ecrpublic(self):
+        """ECRPUB-01 — a public registry is readable by design; WRITE is the finding."""
+        self._section_header("ECRPUBLIC")
+        try:
+            ep = self._client("ecr-public")
+            repos = self._tokens(ep.describe_repositories, "repositories",
+                                 token_key="nextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("ECRPUB-01",
+                                           "ecr-public:DescribeRepositories")
+            return
+
+        for r0 in repos:
+            name = (r0 or {}).get("repositoryName")
+            if not name:
+                continue
+            try:
+                pol = (ep.get_repository_policy(repositoryName=name) or {}
+                       ).get("policyText")
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("ECRPUB-01",
+                                               "ecr-public:GetRepositoryPolicy")
+                continue
+            r = aws_extsvc7.ecr_public_policy(name, pol)
+            if r["public_write"]:
+                self._add("FAIL", "ECRPUB-01", "ECRPUBLIC", name,
+                          f"{r['statement']} | {name}")
+            elif r["has_policy"]:
+                self._add("PASS", "ECRPUB-01", "ECRPUBLIC", name,
+                          f"ECR Public repository {name} grants no wildcard write "
+                          f"| {name}")
+
+    def _check_multipartyapproval(self):
+        """MPA-01 — one approver is not multi-party approval."""
+        self._section_header("MULTIPARTYAPPROVAL")
+        try:
+            mpa = self._client("mpa")
+            teams = self._tokens(mpa.list_approval_teams, "ApprovalTeams",
+                                 token_key="NextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("MPA-01", "mpa:ListApprovalTeams")
+            return
+
+        for t in teams:
+            arn = (t or {}).get("Arn")
+            if not arn:
+                continue
+            try:
+                full = mpa.get_approval_team(Arn=arn) or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("MPA-01", "mpa:GetApprovalTeam")
+                continue
+            r = aws_extsvc7.mpa_approval_team(full)
+            nm = r["name"] or arn
+            if r["single_approver"]:
+                self._add("FAIL", "MPA-01", "MULTIPARTYAPPROVAL", nm,
+                          f"{r['statement']} | {nm}")
+            elif r["known"]:
+                self._add("PASS", "MPA-01", "MULTIPARTYAPPROVAL", nm,
+                          f"Approval team {nm} requires {r['minimum']} approvals | {nm}")
+
+    def _check_wickr(self):
+        """WKR-01 — retention on an E2E messenger: context, not a defect."""
+        self._section_header("WICKR")
+        try:
+            wk = self._client("wickr")
+            nets = self._tokens(wk.list_networks, "networks", token_key="nextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("WKR-01", "wickr:ListNetworks")
+            return
+
+        for n in nets:
+            nid = (n or {}).get("id") or (n or {}).get("networkId")
+            if not nid:
+                continue
+            try:
+                st = (wk.get_network_settings(networkId=nid) or {}
+                      ).get("networkSettings") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("WKR-01", "wickr:GetNetworkSettings")
+                continue
+            r = aws_extsvc7.wickr_retention(nid, st)
+            if r["retention_on"]:
+                self._add("INFO", "WKR-01", "WICKR", nid, f"{r['statement']} | {nid}")
+
+    def _check_mediapackage(self):
+        """MPV-01 — a channel policy governs who may INGEST."""
+        self._section_header("MEDIAPACKAGE")
+        try:
+            mp = self._client("mediapackagev2")
+            groups = self._tokens(mp.list_channel_groups, "Items",
+                                  token_key="NextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("MPV-01",
+                                           "mediapackagev2:ListChannelGroups")
+            return
+
+        for g in groups:
+            gname = (g or {}).get("ChannelGroupName")
+            if not gname:
+                continue
+            try:
+                chans = self._tokens(mp.list_channels, "Items", token_key="NextToken",
+                                     ChannelGroupName=gname)
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("MPV-01", "mediapackagev2:ListChannels")
+                continue
+            for c in chans:
+                cname = (c or {}).get("ChannelName")
+                if not cname:
+                    continue
+                try:
+                    pol = (mp.get_channel_policy(ChannelGroupName=gname,
+                                                 ChannelName=cname) or {}).get("Policy")
+                except Exception as e:
+                    if self._is_access_denied(e):
+                        self._coverage.note_denied("MPV-01",
+                                                   "mediapackagev2:GetChannelPolicy")
+                    continue
+                r = aws_extsvc7.mediapackage_policy(f"{gname}/{cname}", pol)
+                if r["public"]:
+                    self._add("FAIL", "MPV-01", "MEDIAPACKAGE", cname,
+                              f"{r['statement']} | {cname}")
+                elif r["has_policy"]:
+                    self._add("PASS", "MPV-01", "MEDIAPACKAGE", cname,
+                              f"MediaPackage channel {gname}/{cname} grants no wildcard "
+                              f"ingest | {cname}")
+
     def _check_verifiedpermissions(self):
         """VP-01/02 — a Cedar policy store IS the application's authorization logic."""
         self._section_header("VERIFIEDPERMISSIONS")
@@ -16043,6 +16284,12 @@ class AWSLiveScanner:
             "MANAGEDGRAFANA": self._check_managedgrafana,
             "AURORADSQL":     self._check_auroradsql,
             "FLEETWISE":      self._check_fleetwise,
+            "CLOUDFORMATION": self._check_cloudformation,
+            "FIREWALLMANAGER": self._check_firewallmanager,
+            "ECRPUBLIC":      self._check_ecrpublic,
+            "MULTIPARTYAPPROVAL": self._check_multipartyapproval,
+            "WICKR":          self._check_wickr,
+            "MEDIAPACKAGE":   self._check_mediapackage,
             "ELASTICACHE":    self._check_elasticache,
             "OPENSEARCH":     self._check_opensearch,
             "DYNAMODB":       self._check_dynamodb,

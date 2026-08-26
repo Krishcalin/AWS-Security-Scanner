@@ -7,6 +7,40 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Extended service coverage, batch 7** (`aws_extsvc7.py`, 6 sections, 8 checks) — the
+  first batch chosen **against** the ranking rather than from the top of it. By this
+  point the highest score was 14, and the heuristic reads operation *names*: it puts
+  CloudFormation and Firewall Manager at 5, below AWS Wickr, because `GetStackPolicy`
+  and `GetPolicy` are unremarkable strings attached to the two most consequential
+  services in the batch. That is a limit of the tool, and the response is to say so and
+  choose deliberately rather than to invent a cleverer regex.
+  - **CloudFormation** (`STACK-01/02`) — a stack is the *definition* of its
+    infrastructure, and an update is an instruction to make reality match a new template.
+    Without a stack policy, anyone who can call `UpdateStack` can replace or delete any
+    resource it owns; without a service role, operations run with the **caller's**
+    permissions, and on an IAM-capable stack a template change can mint identities while
+    reading as ordinary infrastructure work.
+  - **Firewall Manager** (`FMS-01/02`) — a policy with remediation disabled evaluates
+    every account and changes nothing. Its *existence* is what people rely on: a review
+    finds an org-wide WAF policy and concludes the WAF is applied. With no notification
+    channel as well, the control reports to a console nobody is watching.
+  - **ECR Public** (`ECRPUB-01`) — a public registry is readable by design, so
+    readability is never the finding. **Write** is: anyone can publish under your
+    namespace, and the namespace *is* the provenance signal a consumer has.
+  - **Multi-Party Approval** (`MPA-01`) — a team requiring one approval is worse than no
+    approval workflow, because it produces every artefact of one: a submission, a
+    recorded approval, an audit trail, and a reviewer who concludes separation of duties
+    is in force.
+  - **Wickr** (`WKR-01`, INFO) and **MediaPackage v2** (`MPV-01`) — retention on an
+    end-to-end encrypted messenger, reported as *context* because it is often a
+    regulatory requirement and also the one setting that puts plaintext somewhere
+    durable; and channel policies, which govern who may **ingest** to a live stream.
+  - **A prefix collision avoided by checking rather than by luck.** CloudFormation's
+    checks are `STACK-*`, because `CFN-01` through `CFN-06` already exist and are
+    **CloudFront** — their remediations call `aws cloudfront update-distribution`.
+    Reaching for the obvious prefix would have silently overwritten six live checks,
+    which is the `SEG-01` defect this codebase has shipped once already.
+
 - **Extended service coverage, batch 6** (`aws_extsvc6.py`, 6 sections, 9 checks) —
   Verified Permissions, CloudHSM, Cloud WAN, Managed Grafana, Aurora DSQL, IoT FleetWise.
   - **Verified Permissions** (`VP-01/02`) — a Cedar policy store *is* an application's

@@ -162,6 +162,22 @@ data "aws_iam_policy_document" "extras" {
       "dsql:GetCluster",
       "iotfleetwise:GetEncryptionConfiguration",
       "iotfleetwise:GetLoggingOptions",
+      # Batch 7. Byte-identical to the CFN template.
+      "cloudformation:ListStacks",
+      "cloudformation:DescribeStacks",
+      "cloudformation:GetStackPolicy",
+      "fms:ListPolicies",
+      "fms:GetPolicy",
+      "fms:GetNotificationChannel",
+      "ecr-public:DescribeRepositories",
+      "ecr-public:GetRepositoryPolicy",
+      "mpa:ListApprovalTeams",
+      "mpa:GetApprovalTeam",
+      "wickr:ListNetworks",
+      "wickr:GetNetworkSettings",
+      "mediapackagev2:ListChannelGroups",
+      "mediapackagev2:ListChannels",
+      "mediapackagev2:GetChannelPolicy",
     ]
     resources = ["*"]
   }
