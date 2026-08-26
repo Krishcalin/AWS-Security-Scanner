@@ -113,7 +113,7 @@ import aws_winvuln
 import aws_finding_detail
 import aws_graph_neptune
 
-VERSION = "2.35.0"
+VERSION = "2.38.0"
 
 
 def _report_logo() -> str:

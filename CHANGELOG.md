@@ -6,6 +6,201 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.38.0] — 2026-08-26
+
+The **OverWatch Phase II SRS** (`OW2-SRS-001 v0.1`) arrived for review. Reading it
+against the codebase produced two findings worth stating before the changelog proper.
+
+First, the specification misjudges its own difficulty. Of its nine functional modules,
+two were already substantially shipped in Phase I — FR-7 Digital Twin, scheduled last
+in II-C, and FR-9 Identity/CIEM — while FR-2 Scorecards, scheduled earlier, started
+from nothing. And the dependency the document files as an *assumption* (AD-02,
+application-to-owner mapping) is the load-bearing floor under half of it.
+
+Second, six defects in the specification would have survived into the built system and
+been expensive to unwind. All six are fixed here, each with ratifiable replacement text
+under `docs/`. The through-line is one failure mode in six costumes: **a number that
+quietly narrows what it was computed over, and reads as good news for doing so.**
+
+### Added
+
+- **Ownership attribution** (`aws_ownership.py`) — the Application entity and three-tier
+  attribution (explicit resource pin, then tag selector, then whole-account claim) that
+  AD-02 assumes and nothing provided. A tier matching two applications stops as
+  **ambiguous** rather than falling through to a vaguer tier that happens to be decisive;
+  resolving a contradiction by widening the question is how a tool confidently bills the
+  wrong team, and ownership must not depend on registry declaration order.
+  - `AttributionCoverage` is returned **alongside the buckets, not optionally**. A
+    scorecard is a filter, and a filter deletes what it does not match: attribute 400 of
+    1,000 findings and the portfolio pack sums to a cleaner estate than the one that
+    exists. That is a phantom pass by omission, and it is worse in a scorecard than in a
+    check because an executive reads a scorecard as complete by default.
+  - Unattributed findings land in a real bucket with a real empty owner slot. They are
+    never dropped. `attribution_health` surfaces the dangerous defect — a selector
+    matching nothing renders a clean scorecard indistinguishable from a mis-scoped one.
+
+- **SLA clocks, MTTR and pre-breach warning** (`aws_sla.py`) — `OW2-CC-014`,
+  `OW2-AR-031/032`, `OW2-PA-005`, `OW2-KM-001(a)`. **No `now()` anywhere:** an SLA state
+  that reads the wall clock is not reproducible, so no auditor can recompute a published
+  KRA. The caller supplies the clock.
+  - Honest because `aws_state` resolves findings via a **coverage-gated** join — a finding
+    closes only when a scan that provably executed that check failed to re-observe it.
+    That already exceeds `OW2-AR-030`, and MTTR built on ticket closure would not.
+  - `MttrReport` carries the excluded-open count and the oldest open age. MTTR over closed
+    findings is a survivor statistic: the slowest remediations are the ones still open, so
+    the mean *improves* as remediation stalls.
+
+- **Composite Cloud Risk Score** (`aws_riskscore.py`, `docs/RISK_MODEL.md`) — `OW2-CC-001`
+  through `006`, with three defects in Appendix B corrected. See **Fixed**, D1/D2.
+
+- **KRA metric layer** (`aws_kra.py`, `docs/KRA_METRICS.md`) — the five metrics of
+  `OW2-KM-001`, the derived metric dictionary `OW2-KM-002` requires, and the proposed
+  requirement `OW2-KM-007`. See **Fixed**, D3.
+
+- **CI/CD guardrail decision layer** (`aws_guardrail.py`,
+  `docs/GUARDRAIL_FAILURE_MODE.md`) — enforcement modes, the declared failure mode,
+  break-glass and the central record. See **Fixed**, D5.
+
+- **Trend collection and sufficiency gating** (`aws_trend.py`,
+  `docs/FORECAST_SEQUENCING.md`) — `OW2-PA-001`, `OW2-PA-006`, `OW2-PA-007`. See
+  **Fixed**, D6.
+
+- **Credential-exposure ingest** (`aws_ingest_credexp.py`) — joins breach-corpus records
+  (a DeHashed export, or any equivalent) to cloud identities, so an administrator learns
+  that an identity with estate access appears in a public dump. Three decisions, each
+  recorded in the module:
+  - **No network calls.** The zero-telemetry tripwire allows egress in exactly three
+    files and this does not become a fourth. Querying a breach service sends the
+    customer's *people* to a third party — the operator's decision, not the scanner's.
+  - **Credential material never enters the product.** `normalize()` builds a new record
+    from an allowlist, so an unrecognised future field is dropped by default rather than
+    by recognition. A tool that stores leaked passwords becomes a more attractive target
+    than the estate it watches.
+  - **A hit is not a compromise.** Provenance is `OBSERVED` for the *corpus*, with an
+    explicit note that it does not establish the credential still works.
+  - Vendor-neutral by construction: DeHashed's API contract could not be verified, so
+    field names live in an alias map rather than in the logic.
+
+### Changed
+
+- **The posture score now carries its coverage, and the letter grade is withheld below
+  90%.** `compute_risk_score` counts only the FAILs it *saw*, so a check that returned
+  AccessDenied contributed no penalty and the score went **up**: on a four-check example,
+  losing `iam:ListUsers` moved an account from 75/C to **85/B**. The scan got worse and
+  the grade improved — and that number feeds `scans.posture_score` and 24 months of trend.
+  - **The arithmetic is unchanged, deliberately.** Silently re-weighting a shipped score
+    rewrites every dashboard and every stored trend. For a complete scan the output is
+    byte-identical and the caveat is empty; what changes is the letter grade, which is the
+    artefact that gets copied into a board pack without its caveat.
+  - `unassessed_penalty` is the honest middle: rather than scoring a refused check as a
+    pass (previously) or as a failure (equally invented), it reports the band that could
+    not be assessed. The reported score is a **ceiling**.
+
+- **`aws_sla.closure_rate` returns a `ClosureRate` rather than a tuple.** The bare
+  `(pct, in_sla, considered)` return is gone on purpose — a caller that *can* ask for the
+  flattering number alone eventually will. See **Fixed**, D4.
+
+### Fixed — six defects in OW2-SRS-001
+
+- **D1 — Appendix B carries three defects, not one.** The weights sum to **95**, not 100.
+  Every factor is one where *more means worse*, and the table then bands the result
+  `A ≥ 90` — so **an estate with maximum severity, exploitability and exposure scored 95
+  and earned an A**. And compensating controls were a sixth weight (see D2).
+  - Normalisation moved **into the engine** rather than renumbering the table:
+    renumbering fixes the instance, normalising fixes the class. Weights are now relative,
+    so ratifying a tidier 100-sum table will not move anybody's published score.
+  - Direction resolved: risk ascends, `posture = 100 − risk`, and the grade bands the
+    posture — which is the convention `compute_risk_score` already used, so FR-1 and FR-2
+    stop disagreeing and neither has to move.
+  - A factor with no data is **excluded and its weight redistributed**, never scored
+    `0.0`, which would lower the risk of an estate nobody measured. Below 50% weight
+    coverage the composite is refused.
+
+- **D2 — Compensating controls were credited into the wrong number.** `OW2-CC-002(e)`
+  reduced the score for EDR presence or PAM vaulting. An EDR sensor does not make an
+  internet-reachable unpatched host less reachable; it makes the consequence more likely
+  to be *noticed*. Credited as a weight, an estate improved its published score by buying
+  tooling without changing a single exposure.
+  - The credit now applies **only to `CREDITABLE_FACTORS`** — `findings` alone. Exposure
+    is never creditable and the model refuses construction if it is declared so.
+  - **This does not preserve Appendix B's 15-point magnitude**, and that is the point: the
+    honest effective ceiling is ~4.7 points. Keeping the size while fixing the instrument
+    would have been having it both ways. The effective ceiling is published rather than
+    left to be found by subtraction.
+  - A **missing** exposure-gate verdict now withholds the credit rather than granting it.
+    An unevaluated exposure is not a cleared one.
+
+- **D3 — Nothing distinguished "clean" from "never looked at".** Every KRA is a ratio or
+  count whose denominator comes from enumeration, and enumeration is exactly what fails
+  when a permission is missing: lose `iam:ListUsers` and MFA coverage reports **100%**;
+  lose a region and internet-exposed critical workloads reports **zero**. Both are the
+  stated target. The reward for losing visibility was a better number.
+  - A metric over a partial population now yields an **interval, not a value**, and a
+    verdict is asserted only where the whole interval supports it. **`NOT_MET` survives
+    incomplete data; `MET` does not.**
+  - `NOT_ESTABLISHED` occupies its own column — folding it into *met* is the defect;
+    folding it into *not met* blames the estate for a permissions problem.
+  - Where the denominator itself is unreadable, **no value is reported at all**.
+
+- **D4 — The exception workflow could carry the headline KRA alone.** `OW2-AR-031` pauses
+  the SLA clock under an approved exception, so a CRITICAL finding remediated on **day
+  200** against a 15-day window counted as closed-within-SLA. **One approval moved
+  `OW2-KM-001(a)` from 0% to 100%.** `OW2-KM-004`'s register is right and insufficient —
+  a register is not a metric, and only metrics reach the BBSC.
+  - Pausing is **not removed**; exceptions exist for real reasons. The adjusted and
+    unadjusted rates now render **together**, so the flattering figure cannot be emitted
+    alone, and the gap between them is exactly how much of the headline an approval bought.
+  - Two new KRAs, **both targeting zero and neither target arbitrary**: exception-assisted
+    closures and deferred breaches. They measure the two places where an approval changes
+    *what a number says* rather than *what the estate is*.
+  - Serial renewal is surfaced — `OW2-KM-003`'s mandatory expiry stops an exception being
+    *formally* permanent, not one assembled from individually reasonable approvals.
+
+- **D5 — FR-5 never said what a blocking gate does when it is down.** `OW2-GR-003`
+  defaults production to block; `OW2-IF-001` protects *scanning* and is silent on the
+  pipeline. Fail-closed halts every production deploy including the fix for the outage;
+  fail-open silently disables the control estate-wide behind green checks.
+  - **An unavailable gate now does what its strictest configured mode would have done**,
+    so losing the service can neither silently downgrade nor silently escalate enforcement.
+  - Every permissive path is a *degraded allow* or an *attributed override* — both
+    **exit 2**, neither ever rendered as a pass. Exit 2 mirrors the evidence verifier,
+    where 2 already means *unauthenticated* rather than *failed*.
+  - Break-glass is expensive on purpose (actor, real justification, mandatory expiry,
+    weekly report) and an **expired override blocks** rather than degrading to a warning.
+  - A pipeline that stops waiting treats the absence of a result as an incomplete
+    evaluation, not consent. A CI config reading its own timeout as success is the
+    cheapest way to disable the whole control while leaving every pipeline green.
+
+- **D6 — FR-4 was scheduled to begin the month its data does.** AD-04 requires six months
+  of clean trend data; §2.7 puts FR-4 in II-C, months 6–12, which *begins* when that data
+  starts accumulating. Every Phase II forecast would carry the `OW2-PA-006` insufficiency
+  label. Separately, the II-C gate requires accuracy tracking enabled — but a 30-day
+  forecast made in month 12 resolves in month 13, **so the gate cannot be met as written**.
+  - The code **refuses rather than labels**. A label is a string beside a number, and the
+    number is what reaches the slide. Below three usable periods there is no projected
+    value at all; the observed series is still reported, because what was measured is a
+    fact and only the extrapolation is a claim.
+  - **Six months elapsed is not six months of data.** Sufficiency counts *usable* periods,
+    so a forecast built on six months of holes cannot report itself as production-grade —
+    the D3 rule reaching forward into FR-4.
+
+### Documentation
+
+- `docs/RISK_MODEL.md` — replacement text for Appendix B (closes Appendix D item 2).
+- `docs/KRA_METRICS.md` — proposed `OW2-KM-007` and `OW2-KM-001(f)/(g)`.
+- `docs/GUARDRAIL_FAILURE_MODE.md` — proposed `OW2-GR-008/009/010`.
+- `docs/FORECAST_SEQUENCING.md` — the FR-4a/FR-4b split and the II-C gate amendment.
+
+### Notes
+
+- **The new modules are libraries with no console surface yet.** `ExposureGate` has no
+  producer, the risk score is not wired to live factor inputs, and the trend series is not
+  wired to scan history. All three are safe un-wired — each *withholds* rather than
+  assumes — but un-wired is un-wired, and slice 2 is where that changes.
+- `VERSION` had drifted two releases behind the tags (2.35.0 against `v2.37.0`) and is
+  corrected here.
+- Suite: **5,285 passing**, up from 4,996.
+
 ## [2.37.0] — 2026-08-26
 
 Four features, all additive, cut together because the CHANGELOG had drifted four
