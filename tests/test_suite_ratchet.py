@@ -301,6 +301,7 @@ FLOORS = {
     "test_totp.py": 18,
     "test_toxicflow.py": 28,
     "test_toxicflow_wiring.py": 17,
+    "test_trend.py": 35,
     "test_unused.py": 21,
     "test_user_admin.py": 19,
     "test_vectorstore.py": 31,
