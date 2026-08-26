@@ -1,0 +1,447 @@
+"""Generated baseline for the permission-ledger expectations.
+
+WHY THIS EXISTS. ``test_perm_ledger`` and ``test_perm_ledger_wiring`` pin the exact set
+of IAM actions the shipped role is missing, and the exact set of checks that are blocked
+as a result. Pinning them is right: the permission surface is the thing a customer has to
+approve, so it must never widen without somebody deciding it should.
+
+Hand-maintaining those lists was the problem. They are sorted, they are long, and every
+new batch of checks inserts entries in the middle of them. Over three service-coverage
+batches that produced the same class of mistake repeatedly -- ``rds`` sorts before
+``s3``, ``codebuild`` before ``ec2``, and a block-detection pattern that did not allow a
+trailing bracket silently orphaned the last entry of every list it touched. Twice the
+lists ended up corrupted and had to be restored from git.
+
+So the data is now GENERATED and committed, exactly like ``test_suite_ratchet``. The
+ratchet property survives -- the numbers change only when somebody runs ``--update``, and
+the change lands in the diff where a reviewer sees it -- while the sorting, the commas
+and the brackets stop being anybody's problem::
+
+    python tests/perm_ledger_baseline.py --update
+
+This is deliberately NOT a self-deriving assertion. Computing the expected value from the
+ledger at test time would make the test tautological and delete the only thing it was
+protecting.
+"""
+from __future__ import annotations
+
+import io
+import os
+import pathlib
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Generated, never typed by hand: python tests/perm_ledger_baseline.py --update
+BASELINE = {
+    "granted_fixture": {
+        "missing_actions": [
+            "acm-pca:GetPolicy",
+            "acm-pca:ListCertificateAuthorities",
+            "aoss:BatchGetCollection",
+            "aoss:GetAccessPolicy",
+            "aoss:GetSecurityPolicy",
+            "aoss:ListAccessPolicies",
+            "aoss:ListCollections",
+            "aoss:ListSecurityPolicies",
+            "aps:DescribeWorkspace",
+            "aps:ListWorkspaces",
+            "bedrock-agentcore:GetAgentRuntime",
+            "bedrock-agentcore:GetGateway",
+            "bedrock-agentcore:GetGatewayTarget",
+            "bedrock-agentcore:GetMemory",
+            "bedrock-agentcore:GetTokenVault",
+            "bedrock-agentcore:GetWorkloadIdentity",
+            "bedrock-agentcore:ListAgentRuntimes",
+            "bedrock-agentcore:ListApiKeyCredentialProviders",
+            "bedrock-agentcore:ListBrowsers",
+            "bedrock-agentcore:ListCodeInterpreters",
+            "bedrock-agentcore:ListGatewayTargets",
+            "bedrock-agentcore:ListGateways",
+            "bedrock-agentcore:ListMemories",
+            "bedrock-agentcore:ListOauth2CredentialProviders",
+            "bedrock-agentcore:ListWorkloadIdentities",
+            "bedrock:GetAgentActionGroup",
+            "bedrock:GetDataSource",
+            "bedrock:GetGuardrail",
+            "bedrock:GetKnowledgeBase",
+            "cloudtrail:DescribeTrails",
+            "cloudtrail:GetEventSelectors",
+            "cloudtrail:LookupEvents",
+            "codeartifact:GetDomainPermissionsPolicy",
+            "codeartifact:GetRepositoryPermissionsPolicy",
+            "codeartifact:ListDomains",
+            "codeartifact:ListRepositories",
+            "codebuild:BatchGetProjects",
+            "codebuild:ListProjects",
+            "ds:DescribeDirectories",
+            "ds:DescribeLDAPSSettings",
+            "ds:DescribeSharedDirectories",
+            "ec2:DescribeInstanceTypes",
+            "ec2:DescribeVpcEndpoints",
+            "elasticmapreduce:DescribeCluster",
+            "elasticmapreduce:GetBlockPublicAccessConfiguration",
+            "elasticmapreduce:ListClusters",
+            "glue:GetDataCatalogEncryptionSettings",
+            "glue:GetDevEndpoints",
+            "imagebuilder:GetImagePolicy",
+            "imagebuilder:ListImages",
+            "iot:DescribeCACertificate",
+            "iot:GetPolicy",
+            "iot:GetV2LoggingOptions",
+            "iot:ListCACertificates",
+            "iot:ListPolicies",
+            "lightsail:GetInstancePortStates",
+            "lightsail:GetInstances",
+            "lightsail:GetRelationalDatabases",
+            "network-firewall:DescribeFirewall",
+            "network-firewall:DescribeFirewallPolicy",
+            "network-firewall:DescribeLoggingConfiguration",
+            "network-firewall:ListFirewalls",
+            "organizations:DescribePolicy",
+            "organizations:ListPoliciesForTarget",
+            "quicksight:DescribeAccountSettings",
+            "rds:DescribeDBClusterSnapshotAttributes",
+            "rds:DescribeDBClusterSnapshots",
+            "rds:DescribeDBClusters",
+            "s3:GetBucketPolicy",
+            "s3tables:GetTableBucketEncryption",
+            "s3tables:GetTableBucketPolicy",
+            "s3tables:ListTableBuckets",
+            "s3vectors:GetVectorBucket",
+            "s3vectors:GetVectorBucketPolicy",
+            "s3vectors:ListVectorBuckets",
+            "sso:GetInlinePolicyForPermissionSet",
+            "sso:ListInstances",
+            "sso:ListPermissionSets",
+            "transfer:DescribeServer",
+            "transfer:ListServers",
+            "vpc-lattice:GetAuthPolicy",
+            "vpc-lattice:GetService",
+            "vpc-lattice:ListServices",
+            "xray:GetEncryptionConfig",
+        ],
+        "blocked_checks": [
+            "AGC-01",
+            "AGC-02",
+            "AGC-03",
+            "AGC-04",
+            "AGC-05",
+            "AGC-06",
+            "AGC-07",
+            "AGC-08",
+            "AGT-03",
+            "AGT-04",
+            "AGY-01",
+            "AGY-02",
+            "AGY-03",
+            "AIGRD-01",
+            "AIGRD-02",
+            "AIGRD-04",
+            "AILOG-04",
+            "AILOG-05",
+            "AILOG-06",
+            "AMEM-02",
+            "AMP-01",
+            "CART-01",
+            "CB-01",
+            "CB-02",
+            "DIRSVC-01",
+            "DIRSVC-02",
+            "DOCDB-01",
+            "DOCDB-02",
+            "DOCDB-03",
+            "EMR-01",
+            "EMR-02",
+            "GLUE-01",
+            "GLUE-02",
+            "IMGB-01",
+            "IOT-01",
+            "IOT-02",
+            "IOT-03",
+            "LATT-01",
+            "LATT-02",
+            "LSAIL-01",
+            "LSAIL-02",
+            "MART-01",
+            "MCP-01",
+            "MCP-02",
+            "MCP-03",
+            "MCP-04",
+            "NFW-01",
+            "NFW-02",
+            "NFW-03",
+            "NITRO-01",
+            "NITRO-02",
+            "PCA-01",
+            "PERIM-01",
+            "PERIM-02",
+            "PERIM-03",
+            "QS-01",
+            "S3T-01",
+            "S3T-02",
+            "SHAI-01",
+            "SHAI-02",
+            "SHAI-03",
+            "SSO-01",
+            "TFLOW-01",
+            "VEC-01",
+            "VEC-02",
+            "VEC-03",
+            "VEC-04",
+            "VEC-05",
+            "VEC-06",
+            "VEC-07",
+            "XFER-01",
+            "XFER-02",
+            "XFER-03",
+            "XRAY-01",
+        ],
+        "annotated_policy_rows": 84,
+    },
+    "shipped_role": {
+        "missing_actions": [
+            "acm-pca:GetPolicy",
+            "acm-pca:ListCertificateAuthorities",
+            "aoss:BatchGetCollection",
+            "aoss:GetAccessPolicy",
+            "aoss:GetSecurityPolicy",
+            "aoss:ListAccessPolicies",
+            "aoss:ListCollections",
+            "aoss:ListSecurityPolicies",
+            "aps:DescribeWorkspace",
+            "aps:ListWorkspaces",
+            "bedrock-agentcore:GetAgentRuntime",
+            "bedrock-agentcore:GetGateway",
+            "bedrock-agentcore:GetGatewayTarget",
+            "bedrock-agentcore:GetMemory",
+            "bedrock-agentcore:GetTokenVault",
+            "bedrock-agentcore:GetWorkloadIdentity",
+            "bedrock-agentcore:ListAgentRuntimes",
+            "bedrock-agentcore:ListApiKeyCredentialProviders",
+            "bedrock-agentcore:ListBrowsers",
+            "bedrock-agentcore:ListCodeInterpreters",
+            "bedrock-agentcore:ListGatewayTargets",
+            "bedrock-agentcore:ListGateways",
+            "bedrock-agentcore:ListMemories",
+            "bedrock-agentcore:ListOauth2CredentialProviders",
+            "bedrock-agentcore:ListWorkloadIdentities",
+            "bedrock:GetAgentActionGroup",
+            "bedrock:GetDataSource",
+            "bedrock:GetGuardrail",
+            "bedrock:GetKnowledgeBase",
+            "cloudtrail:DescribeTrails",
+            "cloudtrail:GetEventSelectors",
+            "cloudtrail:LookupEvents",
+            "codeartifact:GetDomainPermissionsPolicy",
+            "codeartifact:GetRepositoryPermissionsPolicy",
+            "codeartifact:ListDomains",
+            "codeartifact:ListRepositories",
+            "codebuild:BatchGetProjects",
+            "codebuild:ListProjects",
+            "ds:DescribeDirectories",
+            "ds:DescribeLDAPSSettings",
+            "ds:DescribeSharedDirectories",
+            "elasticmapreduce:DescribeCluster",
+            "elasticmapreduce:GetBlockPublicAccessConfiguration",
+            "elasticmapreduce:ListClusters",
+            "glue:GetDataCatalogEncryptionSettings",
+            "glue:GetDevEndpoints",
+            "imagebuilder:GetImagePolicy",
+            "imagebuilder:ListImages",
+            "iot:DescribeCACertificate",
+            "iot:GetPolicy",
+            "iot:GetV2LoggingOptions",
+            "iot:ListCACertificates",
+            "iot:ListPolicies",
+            "lightsail:GetInstancePortStates",
+            "lightsail:GetInstances",
+            "lightsail:GetRelationalDatabases",
+            "network-firewall:DescribeFirewall",
+            "network-firewall:DescribeFirewallPolicy",
+            "network-firewall:DescribeLoggingConfiguration",
+            "network-firewall:ListFirewalls",
+            "organizations:DescribePolicy",
+            "organizations:ListPoliciesForTarget",
+            "quicksight:DescribeAccountSettings",
+            "rds:DescribeDBClusterSnapshotAttributes",
+            "rds:DescribeDBClusterSnapshots",
+            "rds:DescribeDBClusters",
+            "s3:GetBucketPolicy",
+            "s3tables:GetTableBucketEncryption",
+            "s3tables:GetTableBucketPolicy",
+            "s3tables:ListTableBuckets",
+            "s3vectors:GetVectorBucket",
+            "s3vectors:GetVectorBucketPolicy",
+            "s3vectors:ListVectorBuckets",
+            "sso:GetInlinePolicyForPermissionSet",
+            "sso:ListInstances",
+            "sso:ListPermissionSets",
+            "transfer:DescribeServer",
+            "transfer:ListServers",
+            "vpc-lattice:GetAuthPolicy",
+            "vpc-lattice:GetService",
+            "vpc-lattice:ListServices",
+            "xray:GetEncryptionConfig",
+        ],
+        "blocked_checks": [
+            "AGC-01",
+            "AGC-02",
+            "AGC-03",
+            "AGC-04",
+            "AGC-05",
+            "AGC-06",
+            "AGC-07",
+            "AGC-08",
+            "AGT-03",
+            "AGT-04",
+            "AGY-01",
+            "AGY-02",
+            "AGY-03",
+            "AIGRD-01",
+            "AIGRD-02",
+            "AIGRD-04",
+            "AILOG-04",
+            "AILOG-05",
+            "AILOG-06",
+            "AMEM-02",
+            "AMP-01",
+            "CART-01",
+            "CB-01",
+            "CB-02",
+            "DIRSVC-01",
+            "DIRSVC-02",
+            "DOCDB-01",
+            "DOCDB-02",
+            "DOCDB-03",
+            "EMR-01",
+            "EMR-02",
+            "GLUE-01",
+            "GLUE-02",
+            "IMGB-01",
+            "IOT-01",
+            "IOT-02",
+            "IOT-03",
+            "LATT-01",
+            "LATT-02",
+            "LSAIL-01",
+            "LSAIL-02",
+            "MART-01",
+            "MCP-01",
+            "MCP-02",
+            "MCP-03",
+            "MCP-04",
+            "NFW-01",
+            "NFW-02",
+            "NFW-03",
+            "PCA-01",
+            "PERIM-01",
+            "PERIM-02",
+            "PERIM-03",
+            "QS-01",
+            "S3T-01",
+            "S3T-02",
+            "SHAI-01",
+            "SHAI-02",
+            "SSO-01",
+            "TFLOW-01",
+            "VEC-01",
+            "VEC-02",
+            "VEC-03",
+            "VEC-04",
+            "VEC-05",
+            "VEC-06",
+            "VEC-07",
+            "XFER-01",
+            "XFER-02",
+            "XFER-03",
+            "XRAY-01",
+        ],
+        "annotated_policy_rows": 82,
+    },
+}
+# ─────────────────────────────────────────────────────────────────────────────
+# End generated block
+# ─────────────────────────────────────────────────────────────────────────────
+
+_START = "# Generated, never typed by hand: python tests/perm_ledger_baseline.py --update"
+_END = "# End generated block"
+
+
+def _fixtures():
+    """The role fixtures the two ledger suites evaluate against.
+
+    Read from the test modules rather than duplicated here: a second copy of a fixture
+    is a second thing to keep in step, which is the failure this file exists to end."""
+    import test_perm_ledger as TL
+    import test_perm_ledger_wiring as TW
+
+    return {
+        "shipped_role": TL.SHIPPED_ROLE,
+        "granted_fixture": [{
+            "effect": "Allow", "actions": set(TW.GRANTED), "resources": {"*"},
+            "not_resources": set(), "condition": None,
+        }],
+    }
+
+
+def compute() -> dict:
+    """Evaluate the ledger against each fixture and return the pinned facts."""
+    import aws_perm_ledger as L
+
+    out = {}
+    for name, role in _fixtures().items():
+        led = L.evaluate(role)
+        out[name] = {
+            "missing_actions": list(led.missing_actions),
+            "blocked_checks": sorted(led.blocked),
+            "annotated_policy_rows": len(led.annotated_policy()),
+        }
+    return out
+
+
+def _render(data: dict) -> str:
+    lines = ["BASELINE = {"]
+    for name in sorted(data):
+        d = data[name]
+        lines.append(f'    "{name}": {{')
+        lines.append('        "missing_actions": [')
+        for a in d["missing_actions"]:
+            lines.append(f'            "{a}",')
+        lines.append("        ],")
+        lines.append('        "blocked_checks": [')
+        for c in d["blocked_checks"]:
+            lines.append(f'            "{c}",')
+        lines.append("        ],")
+        lines.append(f'        "annotated_policy_rows": {d["annotated_policy_rows"]},')
+        lines.append("    },")
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def update() -> dict:
+    data = compute()
+    p = pathlib.Path(__file__)
+    src = io.open(p, encoding="utf-8").read()
+    i = src.index(_START) + len(_START) + 1
+    j = src.index(_END)
+    # keep the decorative rule line that precedes the end marker
+    j = src.rindex("# ────", i, j)
+    io.open(p, "w", encoding="utf-8", newline="").write(
+        src[:i] + _render(data) + "\n" + src[j:])
+    return data
+
+
+if __name__ == "__main__":
+    if "--update" in sys.argv:
+        d = update()
+        for name in sorted(d):
+            print(f"  {name}: {len(d[name]['missing_actions'])} missing action(s), "
+                  f"{len(d[name]['blocked_checks'])} blocked check(s), "
+                  f"{d[name]['annotated_policy_rows']} policy row(s)")
+        print("baseline regenerated")
+    else:
+        print(__doc__)
+        print("Run with --update to regenerate.")
