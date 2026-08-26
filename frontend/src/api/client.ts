@@ -673,6 +673,15 @@ export const api = {
     get<AttackPath[]>(endpoint(`/accounts/${id}/paths`, `account_${id}_paths.json`)),
   graph: (id: string) =>
     get<GraphFull>(endpoint(`/accounts/${id}/graph`, `account_${id}_graph.json`)),
+  // Signed compliance evidence bundle. LIVE-ONLY BY DESIGN: signing happens on the hub,
+  // where the key lives. There is no sample fixture because a fake signature that
+  // verified would teach exactly the wrong lesson about what the artifact means.
+  evidenceBundle: (id: string): Promise<unknown> => {
+    if (SAMPLE) return Promise.reject(new Error(
+      'Signed evidence bundles are a live-mode feature: the signature is produced by the ' +
+      'hub, which holds the key. Sample mode has no hub to sign with.'))
+    return get<unknown>(`${API_BASE}/accounts/${id}/evidence-bundle`)
+  },
   // blast radius of a graph node — live hits the read-only hub route; sample BFSes the
   // account's graph fixture client-side (same shape via computeBlastRadius).
   blastRadius: async (id: string, node: string, maxHops = 8): Promise<BlastRadius> => {

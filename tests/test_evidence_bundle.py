@@ -408,3 +408,38 @@ def test_cli_console_output_is_ascii_only():
                 continue                      # module docstring: never printed
             bad |= {c for c in node.value if ord(c) > 127}
     assert not bad, f"non-ASCII in a printable string literal: {sorted(bad)}"
+
+
+# ── absent coverage must not read as "no gaps" ──────────────────────────────
+def test_absent_coverage_is_STATED_not_represented_as_an_empty_dict():
+    """The defect this guards was in the first version of this module, and it was the
+    exact phantom pass the whole artifact exists to prevent: `coverage or {}` produced an
+    empty section that verified cleanly and read, to an auditor, as 'the scan missed
+    nothing'. Absence and emptiness are different facts."""
+    b = eb.build_bundle(PACK, coverage=None, generated_at=AT, seed=None)
+    cov = b["sections"]["coverage"]
+    assert cov["available"] is False
+    assert "NOT a statement that the scan was complete" in cov["note"]
+
+
+def test_real_coverage_is_flagged_available_and_kept_verbatim():
+    b = eb.build_bundle(PACK, coverage=COVERAGE, generated_at=AT, seed=None)
+    cov = b["sections"]["coverage"]
+    assert cov["available"] is True
+    assert cov["not_evaluated"] == COVERAGE["not_evaluated"]
+
+
+def test_an_empty_coverage_mapping_is_treated_as_absent_not_as_clean():
+    """A caller that passes {} means 'I have nothing', not 'I checked and found nothing'.
+    Anything else lets a caller launder an unknown into a clean result."""
+    b = eb.build_bundle(PACK, coverage={}, generated_at=AT, seed=None)
+    assert b["sections"]["coverage"]["available"] is False
+
+
+def test_the_availability_flag_is_covered_by_the_signature():
+    """Flipping available:false to true must not survive verification -- otherwise the
+    'we do not know what was missed' caveat could be edited into a clean bill of health."""
+    b = eb.build_bundle(PACK, coverage=None, generated_at=AT, seed=SEED)
+    b["sections"]["coverage"]["available"] = True
+    r = eb.verify_bundle(b)
+    assert not r["ok"] and "coverage" in r["tampered_sections"]
