@@ -268,22 +268,42 @@ def test_the_catalog_agrees_with_the_findings_table(rows):
 
     for account_id, _payload_json, _scan, _ts in rows["scan_results"]:
         payload = json.loads(_payload_json)
-        # CIEM cards are DISPLAY-ONLY, exactly as the real service's
-        # get_finding_catalog appends controls / EDR / DSPM coverage entries
-        # that have no findings-table row either. They feed the Excessive
-        # Access dashboard and are excluded from this comparison on purpose.
-        catalog = {c["check_id"] for c in payload["finding_catalog"]
-                   if not c["check_id"].startswith("CIEM-")}
-        assert catalog == by_account.get(account_id, set()), account_id
+        # Stated as containment rather than equality, because the catalog LEGITIMATELY
+        # exceeds the findings table: the real service's get_finding_catalog appends
+        # controls / EDR / DSPM coverage entries that no scan check produced, and the
+        # demo's equivalents are the CIEM family and the correlation ids the attack
+        # paths cite. What must never happen is the other direction -- a finding in
+        # the table that the catalog does not show.
+        catalog = {c["check_id"] for c in payload["finding_catalog"]}
+        table = by_account.get(account_id, set())
+        assert table <= catalog, (
+            f"{account_id}: findings the catalog does not show: {sorted(table - catalog)}")
+        extra = catalog - table
+        allowed = {c for c in extra
+                   if c.startswith(seed.DISPLAY_ONLY_PREFIXES)
+                   or c in seed.CORRELATION_IDS}
+        assert extra == allowed, (
+            f"{account_id}: catalog cards with no findings row and no reason to be "
+            f"display-only: {sorted(extra - allowed)}")
 
 
 def test_the_payload_severity_counts_match_its_own_catalog(rows):
-    for _a, payload_json, _s, _t in rows["scan_results"]:
+    # `severity_counts` is computed from the findings TABLE, so the comparison has to
+    # exclude exactly the cards that have no row there -- which is a property of the
+    # data, not of the check id. An earlier version excluded by id list and dropped a
+    # CRITICAL that did have a row, making the tile disagree with the list under it.
+    by_account = {}
+    for row in rows["findings"]:
+        if row[10] == "open":
+            by_account.setdefault(row[0], set()).add(row[4])
+
+    for account_id, payload_json, _s, _t in rows["scan_results"]:
         payload = json.loads(payload_json)
+        table = by_account.get(account_id, set())
         counted = {}
         for card in payload["finding_catalog"]:
-            if card["check_id"].startswith("CIEM-"):
-                continue          # display-only; see the note above
+            if card["check_id"] not in table:
+                continue          # display-only; see test_the_catalog_agrees_...
             counted[card["severity"]] = counted.get(card["severity"], 0) + card["count"]
         for severity, total in payload["severity_counts"].items():
             assert counted.get(severity, 0) == total, severity

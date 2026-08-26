@@ -396,6 +396,8 @@ def _payload_row(rng, profile, account_id, findings, all_scans, now, weight=1.0)
     scan_id = last[0] if last else f"scan-demo-{account_id}-0"
 
     catalog = _finding_catalog(findings) + _ciem_cards(rng, account_id, weight)
+    # NB: the correlation cards are appended AFTER the paths are walked, further
+    # down — they describe those specific paths, so they cannot be built here.
     counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
     for row in findings:
         if row[10] == "open" and row[8] in counts:
@@ -411,6 +413,19 @@ def _payload_row(rng, profile, account_id, findings, all_scans, now, weight=1.0)
     # excluded from the scorecard input rather than silently widening it.
     failing_checks = sorted({c["check_id"] for c in catalog
                              if not c["check_id"].startswith("CIEM-")})
+
+    # The paths' own driving_findings (ATTACK-01/02, VULN-02:CVE-x) name check ids
+    # that were never in the catalog, so the Attack Paths card on the Top Risks
+    # dashboard was permanently empty while the account had live paths on screen
+    # two clicks away. Real scans emit these; the seeder did not.
+    catalog = catalog + _correlation_cards(
+        paths, account_id, {c["check_id"] for c in catalog})
+    # ATTACK-/VULN- are real checks with compliance mappings, so they belong in the
+    # scorecard input exactly as a real scan's would. CIEM- stays out: those cards
+    # carry no compliance tags, and including them would widen the control universe
+    # with entries nothing can fail.
+    failing_checks = sorted(set(failing_checks) | {
+        c["check_id"] for c in catalog if not c["check_id"].startswith("CIEM-")})
 
     payload = {
         "account": account_id,
@@ -449,6 +464,82 @@ CIEM_CHECKS = (
      "Principal has been dormant beyond the review window — no recorded "
      "service activity. Review before removal (not auto-deleted)"),
 )
+
+
+#: Catalog cards that deliberately have NO row in the findings table.
+#:
+#: The real service's get_finding_catalog does the same thing -- it appends controls,
+#: EDR and DSPM coverage entries that no scan check produced.
+#:
+#: CIEM- is a whole family (effective-permission analysis). The correlation ids are
+#: NOT: VULN-03 and VULN-04 are ordinary seeded findings with real rows, and only
+#: VULN-01/02 arrive from the path layer. So this is an id list, not a prefix -- an
+#: earlier prefix-based version excluded VULN-03/04 from the catalog comparison and
+#: quietly stopped checking two real findings.
+DISPLAY_ONLY_PREFIXES = ("CIEM-",)
+
+#: Ids the correlation layer may add. Whether each ACTUALLY has a findings row
+#: depends on what was seeded, so `_correlation_cards` skips any id that already
+#: has one and the tests treat this as an upper bound, never an assertion.
+CORRELATION_IDS = ("ATTACK-01", "ATTACK-02", "VULN-01", "VULN-02")
+
+
+def _correlation_cards(paths, account_id, existing_ids=()):
+    """Catalog entries for the check ids the PATHS themselves cite.
+
+    `driving_findings` carries ATTACK-01 (a reachable path to a crown jewel),
+    ATTACK-02 (the crown jewel is directly public) and VULN-02:<CVE> (a KEV pivot).
+    A real scan emits all three into the catalog — the shipped sample fixtures have
+    them — but the seeder cited them without ever creating them, so the dashboard
+    card for the one category the demo is BEST at was always empty.
+
+    Severity is taken from the worst path citing the id, so the card ranks the way
+    the paths do rather than by a number invented here.
+    """
+    worst = {}
+    for path in paths:
+        for driver in path.get("driving_findings", []):
+            check_id = driver.split(":")[0]
+            entry = worst.setdefault(check_id, {"score": 0, "terminals": set()})
+            entry["score"] = max(entry["score"], path["score"])
+            entry["terminals"].add(path["terminal"])
+
+    text = {
+        "ATTACK-01": ("An internet-reachable resource has a path to a crown-jewel "
+                      "datastore. Reachability is what separates this from a "
+                      "misconfiguration: every hop was verified against the graph."),
+        "ATTACK-02": ("A crown-jewel datastore is itself directly public, so the "
+                      "path to it has no intermediate hop to sever."),
+        "VULN-01": ("A vulnerability on a resource that sits on a path to a crown "
+                    "jewel, making it reachable rather than merely present."),
+        "VULN-02": ("A KEV-listed vulnerability sits on a reachable path. Known "
+                    "exploited plus reachable is the combination that sets the "
+                    "hard severity floor."),
+    }
+    out = []
+    for check_id in sorted(worst):
+        detail = worst[check_id]
+        # Already a real seeded finding with its own row -> leave it alone. Emitting a
+        # second card for it would double-count the check in every severity roll-up.
+        if check_id not in text or check_id in existing_ids:
+            continue
+        terminals = sorted(detail["terminals"])
+        out.append({
+            "check_id": check_id, "section": "ATTACKPATH",
+            "severity": "CRITICAL" if detail["score"] >= 80 else "HIGH",
+            "status": "FAIL", "compliance": {}, "remediation_cmd": "",
+            "affected": terminals, "count": len(terminals),
+            "distinct": len(terminals),
+            "risk": text[check_id],
+            "impact": ("An attacker who reaches the entry point can follow the path "
+                       "to data or administrative control without needing a further "
+                       "vulnerability."),
+            "steps": ["Open the path and read each hop's basis.",
+                      "Sever the cheapest hop — usually the ingress rule or the "
+                      "role grant, not the terminal.",
+                      "Re-scan and confirm the path is gone from evidence."],
+        })
+    return out
 
 
 def _ciem_cards(rng, account_id, weight):
