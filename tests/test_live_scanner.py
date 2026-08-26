@@ -112,7 +112,10 @@ class TestDataStructures(unittest.TestCase):
         # 426-service coverage gap analysis. Six TOP-LEVEL sections rather than nesting
         # them inside existing ones: a nested section takes its host's tests down with
         # it, which is exactly what the data-perimeter check did inside _check_iam.
-        self.assertEqual(len(SECTIONS), 52)
+        # 58: +NETWORKFIREWALL, LIGHTSAIL, PRIVATECA, QUICKSIGHT,
+        # IDENTITYCENTER, GLUE -- batch 2, and the first batch declared via
+        # aws_checkdef rather than five hand-edited map literals.
+        self.assertEqual(len(SECTIONS), 58)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

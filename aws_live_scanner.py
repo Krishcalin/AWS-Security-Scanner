@@ -89,7 +89,9 @@ import aws_sagemaker
 import aws_modelartifact
 import aws_nitro
 import aws_perimeter
+import aws_checkdef
 import aws_extsvc
+import aws_extsvc2
 import aws_segmentation
 import aws_shadowai
 import aws_ailog
@@ -219,6 +221,9 @@ SECTIONS = [
     # Batch 1 of the 426-service coverage gap analysis. Each is its own top-level
     # section: a defect in a nested one takes out every test of its host.
     "IOT", "EMR", "CODEBUILD", "DOCDB", "IMAGEBUILDER", "TRANSFER",
+    # Batch 2. Declared via aws_checkdef rather than five hand-edited literals.
+    "NETWORKFIREWALL", "LIGHTSAIL", "PRIVATECA", "QUICKSIGHT",
+    "IDENTITYCENTER", "GLUE",
     "CORRELATE",
 ]
 
@@ -253,6 +258,12 @@ SECTION_LABELS = {
     "DOCDB":          "AMAZON DOCUMENTDB",
     "IMAGEBUILDER":   "EC2 IMAGE BUILDER",
     "TRANSFER":       "AWS TRANSFER FAMILY",
+    "NETWORKFIREWALL": "AWS NETWORK FIREWALL",
+    "LIGHTSAIL":      "AMAZON LIGHTSAIL",
+    "PRIVATECA":      "ACM PRIVATE CA",
+    "QUICKSIGHT":     "AMAZON QUICKSIGHT",
+    "IDENTITYCENTER": "IAM IDENTITY CENTER",
+    "GLUE":           "AWS GLUE",
     "ELASTICACHE":    "AMAZON ELASTICACHE",
     "OPENSEARCH":     "AMAZON OPENSEARCH",
     "DYNAMODB":       "AMAZON DYNAMODB",
@@ -1392,6 +1403,15 @@ REMEDIATION_MAP = {
     "ATTACK-02": "Sever the flagship chain at ANY hop: patch the exploitable CVE, remove the public ingress (aws ec2 revoke-security-group-ingress --group-id <SG> --protocol tcp --port <PORT> --cidr 0.0.0.0/0), and scope the instance-profile role's data access (aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>). Fixing the choke-point node breaks the whole path.",
     "CHOKEPOINT-01": "Remediate this single node to sever multiple attack paths at once: for an over-privileged role, aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>; for an exposed host, patch the exploitable CVE or aws ec2 revoke-security-group-ingress ...; see the finding for the node kind and the count of paths/crown-jewels it severs.",
 }
+
+# ── registry projection ──────────────────────────────────────────────────────
+# Checks declared via aws_checkdef (batch 2 onward) contribute their severity,
+# compliance mapping and remediation here rather than being hand-written into the three
+# literals above. merge_maps REFUSES to overwrite an existing id: a registry merge
+# bypasses the duplicate-key ratchet, which only ever sees dict literals, so the
+# collision has to be caught at merge time instead.
+aws_checkdef.merge_maps(CHECK_SEVERITY, COMPLIANCE_MAP, REMEDIATION_MAP)
+
 
 
 # ─── IAM privilege-escalation primitives ─────────────────────────────────────
@@ -8742,6 +8762,291 @@ class AWSLiveScanner:
     # Each section is TOP-LEVEL and self-contained: a denial degrades that one
     # section to a coverage note and never becomes a clean pass elsewhere.
     # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
+    # BATCH 2 — declared via aws_checkdef (see aws_extsvc2)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _tokens(self, fn, key, token_key="NextToken", **kw):
+        """Bounded pagination that lets denials REACH the caller.
+
+        A continuation token is a STRING. Anything else -- notably a truthy MagicMock --
+        ends the walk rather than spinning, which is the defect that cost a suite run."""
+        out, token, guard = [], None, 0
+        while guard < 100:
+            guard += 1
+            call = dict(kw)
+            if token:
+                call[token_key] = token
+            resp = fn(**call) or {}
+            out += list(resp.get(key) or [])
+            token = resp.get(token_key)
+            if not isinstance(token, str) or not token:
+                break
+        return out
+
+    def _check_networkfirewall(self):
+        """NFW-01/02/03 — AWS Network Firewall."""
+        self._section_header("NETWORKFIREWALL")
+        ids = ("NFW-01", "NFW-02", "NFW-03")
+        try:
+            nfw = self._client("network-firewall")
+            firewalls = self._tokens(nfw.list_firewalls, "Firewalls")
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ids:
+                    self._coverage.note_denied(cid, "network-firewall:ListFirewalls")
+            return
+
+        for fw in firewalls:
+            name = (fw or {}).get("FirewallName")
+            if not name:
+                continue
+            try:
+                lg = (nfw.describe_logging_configuration(FirewallName=name) or {}
+                      ).get("LoggingConfiguration") or {}
+                r = aws_extsvc2.nfw_logging(name, lg)
+                if not r["logging"]:
+                    self._add("FAIL", "NFW-01", "NETWORKFIREWALL", name,
+                              f"{r['statement']} | {name}")
+                else:
+                    self._add("PASS", "NFW-01", "NETWORKFIREWALL", name,
+                              f"Network Firewall {name} logs to {r['destinations']} "
+                              f"destination(s) | {name}")
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied(
+                        "NFW-01", "network-firewall:DescribeLoggingConfiguration")
+
+            try:
+                d = nfw.describe_firewall(FirewallName=name) or {}
+                fwd = d.get("Firewall") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    for cid in ("NFW-02", "NFW-03"):
+                        self._coverage.note_denied(cid, "network-firewall:DescribeFirewall")
+                continue
+
+            prot = aws_extsvc2.nfw_protection(fwd)
+            if prot["unprotected"]:
+                self._add("FAIL", "NFW-03", "NETWORKFIREWALL", name,
+                          f"{prot['statement']} | {name}")
+            elif prot["known"]:
+                self._add("PASS", "NFW-03", "NETWORKFIREWALL", name,
+                          f"Network Firewall {name} has delete and change protection "
+                          f"enabled | {name}")
+
+            arn = fwd.get("FirewallPolicyArn")
+            if not arn:
+                continue
+            try:
+                pol = (nfw.describe_firewall_policy(FirewallPolicyArn=arn) or {}
+                       ).get("FirewallPolicy") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied(
+                        "NFW-02", "network-firewall:DescribeFirewallPolicy")
+                continue
+            r = aws_extsvc2.nfw_policy_default(name, pol)
+            if r["fails_open"]:
+                self._add("FAIL", "NFW-02", "NETWORKFIREWALL", name,
+                          f"{r['statement']} | {name}")
+            elif r["known"]:
+                self._add("PASS", "NFW-02", "NETWORKFIREWALL", name,
+                          f"Network Firewall {name} does not default to aws:pass "
+                          f"({', '.join(r['defaults'])}) | {name}")
+
+    def _check_lightsail(self):
+        """LSAIL-01/02 — Amazon Lightsail, the corner of AWS an EC2 audit cannot see."""
+        self._section_header("LIGHTSAIL")
+        try:
+            ls = self._client("lightsail")
+            instances = (ls.get_instances() or {}).get("instances") or []
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("LSAIL-01", "lightsail:GetInstances")
+            instances = None
+
+        for inst in (instances or []):
+            name = (inst or {}).get("name")
+            if not name:
+                continue
+            try:
+                ports = (ls.get_instance_port_states(instanceName=name) or {}
+                         ).get("portStates") or []
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("LSAIL-01",
+                                               "lightsail:GetInstancePortStates")
+                continue
+            r = aws_extsvc2.lightsail_ports(name, ports)
+            if r["world_open"]:
+                self._add("FAIL", "LSAIL-01", "LIGHTSAIL", name,
+                          f"{r['statement']} | {name}")
+            else:
+                self._add("PASS", "LSAIL-01", "LIGHTSAIL", name,
+                          f"Lightsail instance {name} has no world-open ports | {name}")
+
+        try:
+            dbs = (ls.get_relational_databases() or {}
+                   ).get("relationalDatabases") or []
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("LSAIL-02",
+                                           "lightsail:GetRelationalDatabases")
+            return
+        for db in dbs:
+            r = aws_extsvc2.lightsail_database(db)
+            nm = r["name"] or "?"
+            if r["public"]:
+                self._add("FAIL", "LSAIL-02", "LIGHTSAIL", nm, f"{r['statement']} | {nm}")
+            elif r["public_known"]:
+                self._add("PASS", "LSAIL-02", "LIGHTSAIL", nm,
+                          f"Lightsail database {nm} is not publicly accessible | {nm}")
+
+    def _check_privateca(self):
+        """PCA-01 — a private CA is a trust root, not an ordinary shared resource."""
+        self._section_header("PRIVATECA")
+        try:
+            pca = self._client("acm-pca")
+            cas = self._tokens(pca.list_certificate_authorities,
+                               "CertificateAuthorities")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("PCA-01",
+                                           "acm-pca:ListCertificateAuthorities")
+            return
+
+        for ca in cas:
+            arn = (ca or {}).get("Arn")
+            if not arn:
+                continue
+            try:
+                pol = (pca.get_policy(ResourceArn=arn) or {}).get("Policy")
+            except Exception as e:
+                msg = str(e)
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("PCA-01", "acm-pca:GetPolicy")
+                    continue
+                # ResourceNotFound simply means no resource policy is attached, which
+                # is the good case rather than an unreadable one.
+                if "ResourceNotFound" not in msg:
+                    continue
+                pol = None
+            r = aws_extsvc2.pca_policy_exposure(arn, pol)
+            if r["public"]:
+                self._add("FAIL", "PCA-01", "PRIVATECA", arn, f"{r['statement']} | {arn}")
+            else:
+                self._add("PASS", "PCA-01", "PRIVATECA", arn,
+                          f"Private CA {arn} has no wildcard-principal resource "
+                          f"policy | {arn}")
+
+    def _check_quicksight(self):
+        """QS-01 — QuickSight sits on top of the warehouses, so a public dashboard
+        bypasses the datastore's own access controls."""
+        self._section_header("QUICKSIGHT")
+        try:
+            qs = self._client("quicksight")
+            st = (qs.describe_account_settings(AwsAccountId=self.account) or {}
+                  ).get("AccountSettings") or {}
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("QS-01",
+                                           "quicksight:DescribeAccountSettings")
+            return
+        r = aws_extsvc2.quicksight_account(st)
+        if r["public_sharing"]:
+            self._add("FAIL", "QS-01", "QUICKSIGHT", "account",
+                      f"{r['statement']} | account")
+        elif r["known"]:
+            self._add("PASS", "QS-01", "QUICKSIGHT", "account",
+                      f"QuickSight public sharing is disabled for this account | account")
+
+    def _check_identitycenter(self):
+        """SSO-01 — permission sets are how humans actually get access."""
+        self._section_header("IDENTITYCENTER")
+        try:
+            sso = self._client("sso-admin")
+            instances = self._tokens(sso.list_instances, "Instances")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("SSO-01", "sso:ListInstances")
+            return
+
+        for inst in instances:
+            iarn = (inst or {}).get("InstanceArn")
+            if not iarn:
+                continue
+            try:
+                arns = self._tokens(sso.list_permission_sets, "PermissionSets",
+                                    InstanceArn=iarn)
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("SSO-01", "sso:ListPermissionSets")
+                continue
+            for ps in arns:
+                try:
+                    name = ((sso.describe_permission_set(
+                        InstanceArn=iarn, PermissionSetArn=ps) or {}
+                    ).get("PermissionSet") or {}).get("Name") or ps
+                except Exception:
+                    name = ps
+                try:
+                    doc = (sso.get_inline_policy_for_permission_set(
+                        InstanceArn=iarn, PermissionSetArn=ps) or {}
+                    ).get("InlinePolicy")
+                except Exception as e:
+                    if self._is_access_denied(e):
+                        self._coverage.note_denied(
+                            "SSO-01", "sso:GetInlinePolicyForPermissionSet")
+                    continue
+                r = aws_extsvc2.sso_permission_set(name, doc)
+                if r["admin"]:
+                    self._add("FAIL", "SSO-01", "IDENTITYCENTER", name,
+                              f"{r['statement']} | {name}")
+                elif r["parsed"]:
+                    self._add("PASS", "SSO-01", "IDENTITYCENTER", name,
+                              f"Permission set {name} does not grant * on * | {name}")
+
+    def _check_glue(self):
+        """GLUE-01/02 — the catalog hands back connection passwords."""
+        self._section_header("GLUE")
+        try:
+            glue = self._client("glue")
+            st = (glue.get_data_catalog_encryption_settings() or {}
+                  ).get("DataCatalogEncryptionSettings") or {}
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied(
+                    "GLUE-01", "glue:GetDataCatalogEncryptionSettings")
+            st = None
+
+        if st is not None:
+            r = aws_extsvc2.glue_catalog_encryption(st)
+            if r["password_known"] and not r["passwords_encrypted"]:
+                self._add("FAIL", "GLUE-01", "GLUE", "catalog",
+                          f"{r['password_statement']} | catalog")
+            elif r["mode_known"] and not r["encrypted"]:
+                self._add("FAIL", "GLUE-01", "GLUE", "catalog",
+                          f"{r['statement']} | catalog")
+            elif r["passwords_encrypted"]:
+                self._add("PASS", "GLUE-01", "GLUE", "catalog",
+                          f"Glue catalog encryption is {r['mode']} and connection "
+                          f"passwords are returned encrypted | catalog")
+
+        try:
+            eps = self._tokens(glue.get_dev_endpoints, "DevEndpoints")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("GLUE-02", "glue:GetDevEndpoints")
+            return
+        for ep in eps:
+            r = aws_extsvc2.glue_dev_endpoint(ep)
+            nm = r["name"] or "?"
+            if r["public"]:
+                self._add("FAIL", "GLUE-02", "GLUE", nm, f"{r['statement']} | {nm}")
+            else:
+                self._add("PASS", "GLUE-02", "GLUE", nm,
+                          f"Glue development endpoint {nm} has no public address | {nm}")
+
     def _check_iot(self):
         """IOT-01/02/03 — AWS IoT Core.
 
@@ -14778,6 +15083,12 @@ class AWSLiveScanner:
             "DOCDB":          self._check_docdb,
             "IMAGEBUILDER":   self._check_imagebuilder,
             "TRANSFER":       self._check_transfer,
+            "NETWORKFIREWALL": self._check_networkfirewall,
+            "LIGHTSAIL":      self._check_lightsail,
+            "PRIVATECA":      self._check_privateca,
+            "QUICKSIGHT":     self._check_quicksight,
+            "IDENTITYCENTER": self._check_identitycenter,
+            "GLUE":           self._check_glue,
             "ELASTICACHE":    self._check_elasticache,
             "OPENSEARCH":     self._check_opensearch,
             "DYNAMODB":       self._check_dynamodb,

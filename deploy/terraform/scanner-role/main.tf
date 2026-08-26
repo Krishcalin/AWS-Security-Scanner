@@ -85,6 +85,24 @@ data "aws_iam_policy_document" "extras" {
       "imagebuilder:GetImagePolicy",
       "transfer:ListServers",
       "transfer:DescribeServer",
+      # Batch 2. IAM prefix for Identity Center is `sso`, not the
+      # `sso-admin` client name. Kept byte-identical to the CFN
+      # template -- test_terraform_parity enforces no drift.
+      "network-firewall:ListFirewalls",
+      "network-firewall:DescribeFirewall",
+      "network-firewall:DescribeFirewallPolicy",
+      "network-firewall:DescribeLoggingConfiguration",
+      "lightsail:GetInstances",
+      "lightsail:GetInstancePortStates",
+      "lightsail:GetRelationalDatabases",
+      "acm-pca:ListCertificateAuthorities",
+      "acm-pca:GetPolicy",
+      "quicksight:DescribeAccountSettings",
+      "sso:ListInstances",
+      "sso:ListPermissionSets",
+      "sso:GetInlinePolicyForPermissionSet",
+      "glue:GetDataCatalogEncryptionSettings",
+      "glue:GetDevEndpoints",
     ]
     resources = ["*"]
   }

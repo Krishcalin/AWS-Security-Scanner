@@ -89,6 +89,31 @@ Resources:
               # silently degrades to a coverage note in every real deployment is worse
               # than one that asks for the grant it needs. All are read-only:
               # no Put/Create/Delete/Modify appears anywhere in this list.
+              # ── Batch 2: declared via aws_checkdef (see aws_extsvc2) ─────
+              # NOTE the IAM prefix for IAM Identity Center is `sso`, NOT the boto3
+              # client name `sso-admin`. Same shape as the bedrock-agentcore trap: a
+              # policy written with the client/endpoint name grants nothing and looks
+              # correct in review. All read-only.
+              - Sid: Batch2ServiceReads
+                Effect: Allow
+                Action:
+                  - network-firewall:ListFirewalls
+                  - network-firewall:DescribeFirewall
+                  - network-firewall:DescribeFirewallPolicy
+                  - network-firewall:DescribeLoggingConfiguration
+                  - lightsail:GetInstances
+                  - lightsail:GetInstancePortStates
+                  - lightsail:GetRelationalDatabases
+                  - acm-pca:ListCertificateAuthorities
+                  - acm-pca:GetPolicy
+                  - quicksight:DescribeAccountSettings
+                  - sso:ListInstances
+                  - sso:ListPermissionSets
+                  - sso:GetInlinePolicyForPermissionSet
+                  - glue:GetDataCatalogEncryptionSettings
+                  - glue:GetDevEndpoints
+                Resource: '*'
+
               - Sid: Batch1ServiceReads
                 Effect: Allow
                 Action:

@@ -7,6 +7,69 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **`aws_checkdef.py` — declare a check once, derive every map from it.** A new check
+  cost edits in five places: `CHECK_SEVERITY`, `COMPLIANCE_MAP` and `REMEDIATION_MAP` in
+  `aws_live_scanner`, `FINDING_DETAIL` in `aws_finding_detail`, and `REQUIREMENTS` in
+  `aws_perm_ledger`. At 385 checks that was tolerable; with 110 uncovered services still
+  to go it had become the dominant cost of adding coverage — and five chances to get one
+  check half-declared.
+  - `test_check_maps_lockstep` already caught a half-declared check, and it is a good
+    test — but it caught it *afterwards*. **A `CheckDef` cannot be constructed unless
+    every projection is present and well-formed**, which moves the same invariant from
+    test-time to definition-time: the failure stops being "someone forgot the detail
+    page" and becomes "this does not import".
+  - Validated at declaration: severity in the known set, **all four** compliance
+    frameworks present (the evidence pack counts *controls*, so a gap silently shrinks a
+    denominator), a remediation carrying a runnable `aws` command, a risk narrative long
+    enough to decide on, and at least two remediation steps.
+  - **The charter is enforced structurally.** A `Perm` naming anything but a read verb is
+    rejected as a charter violation, so `read-only-of-CONFIG` stops being a convention
+    that review has to catch.
+  - **The collision guard is the point.** Merging by `dict.update` bypasses the
+    duplicate-key ratchet, which parses dict *literals* as source and cannot see a
+    registry merge — so `merge_*` refuses to overwrite an id that already exists. That is
+    the `SEG-01` defect (a new check silently replacing a real one's remediation, with
+    nothing failing anywhere) caught structurally rather than by a test that happened to
+    be written.
+  - It does **not** migrate the 399 existing checks. Rewriting nearly four hundred
+    hand-authored entries to prove a point would be a large, risky diff with no
+    behavioural benefit. This is an additive second path; the old literals keep working.
+
+- **Extended service coverage, batch 2** (`aws_extsvc2.py`, 6 sections, 10 checks) — the
+  first consumer of the registry. The clearest evidence it works is what is *absent*:
+  batch 1 needed a hand-written detail page per check plus a lockstep test to catch the
+  forgotten ones; batch 2's lockstep passed with no extra work at all.
+  - **Network Firewall** (`NFW-01/02/03`) — a firewall with no `LogDestinationConfigs`
+    inspects traffic and records none of it. A stateless default action of `aws:pass`
+    means unmatched packets are **forwarded**, so the firewall fails *open* and the
+    stateful rule groups are never consulted. Delete and change protection off means the
+    inspection point can be removed rather than defeated — and detaching a firewall from
+    its subnets is far quieter than deleting it.
+  - **Lightsail** (`LSAIL-01/02`) — its own console and its own firewall model, which is
+    *not* security groups, so these rules are invisible to an EC2 security-group audit
+    including OverWatch's own. Plus publicly-accessible managed databases, where the
+    master password is the only control in front of the data.
+  - **ACM Private CA** (`PCA-01`) — a private CA is a **trust root**. A wildcard
+    principal lets anyone mint certificates the estate trusts by construction, and the
+    resulting certificates are genuine, so they appear in no list of compromised material.
+  - **QuickSight** (`QS-01`) — `PublicSharingEnabled` permits dashboards over your
+    warehouses to be published to anonymous readers. QuickSight reads the warehouse with
+    its own credentials, so a public dashboard is a data export path that **bypasses the
+    datastore's access controls entirely**.
+  - **IAM Identity Center** (`SSO-01`) — a permission set granting `*` on `*` is
+    administrator in every account it is provisioned into, for everyone assigned it. It
+    is close to invisible from below: each account sees an ordinary IAM role with no
+    indication the grant is central or who holds it.
+  - **Glue** (`GLUE-01/02`) — `ReturnConnectionPasswordEncrypted=false` makes
+    `glue:GetConnection` a **credential dispenser**: it returns stored database passwords
+    in cleartext, typically for the production stores. A permission that reads like
+    metadata access is not one. Plus catalog encryption mode, and dev endpoints with a
+    public address — interactive shells holding the endpoint's IAM role.
+  - 15 read actions added to **both** `deploy/cnapp-scanner-role.yaml` and the Terraform
+    module. Note the IAM prefix for Identity Center is **`sso`**, not the `sso-admin`
+    client name — the same trap as `bedrock-agentcore`, where a policy written with the
+    client/endpoint name grants nothing and looks correct in review.
+
 - **Extended service coverage, batch 1** (`aws_extsvc.py`, 6 new sections, 14 checks).
   OverWatch instantiated **60** boto3 clients. botocore ships service models for
   **426** services, and **116** of the uncovered ones expose read APIs that answer a
