@@ -286,6 +286,7 @@ FLOORS = {
     "test_supplychain_state.py": 11,
     "test_terraform_parity.py": 9,
     "test_toolpoison.py": 31,
+    "test_toprisks_categories.py": 7,
     "test_totp.py": 18,
     "test_toxicflow.py": 28,
     "test_toxicflow_wiring.py": 17,

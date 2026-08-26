@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Waypoints, CircleAlert, ShieldAlert, Boxes, KeyRound,
   ShieldCheck, Wrench, FileText, Cloud, Settings2, PackageCheck,
   Globe, Database, Container, BrainCircuit, UserRoundMinus, FolderKanban, Terminal, Radar,
-  Server, ShieldUser,
+  Server, ShieldUser, LayoutGrid,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -48,6 +48,9 @@ export const NAV_ADMIN: NavItem[] = [
 
 // Risk Dashboards — named roll-ups over the finding catalog (see lib/dashboards.ts).
 export const NAV_DASHBOARDS: NavItem[] = [
+  // First, because it is the way IN to the other five: the worst ten in every
+  // domain on one screen, each card linking to the full-page roll-up below it.
+  { to: '/top-risks', label: 'Top Risks', icon: LayoutGrid },
   { to: '/exposure', label: 'External Exposure', icon: Globe },
   { to: '/data-security', label: 'Data Findings', icon: Database },
   { to: '/containers', label: 'Containers', icon: Container },
