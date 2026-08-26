@@ -62,6 +62,29 @@ data "aws_iam_policy_document" "extras" {
       "ec2:GetEbsDefaultKmsKeyId",
       "ec2:GetSnapshotBlockPublicAccessState",
       "access-analyzer:ValidatePolicy",
+      # Batch 1 of the 426-service coverage gap analysis. Requested explicitly
+      # rather than assumed: SecurityAudit may cover some, but that was not
+      # verified against the published policy document, and a check that
+      # silently degrades to a coverage note everywhere is worse than one that
+      # asks. All read-only. Kept byte-identical to cnapp-scanner-role.yaml --
+      # test_terraform_parity enforces that the two never drift.
+      "iot:ListPolicies",
+      "iot:GetPolicy",
+      "iot:GetV2LoggingOptions",
+      "iot:ListCACertificates",
+      "iot:DescribeCACertificate",
+      "elasticmapreduce:GetBlockPublicAccessConfiguration",
+      "elasticmapreduce:ListClusters",
+      "elasticmapreduce:DescribeCluster",
+      "codebuild:ListProjects",
+      "codebuild:BatchGetProjects",
+      "rds:DescribeDBClusters",
+      "rds:DescribeDBClusterSnapshots",
+      "rds:DescribeDBClusterSnapshotAttributes",
+      "imagebuilder:ListImages",
+      "imagebuilder:GetImagePolicy",
+      "transfer:ListServers",
+      "transfer:DescribeServer",
     ]
     resources = ["*"]
   }

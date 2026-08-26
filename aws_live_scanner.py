@@ -89,6 +89,7 @@ import aws_sagemaker
 import aws_modelartifact
 import aws_nitro
 import aws_perimeter
+import aws_extsvc
 import aws_segmentation
 import aws_shadowai
 import aws_ailog
@@ -214,7 +215,11 @@ SECTIONS = [
     "APIGATEWAY", "ELB", "EBS", "REDSHIFT", "EFS", "ACM",
     "SAGEMAKER", "COGNITO", "APIGATEWAYV2", "IAMPRIVESC", "EXPOSURE",
     "COGNITO_IDENTITY", "WINVULN",
-    "VULN", "THREAT", "DATA", "AI_THREAT", "CORRELATE",
+    "VULN", "THREAT", "DATA", "AI_THREAT",
+    # Batch 1 of the 426-service coverage gap analysis. Each is its own top-level
+    # section: a defect in a nested one takes out every test of its host.
+    "IOT", "EMR", "CODEBUILD", "DOCDB", "IMAGEBUILDER", "TRANSFER",
+    "CORRELATE",
 ]
 
 SECTION_LABELS = {
@@ -242,6 +247,12 @@ SECTION_LABELS = {
     "ECS":            "AMAZON ECS",
     "SECRETS":        "AWS SECRETS MANAGER",
     "WAF":            "AWS WAF",
+    "IOT":            "AWS IOT CORE",
+    "EMR":            "AMAZON EMR",
+    "CODEBUILD":      "AWS CODEBUILD",
+    "DOCDB":          "AMAZON DOCUMENTDB",
+    "IMAGEBUILDER":   "EC2 IMAGE BUILDER",
+    "TRANSFER":       "AWS TRANSFER FAMILY",
     "ELASTICACHE":    "AMAZON ELASTICACHE",
     "OPENSEARCH":     "AMAZON OPENSEARCH",
     "DYNAMODB":       "AMAZON DYNAMODB",
@@ -488,6 +499,17 @@ CHECK_SEVERITY = {
     # emitting advice as a failure would double-count an exposure already counted and
     # inflate the finding total with something that is not itself wrong.
     "SEGREC-01": "INFO",
+    # ── Batch 1: previously-uncovered services ──────────────────────────────
+    # IOT-01 is HIGH rather than CRITICAL: an IoT policy attaches to certificates, so
+    # a wildcard is every device at once -- but it is a permission grant, not a
+    # confirmed compromise. DOCDB-01 IS critical, because a snapshot shared with "all"
+    # is an OBSERVED public exposure of the data itself, not a capability.
+    "IOT-01": "HIGH", "IOT-02": "MEDIUM", "IOT-03": "MEDIUM",
+    "EMR-01": "HIGH", "EMR-02": "MEDIUM",
+    "CB-01": "HIGH", "CB-02": "MEDIUM",
+    "DOCDB-01": "CRITICAL", "DOCDB-02": "HIGH", "DOCDB-03": "MEDIUM",
+    "IMGB-01": "HIGH",
+    "XFER-01": "HIGH", "XFER-02": "MEDIUM", "XFER-03": "INFO",
     "MART-01": "CRITICAL",
     # Unpinned and cross-account are MEDIUM: both are preconditions rather than
     # exploitation, and a team that deliberately shares an artifact bucket with a
@@ -848,6 +870,20 @@ COMPLIANCE_MAP = {
     "SM-28": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
     "AIDR-01": {"PCI-DSS": "10.6.1", "HIPAA": "164.308(a)(1)(ii)(D)", "SOC2": "CC7.2", "NIST": "SI-4"},
     "SEGREC-01": {"PCI-DSS": "1.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "IOT-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "IOT-02": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "IOT-03": {"PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
+    "EMR-01": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EMR-02": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "CB-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "CB-02": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "DOCDB-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "DOCDB-02": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "DOCDB-03": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "IMGB-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "XFER-01": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "XFER-02": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "XFER-03": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "PERIM-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "PERIM-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "PERIM-03": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
@@ -1233,6 +1269,20 @@ REMEDIATION_MAP = {
     "SM-27": "Tag the app image configuration so it can be attributed and governed: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Tags with the aws: prefix are system tags and do not satisfy the control. Never put personally identifiable or sensitive information in a tag -- tags are readable from many AWS services",
     "SM-28": "Tag the image: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Same caveats as SM-27 -- system aws: tags do not count, and tags are not a place for sensitive values",
     "AIDR-01": "Your own detector recognised this and the request reached the model anyway, so treat the detector as reporting rather than enforcing: check whether it is deployed in blocking mode, and put an AWS-side control behind it -- aws bedrock get-guardrail --guardrail-identifier <ID> --guardrail-version DRAFT to confirm a PROMPT_ATTACK filter is set to BLOCK rather than NONE (AIGRD-01), and aws bedrock-agent update-agent to attach the guardrail if the agent has none. Then bound what a successful injection reaches with AISPM-01/02",
+    "IOT-01": "Replace the wildcard IoT policy with one scoped to the topics each device actually needs. Inspect it first: aws iot get-policy --policy-name <POLICY>. Then publish a scoped version and make it the default: aws iot create-policy-version --policy-name <POLICY> --policy-document file://scoped.json --set-as-default. IoT policies attach to certificates, so this is every device carrying one -- stage the change and watch for connection failures before deleting the old version",
+    "IOT-02": "Turn IoT logging back on so device activity leaves a record: aws iot set-v2-logging-options --role-arn <ROLE_ARN> --default-log-level WARN --no-disable-all-logs. Use INFO or DEBUG only for targeted investigation; WARN is the sustainable default",
+    "IOT-03": "Disable auto-registration on the CA so a certificate it signs cannot join the fleet unreviewed: aws iot update-ca-certificate --certificate-id <CA_ID> --new-auto-registration-status DISABLE. If devices genuinely need to self-register, pair it with a registration config and a provisioning template rather than leaving the gate open",
+    "EMR-01": "Turn on the account-level guardrail so a cluster cannot be launched with an internet-facing security group: aws emr put-block-public-access-configuration --block-public-access-configuration BlockPublicSecurityGroupRules=true. Add narrow PermittedPublicSecurityGroupRuleRanges only for ports you have deliberately reviewed",
+    "EMR-02": "Attach a named security configuration so at-rest and in-transit encryption and authentication settings apply to the cluster. Create one: aws emr create-security-configuration --name <NAME> --security-configuration file://sec-config.json . Security configurations bind at cluster creation, so this applies to the next cluster rather than the running one",
+    "CB-01": "Make the project private so its build logs and artifacts stop being world-readable: aws codebuild update-project-visibility --project-arn <ARN> --project-visibility PRIVATE. Then treat every credential that appeared in a public build log as exposed and rotate it",
+    "CB-02": "Re-enable artifact encryption -- it is an explicit opt-out rather than a default: aws codebuild update-project --name <PROJECT> --artifacts type=S3,location=<BUCKET>,encryptionDisabled=false. Supply a CMK with --encryption-key if the artifacts warrant customer-managed custody",
+    "DOCDB-01": "Stop sharing the snapshot with every AWS account immediately: aws docdb modify-db-cluster-snapshot-attribute --db-cluster-snapshot-identifier <SNAPSHOT> --attribute-name restore --values-to-remove all. Then establish how long it was public and treat the contents as disclosed for that window",
+    "DOCDB-02": "DocumentDB storage encryption can only be set at creation, so this cannot be switched on in place. Create an encrypted cluster from a snapshot and cut over: aws docdb restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAPSHOT> --kms-key-id <KEY_ARN> --storage-encrypted",
+    "DOCDB-03": "Export audit logs so there is a record of who connected and what they queried: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --cloudwatch-logs-export-configuration EnableLogTypes=audit. The cluster parameter group also needs audit_logs enabled",
+    "IMGB-01": "Remove the wildcard principal from the Image Builder resource policy so the image and everything baked into it stops being shared beyond your account: aws imagebuilder put-image-policy --image-arn <ARN> --policy file://scoped-policy.json . Then audit the image for embedded credentials, since anyone could have pulled it",
+    "XFER-01": "Stop accepting plain FTP -- credentials and file contents cross the network in the clear. Move the server to FTPS or SFTP, which carry the same workflow encrypted: aws transfer update-server --server-id <SERVER_ID> --protocols SFTP FTPS. Coordinate with clients before removing FTP",
+    "XFER-02": "Attach a logging role so there is a record of who connected and which files moved: aws transfer update-server --server-id <SERVER_ID> --logging-role <ROLE_ARN>",
+    "XFER-03": "A PUBLIC endpoint is the intended mode for many Transfer servers, so treat this as context rather than a defect. If the workflow is internal, move it into your VPC: aws transfer update-server --server-id <SERVER_ID> --endpoint-type VPC --endpoint-details VpcId=<VPC_ID>,SubnetIds=<SUBNETS>,SecurityGroupIds=<SGS>",
     "SEGREC-01": "Find the rule that admits the named ports on the named security group(s): aws ec2 describe-security-groups --group-ids <SG_ID> --query SecurityGroups[].IpPermissions . Prefer narrowing the source over deleting the rule where the port is legitimately in use: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0 then aws ec2 authorize-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr <TRUSTED_CIDR>. Verify against the attack-path list rather than this line alone -- the count is derived from the paths in THIS scan, and a path OverWatch could not see is not in it. Paths reported as identity-only are unaffected by any network change and need a permissions fix instead",
     "PERIM-01": "Attach a Resource Control Policy (RCP) at the organization root requiring aws:PrincipalOrgID, which is how AWS describes implementing the trusted-identities perimeter -- an SCP cannot do this job, because an SCP bounds what YOUR principals may do rather than who may reach your resources. Exempt AWS service principals with aws:PrincipalIsAWSService (you cannot write NotPrincipal against a service principal) and constrain service-on-your-behalf access with aws:SourceOrgID. Start from the AWS data-perimeter policy examples repo rather than from scratch",
     "PERIM-02": "Attach a Service Control Policy requiring aws:ResourceOrgID so your principals can reach only resources your organization owns, and pair it with VPC endpoint policies for the paths SCPs do not cover (SCPs do not apply to service-linked roles or AWS service principals). Where a genuine external resource is needed -- Amazon Linux repos, public SSM parameters -- exempt the specific ACTIONS with NotAction in the SCP and allow the specific RESOURCES in the endpoint policy, rather than opening a broad aws:ViaAWSService exception",
@@ -8687,6 +8737,342 @@ class AWSLiveScanner:
                     return None
         return docs
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # BATCH 1 — services from the 426-service coverage gap analysis
+    # Each section is TOP-LEVEL and self-contained: a denial degrades that one
+    # section to a coverage note and never becomes a clean pass elsewhere.
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_iot(self):
+        """IOT-01/02/03 — AWS IoT Core.
+
+        The single largest gap in the coverage analysis: 123 read operations, none
+        previously used. An IoT policy attaches to CERTIFICATES, so one over-broad
+        policy is not one over-privileged principal — it is every device carrying that
+        certificate."""
+        self._section_header("IOT")
+        try:
+            iot = self._client("iot")
+        except Exception:
+            return
+
+        # IOT-01 — policies granting everything on everything
+        try:
+            pols, token, guard = [], None, 0
+            while guard < 100:
+                guard += 1
+                kw = {"pageSize": 100}
+                if token:
+                    kw["marker"] = token
+                resp = iot.list_policies(**kw) or {}
+                pols += list(resp.get("policies") or [])
+                token = resp.get("nextMarker")
+                if not isinstance(token, str) or not token:
+                    break
+        except Exception as e:
+            pols = None
+            if self._is_access_denied(e):
+                self._coverage.note_denied("IOT-01", "iot:ListPolicies")
+        if pols is not None:
+            for p in pols:
+                name = (p or {}).get("policyName")
+                if not name:
+                    continue
+                try:
+                    doc = (iot.get_policy(policyName=name) or {}).get("policyDocument")
+                except Exception as e:
+                    if self._is_access_denied(e):
+                        self._coverage.note_denied("IOT-01", "iot:GetPolicy")
+                    continue
+                r = aws_extsvc.iot_policy_risk(name, doc)
+                if r["wildcard"]:
+                    self._add("FAIL", "IOT-01", "IOT", name, f"{r['statement']} | {name}")
+                elif r["parsed"]:
+                    self._add("PASS", "IOT-01", "IOT", name,
+                              f"IoT policy {name} is scoped rather than iot:* on * | {name}")
+
+        # IOT-02 — account-wide logging switch
+        try:
+            r = aws_extsvc.iot_logging_posture(iot.get_v2_logging_options() or {})
+            if r["disabled"]:
+                self._add("FAIL", "IOT-02", "IOT", "logging",
+                          f"{r['statement']} | logging")
+            elif r["known"]:
+                self._add("PASS", "IOT-02", "IOT", "logging",
+                          f"IoT logging is enabled (default level "
+                          f"{r['default_level'] or 'unset'}) | logging")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("IOT-02", "iot:GetV2LoggingOptions")
+
+        # IOT-03 — CA certificates that admit anything they sign
+        try:
+            cas = (iot.list_ca_certificates() or {}).get("certificates") or []
+        except Exception as e:
+            cas = None
+            if self._is_access_denied(e):
+                self._coverage.note_denied("IOT-03", "iot:ListCACertificates")
+        for ca in (cas or []):
+            cid = (ca or {}).get("certificateId")
+            if not cid:
+                continue
+            try:
+                desc = (iot.describe_ca_certificate(certificateId=cid) or {}
+                        ).get("certificateDescription") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("IOT-03", "iot:DescribeCACertificate")
+                continue
+            r = aws_extsvc.iot_ca_posture(desc)
+            if r["auto_register"]:
+                self._add("FAIL", "IOT-03", "IOT", cid, f"{r['statement']} | {cid}")
+            elif r["known"]:
+                self._add("PASS", "IOT-03", "IOT", cid,
+                          f"IoT CA {cid} does not auto-register the certificates it "
+                          f"signs | {cid}")
+
+    def _check_emr(self):
+        """EMR-01/02 — Amazon EMR."""
+        self._section_header("EMR")
+        try:
+            emr = self._client("emr")
+        except Exception:
+            return
+
+        try:
+            cfg = (emr.get_block_public_access_configuration() or {}
+                   ).get("BlockPublicAccessConfiguration") or {}
+            r = aws_extsvc.emr_block_public_access(cfg)
+            if r["known"] and not r["blocked"]:
+                self._add("FAIL", "EMR-01", "EMR", "account", f"{r['statement']} | account")
+            elif r["blocked"]:
+                self._add("PASS", "EMR-01", "EMR", "account",
+                          f"EMR block-public-access is ON for this account "
+                          f"({r['exceptions']} permitted port range(s)) | account")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("EMR-01",
+                                           "elasticmapreduce:GetBlockPublicAccessConfiguration")
+
+        try:
+            clusters = (emr.list_clusters(
+                ClusterStates=["STARTING", "BOOTSTRAPPING", "RUNNING", "WAITING"]) or {}
+            ).get("Clusters") or []
+        except Exception as e:
+            clusters = None
+            if self._is_access_denied(e):
+                self._coverage.note_denied("EMR-02", "elasticmapreduce:ListClusters")
+        for c in (clusters or []):
+            cid = (c or {}).get("Id")
+            if not cid:
+                continue
+            try:
+                full = (emr.describe_cluster(ClusterId=cid) or {}).get("Cluster") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("EMR-02", "elasticmapreduce:DescribeCluster")
+                continue
+            r = aws_extsvc.emr_cluster_posture(full)
+            if not r["has_security_configuration"]:
+                self._add("FAIL", "EMR-02", "EMR", cid, f"{r['statement']} | {cid}")
+            else:
+                self._add("PASS", "EMR-02", "EMR", cid,
+                          f"EMR cluster {cid} uses security configuration "
+                          f"{r['security_configuration']} | {cid}")
+
+    def _check_codebuild(self):
+        """CB-01/02 — AWS CodeBuild. Build logs are where credentials surface."""
+        self._section_header("CODEBUILD")
+        try:
+            cb = self._client("codebuild")
+            names, token, guard = [], None, 0
+            while guard < 100:
+                guard += 1
+                kw = {"nextToken": token} if token else {}
+                resp = cb.list_projects(**kw) or {}
+                names += list(resp.get("projects") or [])
+                token = resp.get("nextToken")
+                if not isinstance(token, str) or not token:
+                    break
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("CB-01", "CB-02"):
+                    self._coverage.note_denied(cid, "codebuild:ListProjects")
+            return
+
+        for i in range(0, len(names), 100):
+            try:
+                projects = (cb.batch_get_projects(names=names[i:i + 100]) or {}
+                            ).get("projects") or []
+            except Exception as e:
+                if self._is_access_denied(e):
+                    for cid in ("CB-01", "CB-02"):
+                        self._coverage.note_denied(cid, "codebuild:BatchGetProjects")
+                return
+            for proj in projects:
+                r = aws_extsvc.codebuild_posture(proj)
+                nm = r["name"] or "?"
+                if r["public"]:
+                    self._add("FAIL", "CB-01", "CODEBUILD", nm, f"{r['statement']} | {nm}")
+                elif r["vis_known"]:
+                    self._add("PASS", "CB-01", "CODEBUILD", nm,
+                              f"CodeBuild project {nm} is PRIVATE | {nm}")
+                if r["artifact_encryption_disabled"]:
+                    self._add("FAIL", "CB-02", "CODEBUILD", nm,
+                              f"{r['artifact_statement']} | {nm}")
+
+    def _check_docdb(self):
+        """DOCDB-01/02/03 — Amazon DocumentDB.
+
+        DOCDB-01 is one of the few OverWatch checks that is a direct OBSERVATION rather
+        than an inference: the snapshot attribute either lists 'all' or it does not."""
+        self._section_header("DOCDB")
+        try:
+            docdb = self._client("docdb")
+        except Exception:
+            return
+
+        try:
+            snaps = (docdb.describe_db_cluster_snapshots(SnapshotType="manual") or {}
+                     ).get("DBClusterSnapshots") or []
+        except Exception as e:
+            snaps = None
+            if self._is_access_denied(e):
+                self._coverage.note_denied("DOCDB-01", "rds:DescribeDBClusterSnapshots")
+        for sn in (snaps or []):
+            sid = (sn or {}).get("DBClusterSnapshotIdentifier")
+            if not sid:
+                continue
+            try:
+                attrs = (docdb.describe_db_cluster_snapshot_attributes(
+                    DBClusterSnapshotIdentifier=sid) or {}
+                ).get("DBClusterSnapshotAttributesResult", {}).get(
+                    "DBClusterSnapshotAttributes") or []
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied(
+                        "DOCDB-01", "rds:DescribeDBClusterSnapshotAttributes")
+                continue
+            r = aws_extsvc.docdb_snapshot_exposure(sid, attrs)
+            if r["public"]:
+                self._add("FAIL", "DOCDB-01", "DOCDB", sid, f"{r['statement']} | {sid}")
+            elif r["shared_accounts"]:
+                self._add("WARN", "DOCDB-01", "DOCDB", sid,
+                          f"{r['shared_statement']} | {sid}")
+            elif r["known"]:
+                self._add("PASS", "DOCDB-01", "DOCDB", sid,
+                          f"DocumentDB snapshot {sid} is not shared outside this "
+                          f"account | {sid}")
+
+        try:
+            clusters = (docdb.describe_db_clusters() or {}).get("DBClusters") or []
+        except Exception as e:
+            clusters = None
+            if self._is_access_denied(e):
+                for cid in ("DOCDB-02", "DOCDB-03"):
+                    self._coverage.note_denied(cid, "rds:DescribeDBClusters")
+        for c in (clusters or []):
+            r = aws_extsvc.docdb_cluster_posture(c)
+            cid_ = r["id"] or "?"
+            if r["encryption_known"] and not r["encrypted"]:
+                self._add("FAIL", "DOCDB-02", "DOCDB", cid_, f"{r['statement']} | {cid_}")
+            elif r["encrypted"]:
+                self._add("PASS", "DOCDB-02", "DOCDB", cid_,
+                          f"DocumentDB cluster {cid_} is encrypted at rest | {cid_}")
+            if not r["audit_enabled"]:
+                self._add("FAIL", "DOCDB-03", "DOCDB", cid_,
+                          f"{r['audit_statement']} | {cid_}")
+            else:
+                self._add("PASS", "DOCDB-03", "DOCDB", cid_,
+                          f"DocumentDB cluster {cid_} exports audit logs | {cid_}")
+
+    def _check_imagebuilder(self):
+        """IMGB-01 — EC2 Image Builder resource policies."""
+        self._section_header("IMAGEBUILDER")
+        try:
+            ib = self._client("imagebuilder")
+            imgs, token, guard = [], None, 0
+            while guard < 100:
+                guard += 1
+                kw = {"owner": "Self"}
+                if token:
+                    kw["nextToken"] = token
+                resp = ib.list_images(**kw) or {}
+                imgs += list(resp.get("imageVersionList") or [])
+                token = resp.get("nextToken")
+                if not isinstance(token, str) or not token:
+                    break
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("IMGB-01", "imagebuilder:ListImages")
+            return
+
+        for im in imgs:
+            arn = (im or {}).get("arn")
+            if not arn:
+                continue
+            try:
+                pol = (ib.get_image_policy(imageArn=arn) or {}).get("policy")
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("IMGB-01", "imagebuilder:GetImagePolicy")
+                continue
+            r = aws_extsvc.imagebuilder_policy_exposure(arn, pol)
+            if r["public"]:
+                self._add("FAIL", "IMGB-01", "IMAGEBUILDER", arn,
+                          f"{r['statement']} | {arn}")
+            elif r["has_policy"]:
+                self._add("PASS", "IMGB-01", "IMAGEBUILDER", arn,
+                          f"Image Builder resource {arn} has a resource policy with no "
+                          f"wildcard principal | {arn}")
+
+    def _check_transfer(self):
+        """XFER-01/02/03 — AWS Transfer Family."""
+        self._section_header("TRANSFER")
+        try:
+            tr = self._client("transfer")
+            servers, token, guard = [], None, 0
+            while guard < 100:
+                guard += 1
+                kw = {"NextToken": token} if token else {}
+                resp = tr.list_servers(**kw) or {}
+                servers += list(resp.get("Servers") or [])
+                token = resp.get("NextToken")
+                if not isinstance(token, str) or not token:
+                    break
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("XFER-01", "XFER-02", "XFER-03"):
+                    self._coverage.note_denied(cid, "transfer:ListServers")
+            return
+
+        for sv in servers:
+            sid = (sv or {}).get("ServerId")
+            if not sid:
+                continue
+            try:
+                full = (tr.describe_server(ServerId=sid) or {}).get("Server") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    for cid in ("XFER-01", "XFER-02", "XFER-03"):
+                        self._coverage.note_denied(cid, "transfer:DescribeServer")
+                continue
+            r = aws_extsvc.transfer_posture(full)
+            if r["cleartext"]:
+                self._add("FAIL", "XFER-01", "TRANSFER", sid, f"{r['statement']} | {sid}")
+            elif r["protocols"]:
+                self._add("PASS", "XFER-01", "TRANSFER", sid,
+                          f"Transfer server {sid} accepts only encrypted protocols "
+                          f"({', '.join(r['protocols'])}) | {sid}")
+            if not r["logging"]:
+                self._add("FAIL", "XFER-02", "TRANSFER", sid,
+                          f"{r['logging_statement']} | {sid}")
+            else:
+                self._add("PASS", "XFER-02", "TRANSFER", sid,
+                          f"Transfer server {sid} has a logging role | {sid}")
+            if r["public"]:
+                self._add("INFO", "XFER-03", "TRANSFER", sid,
+                          f"{r['endpoint_statement']} | {sid}")
+
     def _check_data_perimeter(self):
         """PERIM-00..03 — AWS's three data-perimeter objectives (slice 5.2).
 
@@ -14386,6 +14772,12 @@ class AWSLiveScanner:
             "ECS":            self._check_ecs,
             "SECRETS":        self._check_secrets,
             "WAF":            self._check_waf,
+            "IOT":            self._check_iot,
+            "EMR":            self._check_emr,
+            "CODEBUILD":      self._check_codebuild,
+            "DOCDB":          self._check_docdb,
+            "IMAGEBUILDER":   self._check_imagebuilder,
+            "TRANSFER":       self._check_transfer,
             "ELASTICACHE":    self._check_elasticache,
             "OPENSEARCH":     self._check_opensearch,
             "DYNAMODB":       self._check_dynamodb,
