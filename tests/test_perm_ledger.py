@@ -81,6 +81,8 @@ EXPECTED_GAP = (
                 "aoss:ListAccessPolicies",
                 "aoss:ListCollections",
                 "aoss:ListSecurityPolicies",
+                "aps:DescribeWorkspace",
+                "aps:ListWorkspaces",
                 "bedrock-agentcore:GetAgentRuntime",
                 "bedrock-agentcore:GetGateway",
                 "bedrock-agentcore:GetGatewayTarget",
@@ -103,8 +105,15 @@ EXPECTED_GAP = (
                 "cloudtrail:DescribeTrails",
                 "cloudtrail:GetEventSelectors",
                 "cloudtrail:LookupEvents",
+                "codeartifact:GetDomainPermissionsPolicy",
+                "codeartifact:GetRepositoryPermissionsPolicy",
+                "codeartifact:ListDomains",
+                "codeartifact:ListRepositories",
                 "codebuild:BatchGetProjects",
                 "codebuild:ListProjects",
+                "ds:DescribeDirectories",
+                "ds:DescribeLDAPSSettings",
+                "ds:DescribeSharedDirectories",
                 "elasticmapreduce:DescribeCluster",
                 "elasticmapreduce:GetBlockPublicAccessConfiguration",
                 "elasticmapreduce:ListClusters",
@@ -131,6 +140,9 @@ EXPECTED_GAP = (
                 "rds:DescribeDBClusterSnapshots",
                 "rds:DescribeDBClusters",
                 "s3:GetBucketPolicy",
+                "s3tables:GetTableBucketEncryption",
+                "s3tables:GetTableBucketPolicy",
+                "s3tables:ListTableBuckets",
                 "s3vectors:GetVectorBucket",
                 "s3vectors:GetVectorBucketPolicy",
                 "s3vectors:ListVectorBuckets",
@@ -139,11 +151,15 @@ EXPECTED_GAP = (
                 "sso:ListPermissionSets",
                 "transfer:DescribeServer",
                 "transfer:ListServers",
+                "vpc-lattice:GetAuthPolicy",
+                "vpc-lattice:GetService",
+                "vpc-lattice:ListServices",
+                "xray:GetEncryptionConfig"
                 )
 
 
 # ── the load-bearing assertion ──────────────────────────────────────────────
-def test_the_shipped_role_is_missing_exactly_sixtysix_actions():
+def test_the_shipped_role_is_missing_exactly_eightytwo_actions():
     """Computed from the policy documents, not recalled. If this number moves, either
     AWS changed SecurityAudit or we added a call — both worth a human looking."""
     led = L.evaluate(SHIPPED_ROLE)
@@ -156,7 +172,7 @@ def test_the_blocked_checks_are_the_knowledge_base_and_guardrail_grading_ones():
     what makes GetGuardrail cheap to justify: one Get buys three checks. AIGRD-03 is
     absent on purpose -- enforcement is read from statements already collected."""
     led = L.evaluate(SHIPPED_ROLE)
-    assert set(led.blocked) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MART-01", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "GLUE-01", "GLUE-02", "LSAIL-01", "LSAIL-02", "NFW-01", "NFW-02", "NFW-03", "PCA-01", "QS-01", "SSO-01", "CB-01", "CB-02", "DOCDB-01", "DOCDB-02", "DOCDB-03", "EMR-01", "EMR-02", "IMGB-01", "IOT-01", "IOT-02", "IOT-03", "XFER-01", "XFER-02", "XFER-03", "PERIM-01", "PERIM-02", "PERIM-03", "SHAI-01", "SHAI-02", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
+    assert set(led.blocked) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MART-01", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "S3T-01", "S3T-02", "LATT-01", "LATT-02", "CART-01", "DIRSVC-01", "DIRSVC-02", "AMP-01", "XRAY-01", "GLUE-01", "GLUE-02", "LSAIL-01", "LSAIL-02", "NFW-01", "NFW-02", "NFW-03", "PCA-01", "QS-01", "SSO-01", "CB-01", "CB-02", "DOCDB-01", "DOCDB-02", "DOCDB-03", "EMR-01", "EMR-02", "IMGB-01", "IOT-01", "IOT-02", "IOT-03", "XFER-01", "XFER-02", "XFER-03", "PERIM-01", "PERIM-02", "PERIM-03", "SHAI-01", "SHAI-02", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
     assert led.blocked["AGT-03"] == ("bedrock:GetDataSource",
                                      "bedrock:GetKnowledgeBase")
     # Slice 3.1: GetDataSource now also buys TFLOW-01, because the data
@@ -197,7 +213,7 @@ def test_declining_an_action_names_what_it_costs():
         "AGT-04", "AGY-01", "AGY-02", "AGY-03"}
     assert led.forfeit(["bedrock:GetGuardrail"]) == (
         "AIGRD-01", "AIGRD-02", "AIGRD-04")
-    assert set(led.forfeit(EXPECTED_GAP)) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MART-01", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "GLUE-01", "GLUE-02", "LSAIL-01", "LSAIL-02", "NFW-01", "NFW-02", "NFW-03", "PCA-01", "QS-01", "SSO-01", "CB-01", "CB-02", "DOCDB-01", "DOCDB-02", "DOCDB-03", "EMR-01", "EMR-02", "IMGB-01", "IOT-01", "IOT-02", "IOT-03", "XFER-01", "XFER-02", "XFER-03", "PERIM-01", "PERIM-02", "PERIM-03", "SHAI-01", "SHAI-02", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
+    assert set(led.forfeit(EXPECTED_GAP)) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MART-01", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "S3T-01", "S3T-02", "LATT-01", "LATT-02", "CART-01", "DIRSVC-01", "DIRSVC-02", "AMP-01", "XRAY-01", "GLUE-01", "GLUE-02", "LSAIL-01", "LSAIL-02", "NFW-01", "NFW-02", "NFW-03", "PCA-01", "QS-01", "SSO-01", "CB-01", "CB-02", "DOCDB-01", "DOCDB-02", "DOCDB-03", "EMR-01", "EMR-02", "IMGB-01", "IOT-01", "IOT-02", "IOT-03", "XFER-01", "XFER-02", "XFER-03", "PERIM-01", "PERIM-02", "PERIM-03", "SHAI-01", "SHAI-02", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
 
 
 def test_declining_an_action_a_working_check_depends_on_is_also_counted():

@@ -87,6 +87,8 @@ def test_preflight_computes_the_ledger_from_our_own_role():
         "aoss:ListAccessPolicies",
         "aoss:ListCollections",
         "aoss:ListSecurityPolicies",
+        "aps:DescribeWorkspace",
+        "aps:ListWorkspaces",
         "bedrock-agentcore:GetAgentRuntime",
         "bedrock-agentcore:GetGateway",
         "bedrock-agentcore:GetGatewayTarget",
@@ -109,8 +111,15 @@ def test_preflight_computes_the_ledger_from_our_own_role():
         "cloudtrail:DescribeTrails",
         "cloudtrail:GetEventSelectors",
         "cloudtrail:LookupEvents",
+        "codeartifact:GetDomainPermissionsPolicy",
+        "codeartifact:GetRepositoryPermissionsPolicy",
+        "codeartifact:ListDomains",
+        "codeartifact:ListRepositories",
         "codebuild:BatchGetProjects",
         "codebuild:ListProjects",
+        "ds:DescribeDirectories",
+        "ds:DescribeLDAPSSettings",
+        "ds:DescribeSharedDirectories",
         "ec2:DescribeInstanceTypes",
         "ec2:DescribeVpcEndpoints",
         "elasticmapreduce:DescribeCluster",
@@ -139,6 +148,9 @@ def test_preflight_computes_the_ledger_from_our_own_role():
         "rds:DescribeDBClusterSnapshots",
         "rds:DescribeDBClusters",
         "s3:GetBucketPolicy",
+        "s3tables:GetTableBucketEncryption",
+        "s3tables:GetTableBucketPolicy",
+        "s3tables:ListTableBuckets",
         "s3vectors:GetVectorBucket",
         "s3vectors:GetVectorBucketPolicy",
         "s3vectors:ListVectorBuckets",
@@ -146,7 +158,11 @@ def test_preflight_computes_the_ledger_from_our_own_role():
         "sso:ListInstances",
         "sso:ListPermissionSets",
         "transfer:DescribeServer",
-        "transfer:ListServers")
+        "transfer:ListServers",
+        "vpc-lattice:GetAuthPolicy",
+        "vpc-lattice:GetService",
+        "vpc-lattice:ListServices",
+        "xray:GetEncryptionConfig")
 
 
 def test_preflight_says_what_will_not_be_evaluated_before_it_runs():
@@ -169,7 +185,7 @@ def test_preflight_records_the_blocked_checks_as_not_evaluated():
     # checks. The preflight derives this set from the ledger, so it picked all three
     # up without being told - which is the behaviour the runtime denial path in
     # _grade_guardrails was corrected to match.
-    assert set(s._coverage.not_evaluated) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MART-01", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "GLUE-01", "GLUE-02", "LSAIL-01", "LSAIL-02", "NFW-01", "NFW-02", "NFW-03", "PCA-01", "QS-01", "SSO-01", "CB-01", "CB-02", "DOCDB-01", "DOCDB-02", "DOCDB-03", "EMR-01", "EMR-02", "IMGB-01", "IOT-01", "IOT-02", "IOT-03", "XFER-01", "XFER-02", "XFER-03", "NITRO-01", "NITRO-02", "PERIM-01", "PERIM-02", "PERIM-03", "SHAI-01", "SHAI-02", "SHAI-03", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
+    assert set(s._coverage.not_evaluated) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MART-01", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "S3T-01", "S3T-02", "LATT-01", "LATT-02", "CART-01", "DIRSVC-01", "DIRSVC-02", "AMP-01", "XRAY-01", "GLUE-01", "GLUE-02", "LSAIL-01", "LSAIL-02", "NFW-01", "NFW-02", "NFW-03", "PCA-01", "QS-01", "SSO-01", "CB-01", "CB-02", "DOCDB-01", "DOCDB-02", "DOCDB-03", "EMR-01", "EMR-02", "IMGB-01", "IOT-01", "IOT-02", "IOT-03", "XFER-01", "XFER-02", "XFER-03", "NITRO-01", "NITRO-02", "PERIM-01", "PERIM-02", "PERIM-03", "SHAI-01", "SHAI-02", "SHAI-03", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
     assert not s._coverage.complete
 
 
@@ -244,6 +260,8 @@ def test_the_scan_result_carries_coverage_and_the_ledger():
         "aoss:ListAccessPolicies",
         "aoss:ListCollections",
         "aoss:ListSecurityPolicies",
+        "aps:DescribeWorkspace",
+        "aps:ListWorkspaces",
         "bedrock-agentcore:GetAgentRuntime",
         "bedrock-agentcore:GetGateway",
         "bedrock-agentcore:GetGatewayTarget",
@@ -266,8 +284,15 @@ def test_the_scan_result_carries_coverage_and_the_ledger():
         "cloudtrail:DescribeTrails",
         "cloudtrail:GetEventSelectors",
         "cloudtrail:LookupEvents",
+        "codeartifact:GetDomainPermissionsPolicy",
+        "codeartifact:GetRepositoryPermissionsPolicy",
+        "codeartifact:ListDomains",
+        "codeartifact:ListRepositories",
         "codebuild:BatchGetProjects",
         "codebuild:ListProjects",
+        "ds:DescribeDirectories",
+        "ds:DescribeLDAPSSettings",
+        "ds:DescribeSharedDirectories",
         "ec2:DescribeInstanceTypes",
         "ec2:DescribeVpcEndpoints",
         "elasticmapreduce:DescribeCluster",
@@ -296,6 +321,9 @@ def test_the_scan_result_carries_coverage_and_the_ledger():
         "rds:DescribeDBClusterSnapshots",
         "rds:DescribeDBClusters",
         "s3:GetBucketPolicy",
+        "s3tables:GetTableBucketEncryption",
+        "s3tables:GetTableBucketPolicy",
+        "s3tables:ListTableBuckets",
         "s3vectors:GetVectorBucket",
         "s3vectors:GetVectorBucketPolicy",
         "s3vectors:ListVectorBuckets",
@@ -303,7 +331,11 @@ def test_the_scan_result_carries_coverage_and_the_ledger():
         "sso:ListInstances",
         "sso:ListPermissionSets",
         "transfer:DescribeServer",
-        "transfer:ListServers"]
+        "transfer:ListServers",
+        "vpc-lattice:GetAuthPolicy",
+        "vpc-lattice:GetService",
+        "vpc-lattice:ListServices",
+        "xray:GetEncryptionConfig"]
 
 
 def test_a_scan_that_never_ran_preflight_still_serializes():
@@ -331,6 +363,6 @@ def test_the_annotated_policy_reaches_the_payload():
     # 15: slice 2.3 added GetGateway and ListGatewayTargets, which are what let
     # AGC-05 grade inbound authorization against the OUTBOUND configuration
     # rather than reporting authorizerType as a boolean.
-    assert len(rows) == 68
+    assert len(rows) == 84
     for row in rows:
         assert row["why"] and row["enables"] and row["forfeited_if_declined"]
