@@ -110,6 +110,30 @@ Resources:
               # CloudHSM's IAM prefix is `cloudhsm`, NOT the cloudhsmv2
               # client name -- the sixth instance of that trap, caught by
               # test_iam_surface. All read-only.
+              # ── Batch 7 ──────────────────────────────────────────────────
+              # Chosen against the ranking: CloudFormation and Firewall
+              # Manager score low because the heuristic reads operation
+              # NAMES, and theirs are unremarkable. All read-only.
+              - Sid: Batch7ServiceReads
+                Effect: Allow
+                Action:
+                  - cloudformation:ListStacks
+                  - cloudformation:DescribeStacks
+                  - cloudformation:GetStackPolicy
+                  - fms:ListPolicies
+                  - fms:GetPolicy
+                  - fms:GetNotificationChannel
+                  - ecr-public:DescribeRepositories
+                  - ecr-public:GetRepositoryPolicy
+                  - mpa:ListApprovalTeams
+                  - mpa:GetApprovalTeam
+                  - wickr:ListNetworks
+                  - wickr:GetNetworkSettings
+                  - mediapackagev2:ListChannelGroups
+                  - mediapackagev2:ListChannels
+                  - mediapackagev2:GetChannelPolicy
+                Resource: '*'
+
               - Sid: Batch6ServiceReads
                 Effect: Allow
                 Action:

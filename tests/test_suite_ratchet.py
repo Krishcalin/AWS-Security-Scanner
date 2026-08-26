@@ -156,6 +156,7 @@ FLOORS = {
     "test_extsvc4.py": 34,
     "test_extsvc5.py": 35,
     "test_extsvc6.py": 36,
+    "test_extsvc7.py": 36,
     "test_extsvc_wiring.py": 29,
     "test_finding_detail.py": 14,
     "test_forensics.py": 6,
