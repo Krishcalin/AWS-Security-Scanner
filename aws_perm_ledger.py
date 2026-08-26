@@ -706,7 +706,8 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
 # import of this module, so it builds Requirements through the factory passed in.
 import aws_checkdef          # noqa: E402
 import aws_extsvc2
-import aws_extsvc3           # noqa: E402,F401  (imported for its registrations)
+import aws_extsvc3
+import aws_extsvc4           # noqa: E402,F401  (imported for its registrations)
 
 aws_checkdef.merge_requirements(REQUIREMENTS, _req)
 

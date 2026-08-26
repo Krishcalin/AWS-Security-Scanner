@@ -98,6 +98,27 @@ Resources:
               # NOTE the IAM prefix for Managed Prometheus is `aps`, NOT the boto3
               # client name `amp` -- the third instance of that trap in this file
               # (bedrock-agentcore, sso, now aps). All read-only.
+              # ── Batch 4 ──────────────────────────────────────────────────
+              # MediaStore was in the requested set and is absent on purpose: AWS
+              # ended support for it on 2025-11-13, so its checks could never fire.
+              # All read-only.
+              - Sid: Batch4ServiceReads
+                Effect: Allow
+                Action:
+                  - lakeformation:GetDataLakeSettings
+                  - lakeformation:ListPermissions
+                  - workspaces-web:ListPortals
+                  - workspaces-web:GetPortal
+                  - storagegateway:ListFileShares
+                  - storagegateway:DescribeNFSFileShares
+                  - storagegateway:DescribeSMBFileShares
+                  - payment-cryptography:ListKeys
+                  - payment-cryptography:GetKey
+                  - managedblockchain:ListNetworks
+                  - managedblockchain:ListMembers
+                  - managedblockchain:GetMember
+                Resource: '*'
+
               - Sid: Batch3ServiceReads
                 Effect: Allow
                 Action:

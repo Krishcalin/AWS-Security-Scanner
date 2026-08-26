@@ -121,6 +121,20 @@ data "aws_iam_policy_document" "extras" {
       "aps:ListWorkspaces",
       "aps:DescribeWorkspace",
       "xray:GetEncryptionConfig",
+      # Batch 4. MediaStore omitted: support ended 2025-11-13.
+      # Byte-identical to the CFN template.
+      "lakeformation:GetDataLakeSettings",
+      "lakeformation:ListPermissions",
+      "workspaces-web:ListPortals",
+      "workspaces-web:GetPortal",
+      "storagegateway:ListFileShares",
+      "storagegateway:DescribeNFSFileShares",
+      "storagegateway:DescribeSMBFileShares",
+      "payment-cryptography:ListKeys",
+      "payment-cryptography:GetKey",
+      "managedblockchain:ListNetworks",
+      "managedblockchain:ListMembers",
+      "managedblockchain:GetMember",
     ]
     resources = ["*"]
   }

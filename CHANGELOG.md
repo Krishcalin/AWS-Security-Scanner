@@ -7,6 +7,42 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Extended service coverage, batch 4** (`aws_extsvc4.py`, 5 sections, 8 checks).
+  - **AWS Lake Formation** (`LF-01/02`) — the most consequential setting in the batch.
+    `IAM_ALLOWED_PRINCIPALS` in the default database or table permissions means Lake
+    Formation **does not evaluate its own grants at all** for those resources, and plain
+    IAM governs the data: every column-, row- and tag-level grant the data team
+    configured is simply not consulted. Nothing looks wrong — the console shows a fully
+    configured Lake Formation — and it is the backwards-compatible default, so an estate
+    arrives here by changing nothing. `LF-02` covers the half most often missed: clearing
+    the default does **not** revoke grants already made.
+  - **Amazon WorkSpaces Web** (`WSW-01/02`) — a managed browser that exists to reach
+    internal applications, so it is a sanctioned path from outside to inside. Without IP
+    access settings that path opens from anywhere; without logging there is no record of
+    what was reached, and the internal application's own logs show only the service
+    fleet.
+  - **AWS Storage Gateway** (`SGW-01/02`) — an NFS share whose `ClientList` contains
+    `0.0.0.0/0` is mountable by anything that can route to the gateway, and the share is
+    a window onto S3 through a path where **no bucket policy, IAM principal or per-caller
+    CloudTrail event applies**. NFS authenticates by network position, so the allow-list
+    is not one control among several — it is the control.
+  - **AWS Payment Cryptography** (`PAY-01`) — an `Exportable` key. The hardware boundary
+    is the entire reason this service exists rather than KMS, and exportability makes it
+    optional. Legitimate for a documented key ceremony with an acquirer; it should not be
+    incidental, and it **cannot be revoked after creation**.
+  - **Amazon Managed Blockchain** (`MBC-01`) — a member with no CA log publishing. The
+    CA is what enrols identities onto a shared, immutable ledger: the ledger records what
+    happened, the CA log is what records who was allowed to.
+  - 12 read actions added to **both** deploy templates.
+
+- **AWS Elemental MediaStore was requested and is deliberately NOT built.** AWS ended
+  support for it on **13 November 2025**, nine months before this batch. Its container
+  and CORS policies would have been reasonable checks while the service existed; against
+  a discontinued service they can never fire, while costing the same wiring, deploy
+  grants, ledger entries and tests as a live service. **A check that cannot fire is worse
+  than no check, because it reads as coverage.** The omission is pinned by a test rather
+  than left as an oversight.
+
 - **The pinned permission expectations are generated, not hand-typed**
   (`tests/perm_ledger_baseline.py`). `test_perm_ledger` and `test_perm_ledger_wiring`
   pin the exact IAM actions the shipped role lacks and the checks that are blocked as a
