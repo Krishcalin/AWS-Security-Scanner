@@ -23,7 +23,7 @@ reads all five, and ``MONITORING_KINDS`` is the table the scanner iterates.
 WHAT THE CONTROL LIST SAYS, READ RATHER THAN RECALLED
 -----------------------------------------------------
 Every field name, default and severity below comes from the published Security Hub
-control reference and from botocore 1.40.51's own service model — the version this
+control reference and from botocore 1.43.51's own service model — the version this
 project pins, checked because slice 3.3 found the API reference running well ahead of
 it. This time every operation the slice needs is present, so nothing is deferred.
 

@@ -263,6 +263,7 @@ FLOORS = {
     "test_sagemaker_depth.py": 38,
     "test_sagemaker_wiring.py": 29,
     "test_sbom_diff.py": 8,
+    "test_sdk_pin.py": 7,
     "test_secrets.py": 9,
     "test_secrets_collector.py": 7,
     "test_seed_demo_data.py": 45,

@@ -13698,7 +13698,7 @@ class AWSLiveScanner:
         try:
             ac = self._client("bedrock-agentcore-control")
         except Exception as e:
-            # The service model ships in botocore 1.40.51, but an older pinned SDK or an
+            # The service model ships in botocore 1.43.51, but an older pinned SDK or an
             # unsupported region has no such client. Say so rather than reporting an
             # account with no agents.
             self._add("INFO", "AGC-00", "AGENTCORE", "agentcore",

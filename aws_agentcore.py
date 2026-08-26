@@ -8,7 +8,7 @@ workload identities, stored third-party credentials — and none of it appears i
 Agents inventory. You cannot secure what you cannot list, and today nothing lists this.
 
 Everything below was read off the API reference and off the service model shipped in the
-botocore version this project pins (1.40.51), not recalled. That distinction mattered
+botocore version this project pins (1.43.51), not recalled. That distinction mattered
 twice while writing it:
 
 * The published API reference is AHEAD of our pinned SDK. It documents Harnesses,
@@ -38,7 +38,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 #: (operation, result_key, kind) for every AgentCore resource the PINNED SDK can list.
-#: Taken from botocore 1.40.51's own paginators-1.json for
+#: Taken from botocore 1.43.51's own paginators-1.json for
 #: bedrock-agentcore-control/2023-06-05 — the result keys are not uniform and are not
 #: guessable, so they are recorded here rather than derived from the operation name.
 LIST_OPERATIONS: Tuple[Tuple[str, str, str], ...] = (
@@ -213,7 +213,7 @@ INBOUND_OPEN = "NONE"
 #: mode a deliberate architecture rather than a hole.
 #:
 #: Read off ``CredentialProviderType`` in the service model rather than recalled, after
-#: the first authoring of this tuple invented all three names. The pinned 1.40.51 enum is
+#: the first authoring of this tuple invented all three names. The pinned 1.43.51 enum is
 #: ``GATEWAY_IAM_ROLE | OAUTH | API_KEY`` -- it has NO caller-carrying value at all --
 #: and 1.43.51 adds exactly ``CALLER_IAM_CREDENTIALS`` and ``JWT_PASSTHROUGH``.
 #: ``OAUTH_TOKEN_EXCHANGE`` exists in neither and is gone.

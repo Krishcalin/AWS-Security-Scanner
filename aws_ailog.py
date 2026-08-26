@@ -26,7 +26,7 @@ WHAT WAS VERIFIED RATHER THAN ASSUMED
 --------------------------------------
 * ``LoggingConfig`` carries four separate delivery switches — ``textDataDeliveryEnabled``,
   ``imageDataDeliveryEnabled``, ``embeddingDataDeliveryEnabled``,
-  ``videoDataDeliveryEnabled`` — read off botocore 1.40.51. They are independent, so a
+  ``videoDataDeliveryEnabled`` — read off botocore 1.43.51. They are independent, so a
   config can log text and not images, and the sensitivity of the destination follows
   whichever are on.
 * ``cloudWatchConfig`` carries ``largeDataDeliveryS3Config``: a **second** S3 destination

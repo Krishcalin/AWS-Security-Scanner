@@ -729,6 +729,38 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
     would be a guess.
 
 ### Fixed
+- **The SDK pin: botocore 1.40.51 -> 1.43.51, both SDKs moving together.** The pin had
+  been deferred twice as "a dependency decision beyond this slice", and investigating it
+  turned up something larger than a stale version.
+  - **The development environment was already on 1.43.51.** Every service model consulted
+    while authoring checks — including the entire 426-service gap analysis behind four
+    coverage batches — was read from a botocore three minor versions ahead of what a
+    fresh install would get. Nothing compared the declared pin to the installed one, so
+    nothing said so. (`boto3` was not installed at all; the scanner's `HAS_BOTO3` guard
+    meant that never surfaced.)
+  - **The pair must move together.** The CHANGELOG records `botocore==1.43.51` breaking
+    the offline build once, because `boto3==1.40.51` caps `botocore<1.41.0`. `boto3
+    1.43.51` requires `botocore>=1.43.51,<1.44.0`, so pinning both at 1.43.51 is
+    internally consistent — verified against PyPI rather than assumed, since boto3 and
+    botocore do **not** track patch-for-patch (the latest boto3 is 1.43.80).
+  - **What the bump unlocks**: `ListingMode` (`DEFAULT`/`DYNAMIC`) and the AgentCore
+    **Registry** with its `DRAFT/PENDING_APPROVAL/APPROVED/REJECTED` lifecycle. Both were
+    unreadable rather than absent under the old pin — the distinction this codebase
+    enforces everywhere else.
+  - **`MCP-04`'s premise moved with the pin, and is written down rather than left
+    standing.** That finding exists because a federated MCP server's tool list could not
+    be read, so its absence had to be *stated* rather than passed over. Under 1.43.51 it
+    partly can be. The check's **behaviour is deliberately unchanged** — bumping a
+    dependency and redesigning a finding are separate pieces of work, and doing both at
+    once ships a rewritten finding nobody reviewed — but the module now says so instead
+    of asserting a blind spot that no longer holds. Reading `ListingMode` and the
+    Registry approval state is the follow-on.
+  - **`tests/test_sdk_pin.py`** guards both failure modes: the two pins must name the
+    same version, the two requirements files must agree, the **installed** botocore must
+    match the pin, and the Registry and `ListingMode` must actually be present in the
+    installed models — asserted against the models, not inferred from a version string.
+    A further test fails if any module still describes 1.40.51 as the current pin.
+
 - **The credential-report poll cost roughly two thirds of every test run.**
   `_get_credential_report` polls an asynchronous AWS API. Against a mocked client the
   state never reaches `COMPLETE`, so every test reaching the method burned the full

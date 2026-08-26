@@ -10,9 +10,8 @@ version, and cannot see inside.
 
 WHAT THE PINNED MODEL ACTUALLY EXPOSES
 --------------------------------------
-Read from botocore **1.40.51**'s own ``service-2.json`` — the version this project pins —
-not from the published API reference, which is well ahead of it. The difference decides
-what this module can honestly claim:
+Read from the pinned botocore's own ``service-2.json`` rather than the published API
+reference. The difference decides what this module can honestly claim:
 
 * ``McpServerTargetConfiguration`` has exactly ONE member: ``endpoint``. Not the tools,
   not a schema, not a version. The endpoint is the entire provenance record.
@@ -20,13 +19,26 @@ what this module can honestly claim:
   ``instructions`` is a free-text string (max 2048) handed to the model to tell it how to
   use the gateway — a server-level instruction channel that slice 3.2 does not cover,
   because 3.2 reads per-tool descriptions on Bedrock Agents action groups.
-* ``ListingMode`` (``DEFAULT`` = tools cached at the control plane, ``DYNAMIC`` = tools
-  retrieved at listing time) does **not exist** in 1.40.51. It arrives in 1.43.51. Under
-  the pin there is no configuration field that says whether a federated server's tool
-  list is pinned or live.
-* The Registry — ``ListRegistries``, ``GetRegistryRecord``, and the
-  ``DRAFT/PENDING_APPROVAL/APPROVED/REJECTED`` lifecycle — does not exist in 1.40.51
-  either. There is no approval state to read.
+
+THE PIN MOVED, AND THIS MODULE'S PREMISE MOVED WITH IT
+------------------------------------------------------
+This module was written against botocore **1.40.51**, where two things did not exist:
+
+* ``ListingMode`` (``DEFAULT`` = tools cached at the control plane, ``DYNAMIC`` =
+  retrieved at listing time), so no field said whether a federated server's tool list
+  was pinned or live; and
+* the **Registry** — ``ListRegistries``, ``GetRegistryRecord`` and the
+  ``DRAFT/PENDING_APPROVAL/APPROVED/REJECTED`` lifecycle — so there was no approval
+  state to read.
+
+**Both arrive in 1.43.51, which is now the pin.** ``MCP-04``'s finding below — that the
+tool list of a federated server cannot be read, so its absence must be *stated* rather
+than passed over — was correct under 1.40.51 and is no longer the whole truth. The
+behaviour is deliberately UNCHANGED here: bumping a dependency and redesigning a check
+are separate pieces of work, and doing both in one change would mean shipping a
+rewritten finding nobody reviewed. What is not acceptable is leaving the old rationale
+standing as though it still held, which is why it is written down rather than quietly
+left. Reading ``ListingMode`` and the Registry approval state is the follow-on.
 
 THE BLIND SPOT IS THE FINDING
 -----------------------------
