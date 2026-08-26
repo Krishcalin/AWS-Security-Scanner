@@ -7,6 +7,54 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Extended service coverage, batch 1** (`aws_extsvc.py`, 6 new sections, 14 checks).
+  OverWatch instantiated **60** boto3 clients. botocore ships service models for
+  **426** services, and **116** of the uncovered ones expose read APIs that answer a
+  real security question. This is the first batch off that gap analysis.
+  - **The catalog page was the wrong source.** `aws.amazon.com/products` is
+    JS-rendered and yields a handful of marketing names. The **botocore service models
+    already on disk** are strictly better for this purpose: complete, versioned, and
+    they name the exact operations and enum values. A service only has detectable
+    *configuration* if it has a `Describe`/`Get`/`List` API — and a check written
+    against a field nobody returns looks like a clean pass forever.
+  - Uncovered services were **ranked by their actual security-relevant read surface**
+    (resource-policy and public-access operations weighted highest, then encryption and
+    network, then logging, auth, backup, TLS) rather than by intuition.
+  - **AWS IoT Core** (`IOT-01/02/03`) — the largest single gap at 123 read operations.
+    An IoT policy attaches to **certificates**, so `iot:*` on `*` is not one
+    over-privileged principal, it is every device carrying that certificate — and
+    device keys sit in flash on hardware strangers can buy. Also `disableAllLogs`, and
+    CAs with `autoRegistrationStatus=ENABLE`, which admit anything they sign.
+  - **Amazon EMR** (`EMR-01/02`) — `BlockPublicSecurityGroupRules`, the account-level
+    guardrail AWS added because EMR clusters kept reaching the internet with
+    unauthenticated cluster UIs; and clusters with no named security configuration,
+    which have no at-rest/in-transit encryption and share one role across all users.
+  - **AWS CodeBuild** (`CB-01/02`) — `projectVisibility=PUBLIC_READ` publishes build
+    logs, which is where credentials, internal hostnames and dependency graphs surface;
+    and `artifacts.encryptionDisabled`, an explicit opt-out rather than a default.
+  - **Amazon DocumentDB** (`DOCDB-01/02/03`) — a snapshot whose `restore` attribute
+    contains `all` is **public to every AWS account**. This is one of very few checks
+    in OverWatch that is a direct **observation** rather than an inference, which is why
+    it is the batch's only CRITICAL. Also creation-time-only storage encryption, and
+    absent audit-log export.
+  - **EC2 Image Builder** (`IMGB-01`) — wildcard-principal resource policies, which
+    share the golden image and everything baked into it.
+  - **AWS Transfer Family** (`XFER-01/02/03`) — plain `FTP` (verified enum
+    `SFTP|FTP|FTPS|AS2`) carries credentials in cleartext; FTPS deliberately does **not**
+    trigger it. Absent logging role, and a `PUBLIC` endpoint reported as **context
+    rather than a defect** — it is the intended mode for many servers, and flagging it
+    would flag the normal case.
+  - Each is a **top-level section**, not nested inside an existing one. That is a direct
+    response to the data-perimeter check, which was hooked inside `_check_iam` and took
+    every IAM-section test with it when it spun. A self-contained section can only break
+    itself, and a test asserts each one terminates against a bare `MagicMock`.
+  - **17 read actions added to `deploy/cnapp-scanner-role.yaml`** as `Batch1ServiceReads`.
+    Requested **explicitly rather than assumed**: SecurityAudit may already grant some
+    (`rds:Describe*`, `iot:List*`), but that coverage was not verified against the
+    published policy document, and a check that silently degrades to a coverage note in
+    every real deployment is worse than one that asks for the grant it needs. All are
+    read-only — no Put/Create/Delete/Modify appears in the list.
+
 - **Phase 5 · slice 5.2 — data-perimeter posture** (`aws_perimeter.py`,
   `PERIM-01/02/03`). OverWatch has been *recommending* `aws:PrincipalOrgID` in some
   twenty remediation strings and has never once **checked** whether the estate has one.

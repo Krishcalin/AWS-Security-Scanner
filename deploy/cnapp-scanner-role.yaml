@@ -82,6 +82,35 @@ Resources:
                   - ec2:GetSnapshotBlockPublicAccessState
                   - access-analyzer:ValidatePolicy
                 Resource: '*'
+              # ── Batch 1: services SecurityAudit does not reliably cover ──
+              # Requested EXPLICITLY rather than assumed. SecurityAudit may already
+              # grant some of these (rds:Describe*, iot:List*), but the coverage was
+              # not verified against the published policy document, and a check that
+              # silently degrades to a coverage note in every real deployment is worse
+              # than one that asks for the grant it needs. All are read-only:
+              # no Put/Create/Delete/Modify appears anywhere in this list.
+              - Sid: Batch1ServiceReads
+                Effect: Allow
+                Action:
+                  - iot:ListPolicies
+                  - iot:GetPolicy
+                  - iot:GetV2LoggingOptions
+                  - iot:ListCACertificates
+                  - iot:DescribeCACertificate
+                  - elasticmapreduce:GetBlockPublicAccessConfiguration
+                  - elasticmapreduce:ListClusters
+                  - elasticmapreduce:DescribeCluster
+                  - codebuild:ListProjects
+                  - codebuild:BatchGetProjects
+                  - rds:DescribeDBClusters
+                  - rds:DescribeDBClusterSnapshots
+                  - rds:DescribeDBClusterSnapshotAttributes
+                  - imagebuilder:ListImages
+                  - imagebuilder:GetImagePolicy
+                  - transfer:ListServers
+                  - transfer:DescribeServer
+                Resource: '*'
+
               # Three Bedrock CONFIG reads SecurityAudit v92 does not grant, each needed
               # by a check that was otherwise refused at runtime and — before the
               # preflight ledger existed — reported as though it had run. Verified

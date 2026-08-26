@@ -108,7 +108,11 @@ class TestDataStructures(unittest.TestCase):
         # separate service from Bedrock Agents, with its own control plane and
         # its own IAM prefix, so an account's whole agent estate can live there
         # unseen by the BEDROCK_AGENTS section.
-        self.assertEqual(len(SECTIONS), 46)
+        # 52: +IOT, EMR, CODEBUILD, DOCDB, IMAGEBUILDER, TRANSFER -- batch 1 of the
+        # 426-service coverage gap analysis. Six TOP-LEVEL sections rather than nesting
+        # them inside existing ones: a nested section takes its host's tests down with
+        # it, which is exactly what the data-perimeter check did inside _check_iam.
+        self.assertEqual(len(SECTIONS), 52)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

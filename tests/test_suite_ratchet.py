@@ -148,6 +148,8 @@ FLOORS = {
     "test_evidence.py": 28,
     "test_evidence_wiring.py": 8,
     "test_exposure.py": 56,
+    "test_extsvc.py": 51,
+    "test_extsvc_wiring.py": 29,
     "test_finding_detail.py": 14,
     "test_forensics.py": 6,
     "test_forensics_api.py": 4,

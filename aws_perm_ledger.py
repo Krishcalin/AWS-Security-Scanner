@@ -297,6 +297,92 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
     # from their own detector. Recorded as a deliberate absence rather than an omission,
     # the same way slice 3.5's pen-test ingest is -- a reader checking why AIDR-01 has no
     # entry should find the reason here rather than assume it was forgotten.
+    # ── Batch 1 of the 426-service coverage gap analysis ────────────────────
+    # SecurityAudit predates none of these services, but it grants only a subset:
+    # iot:List*/Get*/Describe* and elasticmapreduce:Describe*/List* are covered,
+    # codebuild:BatchGetProjects and imagebuilder:GetImagePolicy are NOT. Recorded so
+    # a declined grant names what it costs rather than silently becoming a clean pass.
+    "IOT-01": (
+        _req("iot:ListPolicies",
+         "enumerate the IoT policies attached to device certificates"),
+        _req("iot:GetPolicy",
+             "read each policy document to see whether it grants iot:* on * -- IoT "
+             "policies attach to certificates, so a wildcard is every device at once"),
+    ),
+    "IOT-02": (
+        _req("iot:GetV2LoggingOptions",
+             "read disableAllLogs -- whether any record exists of what devices did"),
+    ),
+    "IOT-03": (
+        _req("iot:ListCACertificates",
+         "enumerate the certificate authorities that can admit devices"),
+        _req("iot:DescribeCACertificate",
+             "read autoRegistrationStatus -- whether any certificate the CA signs "
+             "joins the fleet without review"),
+    ),
+    "EMR-01": (
+        _req("elasticmapreduce:GetBlockPublicAccessConfiguration",
+             "read the account-level guardrail AWS added because EMR clusters kept "
+             "reaching the internet"),
+    ),
+    "EMR-02": (
+        _req("elasticmapreduce:ListClusters",
+         "enumerate clusters in a running or starting state"),
+        _req("elasticmapreduce:DescribeCluster",
+             "read SecurityConfiguration -- without one, no at-rest or in-transit "
+             "encryption and no per-user identity applies to the cluster"),
+    ),
+    "CB-01": (
+        _req("codebuild:ListProjects",
+         "enumerate CodeBuild projects so each one can be graded"),
+        _req("codebuild:BatchGetProjects",
+             "read projectVisibility -- PUBLIC_READ publishes build logs, which is "
+             "where credentials and internal hostnames surface"),
+    ),
+    "CB-02": (
+        _req("codebuild:BatchGetProjects",
+             "read artifacts.encryptionDisabled -- an explicit opt-out, not a default"),
+    ),
+    "DOCDB-01": (
+        _req("rds:DescribeDBClusterSnapshots",
+         "enumerate manual DocumentDB cluster snapshots, which are the copies "
+         "that get shared and moved between accounts"),
+        _req("rds:DescribeDBClusterSnapshotAttributes",
+             "read the restore attribute -- a value of 'all' means ANY AWS account can "
+             "restore the database, which is an observation rather than an inference"),
+    ),
+    "DOCDB-02": (
+        _req("rds:DescribeDBClusters",
+             "read StorageEncrypted -- DocumentDB encryption is creation-time only, so "
+             "this determines whether a migration is required"),
+    ),
+    "DOCDB-03": (
+        _req("rds:DescribeDBClusters",
+             "read EnabledCloudwatchLogsExports -- whether any record exists of who "
+             "connected and what they queried"),
+    ),
+    "IMGB-01": (
+        _req("imagebuilder:ListImages",
+         "enumerate golden images this account owns and builds"),
+        _req("imagebuilder:GetImagePolicy",
+             "read the resource policy -- a wildcard principal shares the image and "
+             "everything baked into it"),
+    ),
+    "XFER-01": (
+        _req("transfer:ListServers",
+         "enumerate Transfer Family file-transfer servers"),
+        _req("transfer:DescribeServer",
+             "read Protocols -- plain FTP carries credentials and file contents in "
+             "cleartext (FTPS is NOT this finding)"),
+    ),
+    "XFER-02": (
+        _req("transfer:DescribeServer",
+             "read LoggingRole -- without one the service writes no audit trail at all"),
+    ),
+    "XFER-03": (
+        _req("transfer:DescribeServer",
+             "read EndpointType -- context for the other two findings on the server"),
+    ),
     # Slice 5.2 -- the data perimeter. ListPoliciesForTarget/DescribePolicy are
     # normally callable only from the management or a delegated-admin account, so a
     # member-account scan will legitimately be denied these and report the perimeter as
