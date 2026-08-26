@@ -182,6 +182,7 @@ FLOORS = {
     "test_ingest_service.py": 11,
     "test_ingest_snapshot.py": 6,
     "test_ingest_state.py": 8,
+    "test_kra.py": 33,
     "test_layer_fetch.py": 14,
     "test_leastpriv.py": 13,
     "test_leastpriv_wiring.py": 5,
