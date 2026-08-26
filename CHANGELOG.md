@@ -6,6 +6,56 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.36.0] — 2026-08-26
+
+### Added
+- **Depth pass 2 — the lockstep backlog reaches zero.** `test_check_maps_lockstep`
+  carried a shrink-only backlog of checks that scored while mapping to no framework,
+  offering no remediation, and rendering an empty detail panel. Depth pass 1 took the
+  16 CRITICAL/HIGH ones; this takes the remaining 52 (31 MEDIUM, 20 LOW, and `CFN-01`,
+  which had a detail page but no remediation). **All 452 checks now have all three.**
+  - Every entry was written from the check's **emission site**, not its name, because
+    several read backwards from the name alone. `DDB-03` is a billing-mode observation
+    that only ever emits INFO on the provisioned case, not a security control.
+    `EKS-04` reports the Kubernetes version and deliberately does not judge it, because
+    the EKS support calendar moves and a hard-coded threshold would be wrong within a
+    release. `SQS-04` fires on retention **above** 14 days — a stalled-consumer signal,
+    not a retention-too-short one. `SECRET-02`, `SEC-03` and `SFN-03` are all
+    AWS-managed-key vs CMK findings: the value **is** encrypted, and `SECRET-01` is the
+    plaintext one. `ELB-08` checks target *health*, so it reports either an orphaned
+    load balancer or a live outage and the write-up has to separate them.
+    `EBS-05`/`EC2-09`/`RDS-13`/`ELB-08` are cost hygiene — fail-open, no posture-score
+    weight — and saying so matters, because a security framing would misrank them.
+  - `IAMPE-18` fires on `ssm:SendCommand` **or** `ssm:StartSession` (one requirement,
+    two alternatives) and matches at **action level only** — Resource ARNs and
+    conditions are not evaluated, so a grant scoped to one development instance
+    produces the same finding as `Resource: "*"`. The write-up leads with that, since
+    ranking it without checking scope is the mistake it invites.
+  - Filled the 7 checks that scored while mapping to **no framework at all**
+    (`CFN-04`, `FARGATE-01`, `GLC-03`, `R53-04`, `RDS-05`, `SFN-02`, `SQS-04`). All 7
+    NIST controls were verified against the frozen 38 in `compliance/crosswalk.json`
+    **before** writing, rather than discovered to be outside it afterwards — which is
+    how `SI-12` and `CM-3` were caught in the two previous passes.
+
+- **`test_the_backlog_is_empty_and_stays_that_way`** — the ratchet's terminal state.
+  The easy way to make the coverage ratchet pass is to add the failing id back to a
+  backlog, which converts a hard failure into a silent one: the exact regression the
+  backlog was introduced to end. Verified by injecting a repopulated backlog and
+  confirming the guard fails, with an assertion that the mutation actually applied.
+
+### Changed
+- **`kubectl` now counts as a runnable remediation command**, in both copies of that
+  assertion (`test_check_maps_lockstep` and the older `test_live_scanner`). `KSPM-04`
+  fixes a Kubernetes object — `automountServiceAccountToken` — that no AWS API can
+  touch. Inventing an `aws` command for it would have been worse than the prose the
+  assertion exists to reject. `FARGATE-01` genuinely did have an AWS-CLI remediation
+  and now names it.
+
+### Removed
+- **`coverage_gap.json` is no longer committed.** It was generated output with no
+  currency test, which is the condition under which a stale ranking reads as a current
+  one. Regenerate with `python scripts/coverage_gap.py`.
+
 ### Added
 - **`tests/test_registry_import_order.py`** — registry projections must not depend on
   import order. `aws_checkdef` is populated as a *side effect* of importing the modules

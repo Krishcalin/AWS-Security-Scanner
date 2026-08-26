@@ -209,9 +209,14 @@ class TestMaps(unittest.TestCase):
     def test_remediation_map_has_entries(self):
         self.assertGreater(len(REMEDIATION_MAP), 20)
         for check_id, cmd in REMEDIATION_MAP.items():
-            # Remediation should contain an AWS CLI command somewhere
-            self.assertIn("aws ", cmd.lower(),
-                          f"{check_id} remediation missing AWS CLI: {cmd[:60]}")
+            # Remediation should contain a runnable command somewhere. `kubectl` counts
+            # alongside `aws`: the KSPM/KIEM checks fix Kubernetes objects that no AWS
+            # API can touch, and inventing an aws command for them would be worse than
+            # the prose this assertion exists to reject. Kept in lockstep with
+            # test_check_maps_lockstep.RUNNABLE_PREFIXES.
+            self.assertTrue(
+                any(p in cmd.lower() for p in ("aws ", "kubectl ")),
+                f"{check_id} remediation has no runnable command: {cmd[:60]}")
 
     def test_severity_map_covers_new_sections(self):
         new_checks = ["LMB-01", "EKS-01", "ECS-01", "SEC-01", "WAF-01",

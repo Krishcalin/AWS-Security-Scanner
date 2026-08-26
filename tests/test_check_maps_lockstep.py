@@ -45,33 +45,16 @@ DETAIL_MAP = aws_finding_detail.FINDING_DETAIL
 # control from the crosswalk, which derives 34 further frameworks from the NIST spine.
 ALLOWED_FRAMEWORKS = {"CIS", "PCI-DSS", "HIPAA", "SOC2", "NIST"}
 
-# ── the frozen backlog — generated from the runtime maps, shrink only ────────
-BACKLOG_COMPLIANCE = frozenset({
-    "CFN-04", "FARGATE-01", "GLC-03", "R53-04", "RDS-05", "SFN-02",
-    "SQS-04"
-})
+# ── the frozen backlog — now EMPTY, and it can only stay that way ───────────
+# Depth pass 2 filled the last of it. These stay as (empty) frozensets rather than
+# being deleted with the tests that read them, because the ratchet below is what
+# keeps them empty: a check added without its metadata now fails immediately with
+# nothing to grandfather it. Do not repopulate these to make a build pass.
+BACKLOG_COMPLIANCE: frozenset = frozenset()
 
-BACKLOG_REMEDIATION = frozenset({
-    "ACM-03", "AGW2-03", "APIGW-04", "BCK-01", "CFN-01", "CFN-04", "COG-04", "DDB-03", "EBS-05", "EC2-05", "EC2-09",
-    "ECS-03", "ECS-05", "EKS-04", "EKS-05", "EKS-07", "EKS-08", "ELB-04", "ELB-08",
-    "ELC-04", "FARGATE-01", "FLOW-01", "FLOW-02", "GLC-02", "GLC-03",
-    "IAMPE-18", "KIEM-02", "KIEM-03", "KSPM-04", "LMB-04", "LMB-05",
-    "OSR-03", "R53-01", "R53-02", "R53-04", "R53-05", "RDS-03", "RDS-05",
-    "RDS-13", "RS-05", "SEC-03", "SEC-04", "SECRET-02", "SEG-06", "SFN-02",
-    "SFN-03", "SNS-01", "SNS-04", "SQS-03", "SQS-04",
-    "WAF-03", "WAF-04"
-})
+BACKLOG_REMEDIATION: frozenset = frozenset()
 
-BACKLOG_DETAIL = frozenset({
-    "ACM-03", "AGW2-03", "APIGW-04", "BCK-01", "CFN-04",
-    "COG-04", "DDB-03", "EBS-05", "EC2-05", "EC2-09", "ECS-03",
-    "ECS-05", "EKS-04", "EKS-05", "EKS-07", "EKS-08", "ELB-04", "ELB-08",
-    "ELC-04", "FARGATE-01", "FLOW-01", "FLOW-02", "GLC-02", "GLC-03", "IAMPE-18",
-    "KIEM-02", "KIEM-03", "KSPM-04", "LMB-04", "LMB-05", "OSR-03", "R53-01", "R53-02", "R53-04", "R53-05", "RDS-03", "RDS-05", "RDS-13",
-    "RS-05", "SEC-03", "SEC-04", "SECRET-02", "SEG-06", "SFN-02", "SFN-03",
-    "SNS-01", "SNS-04", "SQS-03", "SQS-04", "WAF-03",
-    "WAF-04"
-})
+BACKLOG_DETAIL: frozenset = frozenset()
 
 
 def _missing(target):
@@ -111,6 +94,25 @@ def test_no_backlog_entry_is_already_fixed(label, target, backlog):
         f"deleted from the frozen list: {fixed}")
 
 
+def test_the_backlog_is_empty_and_stays_that_way():
+    """The ratchet's terminal state. Depth pass 2 filled the last grandfathered gap,
+    so there is nothing left to tolerate: every check in CHECK_SEVERITY now has a
+    compliance mapping, a remediation command and a detail page.
+
+    This test exists because the easy way to make the ratchet above pass is to add the
+    failing id back to a backlog, which converts a hard failure into a silent one. That
+    is the exact regression the backlog was introduced to end, so re-populating these
+    sets is a deliberate act that has to fail here first."""
+    populated = {name: sorted(b) for name, b in
+                 (("BACKLOG_COMPLIANCE", BACKLOG_COMPLIANCE),
+                  ("BACKLOG_REMEDIATION", BACKLOG_REMEDIATION),
+                  ("BACKLOG_DETAIL", BACKLOG_DETAIL)) if b}
+    assert not populated, (
+        f"the frozen backlog was re-populated: {populated}. It is shrink-only and it "
+        f"reached zero -- a check missing its metadata must be given the metadata, not "
+        f"grandfathered back in.")
+
+
 @pytest.mark.parametrize("backlog", [BACKLOG_COMPLIANCE, BACKLOG_REMEDIATION,
                                      BACKLOG_DETAIL])
 def test_no_backlog_entry_names_a_check_that_no_longer_exists(backlog):
@@ -125,10 +127,17 @@ def test_compliance_keys_are_confined_to_the_allowed_frameworks():
     assert not bad, f"compliance mappings use unknown framework keys: {bad}"
 
 
+# Command prefixes that count as runnable. `aws` covers almost everything; `kubectl`
+# is here because the KSPM/KIEM checks fix Kubernetes objects that no AWS API can
+# touch -- automountServiceAccountToken has no aws-CLI form, and inventing one would
+# be worse than the prose this test exists to reject.
+RUNNABLE_PREFIXES = ("aws ", "kubectl ")
+
+
 def test_every_remediation_carries_a_runnable_command():
     """Prose is not remediation. The console offers this as a copyable one-liner."""
     prose = sorted(c for c, v in REMEDIATION_MAP.items()
-                   if "aws " not in (v or "").lower())
+                   if not any(p in (v or "").lower() for p in RUNNABLE_PREFIXES))
     assert not prose, f"remediation entries with no CLI command: {prose}"
 
 
