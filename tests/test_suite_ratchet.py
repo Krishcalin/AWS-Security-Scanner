@@ -173,6 +173,7 @@ FLOORS = {
     "test_ingest_aidr_wiring.py": 13,
     "test_ingest_api.py": 5,
     "test_ingest_connectors.py": 7,
+    "test_ingest_credexp.py": 35,
     "test_ingest_enrich.py": 13,
     "test_ingest_hardening.py": 14,
     "test_ingest_parsers.py": 24,
