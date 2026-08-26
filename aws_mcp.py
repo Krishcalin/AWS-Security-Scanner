@@ -59,12 +59,17 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Dict, List, Optional, Sequence, Tuple
+
+import aws_checkdef as _cd
+from aws_checkdef import CheckDef as _C, Perm as _P
 from urllib.parse import urlsplit
 
 __all__ = [
     "TARGET_KINDS", "FEDERATED_KIND", "AWS_SUFFIXES",
     "target_kind", "mcp_endpoint", "endpoint_provenance", "gateway_instructions",
     "assess_target", "surface_fingerprint", "describe", "blind_spot_note",
+    "listing_mode", "registry_record", "LISTING_DEFAULT", "LISTING_DYNAMIC",
+    "RECORD_APPROVED", "RECORD_REVIEWABLE",
 ]
 
 #: The four target shapes in ``McpTargetConfiguration`` (botocore 1.40.51). Ordered as
@@ -85,6 +90,19 @@ AWS_SUFFIXES: Tuple[str, ...] = (".amazonaws.com", ".aws.dev", ".on.aws")
 PROV_AWS = "AWS_HOSTED"
 PROV_THIRD_PARTY = "THIRD_PARTY"
 PROV_UNKNOWN = "UNKNOWN"
+
+#: McpServerTargetConfiguration.listingMode, from botocore 1.43.51. DEFAULT caches the
+#: tool list at the control plane -- so it IS recorded and CAN be diffed. DYNAMIC
+#: retrieves it at listing time, so nothing is stored and nothing can be compared.
+#: Under the previous pin neither this field nor mcpToolSchema existed, which is why
+#: this module used to assert the tool list was never recorded at all.
+LISTING_DEFAULT = "DEFAULT"
+LISTING_DYNAMIC = "DYNAMIC"
+
+#: RegistryRecordStatus. Only APPROVED means a record cleared the review the registry
+#: exists to impose.
+RECORD_APPROVED = "APPROVED"
+RECORD_REVIEWABLE = ("DRAFT", "PENDING_APPROVAL", "REJECTED", "DEPRECATED")
 
 
 def _mcp(container: Optional[dict], key: str) -> dict:
@@ -168,6 +186,25 @@ def endpoint_provenance(endpoint: Optional[str]) -> dict:
     }
 
 
+def listing_mode(target: Optional[dict]) -> dict:
+    """Whether a federated target's tool list is CACHED or fetched live.
+
+    This field did not exist under the old pin, which is the whole reason MCP-04 used to
+    say the tool list was never recorded. DEFAULT means the control plane holds it, so it
+    is readable and diffable; DYNAMIC means it is fetched at listing time and nothing is
+    stored, so there is genuinely nothing to compare against."""
+    cfg = _mcp(target, "targetConfiguration").get(FEDERATED_KIND)
+    cfg = cfg if isinstance(cfg, dict) else {}
+    mode = cfg.get("listingMode") or ""
+    schema = cfg.get("mcpToolSchema")
+    return {
+        "mode": mode,
+        "known": mode in (LISTING_DEFAULT, LISTING_DYNAMIC),
+        "dynamic": mode == LISTING_DYNAMIC,
+        "schema_recorded": bool(schema),
+    }
+
+
 def gateway_instructions(gateway: Optional[dict]) -> str:
     """``protocolConfiguration.mcp.instructions`` — what the gateway tells the MODEL.
 
@@ -189,13 +226,19 @@ def assess_target(target: Optional[dict]) -> dict:
         name = str(target.get("name") or target.get("targetId") or "")
     out = {"name": name, "kind": kind, "federated": kind == FEDERATED_KIND,
            "readable": bool(kind), "endpoint": "", "provenance": PROV_UNKNOWN,
-           "plaintext": False, "host": "", "why": ""}
+           "plaintext": False, "host": "", "why": "",
+           "listing": {"mode": "", "known": False, "dynamic": False,
+                       "schema_recorded": False}}
     if kind != FEDERATED_KIND:
         return out
     prov = endpoint_provenance(mcp_endpoint(target))
     out.update({"endpoint": prov["endpoint"], "provenance": prov["provenance"],
                 "plaintext": prov["plaintext"], "host": prov["host"],
-                "why": prov["why"]})
+                "why": prov["why"],
+                # listingMode and mcpToolSchema arrived with the SDK pin bump; under the
+                # old pin neither existed, which is why this module used to assert the
+                # tool list was never recorded.
+                "listing": listing_mode(target)})
     return out
 
 
@@ -208,10 +251,19 @@ def blind_spot_note(assessment: Optional[dict]) -> str:
     a = assessment or {}
     if not a.get("federated"):
         return ""
-    return ("AWS records this server's endpoint and never the tools it serves, so a "
-            "change to what those tools tell the model to do would leave no trace in "
-            "this account — the tool list is not a thing any API here returns, which "
-            "means no scan of any depth can diff it")
+    lm = a.get("listing") or {}
+    if lm.get("dynamic"):
+        return ("this server's tool list is retrieved at listing time (listingMode "
+                "DYNAMIC) rather than cached, so nothing about the tools is stored in "
+                "this account and a change to what they tell the model to do leaves no "
+                "trace here. Unlike a platform limit this IS a configuration choice: "
+                "DEFAULT caches the schema, which makes it readable and diffable")
+    if lm.get("known") and lm.get("schema_recorded"):
+        return ""       # the schema IS recorded -- there is no blind spot to declare
+    return ("no tool schema is recorded for this server, so a change to what its tools "
+            "tell the model to do would leave no trace in this account. Where "
+            "listingMode is DEFAULT the control plane caches the schema and it can be "
+            "diffed; here there is nothing cached to compare against")
 
 
 def describe(assessment: Optional[dict]) -> str:
@@ -230,6 +282,32 @@ def describe(assessment: Optional[dict]) -> str:
                  "the arguments it sends back, cross the network in the clear, so "
                  "anyone on the path can rewrite what a tool claims to do")
     return lead
+
+
+def registry_record(record: Optional[dict]) -> dict:
+    """A registry record that never cleared approval.
+
+    The AgentCore Registry and its DRAFT/PENDING_APPROVAL/APPROVED/REJECTED lifecycle
+    did not exist under the old pin, so there was no approval state to read and this
+    module said so. There is now."""
+    r = record if isinstance(record, dict) else {}
+    status = r.get("status") or ""
+    return {
+        "name": r.get("name") or r.get("recordId") or "",
+        "record_id": r.get("recordId") or "",
+        "status": status,
+        "known": bool(status),
+        "approved": status == RECORD_APPROVED,
+        "awaiting_review": status in RECORD_REVIEWABLE,
+        "statement": (
+            f"AgentCore registry record {r.get('name') or r.get('recordId')} is in "
+            f"status {status} rather than APPROVED. A registry exists to put a review "
+            f"between an agent component and the fleet that will use it, so a record "
+            f"sitting in {status} is either a component nobody finished approving or one "
+            f"an approver actively turned down — and in both cases the registry is "
+            f"reporting a governance step that did not complete"
+            if status and status != RECORD_APPROVED else ""),
+    }
 
 
 def surface_fingerprint(gateway: Optional[dict],
@@ -256,3 +334,66 @@ def surface_fingerprint(gateway: Optional[dict],
     }
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MCP-06 — the AgentCore Registry, readable since the SDK pin moved to 1.43.51.
+# Declared here rather than in an aws_extsvc module because it belongs to this
+# module's subject: what the account can and cannot see about a federated agent
+# component.
+# ══════════════════════════════════════════════════════════════════════════════
+CHECKS = _cd.register(
+    _C(id="MCP-06", section="AGENTCORE", severity="MEDIUM",
+       # CM-3 (Configuration Change Control) is the precise control and would be
+       # the 39th member of a universe frozen at 38 -- the denominator the
+       # evidence pack counts against. CM-5 (Access Restrictions for Change) is
+       # the in-universe fit: an approval gate IS an access restriction on change.
+       compliance={"PCI-DSS": "6.5.1", "HIPAA": "164.308(a)(1)", "SOC2": "CC8.1",
+                   "NIST": "CM-5"},
+       permissions=(
+           _P("bedrock-agentcore:ListRegistries",
+              "enumerate the AgentCore registries that govern which agent components "
+              "may be used in this account"),
+           _P("bedrock-agentcore:ListRegistryRecords",
+              "read each record's approval status -- a registry exists to put a review "
+              "between a component and the fleet that will use it"),
+       ),
+       remediation=(
+           "Move the record through the approval it is waiting on, or remove it if it "
+           "should not be there: aws bedrock-agentcore-control get-registry-record "
+           "--registry-identifier <REG> --record-id <ID> to see why it is held, then "
+           "aws bedrock-agentcore-control submit-registry-record-for-approval "
+           "--registry-identifier <REG> --record-id <ID> to advance it, or aws "
+           "bedrock-agentcore-control delete-registry-record --registry-identifier "
+           "<REG> --record-id <ID> to withdraw it. A REJECTED record left in place is "
+           "the one worth asking about"),
+       risk=(
+           "This AgentCore registry record is not in APPROVED status. A registry exists "
+           "for one reason: to put a review between an agent component -- a tool, a "
+           "gateway target, an MCP server -- and the fleet of agents that will act on "
+           "what it returns. A record sitting in DRAFT or PENDING_APPROVAL is a "
+           "component whose review never finished, and one in REJECTED is a component "
+           "somebody actively turned down and which is still catalogued. Either way the "
+           "registry is reporting a governance step that did not complete, and the "
+           "danger is what a reviewer concludes from the registry's existence: that "
+           "components are vetted. Worth noting what this check does NOT establish -- "
+           "whether an unapproved record is actually in use by a running agent. The "
+           "registry records the approval state, not the consumption, so treat this as "
+           "a governance gap to resolve rather than as evidence that something "
+           "unreviewed is live. This check was not possible before the SDK pin moved to "
+           "botocore 1.43.51, where the Registry and its lifecycle first appear."),
+       impact=("A component that never cleared review, or was rejected, remains "
+               "catalogued in a registry whose existence implies components are vetted."),
+       steps=(
+           "Read why the record is held: aws bedrock-agentcore-control "
+           "get-registry-record --registry-identifier <REG> --record-id <ID>",
+           "Advance it if the review simply stalled: aws bedrock-agentcore-control "
+           "submit-registry-record-for-approval --registry-identifier <REG> --record-id "
+           "<ID>",
+           "Withdraw it if it should not be catalogued: aws bedrock-agentcore-control "
+           "delete-registry-record --registry-identifier <REG> --record-id <ID>",
+           "Treat a REJECTED record left in place as the one worth asking about -- "
+           "somebody looked at that component and said no.",
+           "Check separately whether any agent actually consumes it; the registry "
+           "records approval state, not consumption.")),
+)

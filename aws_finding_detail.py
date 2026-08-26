@@ -3178,6 +3178,170 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Confirm the security policy is a current one rather than a legacy TLS/cipher set: aws transfer describe-security-policy --security-policy-name <NAME>",
         ],
     },
+    "CFN-02": {
+        "risk": "This CloudFront distribution accepts a minimum TLS version below TLSv1.2. The older protocols are not merely dated: TLS 1.0 and 1.1 carry cipher suites and constructions with known practical weaknesses, and every major browser and every current compliance regime treats them as unacceptable. The distribution's minimum version is what a client can negotiate DOWN to, so this is the floor rather than the typical case -- most traffic will use something modern, and the finding is about what an attacker able to influence the negotiation can force. That is the scenario worth holding in mind: downgrade is not hypothetical where a weak floor exists.",
+        "impact": "Clients can negotiate a TLS version with known weaknesses, and an attacker able to influence negotiation can force it.",
+        "steps": [
+            "Check client analytics before raising the floor if you serve legacy devices -- this is the change most likely to cut off real users.",
+            "Fetch the config and ETag: aws cloudfront get-distribution-config --id <DIST_ID>",
+            "Set ViewerCertificate.MinimumProtocolVersion to TLSv1.2_2021.",
+            "Apply: aws cloudfront update-distribution --id <DIST_ID> --if-match <ETAG> --distribution-config file://config.json",
+        ],
+    },
+    "CFN-05": {
+        "risk": "This CloudFront origin is configured HTTP-only, so the leg between CloudFront and the origin is unencrypted even though the viewer-facing leg is not. The exposure is easy to underestimate because the padlock the user sees is real -- TLS terminates at CloudFront and the browser is genuinely protected. What is not protected is everything after that: the request, including headers and any credential the viewer supplied, crosses to the origin in the clear. Whether that matters depends on the path, and the path is frequently the public internet, because an origin outside AWS or reached by public DNS is the common case for HTTP-only configurations. It also defeats the point of the certificate on the front: an attacker on the back leg sees the plaintext regardless.",
+        "impact": "Requests between CloudFront and the origin, including headers and credentials, cross the network unencrypted.",
+        "steps": [
+            "Confirm the origin can serve TLS -- if it cannot, that is the thing to fix first.",
+            "Fetch the config: aws cloudfront get-distribution-config --id <DIST_ID>",
+            "Set CustomOriginConfig.OriginProtocolPolicy to https-only.",
+            "Apply: aws cloudfront update-distribution --id <DIST_ID> --if-match <ETAG> --distribution-config file://config.json",
+            "Prefer https-only over match-viewer: match-viewer leaves the back leg as weak as whatever the viewer negotiated.",
+        ],
+    },
+    "ECS-01": {
+        "risk": "This container runs in privileged mode. Privileged is not a permission that grants a little more than usual -- it disables the isolation that makes a container a container: the process gets nearly all Linux capabilities, unrestricted device access, and the ability to manipulate the host kernel's namespaces. From there, escaping to the host is a documented and well-tooled procedure rather than an exploit, and on ECS the host is an EC2 instance holding an instance profile, so the escape converts directly into whatever that profile can do across the account. It is also worth noting how these arise: privileged is very often set while debugging a permissions problem, works, and is never removed, so the presence of the flag is rarely a considered decision.",
+        "impact": "The container can escape to the host and assume the instance profile, converting a workload compromise into account-level access.",
+        "steps": [
+            "Confirm what the container actually needs -- privileged is almost never the minimum, and a single capability usually is.",
+            "Register a revision with privileged=false: aws ecs register-task-definition --cli-input-json file://taskdef.json",
+            "If a capability is genuinely required, add only that one via linuxParameters.capabilities.add rather than restoring privileged.",
+            "Redeploy: aws ecs update-service --cluster <CLUSTER> --service <SERVICE> --task-definition <FAMILY>:<NEW_REVISION>",
+            "Review the instance profile on the container hosts, since that is what the escape reaches.",
+        ],
+    },
+    "ECS-02": {
+        "risk": "This container specifies no user, so it runs as root inside the container. That is not the same as root on the host, and saying so would overstate it -- but it removes the layer that makes a container escape hard rather than routine. A process running as uid 0 can write anywhere in the container filesystem, load whatever it likes into its own namespace, and take fuller advantage of any kernel or runtime vulnerability it finds, because most container escapes require root inside the container as their starting point. Running as an unprivileged user does not prevent an escape, it raises the bar from 'find a kernel bug' to 'first find a local privilege escalation as well'. The reason this is worth flagging rather than assuming is that root is the default: a task definition with no user field gets it without anybody choosing.",
+        "impact": "A compromised process has full control inside the container and the starting position most container escapes require.",
+        "steps": [
+            "Check whether the image defines a non-root user already -- many do, and the task definition simply overrides it with nothing.",
+            "Set one in the container definition: \"user\": \"1000:1000\" or a named user.",
+            "Register and redeploy: aws ecs register-task-definition --cli-input-json file://taskdef.json then aws ecs update-service --cluster <CLUSTER> --service <SERVICE> --task-definition <FAMILY>:<NEW_REVISION>",
+            "Confirm the uid can write to any path the application needs -- this is the change most likely to break at runtime rather than at deploy.",
+        ],
+    },
+    "ELC-03": {
+        "risk": "This ElastiCache replication group has no AUTH token, so any client that can reach it on the network is authenticated by that fact alone. Caches attract this configuration more than most datastores because they are treated as internal plumbing, but what they hold is rarely plumbing: session tokens, cached authorization decisions, rendered user data, and frequently entire serialized objects lifted from the database. An attacker reaching the cache reads all of it, and in the session-token case can generally use it directly rather than having to escalate. Worth pairing with transit encryption -- an AUTH token sent over an unencrypted connection is observable by anyone who could have reached the port anyway.",
+        "impact": "Any client with network reachability can read and write the cache, including session tokens and cached user data.",
+        "steps": [
+            "Set an AUTH token: aws elasticache modify-replication-group --replication-group-id <RGID> --auth-token <TOKEN> --auth-token-update-strategy SET --apply-immediately",
+            "Prefer RBAC users over a shared AUTH token where the engine version supports it -- a shared secret is shared.",
+            "Enable transit encryption at the same time, or the token itself crosses the network in the clear.",
+            "Review the security group as well: authentication is the second control, network reachability is the first.",
+        ],
+    },
+    "IAMPE-02": {
+        "risk": "This principal holds iam:SetDefaultPolicyVersion, which lets it change which version of a managed policy is active. Managed policies retain their previous versions, and rolling the default back to an earlier one is a single API call that requires no ability to write a policy document at all. That is what makes this an escalation rather than an administrative convenience: a policy that was tightened last quarter can be returned to what it was before, and the principal gains whatever that older version granted -- often considerably more, since policies are usually tightened over time rather than loosened. It is also quiet. The call is not CreatePolicyVersion or PutRolePolicy, the policy document does not change, and a reviewer comparing policy text against last month's export sees a familiar document.",
+        "impact": "The principal can restore an older, more permissive version of any managed policy in one call, without writing a policy document.",
+        "steps": [
+            "Remove the permission or scope its Resource to specific policy ARNs rather than *.",
+            "Delete stale permissive versions so there is nothing to roll back to: aws iam list-policy-versions --policy-arn <ARN>",
+            "Then: aws iam delete-policy-version --policy-arn <ARN> --version-id <VID>",
+            "Alarm on SetDefaultPolicyVersion in CloudTrail -- it is rare in normal operation, which makes it a good signal.",
+        ],
+    },
+    "IAMPE-05": {
+        "risk": "This principal holds iam:AddUserToGroup, which lets it place a user -- including itself, where the principal is a user -- into any IAM group. Groups exist to carry permissions, so this is a direct path to whatever the most privileged group in the account grants, achieved without touching a policy document and without any action that reads as a permissions change. The audit trail shows a group membership addition, which is routine administrative traffic in most organizations and rarely reviewed with the attention a policy edit would attract. The escalation is also trivially reversible by the attacker: join the group, act, leave, and the resulting CloudTrail record is two ordinary membership events.",
+        "impact": "The principal can grant itself the permissions of the most privileged group in the account, via routine-looking membership changes.",
+        "steps": [
+            "Remove the permission, or scope its Resource to specific non-privileged group ARNs.",
+            "Audit membership of privileged groups now: aws iam get-group --group-name <GROUP>",
+            "Prefer roles over groups for elevated access -- assumption is time-bounded and logged as such, membership is not.",
+            "Alarm on AddUserToGroup for any group carrying administrative policies.",
+        ],
+    },
+    "IAMPE-06": {
+        "risk": "This principal holds iam:CreateAccessKey, which lets it mint long-lived API credentials for an IAM user. Where the Resource is unscoped that includes users more privileged than the principal itself, and the resulting escalation is unusually durable: an access key is not a session, it does not expire, and it continues to work after the principal that created it is removed, disabled or rotated. That persistence is what makes it a favoured technique -- the escalation survives the incident response that removes the original access. It is also easy to miss during clean-up, because the key belongs to a legitimate user who was not compromised and whose own credentials do not need rotating for any other reason.",
+        "impact": "The principal can mint permanent credentials for a more privileged user, and those credentials outlive any remediation of the principal itself.",
+        "steps": [
+            "Remove the permission or scope it to the principal's own user ARN so it cannot mint keys for anyone else.",
+            "Audit keys on privileged users: aws iam list-access-keys --user-name <USER>",
+            "Rotate anything that cannot be accounted for, and check the key's creation date against a change record.",
+            "Prefer roles and short-lived credentials over IAM users with access keys wherever the workload allows it.",
+        ],
+    },
+    "IAMPE-12": {
+        "risk": "This principal holds both iam:PassRole and glue:CreateDevEndpoint, and the pair is the escalation -- neither half is one alone. A Glue development endpoint is an interactive environment that runs holding whatever role was passed to it, so a principal able to pass a privileged role into a new endpoint obtains an interactive shell with that role's permissions. What makes this route attractive rather than merely possible is that neither call is an IAM action in the sense a reviewer watches for: creating a development endpoint is data-engineering traffic, and PassRole appears in the logs of every legitimate service launch. Development endpoints also persist, are billed hourly, and are rarely inventoried, so the foothold tends to outlive the activity that created it.",
+        "impact": "The principal can obtain an interactive shell holding any role it may pass, via calls that read as ordinary data-engineering work.",
+        "steps": [
+            "Break the pair rather than either half: constrain iam:PassRole with a Condition on iam:PassedToService, or remove glue:CreateDevEndpoint.",
+            "Apply: aws iam put-role-policy --role-name <ROLE> --policy-name <NAME> --policy-document file://scoped.json",
+            "Audit existing endpoints -- each is a shell holding whatever role was passed: aws glue get-dev-endpoints",
+            "Interactive sessions have largely replaced development endpoints; removing the capability entirely is often viable.",
+        ],
+    },
+    "IAMPE-13": {
+        "risk": "This principal holds both iam:PassRole and cloudformation:CreateStack. CloudFormation executes a template using the role passed to it, so a principal able to pass a privileged role can have CloudFormation create whatever that role permits -- including new IAM roles, if the passed role can create them. The template is the payload and the service is the executor, which means the escalation appears in CloudTrail as a stack creation performed by CloudFormation rather than as a privileged action performed by the principal. That indirection is the point: infrastructure-as-code traffic is high-volume and expected, and a stack creation is among the least suspicious things in an account. This is also the escalation that STACK-02 addresses from the other end, by insisting a stack carry a scoped service role rather than inheriting the caller's reach.",
+        "impact": "The principal can have CloudFormation perform any action the passed role permits, appearing in logs as ordinary stack creation.",
+        "steps": [
+            "Constrain iam:PassRole with a Condition on iam:PassedToService=cloudformation.amazonaws.com and a Resource list of roles CloudFormation may assume.",
+            "Or remove cloudformation:CreateStack from the principal if it does not need to deploy.",
+            "Apply: aws iam put-role-policy --role-name <ROLE> --policy-name <NAME> --policy-document file://scoped.json",
+            "Pair with STACK-02: a scoped stack service role is the control on the other side of the same escalation.",
+        ],
+    },
+    "IAMPE-14": {
+        "risk": "This principal holds iam:PassRole together with SageMaker creation permissions. A SageMaker notebook instance is an interactive Jupyter environment that runs with the execution role passed to it, so passing a privileged role yields an interactive shell holding that role -- and a training job passes the same role to arbitrary container code. The route is well-known and attractive for the usual reason: neither call looks like privilege escalation. Creating a notebook is routine machine-learning work, and PassRole is present in the logs of every legitimate service launch. SageMaker execution roles compound the problem, because they are habitually broad -- they need to reach S3, ECR, KMS and often the data estate generally, so the role most likely to be lying around passable is also among the most useful to obtain.",
+        "impact": "The principal can obtain an interactive environment holding a SageMaker execution role, which is typically broad across the data estate.",
+        "steps": [
+            "Constrain iam:PassRole with a Condition on iam:PassedToService=sagemaker.amazonaws.com and a Resource list of permitted execution roles.",
+            "Or remove the sagemaker:Create* actions from the principal.",
+            "Apply: aws iam put-role-policy --role-name <ROLE> --policy-name <NAME> --policy-document file://scoped.json",
+            "Audit existing notebook instances, which run interactively with whatever role was passed: aws sagemaker list-notebook-instances",
+            "Review how broad your SageMaker execution roles actually are -- that is what this escalation is worth.",
+        ],
+    },
+    "LMB-03": {
+        "risk": "An environment variable on this Lambda function looks like a secret. Lambda environment variables are not a secret store: they are returned in full by lambda:GetFunctionConfiguration, they appear in the console to anyone who can view the function, and they are commonly captured into deployment logs, CloudTrail management events and infrastructure-as-code state files. The permission that reveals them reads as innocuous -- 'view function configuration' is the sort of thing granted broadly to developers and to CI roles -- which is what makes this different from a secret in a store that at least requires an explicit read. Note the detection is a heuristic on the variable's name and value shape, so treat it as a prompt to look rather than proof; a false positive costs a glance, and the failure mode in the other direction is a live credential in a place many people can read.",
+        "impact": "A credential is readable by anyone holding lambda:GetFunctionConfiguration, and is likely also in deployment logs and IaC state.",
+        "steps": [
+            "Confirm it is genuinely a secret rather than a false positive -- the detection is a name and shape heuristic.",
+            "Move it: aws secretsmanager create-secret --name <NAME> --secret-string <VALUE>",
+            "Grant the function role secretsmanager:GetSecretValue on that ARN only, and read it at runtime with caching.",
+            "Remove the variable: aws lambda update-function-configuration --function-name <FN> --environment Variables={...}",
+            "Rotate the old value. It has been readable by everyone with view access for as long as it has existed, and it is probably in a state file too.",
+        ],
+    },
+    "OSR-05": {
+        "risk": "This OpenSearch domain has fine-grained access control disabled. Without FGAC the domain's access policy is the whole authorization story: a principal either reaches the domain or does not, and once it does, it can read every index. There is no per-index, per-document or per-field restriction, and no internal user database to distinguish one caller from another. That is a poor fit for how OpenSearch is actually used, because a domain almost always hosts several indices belonging to different applications or tenants, and the domain-level grant that lets a service write its own logs also lets it read everyone else's. FGAC is also a prerequisite for meaningful audit logging of who read what.",
+        "impact": "Any principal that can reach the domain can read every index on it, with no per-index or per-field restriction.",
+        "steps": [
+            "Enable the prerequisites first if they are off: node-to-node encryption, encryption at rest, and HTTPS enforcement.",
+            "Enable FGAC: aws opensearch update-domain-config --domain-name <DOMAIN> --advanced-security-options Enabled=true,InternalUserDatabaseEnabled=true,MasterUserOptions={MasterUserARN=<ROLE_ARN>}",
+            "Define roles and index patterns afterwards -- enabling FGAC without them leaves everything to the master user.",
+            "Expect clients to need updating: FGAC changes how requests are authorized.",
+        ],
+    },
+    "SNS-02": {
+        "risk": "This SNS topic's access policy contains a wildcard with no condition constraining it. What that permits depends on the actions allowed, and both directions matter. A wildcard on Publish means anyone can inject messages into the topic, and subscribers generally trust topic content -- messages fan out into queues, Lambda functions and webhooks that act on them without re-authenticating the source. A wildcard on Subscribe means anyone can attach an endpoint and receive everything the topic carries thereafter, silently and without any further interaction. SNS topics are also frequently the join between systems, so the content is often exactly the operational or customer data that neither side would publish deliberately.",
+        "impact": "Unconstrained principals can publish messages that subscribers act on, or subscribe an endpoint and receive everything the topic carries.",
+        "steps": [
+            "Read the current policy: aws sns get-topic-attributes --topic-arn <ARN>",
+            "Replace it naming the specific principals, or constrain the wildcard with aws:SourceArn or aws:PrincipalOrgID.",
+            "Apply: aws sns set-topic-attributes --topic-arn <ARN> --attribute-name Policy --attribute-value file://scoped-policy.json",
+            "List existing subscriptions and confirm each is intended: aws sns list-subscriptions-by-topic --topic-arn <ARN>",
+        ],
+    },
+    "SNS-03": {
+        "risk": "This SNS topic has a subscription delivering over plain HTTP. The message body crosses the network unencrypted, and SNS message bodies are rarely notifications in the trivial sense -- they typically carry the payload the subscriber needs in order to act, which means identifiers, state changes and frequently customer data. Anyone positioned on the path reads all of it. The second problem is integrity rather than confidentiality: without TLS the subscriber has no assurance the message came from SNS at all, so an attacker able to reach the endpoint can forge messages the subscriber will act on, and HTTP subscriptions are usually attached to endpoints that exist specifically to take action.",
+        "impact": "Message bodies cross the network in cleartext, and the subscriber cannot verify a message actually came from SNS.",
+        "steps": [
+            "Confirm the endpoint serves a valid certificate before switching, or deliveries fail into the retry policy.",
+            "Remove the HTTP subscription: aws sns unsubscribe --subscription-arn <SUB_ARN>",
+            "Re-create over TLS: aws sns subscribe --topic-arn <ARN> --protocol https --notification-endpoint <HTTPS_ENDPOINT>",
+            "Verify the subscriber validates the SNS signature on each message -- TLS authenticates the channel, the signature authenticates the message.",
+        ],
+    },
+    "SQS-01": {
+        "risk": "This SQS queue has no encryption at rest -- neither SSE-SQS nor a customer-managed key. As with other at-rest findings the immediate exposure is bounded, since reaching the underlying storage means reaching AWS infrastructure rather than your network. What makes a queue worth attending to anyway is what accumulates in one: queues hold messages in flight between systems, and those messages are usually the full payload rather than a reference -- order contents, personal data, document bodies, and quite often credentials being handed from one component to another. A queue with a long retention period or a stalled consumer holds days of that. SSE-SQS costs nothing and requires no key management, so the usual argument against encryption at rest does not apply here.",
+        "impact": "Message bodies, which frequently contain full payloads and sometimes credentials, sit unencrypted at rest.",
+        "steps": [
+            "Enable SSE-SQS, which needs no key management: aws sqs set-queue-attributes --queue-url <URL> --attributes SqsManagedSseEnabled=true",
+            "Use a customer-managed key where the messages warrant a separately administered control: --attributes KmsMasterKeyId=<KEY_ARN>",
+            "If using a CMK, confirm producer and consumer roles are in the key policy, or sends and receives start failing with KMS denials.",
+            "Check the retention period while you are here: a queue holding 14 days of messages is a datastore.",
+        ],
+    },
     "PERIM-01": {
         "risk": "The trusted-identities perimeter answers one question: can only identities from your own organization reach your resources and use your networks? AWS implements it with a Resource Control Policy requiring aws:PrincipalOrgID, plus VPC endpoint policies for the from-my-networks half. Without it, every resource policy in the estate is load-bearing on its own -- a single over-broad bucket policy, KMS key policy or role trust policy is the whole control, with nothing above it to catch the mistake. This is the guardrail that makes those individual findings recoverable rather than fatal, which is why OverWatch checks for it rather than only recommending it in twenty other remediations. The policy TYPE matters and is not interchangeable. AWS's matrix is asymmetric: trusted identities is implemented with RCPs and VPC endpoint policies, trusted resources with SCPs and VPC endpoint policies, expected networks with SCPs and RCPs. The asymmetry follows from what each type governs -- an SCP bounds what YOUR principals may do, so it cannot say who may reach your resources, and an RCP bounds who reaches you, so it cannot say which foreign resource you may call. A control written in the wrong type is not a weaker perimeter; it is not that perimeter at all, and OverWatch reports it as absent rather than partial. Read the verdict precisely: this reports the PRESENCE and SHAPE of the policies, not their effect. Establishing that a perimeter actually holds means evaluating an authorization decision for every principal, resource and path, which is not something a configuration read can do -- so the honest claim is that a policy requiring the condition is attached, never that access is enforced or prevented.",
         "impact": "No organization-wide floor constrains WHO can reach your resources, so each individual resource policy is the only thing standing between an external principal and the data behind it.",
@@ -3795,7 +3959,8 @@ import aws_extsvc3
 import aws_extsvc4
 import aws_extsvc5
 import aws_extsvc6
-import aws_extsvc7           # noqa: E402,F401  (imported for its registrations)
+import aws_extsvc7
+import aws_mcp           # noqa: E402,F401  (imported for its registrations)
 
 aws_checkdef.merge_detail(FINDING_DETAIL)
 

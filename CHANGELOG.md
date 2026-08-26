@@ -7,6 +7,44 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **`tests/test_registry_import_order.py`** — registry projections must not depend on
+  import order. `aws_checkdef` is populated as a *side effect* of importing the modules
+  that declare checks, and the three consumer modules merge that registry at import
+  time. A consumer that fails to import a declaring module therefore merges a **partial**
+  registry, and which projections exist depends on what happened to be imported first.
+  - That is the `MCP-06` defect, generalised: neither `aws_finding_detail` nor
+    `aws_perm_ledger` imported `aws_mcp`, and the first verification imported `aws_mcp`
+    first, so it reported everything present. A registry merge is invisible to the
+    dict-literal ratchets, so this is the only place the coupling can be caught.
+  - The check imports each consumer **alone, in a fresh interpreter** — the condition
+    that actually failed — and separately asserts, from source, that every declaring
+    module is imported by every consumer.
+  - **Verified by reintroducing the defect**, and that verification needed fixing too:
+    the first attempt reported success while changing nothing, because the injection
+    string did not match and the script printed unconditionally. It now asserts the
+    mutation applied before drawing any conclusion. A guard that has only been seen to
+    pass is not a guard.
+
+- **`MCP-06` — AgentCore registry approval state**, the other half of what the SDK pin
+  unlocked. A registry exists to put a review between an agent component and the fleet
+  that will use it, so a record in `DRAFT`, `PENDING_APPROVAL` or `REJECTED` is a
+  governance step that did not complete — while the registry's existence implies
+  components are vetted. The check is explicit about what it does **not** establish:
+  the registry records approval state, not consumption, so an unapproved record is a
+  governance gap rather than evidence something unreviewed is live.
+- **Depth pass 1 — 16 CRITICAL/HIGH checks that scored with no remediation and no
+  explanation** now have both, and their ids are deleted from the frozen backlog.
+  `ECS-01/02`, `CFN-02/05`, `ELC-03`, `LMB-03`, `OSR-05`, `SNS-02/03`, `SQS-01` and six
+  `IAMPE-*` privilege-escalation techniques. The lockstep test's own words are the
+  reason: *"a check that scores but cannot be explained or fixed is worse than no check
+  at all"* — 67 checks were exempt from that rule by a grandfather clause, and this
+  removes the 16 worst.
+  - Each was written from its **emission site**, not from its id. That mattered:
+    `SQS-01` is encryption at rest, not public access, and would have been documented
+    backwards from the name alone.
+  - `CFN-05` also gained the compliance mapping it lacked. **51 checks still lack a
+    detail page** — all MEDIUM or below.
+
 - **Extended service coverage, batch 7** (`aws_extsvc7.py`, 6 sections, 8 checks) — the
   first batch chosen **against** the ranking rather than from the top of it. By this
   point the highest score was 14, and the heuristic reads operation *names*: it puts
@@ -831,6 +869,31 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
     would be a guess.
 
 ### Fixed
+- **`MCP-04` was asserting something that had become false.** It emitted, verbatim,
+  *"the tool list is not a thing any API here returns, which means no scan of any depth
+  can diff it"*. Under botocore 1.40.51 that was true. Under 1.43.51 —
+  the pin since the previous change — `McpServerTargetConfiguration` carries
+  `mcpToolSchema` and `listingMode`, and `listingMode=DEFAULT` means the tool schema **is**
+  cached at the control plane and therefore diffable. A live check stating a falsehood is
+  the phantom this codebase exists to prevent.
+  - The note is now conditioned on what is actually readable, and the distinction is
+    useful: `DEFAULT` + a recorded schema declares **no** blind spot; `DYNAMIC` declares
+    one and says it is a **configuration choice** rather than a platform limit, because
+    switching to `DEFAULT` closes it.
+  - `MCP-04`'s remediation opened *"No action closes this one"*. For `DYNAMIC` that is
+    now wrong, and it says so.
+  - **Two pre-existing tests pinned the false sentence.** Their intent — a federated
+    target whose tools are not recorded must *say* so rather than read as audited — is
+    kept; the pin on the wording is gone, and a new test asserts the opposite case.
+- **`aws_finding_detail` and `aws_perm_ledger` did not import `aws_mcp`**, so whether
+  `MCP-06`'s projections existed depended on import order. Caught because the first
+  verification imported `aws_mcp` first and masked it.
+- **`overwatch-phase2-misconfigs` deleted — it was never at risk.** It had been flagged
+  repeatedly as the only unmerged branch and therefore holding work that existed nowhere
+  else. `git cherry` shows **both** its commits already in `main` by patch-id: the
+  content had been applied separately. `git branch --no-merged` reports on commit
+  ancestry, not content, and the two are not the same thing.
+
 - **The SDK pin: botocore 1.40.51 -> 1.43.51, both SDKs moving together.** The pin had
   been deferred twice as "a dependency decision beyond this slice", and investigating it
   turned up something larger than a stale version.

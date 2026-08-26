@@ -149,9 +149,24 @@ def test_the_module_authors_no_injection_phrasings():
 
 # ── the blind spot ──────────────────────────────────────────────────────────
 def test_the_blind_spot_is_declared_for_a_federated_target():
+    """The intent is unchanged: a federated target whose tool list is not recorded must
+    SAY so rather than read as audited. The exact sentence is no longer pinned, because
+    the one this used to assert -- "never the tools it serves" -- became false when the
+    SDK pin moved to botocore 1.43.51 and McpServerTargetConfiguration gained
+    mcpToolSchema and listingMode."""
     note = M.blind_spot_note(M.assess_target(target()))
-    assert "never the tools it serves" in note
+    assert "no tool schema is recorded" in note
     assert "no trace in this account" in note
+
+
+def test_no_blind_spot_is_declared_when_the_schema_IS_recorded():
+    """The correction. listingMode DEFAULT caches the tool schema at the control plane,
+    so it is readable and diffable -- declaring a blind spot there would be the same
+    error in the opposite direction."""
+    t = {"targetConfiguration": {"mcp": {"mcpServer": {
+        "endpoint": "https://example.com/mcp", "listingMode": "DEFAULT",
+        "mcpToolSchema": {"inlinePayload": []}}}}}
+    assert M.blind_spot_note(M.assess_target(t)) == ""
 
 
 def test_no_blind_spot_is_claimed_for_an_in_account_target():
