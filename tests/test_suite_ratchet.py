@@ -151,6 +151,7 @@ FLOORS = {
     "test_evidence.py": 28,
     "test_evidence_bundle.py": 46,
     "test_evidence_wiring.py": 8,
+    "test_exceptions_d4.py": 27,
     "test_exposure.py": 56,
     "test_extsvc.py": 51,
     "test_extsvc2_wiring.py": 39,

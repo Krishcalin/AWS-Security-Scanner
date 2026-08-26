@@ -265,19 +265,19 @@ def test_closure_rate_denominator_includes_open_findings():
     sts = states(("CRITICAL", T0 + 5 * DAY, T0 + 99 * DAY),
                  ("CRITICAL", None, T0 + 99 * DAY),
                  ("CRITICAL", None, T0 + 99 * DAY))
-    pct, in_sla, considered = S.closure_rate(sts, "CRITICAL")
-    assert (in_sla, considered) == (1, 3)
-    assert pct == 33.3
+    r = S.closure_rate(sts, "CRITICAL")
+    assert (r.in_sla, r.considered) == (1, 3)
+    assert r.pct == 33.3
 
 
 def test_closure_rate_ignores_other_bands_and_unpolicied_findings():
     sts = states(("CRITICAL", T0 + 5 * DAY, T0 + 99 * DAY),
                  ("HIGH", T0 + 5 * DAY, T0 + 99 * DAY),
                  ("NOTICE", T0 + 5 * DAY, T0 + 99 * DAY))
-    assert S.closure_rate(sts, "CRITICAL")[2] == 1
+    assert S.closure_rate(sts, "CRITICAL").considered == 1
 
 
 def test_late_closure_does_not_count_toward_the_kra():
     sts = states(("CRITICAL", T0 + 40 * DAY, T0 + 99 * DAY))
-    pct, in_sla, considered = S.closure_rate(sts, "CRITICAL")
-    assert (pct, in_sla, considered) == (0.0, 0, 1)
+    r = S.closure_rate(sts, "CRITICAL")
+    assert (r.pct, r.in_sla, r.considered) == (0.0, 0, 1)
