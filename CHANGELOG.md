@@ -7,6 +7,45 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Extended service coverage, batch 6** (`aws_extsvc6.py`, 6 sections, 9 checks) —
+  Verified Permissions, CloudHSM, Cloud WAN, Managed Grafana, Aurora DSQL, IoT FleetWise.
+  - **Verified Permissions** (`VP-01/02`) — a Cedar policy store *is* an application's
+    authorization logic. With schema validation `OFF`, a policy referencing an entity
+    type that does not exist is accepted without error: it **never matches**, and a
+    policy that never matches is indistinguishable from one that was never written. A
+    reviewer reads it and concludes the rule is in force.
+  - **CloudHSM** (`HSM-01/02`) — a backup is the *one* artefact that leaves an HSM, and
+    it is restorable into another cluster. So retention decides how many restorable
+    copies of your key material exist, and a wildcard resource policy shares the key
+    material itself — the single thing the service exists to prevent. No rotation undoes
+    a copy already taken.
+  - **Cloud WAN** (`NWM-01`) — the core network policy is the segmentation design of an
+    entire global network: segments, routing between them, every attachment. Reading it
+    is reading the map an attacker would otherwise assemble slowly and noisily.
+  - **Managed Grafana** (`GRF-01`) — `ORGANIZATION` access means the workspace role
+    reaches *into* other accounts to read data sources, and logs are the least curated
+    data any organisation holds. The effective audience is set by the workspace's
+    authentication config rather than by IAM, and those are usually different people.
+  - **Aurora DSQL** (`DSQL-01`) and **IoT FleetWise** (`FW-01/02`) — deletion protection;
+    and vehicle telemetry, where a location history is among the most re-identifiable
+    datasets that exists.
+
+- **`scripts/coverage_gap.py`** — the ranking tool that drives this programme, promoted
+  out of a scratch directory into the repo, because across six batches a fix to it lived
+  nowhere. Two corrections came with it:
+  - **It deduplicates by signing name now.** `es` scored 16 as an uncovered gap, and `es`
+    and `opensearch` are the *same service* at different API versions — `opensearch` was
+    already covered. Keying on client directories counted one service twice. That also
+    shrank the catalogue from an apparent **426 services to 360**.
+  - **It excludes discontinued services.** Three of the four highest-ranked remaining
+    gaps could not be built at all: MediaStore (support ended **2025-11-13**, already
+    declined in batch 4) and **AWS WAF Classic**'s two clients (**2025-09-30**; `wafv2`
+    is the covered successor). Liveness checking became routine after MediaStore, and
+    this batch is why it should stay routine.
+  - Honest totals after both fixes: **89 of 360 services covered, 67 uncovered and live**
+    — and the highest remaining score is now **14**, down from 87 when the programme
+    started. The valuable tail is genuinely thinning.
+
 - **Extended service coverage, batch 5** (`aws_extsvc5.py`, 5 sections, 8 checks) — the
   first batch authored *after* the SDK pin moved, so the models these were verified
   against are finally the models the product ships.

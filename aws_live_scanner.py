@@ -95,6 +95,7 @@ import aws_extsvc2
 import aws_extsvc3
 import aws_extsvc4
 import aws_extsvc5
+import aws_extsvc6
 import aws_segmentation
 import aws_shadowai
 import aws_ailog
@@ -251,6 +252,10 @@ SECTIONS = [
     # Batch 5 -- first batch authored after the SDK pin moved to botocore 1.43.51,
     # so the models these were verified against are the models the product ships.
     "WORKMAIL", "SITEWISE", "IOTMANAGEDINT", "MAILMANAGER", "CODEGURUPROFILER",
+    # Batch 6. The three highest-ranked remaining "gaps" were all discontinued
+    # services (MediaStore, and WAF Classic's two clients) -- see aws_extsvc6.
+    "VERIFIEDPERMISSIONS", "CLOUDHSM", "CLOUDWAN", "MANAGEDGRAFANA",
+    "AURORADSQL", "FLEETWISE",
     "CORRELATE",
 ]
 
@@ -307,6 +312,12 @@ SECTION_LABELS = {
     "IOTMANAGEDINT":  "AWS IOT MANAGED INTEGRATIONS",
     "MAILMANAGER":    "SES MAIL MANAGER",
     "CODEGURUPROFILER": "AMAZON CODEGURU PROFILER",
+    "VERIFIEDPERMISSIONS": "AMAZON VERIFIED PERMISSIONS",
+    "CLOUDHSM":       "AWS CLOUDHSM",
+    "CLOUDWAN":       "AWS CLOUD WAN",
+    "MANAGEDGRAFANA": "AMAZON MANAGED GRAFANA",
+    "AURORADSQL":     "AMAZON AURORA DSQL",
+    "FLEETWISE":      "AWS IOT FLEETWISE",
     "ELASTICACHE":    "AMAZON ELASTICACHE",
     "OPENSEARCH":     "AMAZON OPENSEARCH",
     "DYNAMODB":       "AMAZON DYNAMODB",
@@ -8842,6 +8853,218 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     # BATCH 5 — declared via aws_checkdef (see aws_extsvc5)
     # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
+    # BATCH 6 — declared via aws_checkdef (see aws_extsvc6)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_verifiedpermissions(self):
+        """VP-01/02 — a Cedar policy store IS the application's authorization logic."""
+        self._section_header("VERIFIEDPERMISSIONS")
+        try:
+            vp = self._client("verifiedpermissions")
+            stores = self._tokens(vp.list_policy_stores, "policyStores",
+                                  token_key="nextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("VP-01", "VP-02"):
+                    self._coverage.note_denied(
+                        cid, "verifiedpermissions:ListPolicyStores")
+            return
+
+        for st in stores:
+            sid = (st or {}).get("policyStoreId")
+            if not sid:
+                continue
+            try:
+                full = vp.get_policy_store(policyStoreId=sid) or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    for cid in ("VP-01", "VP-02"):
+                        self._coverage.note_denied(
+                            cid, "verifiedpermissions:GetPolicyStore")
+                continue
+            r = aws_extsvc6.vp_policy_store(full)
+            if r["validation_off"]:
+                self._add("FAIL", "VP-01", "VERIFIEDPERMISSIONS", sid,
+                          f"{r['statement']} | {sid}")
+            elif r["mode_known"]:
+                self._add("PASS", "VP-01", "VERIFIEDPERMISSIONS", sid,
+                          f"Verified Permissions policy store {sid} validates against "
+                          f"its schema ({r['mode']}) | {sid}")
+            if r["unprotected"]:
+                self._add("FAIL", "VP-02", "VERIFIEDPERMISSIONS", sid,
+                          f"{r['protection_statement']} | {sid}")
+            elif r["protection_known"]:
+                self._add("PASS", "VP-02", "VERIFIEDPERMISSIONS", sid,
+                          f"Verified Permissions policy store {sid} has deletion "
+                          f"protection enabled | {sid}")
+
+    def _check_cloudhsm(self):
+        """HSM-01/02 — backups are the one artefact that leaves an HSM."""
+        self._section_header("CLOUDHSM")
+        try:
+            ch = self._client("cloudhsmv2")
+            clusters = self._tokens(ch.describe_clusters, "Clusters",
+                                    token_key="NextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("HSM-01", "cloudhsm:DescribeClusters")
+            return
+
+        for c in clusters:
+            r = aws_extsvc6.hsm_cluster(c)
+            cid_ = r["id"] or "?"
+            if not r["retention_known"]:
+                self._add("FAIL", "HSM-01", "CLOUDHSM", cid_, f"{r['statement']} | {cid_}")
+            else:
+                self._add("PASS", "HSM-01", "CLOUDHSM", cid_,
+                          f"CloudHSM cluster {cid_} retains backups for "
+                          f"{r['retention_days']} day(s) | {cid_}")
+            arn = (c or {}).get("ClusterArn") or cid_
+            try:
+                pol = (ch.get_resource_policy(ResourceArn=arn) or {}).get("Policy")
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("HSM-02", "cloudhsm:GetResourcePolicy")
+                continue
+            p = aws_extsvc6.hsm_policy(cid_, pol)
+            if p["public"]:
+                self._add("FAIL", "HSM-02", "CLOUDHSM", cid_, f"{p['statement']} | {cid_}")
+            elif p["has_policy"]:
+                self._add("PASS", "HSM-02", "CLOUDHSM", cid_,
+                          f"CloudHSM resource {cid_} has no wildcard-principal "
+                          f"policy | {cid_}")
+
+    def _check_cloudwan(self):
+        """NWM-01 — the core network policy is the segmentation map."""
+        self._section_header("CLOUDWAN")
+        try:
+            nm = self._client("networkmanager")
+            nets = self._tokens(nm.describe_global_networks, "GlobalNetworks",
+                                token_key="NextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("NWM-01",
+                                           "networkmanager:DescribeGlobalNetworks")
+            return
+
+        for n in nets:
+            nid = (n or {}).get("GlobalNetworkId")
+            arn = (n or {}).get("GlobalNetworkArn") or nid
+            if not nid:
+                continue
+            try:
+                pol = (nm.get_resource_policy(ResourceArn=arn) or {}).get("PolicyDocument")
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("NWM-01",
+                                               "networkmanager:GetResourcePolicy")
+                continue
+            r = aws_extsvc6.nwm_policy(nid, pol)
+            if r["public"]:
+                self._add("FAIL", "NWM-01", "CLOUDWAN", nid, f"{r['statement']} | {nid}")
+            elif r["has_policy"]:
+                self._add("PASS", "NWM-01", "CLOUDWAN", nid,
+                          f"Cloud WAN global network {nid} has no wildcard-principal "
+                          f"policy | {nid}")
+
+    def _check_managedgrafana(self):
+        """GRF-01 — a workspace reaches INTO accounts to read data sources."""
+        self._section_header("MANAGEDGRAFANA")
+        try:
+            gf = self._client("grafana")
+            spaces = self._tokens(gf.list_workspaces, "workspaces",
+                                  token_key="nextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("GRF-01", "grafana:ListWorkspaces")
+            return
+
+        for w in spaces:
+            wid = (w or {}).get("id")
+            if not wid:
+                continue
+            try:
+                full = (gf.describe_workspace(workspaceId=wid) or {}
+                        ).get("workspace") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("GRF-01", "grafana:DescribeWorkspace")
+                continue
+            r = aws_extsvc6.grafana_workspace(full)
+            nm_ = r["name"] or wid
+            if r["organization_wide"]:
+                self._add("FAIL", "GRF-01", "MANAGEDGRAFANA", nm_,
+                          f"{r['statement']} | {nm_}")
+            elif r["access_known"]:
+                self._add("PASS", "GRF-01", "MANAGEDGRAFANA", nm_,
+                          f"Managed Grafana workspace {nm_} is scoped to "
+                          f"{r['access_type']} | {nm_}")
+
+    def _check_auroradsql(self):
+        """DSQL-01 — deletion protection on a distributed SQL cluster."""
+        self._section_header("AURORADSQL")
+        try:
+            ds = self._client("dsql")
+            clusters = self._tokens(ds.list_clusters, "clusters",
+                                    token_key="nextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("DSQL-01", "dsql:ListClusters")
+            return
+
+        for c in clusters:
+            cid_ = (c or {}).get("identifier") or (c or {}).get("arn")
+            if not cid_:
+                continue
+            try:
+                full = ds.get_cluster(identifier=cid_) or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("DSQL-01", "dsql:GetCluster")
+                continue
+            r = aws_extsvc6.dsql_cluster(full)
+            nm_ = r["id"] or cid_
+            if r["protection_known"] and not r["protected"]:
+                self._add("FAIL", "DSQL-01", "AURORADSQL", nm_, f"{r['statement']} | {nm_}")
+            elif r["protected"]:
+                self._add("PASS", "DSQL-01", "AURORADSQL", nm_,
+                          f"Aurora DSQL cluster {nm_} has deletion protection "
+                          f"enabled | {nm_}")
+
+    def _check_fleetwise(self):
+        """FW-01/02 — vehicle telemetry is personal data."""
+        self._section_header("FLEETWISE")
+        try:
+            fw = self._client("iotfleetwise")
+        except Exception:
+            return
+        try:
+            cfg = fw.get_encryption_configuration() or {}
+            r = aws_extsvc6.fleetwise_encryption(cfg)
+            if r["known"] and not r["cmk"]:
+                self._add("FAIL", "FW-01", "FLEETWISE", "encryption",
+                          f"{r['statement']} | encryption")
+            elif r["cmk"]:
+                self._add("PASS", "FW-01", "FLEETWISE", "encryption",
+                          f"IoT FleetWise uses a customer-managed KMS key | encryption")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("FW-01",
+                                           "iotfleetwise:GetEncryptionConfiguration")
+
+        try:
+            opts = fw.get_logging_options() or {}
+            r = aws_extsvc6.fleetwise_logging(opts)
+            if r["off"]:
+                self._add("FAIL", "FW-02", "FLEETWISE", "logging",
+                          f"{r['statement']} | logging")
+            elif r["known"]:
+                self._add("PASS", "FW-02", "FLEETWISE", "logging",
+                          f"IoT FleetWise delivers {r['log_type']} logs | logging")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("FW-02", "iotfleetwise:GetLoggingOptions")
+
     def _check_workmail(self):
         """WM-01/02/03 — a mailbox is a credential store with a login page."""
         self._section_header("WORKMAIL")
@@ -15814,6 +16037,12 @@ class AWSLiveScanner:
             "IOTMANAGEDINT":  self._check_iotmanagedint,
             "MAILMANAGER":    self._check_mailmanager,
             "CODEGURUPROFILER": self._check_codeguruprofiler,
+            "VERIFIEDPERMISSIONS": self._check_verifiedpermissions,
+            "CLOUDHSM":       self._check_cloudhsm,
+            "CLOUDWAN":       self._check_cloudwan,
+            "MANAGEDGRAFANA": self._check_managedgrafana,
+            "AURORADSQL":     self._check_auroradsql,
+            "FLEETWISE":      self._check_fleetwise,
             "ELASTICACHE":    self._check_elasticache,
             "OPENSEARCH":     self._check_opensearch,
             "DYNAMODB":       self._check_dynamodb,
