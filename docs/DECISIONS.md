@@ -28,11 +28,21 @@ without a guard drifts; that is the whole lesson of this codebase's Phase 0.
 | **D4** | Do we cross read-only for AI red teaming? | **Out of scope** | `tests/test_decisions.py` |
 | **D6** | The MCP client boundary | **Taken** — ship it enforced | Section G, `tests/test_mcp.py` |
 | **D7** | The Guardrail sibling dependency | **Decoupled** | `tests/test_decisions.py` |
+| **D11** | Does auto-fix end the read-only guarantee? | **Open** — CISO | the absence of a remediation role |
+| **D12** | Widen the egress allowlist for SIEM forwarding? | **Open** — CISO | Section A, `tests/test_zero_telemetry.py` |
+| **D13** | Build the inbound connectors vendor-neutral? | **Open** — architecture board | *(recommendation only)* |
 
 None of these decisions left the product in a broken or dishonest state while they were
 open. D2 and D4 were questions about whether to *add* something, and the answer to each
 preserves what the product already does. D3 was the one where adding was the right
 answer, and it was built rather than deferred.
+
+**D11–D13 arrived with the Phase II SRS (`OW2-SRS-001 v0.1`) and are still open.** The
+same property holds: the product is not in a dishonest state while they are. Each is a
+question about whether to *add* a capability, and in each case not-yet-added is the
+conservative answer — the read-only guarantee holds, no new egress path exists, and no
+connector has been built against an unverified vendor contract. They are recorded here
+so they are answered deliberately rather than by a commit.
 
 ---
 
@@ -399,3 +409,73 @@ capability OverWatch claims.
 
 **What enforces it.** `tests/test_decisions.py` asserts no import of, or reference to, the
 sibling product.
+
+---
+
+## D11 · Does auto-fix end the read-only guarantee? — **OPEN**
+
+**The ask.** `OW2-AR-010` through `OW2-AR-015` specify a controlled auto-fix catalogue:
+approved actions only, blast-radius assessment, rollback, a separately credentialed
+remediation role, and a global kill switch. `CON-04` anticipates the split and requires
+the role be separate, auditable and disableable.
+
+**Why it is a decision and not a sprint.** OverWatch is read-only of configuration by
+construction. `aws_remediate.py` generates Terraform, CloudFormation and CLI and
+explicitly never applies any of it. The SRS is responsible about auto-fix and it is
+buildable — but it changes what the product *is*, from a system that cannot damage the
+estate to one that can, and **that guarantee is binary**. Once a remediation role exists,
+"OverWatch cannot alter production" stops being true, and the assurance argument for
+every other module changes with it.
+
+**The recommendation, not the answer.** Build the governance in II-B and withhold the
+execution: the catalogue, the change-record linkage, the before/after capture, the
+rollback path and the kill switch — with the executing role **absent from the
+deployment**. That delivers everything `AR-010`–`AR-014` specify about *control*, and
+leaves the grant of write access as its own explicit, dated approval rather than a side
+effect of a sprint.
+
+**What holds the line meanwhile.** No remediation role exists, and no module calls a
+mutating AWS API.
+
+---
+
+## D12 · Widen the egress allowlist for SIEM forwarding? — **OPEN**
+
+**The ask.** `OW2-CC-030/031` require findings and platform audit events forwarded to the
+enterprise SIEM within five minutes, as JSON over an HTTPS event API and/or CEF/syslog.
+
+**Why it is a decision.** `tests/test_zero_telemetry.py` enumerates every file permitted
+to open an outbound connection and fails the build when a new one appears. A CEF/syslog
+transport needs a path that is not currently on that list.
+
+**This is not a genuine conflict.** The rule exists to prevent *vendor* telemetry, not
+operator-directed integration, and the connector plane already forwards findings to
+Splunk HEC under operator control — satisfying `CON-01` and `OW2-DR-003` as written. What
+is required is that the allowlist be widened **deliberately**, in a commit whose message
+says so.
+
+**The recommendation.** Approve. The cost of the tripwire is exactly this friction, and
+the friction is the feature: the next outbound call added without a reason will also stop
+the build.
+
+---
+
+## D13 · Build the inbound connectors vendor-neutral? — **OPEN**
+
+**The ask.** `OW2-CC-020` (ManageEngine ServiceDesk Plus), `OW2-CC-040` (the PAM
+platform) and `OW2-PA-002` (IBM Instana) all require inbound integrations.
+
+**Why it is a decision.** All three depend on service accounts that do not yet exist
+(`AD-01`), and PAM is worse than that: Appendix D item 1 records that the product's API
+scope is still unconfirmed, and the vendor is unnamed in the document. **Building against
+an unverified contract produces a connector that compiles and does not work.**
+
+**The recommendation.** Build each against a vendor-neutral normalised record, with the
+vendor's field names in an alias map rather than in the logic. This is the call
+`aws_ingest_aidr.py` and `aws_ingest_credexp.py` already made when their upstream
+contracts could not be verified, and both shipped and tested without one. It keeps
+`AD-01` off the critical path for the II-A gate — a service account arriving late then
+costs an alias map, not a rewrite.
+
+**What holds the line meanwhile.** No connector has been built against an unverified
+vendor contract.
