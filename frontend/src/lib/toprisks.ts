@@ -57,8 +57,11 @@ export const RISK_CATEGORIES: RiskCategory[] = [
   },
   {
     slug: 'identity', title: 'Identity & Access', icon: KeyRound,
+    // NHI- is here rather than in its own card: a non-human identity is an identity,
+    // and splitting the pillar out would let a reader review "identity" and miss the
+    // machine half -- which is the half that outnumbers the other and goes unrotated.
     prefixes: ['IAM-', 'IAMPE-', 'IDENTITY-', 'CIEM-', 'SSO-', 'COG-', 'DIRSVC-',
-      'MPA-', 'VP-'],
+      'MPA-', 'VP-', 'NHI-'],
     seeAll: '/identity',
   },
   {

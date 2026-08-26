@@ -84,6 +84,7 @@ import aws_cbom
 import aws_airules
 import aws_cdr
 import aws_mcp
+import aws_nhi
 import aws_perm_ledger
 import aws_sagemaker
 import aws_modelartifact
