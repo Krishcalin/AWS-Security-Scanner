@@ -62,6 +62,8 @@ BASELINE = {
             "bedrock-agentcore:ListGateways",
             "bedrock-agentcore:ListMemories",
             "bedrock-agentcore:ListOauth2CredentialProviders",
+            "bedrock-agentcore:ListRegistries",
+            "bedrock-agentcore:ListRegistryRecords",
             "bedrock-agentcore:ListWorkloadIdentities",
             "bedrock:GetAgentActionGroup",
             "bedrock:GetDataSource",
@@ -232,6 +234,7 @@ BASELINE = {
             "MCP-02",
             "MCP-03",
             "MCP-04",
+            "MCP-06",
             "MM-01",
             "MPA-01",
             "MPV-01",
@@ -280,7 +283,7 @@ BASELINE = {
             "XFER-03",
             "XRAY-01",
         ],
-        "annotated_policy_rows": 132,
+        "annotated_policy_rows": 134,
     },
     "shipped_role": {
         "missing_actions": [
@@ -308,6 +311,8 @@ BASELINE = {
             "bedrock-agentcore:ListGateways",
             "bedrock-agentcore:ListMemories",
             "bedrock-agentcore:ListOauth2CredentialProviders",
+            "bedrock-agentcore:ListRegistries",
+            "bedrock-agentcore:ListRegistryRecords",
             "bedrock-agentcore:ListWorkloadIdentities",
             "bedrock:GetAgentActionGroup",
             "bedrock:GetDataSource",
@@ -476,6 +481,7 @@ BASELINE = {
             "MCP-02",
             "MCP-03",
             "MCP-04",
+            "MCP-06",
             "MM-01",
             "MPA-01",
             "MPV-01",
@@ -521,7 +527,7 @@ BASELINE = {
             "XFER-03",
             "XRAY-01",
         ],
-        "annotated_policy_rows": 130,
+        "annotated_policy_rows": 132,
     },
 }
 # ─────────────────────────────────────────────────────────────────────────────

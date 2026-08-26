@@ -225,7 +225,9 @@ def test_the_blind_spot_is_reported_for_every_federated_target():
     s = _run(_ac(gw(), [mcp_target()]))
     w = _ids(s, "MCP-04", "WARN")
     assert len(w) == 1
-    assert "never the tools it serves" in w[0].message
+    # The exact sentence is no longer pinned: "never the tools it serves" became false
+    # when the SDK pin moved to 1.43.51. The behaviour it protected is unchanged.
+    assert "no tool schema is recorded" in w[0].message
     assert "no trace in this account" in w[0].message
 
 

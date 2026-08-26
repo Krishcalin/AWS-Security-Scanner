@@ -47,33 +47,29 @@ ALLOWED_FRAMEWORKS = {"CIS", "PCI-DSS", "HIPAA", "SOC2", "NIST"}
 
 # ── the frozen backlog — generated from the runtime maps, shrink only ────────
 BACKLOG_COMPLIANCE = frozenset({
-    "CFN-04", "CFN-05", "FARGATE-01", "GLC-03", "R53-04", "RDS-05", "SFN-02",
+    "CFN-04", "FARGATE-01", "GLC-03", "R53-04", "RDS-05", "SFN-02",
     "SQS-04"
 })
 
 BACKLOG_REMEDIATION = frozenset({
-    "ACM-03", "AGW2-03", "APIGW-04", "BCK-01", "CFN-01", "CFN-02", "CFN-04",
-    "CFN-05", "COG-04", "DDB-03", "EBS-05", "EC2-05", "EC2-09", "ECS-01", "ECS-02",
+    "ACM-03", "AGW2-03", "APIGW-04", "BCK-01", "CFN-01", "CFN-04", "COG-04", "DDB-03", "EBS-05", "EC2-05", "EC2-09",
     "ECS-03", "ECS-05", "EKS-04", "EKS-05", "EKS-07", "EKS-08", "ELB-04", "ELB-08",
-    "ELC-03", "ELC-04", "FARGATE-01", "FLOW-01", "FLOW-02", "GLC-02", "GLC-03",
-    "IAMPE-02", "IAMPE-05", "IAMPE-06", "IAMPE-12", "IAMPE-13", "IAMPE-14",
-    "IAMPE-18", "KIEM-02", "KIEM-03", "KSPM-04", "LMB-03", "LMB-04", "LMB-05",
-    "OSR-03", "OSR-05", "R53-01", "R53-02", "R53-04", "R53-05", "RDS-03", "RDS-05",
+    "ELC-04", "FARGATE-01", "FLOW-01", "FLOW-02", "GLC-02", "GLC-03",
+    "IAMPE-18", "KIEM-02", "KIEM-03", "KSPM-04", "LMB-04", "LMB-05",
+    "OSR-03", "R53-01", "R53-02", "R53-04", "R53-05", "RDS-03", "RDS-05",
     "RDS-13", "RS-05", "SEC-03", "SEC-04", "SECRET-02", "SEG-06", "SFN-02",
-    "SFN-03", "SNS-01", "SNS-02", "SNS-03", "SNS-04", "SQS-01", "SQS-03", "SQS-04",
+    "SFN-03", "SNS-01", "SNS-04", "SQS-03", "SQS-04",
     "WAF-03", "WAF-04"
 })
 
 BACKLOG_DETAIL = frozenset({
-    "ACM-03", "AGW2-03", "APIGW-04", "BCK-01", "CFN-02", "CFN-04", "CFN-05",
-    "COG-04", "DDB-03", "EBS-05", "EC2-05", "EC2-09", "ECS-01", "ECS-02", "ECS-03",
-    "ECS-05", "EKS-04", "EKS-05", "EKS-07", "EKS-08", "ELB-04", "ELB-08", "ELC-03",
-    "ELC-04", "FARGATE-01", "FLOW-01", "FLOW-02", "GLC-02", "GLC-03", "IAMPE-02",
-    "IAMPE-05", "IAMPE-06", "IAMPE-12", "IAMPE-13", "IAMPE-14", "IAMPE-18",
-    "KIEM-02", "KIEM-03", "KSPM-04", "LMB-03", "LMB-04", "LMB-05", "OSR-03",
-    "OSR-05", "R53-01", "R53-02", "R53-04", "R53-05", "RDS-03", "RDS-05", "RDS-13",
+    "ACM-03", "AGW2-03", "APIGW-04", "BCK-01", "CFN-04",
+    "COG-04", "DDB-03", "EBS-05", "EC2-05", "EC2-09", "ECS-03",
+    "ECS-05", "EKS-04", "EKS-05", "EKS-07", "EKS-08", "ELB-04", "ELB-08",
+    "ELC-04", "FARGATE-01", "FLOW-01", "FLOW-02", "GLC-02", "GLC-03", "IAMPE-18",
+    "KIEM-02", "KIEM-03", "KSPM-04", "LMB-04", "LMB-05", "OSR-03", "R53-01", "R53-02", "R53-04", "R53-05", "RDS-03", "RDS-05", "RDS-13",
     "RS-05", "SEC-03", "SEC-04", "SECRET-02", "SEG-06", "SFN-02", "SFN-03",
-    "SNS-01", "SNS-02", "SNS-03", "SNS-04", "SQS-01", "SQS-03", "SQS-04", "WAF-03",
+    "SNS-01", "SNS-04", "SQS-03", "SQS-04", "WAF-03",
     "WAF-04"
 })
 

@@ -786,6 +786,7 @@ COMPLIANCE_MAP = {
     "CFN-01": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "CFN-02": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
     "CFN-03": {"PCI-DSS": "6.6", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "CFN-05": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "CFN-06": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
     # New sections
     "LMB-01": {"CIS": "2.7.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
@@ -1323,7 +1324,7 @@ REMEDIATION_MAP = {
     "MCP-01": "Confirm this federated MCP server is one you intend to trust with your agent's tool surface, then bound what it can reach: the gateway execution role is the upper bound for any target using GATEWAY_IAM_ROLE (aws bedrock-agentcore-control get-gateway --gateway-identifier <ID>, then narrow the roleArn's policy). Prefer a target kind defined inside the account -- openApiSchema, smithyModel or lambda -- where the tool definitions are yours and are versioned with your infrastructure",
     "MCP-02": "Re-point the target at an https endpoint: aws bedrock-agentcore-control update-gateway-target --gateway-identifier <ID> --target-id <TID> --target-configuration '{\"mcp\":{\"mcpServer\":{\"endpoint\":\"https://...\"}}}'. Over http the tool definitions the model is handed, and the arguments it sends back, are readable and rewritable by anyone on the path",
     "MCP-03": "Read the gateway's MCP instructions as the model receives them, not as documentation: aws bedrock-agentcore-control get-gateway --gateway-identifier <ID> --query protocolConfiguration.mcp.instructions. Remove chat-template delimiters and invisible codepoints, then re-set the field with update-gateway. Treat whoever can edit this string as able to address your agents directly",
-    "MCP-04": "No action closes this one -- it is a limit of what AWS records, not a misconfiguration. Compensate rather than remediate: put a human in front of consequential actions (AGY-03), narrow the gateway execution role so a changed tool reaches less (AISPM-01/02), and pin the vendor by contract and version since the account cannot pin them technically. Re-scan after any change to the federation and compare",
+    "MCP-04": "Whether this closes depends on WHY the tool list is unreadable, which the SDK pin bump made visible. If listingMode is DYNAMIC the server fetches its tool list at listing time and nothing is cached to diff -- that is a configuration choice, and switching the target to DEFAULT caches the schema: aws bedrock-agentcore-control update-gateway-target --gateway-identifier <GW> --target-id <TARGET> --target-configuration file://target.json with listingMode DEFAULT. If no schema is recorded at all, no action closes it -- compensate instead: put a human in front of consequential actions (AGY-03), narrow the gateway execution role so a changed tool reaches less (AISPM-01/02), and pin the vendor by contract and version. Re-scan after any federation change and compare",
     "MCP-05": "Match the change against your own change record. If it was yours, nothing more is needed and the next scan will read as stable. If it was not, treat the gateway as untrusted until you know who made it: aws bedrock-agentcore-control get-gateway-target --gateway-identifier <ID> --target-id <TID> for the current state, then cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=UpdateGatewayTarget to find who called it and when",
     "SM-08": "Raise the production variant's initial instance count above 1 so SageMaker spreads it across Availability Zones: aws sagemaker create-endpoint-config --endpoint-config-name <NEW> --production-variants VariantName=<V>,ModelName=<M>,InitialInstanceCount=2,InstanceType=<T> ; then aws sagemaker update-endpoint --endpoint-name <E> --endpoint-config-name <NEW>. Serverless variants are out of scope -- they have no instance count to raise",
     "SM-09": "Recreate the model with network isolation on: aws sagemaker create-model --model-name <M> --execution-role-arn <ROLE> --enable-network-isolation --primary-container Image=<IMG>. An isolated container cannot reach the internet or other AWS services, and no AWS credentials are placed in its runtime environment",
@@ -1361,6 +1362,22 @@ REMEDIATION_MAP = {
     "XFER-01": "Stop accepting plain FTP -- credentials and file contents cross the network in the clear. Move the server to FTPS or SFTP, which carry the same workflow encrypted: aws transfer update-server --server-id <SERVER_ID> --protocols SFTP FTPS. Coordinate with clients before removing FTP",
     "XFER-02": "Attach a logging role so there is a record of who connected and which files moved: aws transfer update-server --server-id <SERVER_ID> --logging-role <ROLE_ARN>",
     "XFER-03": "A PUBLIC endpoint is the intended mode for many Transfer servers, so treat this as context rather than a defect. If the workflow is internal, move it into your VPC: aws transfer update-server --server-id <SERVER_ID> --endpoint-type VPC --endpoint-details VpcId=<VPC_ID>,SubnetIds=<SUBNETS>,SecurityGroupIds=<SGS>",
+    "CFN-02": "Raise the minimum TLS version on the distribution to TLSv1.2_2021: aws cloudfront get-distribution-config --id <DIST_ID> to fetch the config and ETag, set ViewerCertificate.MinimumProtocolVersion, then aws cloudfront update-distribution --id <DIST_ID> --if-match <ETAG> --distribution-config file://config.json. Check client analytics first if you still serve legacy devices",
+    "CFN-05": "Stop CloudFront talking to the origin over plain HTTP: aws cloudfront get-distribution-config --id <DIST_ID>, set CustomOriginConfig.OriginProtocolPolicy to https-only (or match-viewer only if the origin genuinely cannot serve TLS), then aws cloudfront update-distribution --id <DIST_ID> --if-match <ETAG> --distribution-config file://config.json",
+    "ECS-01": "Remove privileged mode from the task definition -- it is a per-container flag, so register a new revision with privileged=false and redeploy: aws ecs register-task-definition --cli-input-json file://taskdef.json then aws ecs update-service --cluster <CLUSTER> --service <SERVICE> --task-definition <FAMILY>:<NEW_REVISION>. If a specific capability is genuinely needed, add just that one with linuxParameters.capabilities.add rather than privileged",
+    "ECS-02": "Set a non-root user in the task definition and redeploy: add \"user\": \"1000:1000\" (or a named user the image defines) to the container definition, then aws ecs register-task-definition --cli-input-json file://taskdef.json and aws ecs update-service --cluster <CLUSTER> --service <SERVICE> --task-definition <FAMILY>:<NEW_REVISION>. Confirm the image's filesystem permissions allow that uid to write where it needs to",
+    "ELC-03": "Enable the AUTH token (Redis AUTH) or, preferably, RBAC users on the replication group: aws elasticache modify-replication-group --replication-group-id <RGID> --auth-token <TOKEN> --auth-token-update-strategy SET --apply-immediately. Enable transit encryption at the same time -- an AUTH token sent in the clear is not a secret",
+    "IAMPE-02": "Remove iam:SetDefaultPolicyVersion from this principal, or scope it to specific policy ARNs: aws iam put-role-policy / put-user-policy with a Resource list rather than *. Then delete stale permissive versions so there is nothing to roll back to: aws iam list-policy-versions --policy-arn <ARN> and aws iam delete-policy-version --policy-arn <ARN> --version-id <VID>",
+    "IAMPE-05": "Remove iam:AddUserToGroup from this principal, or restrict it to groups that carry no elevated permissions: scope the Resource to specific group ARNs rather than *. Audit current membership of privileged groups while you are here: aws iam get-group --group-name <GROUP>",
+    "IAMPE-06": "Remove iam:CreateAccessKey from this principal or scope it to the principal's own user ARN so it cannot mint keys for anyone else. Then audit existing keys for users more privileged than this principal: aws iam list-access-keys --user-name <USER>, and rotate any that cannot be accounted for",
+    "IAMPE-12": "Break the pair rather than either half alone -- the escalation needs both. Scope iam:PassRole with a Condition on iam:PassedToService, or remove glue:CreateDevEndpoint from this principal: aws iam put-role-policy --role-name <ROLE> --policy-name <NAME> --policy-document file://scoped.json. Also audit existing dev endpoints, which are interactive shells holding whatever role was passed: aws glue get-dev-endpoints",
+    "IAMPE-13": "Scope iam:PassRole with a Condition on iam:PassedToService=cloudformation.amazonaws.com and a Resource list of the roles CloudFormation may legitimately assume, or remove cloudformation:CreateStack from this principal: aws iam put-role-policy --role-name <ROLE> --policy-name <NAME> --policy-document file://scoped.json . Then give the stacks themselves a scoped service role so an operation stops inheriting the caller's reach: aws cloudformation update-stack --stack-name <STACK> --role-arn <ROLE_ARN> --use-previous-template (see STACK-02)",
+    "IAMPE-14": "Scope iam:PassRole with a Condition on iam:PassedToService=sagemaker.amazonaws.com and a Resource list of the execution roles SageMaker may use, or remove the sagemaker:Create* actions from this principal: aws iam put-role-policy --role-name <ROLE> --policy-name <NAME> --policy-document file://scoped.json. Audit existing notebook instances, which run interactively with the role that was passed",
+    "LMB-03": "Move the value out of the environment and into a secret store, then read it at runtime: aws secretsmanager create-secret --name <NAME> --secret-string <VALUE>, grant the function role secretsmanager:GetSecretValue on that ARN, and remove the variable with aws lambda update-function-configuration --function-name <FN> --environment Variables={...}. Treat the old value as disclosed and rotate it -- environment variables are readable by anyone with lambda:GetFunctionConfiguration",
+    "OSR-05": "Enable fine-grained access control on the domain: aws opensearch update-domain-config --domain-name <DOMAIN> --advanced-security-options Enabled=true,InternalUserDatabaseEnabled=true,MasterUserOptions={MasterUserARN=<ROLE_ARN>}. FGAC requires node-to-node encryption, encryption at rest and HTTPS enforcement, so enable those first if they are off",
+    "SNS-02": "Replace the wildcard statement with one naming the principals that should publish or subscribe, or constrain it with a condition: aws sns get-topic-attributes --topic-arn <ARN> to read the current policy, then aws sns set-topic-attributes --topic-arn <ARN> --attribute-name Policy --attribute-value file://scoped-policy.json. aws:SourceArn or aws:PrincipalOrgID are the usual narrowings for a topic that must stay broad in principal",
+    "SNS-03": "Move the subscription to HTTPS, since an HTTP subscription delivers message bodies in cleartext: aws sns unsubscribe --subscription-arn <SUB_ARN>, then aws sns subscribe --topic-arn <ARN> --protocol https --notification-endpoint <HTTPS_ENDPOINT>. Confirm the endpoint presents a valid certificate before switching, or deliveries will fail silently into the retry policy",
+    "SQS-01": "Enable encryption at rest on the queue. SSE-SQS needs no key management: aws sqs set-queue-attributes --queue-url <URL> --attributes SqsManagedSseEnabled=true. Use a customer-managed key where the messages warrant a separately administered control: aws sqs set-queue-attributes --queue-url <URL> --attributes KmsMasterKeyId=<KEY_ARN>",
     "SEGREC-01": "Find the rule that admits the named ports on the named security group(s): aws ec2 describe-security-groups --group-ids <SG_ID> --query SecurityGroups[].IpPermissions . Prefer narrowing the source over deleting the rule where the port is legitimately in use: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0 then aws ec2 authorize-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr <TRUSTED_CIDR>. Verify against the attack-path list rather than this line alone -- the count is derived from the paths in THIS scan, and a path OverWatch could not see is not in it. Paths reported as identity-only are unaffected by any network change and need a permissions fix instead",
     "PERIM-01": "Attach a Resource Control Policy (RCP) at the organization root requiring aws:PrincipalOrgID, which is how AWS describes implementing the trusted-identities perimeter -- an SCP cannot do this job, because an SCP bounds what YOUR principals may do rather than who may reach your resources. Exempt AWS service principals with aws:PrincipalIsAWSService (you cannot write NotPrincipal against a service principal) and constrain service-on-your-behalf access with aws:SourceOrgID. Start from the AWS data-perimeter policy examples repo rather than from scratch",
     "PERIM-02": "Attach a Service Control Policy requiring aws:ResourceOrgID so your principals can reach only resources your organization owns, and pair it with VPC endpoint policies for the paths SCPs do not cover (SCPs do not apply to service-linked roles or AWS service principals). Where a genuine external resource is needed -- Amazon Linux repos, public SSM parameters -- exempt the specific ACTIONS with NotAction in the SCP and allow the specific RESOURCES in the endpoint policy, rather than opening a broad aws:ViaAWSService exception",
@@ -14681,6 +14698,44 @@ class AWSLiveScanner:
             self._add("WARN", "MCP-04", "AGENTCORE", where,
                       f"Gateway '{gname}' target '{where}': "
                       f"{aws_mcp.blind_spot_note(a)} | {where}")
+
+    def _emit_mcp_registry(self, client):
+        """MCP-06 — AgentCore registry records that never cleared approval.
+
+        Readable only since the SDK pin moved to botocore 1.43.51: the Registry and its
+        DRAFT/PENDING_APPROVAL/APPROVED/REJECTED lifecycle do not exist in 1.40.51,
+        which is why aws_mcp used to state there was no approval state to read."""
+        try:
+            regs = self._tokens(client.list_registries, "registrySummaries",
+                                token_key="nextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("MCP-06",
+                                           "bedrock-agentcore:ListRegistries")
+            return
+        for reg in regs:
+            rid = (reg or {}).get("registryId") or (reg or {}).get("registryArn")
+            if not rid:
+                continue
+            try:
+                records = self._tokens(client.list_registry_records,
+                                       "registryRecordSummaries",
+                                       token_key="nextToken",
+                                       registryIdentifier=rid)
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied(
+                        "MCP-06", "bedrock-agentcore:ListRegistryRecords")
+                continue
+            for rec in records:
+                r = aws_mcp.registry_record(rec)
+                nm = r["name"] or r["record_id"] or "?"
+                if r["known"] and not r["approved"]:
+                    self._add("FAIL", "MCP-06", "AGENTCORE", nm,
+                              f"{r['statement']} | {nm}")
+                elif r["approved"]:
+                    self._add("PASS", "MCP-06", "AGENTCORE", nm,
+                              f"AgentCore registry record {nm} is APPROVED | {nm}")
 
     def _emit_mcp_drift(self, store, ts, scan_id=""):
         """MCP-05 — the tool surface changed since the last scan.
