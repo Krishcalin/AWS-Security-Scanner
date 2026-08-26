@@ -6,6 +6,80 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.37.0] — 2026-08-26
+
+Four features, all additive, cut together because the CHANGELOG had drifted four
+commits behind the `v2.36.0` tag — the same drift that release fixed, restarting.
+
+### Added
+- **Signed compliance evidence bundles** (`aws_evidence_bundle.py`,
+  `scripts/overwatch_evidence.py`, `GET /accounts/{id}/evidence-bundle`).
+  `aws_evidence.build_pack` already produced the artifact no competitor does — a
+  control-by-control record including **which controls the scan never reached** — but it
+  left the machine as a printout: it asserted things about a scan and nothing about it
+  could be checked. The vendored Ed25519 already shipped too, used only to *verify* the
+  offline vuln feed. This connects them, inverted: there the publisher signs and the
+  runtime verifies; here the operator signs their own evidence and their auditor verifies.
+  - **The coverage manifest is inside the signed root.** Stripping "these controls were
+    never assessed" breaks verification. If signing made an incomplete scan easier to pass
+    off as a clean one it would be worse than not signing at all.
+  - **The bundle states what its own signature does not prove** — not completeness, not
+    that the role could reach everything, not that the mappings are right — and that text
+    is itself signed, so the limits cannot be edited out of a valid artifact.
+  - `generated_at` is the generating host's clock, **not** a trusted timestamp. An RFC 3161
+    TSA is a network call, which air-gap and zero-telemetry both forbid; the root digest is
+    published for counter-signing instead.
+  - A **digest tree** under the signature, so verification reports *which* section was
+    edited. "Invalid" is not an actionable answer for an auditor.
+  - The verifier is **stdlib-only** and runs with no OverWatch install, no AWS access and
+    no network. An auditor should not have to trust the tool that produced the evidence in
+    order to check it.
+  - Signing happens on the **hub**, never in the browser: every other export on the Reports
+    screen is assembled client-side, which is right for a JSON dump and catastrophic for a
+    signature. The console requests a bundle; the key never leaves the server process.
+
+- **Top Risks by Category** (`/top-risks`, `frontend/src/lib/toprisks.ts`) — the worst ten
+  in each of ten risk domains on one screen, each card linking to its full-page roll-up.
+  A row shows a **number only when a real one exists** (an attack-path score, or a
+  published CVSS) and its severity band when it does not. The reference dashboard puts a
+  1–10 to one decimal on every row; we do not compute one, and printing it would invent a
+  precision the scan never produced.
+
+- **Full-screen attack path view** (`frontend/src/components/AttackPathCanvas.tsx`,
+  `frontend/src/lib/pathmodel.ts`) — pan/zoom, per-hop narrative, ATT&CK tactic per hop,
+  and **the basis of every hop**: the graph already recorded *why* each edge exists
+  ("0.0.0.0/0 security group", "instance profile", "iam:PassRole + sts:AssumeRole") and
+  nothing rendered it. That string is the difference between "these two things are
+  connected" and "here is the thing to revoke".
+
+- **Authored Controls** (`cnapp_customcontrol.py`, schema **v16**, `POST`/`PUT`/`DELETE
+  /controls`, `POST /controls/preview`). A saved WQL query became a managed object rather
+  than an environment variable read once at boot and identical for every workspace. The
+  WQL validator runs on **write**, so a bad query is a message to its author rather than an
+  inert control that silently matches nothing; controls cannot cross a workspace; and an
+  authored control renders **WARN, never FAIL**, so a customer's own query can never move
+  the posture score it is being measured on.
+
+### Fixed
+- **An empty coverage section read as "nothing was missed."** `build_bundle(coverage=None)`
+  emitted `{}`, which verified cleanly and told an auditor the scan had no gaps. Absence
+  and emptiness are different facts, and collapsing them was the exact phantom pass the
+  bundle exists to prevent. Absent coverage is now `{"available": false, "note": ...}`,
+  and the flag is covered by the signature so it cannot be flipped.
+- **`overwatch-evidence keygen` claimed `mode 0600` unconditionally.** Windows does not
+  honour POSIX mode bits, so it wrote `0666` while telling the operator their signing key
+  was protected. It now stats the file and reports what the filesystem actually did.
+- **`overwatch-evidence verify` printed a bare `[OK]` without `--pub`** — the case a
+  hurried auditor hits, and one a forger signing their own edited bundle satisfies exactly.
+  It now prints `[OK, UNAUTHENTICATED]` with the caveat, and **exit 0 means "signed by the
+  key I named"**; unauthenticated is exit 2, so a CI gate can tell them apart.
+- **The demo seeder built its graph beside its paths rather than from them** — only
+  `internet` appeared in both, so 1 of 11 path node ids existed in the graph and any view
+  joining the two rendered empty. `_graph`'s own docstring claimed the opposite. Paths are
+  now walked out of the graph, with three ratchets holding it.
+- **A React hook was called after an early return** in the Reports screen, changing hook
+  order between renders. Caught by the linter, not by me.
+
 ## [2.36.0] — 2026-08-26
 
 ### Added

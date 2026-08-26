@@ -2237,6 +2237,58 @@ class PlatformService:
             connector_id, account=account, status=status,
             workspace_id=self._scoped_ws(workspace_id))
 
+    # ── signed evidence bundle (console export) ─────────────────────────────────
+    def build_evidence_bundle(self, account_id: str, *, generated_at: str,
+                              seed: Optional[bytes] = None) -> Optional[dict]:
+        """Assemble -- and, if a key is configured, sign -- an evidence bundle for one
+        account's latest scan. None when the account has no scan.
+
+        SIGNING HAPPENS HERE, NOT IN THE BROWSER. The Reports screen builds every other
+        export client-side from data it already holds, which is fine for a JSON dump and
+        catastrophic for a signature: it would put the private key in a web page. The
+        console asks for a bundle; the key never leaves this process.
+
+        A NOTE ON WHAT THIS BUNDLE CANNOT CARRY. The scanner's coverage manifest -- which
+        checks were skipped, which regions went unread, which reads were denied -- is
+        produced at scan time and is not persisted in the stored payload. So a
+        console-built bundle records that the manifest is ABSENT rather than emitting an
+        empty one, because an empty coverage section reads as "nothing was missed". The
+        complete artifact is the scanner's own `ai_compliance_evidence.json`; this is the
+        same pack assembled from what the hub kept.
+        """
+        import aws_evidence
+        import aws_evidence_bundle
+
+        payload = self.results.get_latest(account_id)
+        if not payload:
+            return None
+        xw, frameworks, digest = self._get_crosswalk()
+        meta = list(frameworks.values()) if isinstance(frameworks, dict) else frameworks
+        try:
+            import aws_live_scanner
+            compliance_map = aws_live_scanner.COMPLIANCE_MAP
+        except Exception:                       # pragma: no cover - import guard
+            compliance_map = {}
+
+        pack = aws_evidence.build_pack(
+            xw, compliance_map, payload.get("results") or payload.get("finding_catalog"),
+            coverage=payload.get("coverage"), framework_meta=meta)
+        pack["account"] = account_id
+        pack["crosswalk_digest"] = digest
+
+        return aws_evidence_bundle.build_bundle(
+            pack,
+            coverage=payload.get("coverage"),
+            scope={"account": account_id,
+                   "scan_id": payload.get("scan_id"),
+                   "crosswalk_digest": digest},
+            producer={"tool": "OverWatch console",
+                      "source": "stored scan payload",
+                      "bundle_version": aws_evidence_bundle.BUNDLE_VERSION},
+            generated_at=generated_at,
+            seed=seed,
+        )
+
     # ── compliance breadth (crosswalk from the NIST 800-53 spine) ───────────────
     def _get_crosswalk(self):
         """(CROSSWALK, FRAMEWORKS, digest). Injected for tests, else the memoized

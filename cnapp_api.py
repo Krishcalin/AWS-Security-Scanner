@@ -718,6 +718,38 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     def compliance_crosswalk(framework: Optional[str] = None):
         return service.get_crosswalk(framework)
 
+    @app.get("/accounts/{account_id}/evidence-bundle",
+             dependencies=[Depends(account_gate("auditor"))])
+    def evidence_bundle(account_id: str):
+        """A signed, verifiable compliance evidence bundle for this account's latest scan.
+
+        The signing key is read from the environment HERE and never leaves this process --
+        the console requests a bundle, it does not sign one. An operator who has configured
+        no key gets an honestly unsigned bundle (integrity digests, no proof of origin)
+        rather than an error, because integrity alone is still worth exporting.
+
+        Verify it with `scripts/overwatch_evidence.py verify --in <file> --pub <key>`,
+        which is stdlib-only and needs no OverWatch install."""
+        import os as _os
+        import time as _time
+        import aws_evidence_bundle
+
+        try:
+            seed = aws_evidence_bundle.seed_from_text(
+                _os.environ.get("OVERWATCH_EVIDENCE_SIGNING_KEY"))
+        except aws_evidence_bundle.BundleError as e:
+            # A configured-but-malformed key must never degrade to an unsigned bundle:
+            # the operator would believe their evidence was signed.
+            raise HTTPException(status_code=500, detail=f"signing key is unusable: {e}")
+
+        bundle = service.build_evidence_bundle(
+            account_id,
+            generated_at=_time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+            seed=seed)
+        if bundle is None:
+            raise HTTPException(status_code=404, detail="no scan results for account")
+        return bundle
+
     @app.get("/accounts/{account_id}/compliance", dependencies=[Depends(account_gate("auditor"))])
     def account_compliance(account_id: str, min_confidence: Optional[str] = None,
                            frameworks: Optional[str] = None):

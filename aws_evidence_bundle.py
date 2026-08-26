@@ -143,6 +143,30 @@ def public_key_for(seed: bytes) -> str:
     return base64.b64encode(aws_ed25519.publickey(seed)).decode("ascii")
 
 
+#: Emitted when the caller had no coverage manifest to supply. An EMPTY coverage section
+#: would be read as "nothing was missed" -- the exact phantom pass this whole artifact
+#: exists to prevent -- so absence has to be stated rather than represented as {}.
+COVERAGE_UNAVAILABLE = (
+    "No coverage manifest was supplied to this bundle, so it records nothing about which "
+    "checks were skipped, which regions went unread, or which reads were denied. This is "
+    "NOT a statement that the scan was complete. A bundle built from the scanner's own "
+    "evidence pack carries the manifest; one assembled from stored scan results may not, "
+    "because the manifest is produced at scan time.")
+
+
+def _coverage_section(coverage: Optional[Mapping]) -> dict:
+    """Coverage, or an explicit statement that there is none.
+
+    The distinction between "the scan found no gaps" and "we do not know what the scan
+    missed" is the single most important one in a compliance artifact, and `{}` collapses
+    them. Callers with real coverage get it verbatim; callers without get a section whose
+    contents say so, and which is covered by the signature like everything else."""
+    cov = dict(coverage or {})
+    if cov:
+        return {"available": True, **cov}
+    return {"available": False, "note": COVERAGE_UNAVAILABLE}
+
+
 # ── build ───────────────────────────────────────────────────────────────────
 def build_bundle(pack: Optional[Mapping],
                  *,
@@ -163,7 +187,7 @@ def build_bundle(pack: Optional[Mapping],
     """
     sections = {
         "pack": dict(pack or {}),
-        "coverage": dict(coverage or {}),
+        "coverage": _coverage_section(coverage),
         "permissions": dict(permissions or {}),
         "scope": dict(scope or {}),
         "producer": dict(producer or {}),

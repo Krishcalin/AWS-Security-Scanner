@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { FileText, Download, FileJson, FileSpreadsheet, Info, FileCode2 } from 'lucide-react'
+import { ShieldCheck, FileText, Download, FileJson, FileSpreadsheet, Info, FileCode2 } from 'lucide-react'
 import { useScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'
 import { api } from '../api/client'
@@ -45,6 +45,10 @@ export function Reports() {
     [scope])
   const [sections, setSections] = useState<Set<string>>(new Set(SECTIONS.map((s) => s.k)))
   const [schedule, setSchedule] = useState('none')
+  // Declared with the other hooks, not beside the handler that uses it: everything below
+  // sits after `if (loading) return`, and a hook called conditionally changes call order
+  // between renders. The linter caught this one.
+  const [bundleState, setBundleState] = useState<'idle' | 'working' | string>('idle')
 
   if (loading) return <Loader />
   if (error) return <ErrorNote msg={error} />
@@ -69,6 +73,24 @@ export function Reports() {
     if (sections.has('network') && !isOrg) rep.network_exposure = exposureReport(data.g)
     if (sections.has('crossaccount') && !isOrg) rep.cross_account_network = crossAccountFindings(data.f)
     return JSON.stringify(rep, null, 2)
+  }
+
+  // Signed evidence bundle. Fetched rather than assembled: every other export on this
+  // screen is built client-side from data the page already holds, which is right for a
+  // JSON dump and wrong for a signature — the key lives on the hub and must stay there.
+  const downloadBundle = async () => {
+    setBundleState('working')
+    try {
+      const b = await api.evidenceBundle(scope) as Record<string, unknown>
+      download(`overwatch-${stamp}-evidence.bundle.json`, JSON.stringify(b, null, 2),
+               'application/json')
+      // Say plainly whether it is signed. A bundle with integrity digests but no
+      // signature is still useful, and letting a user assume otherwise is the failure
+      // this whole feature exists to avoid.
+      setBundleState(b.signature ? 'signed' : 'unsigned')
+    } catch (e) {
+      setBundleState(e instanceof Error ? e.message : 'Could not build the bundle.')
+    }
   }
 
   // Executive HTML — a branded, self-contained artifact opened for print-to-PDF (no PDF dep,
@@ -124,10 +146,43 @@ export function Reports() {
             <button onClick={openExecHtml} className="flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white ow-grad hover:opacity-90">
               <FileCode2 size={16} /> Executive HTML <span className="ml-auto text-[11px] opacity-80">open / print → PDF</span>
             </button>
+            {!isOrg && (
+              <button
+                onClick={downloadBundle}
+                disabled={bundleState === 'working'}
+                data-tour="evidence-bundle"
+                className="flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-semibold text-ink hover:border-accent/40 disabled:opacity-60"
+                style={{ borderColor: 'var(--gold)', background: 'var(--goldbg)' }}
+              >
+                <ShieldCheck size={16} style={{ color: 'var(--gold)' }} />
+                {bundleState === 'working' ? 'Building…' : 'Signed evidence bundle'}
+                <Download size={14} className="ml-auto text-ink3" />
+              </button>
+            )}
           </div>
+
+          {/* The result is stated, never assumed. A bundle with digests but no signature
+              is still worth having, and letting a reader believe it is signed when it is
+              not is precisely the failure this feature exists to prevent. */}
+          {bundleState === 'signed' && (
+            <p className="mt-2 text-xs" style={{ color: 'var(--low)' }}>
+              Downloaded and <b>signed</b>. Verify with{' '}
+              <code className="font-mono">overwatch-evidence verify --in &lt;file&gt; --pub &lt;key&gt;</code>
+            </p>
+          )}
+          {bundleState === 'unsigned' && (
+            <p className="mt-2 text-xs" style={{ color: 'var(--med)' }}>
+              Downloaded, but <b>unsigned</b> — no signing key is configured on the hub, so the
+              bundle carries integrity digests and no proof of origin.
+            </p>
+          )}
+          {bundleState !== 'idle' && bundleState !== 'working' &&
+           bundleState !== 'signed' && bundleState !== 'unsigned' && (
+            <p className="mt-2 text-xs" style={{ color: 'var(--crit)' }}>{bundleState}</p>
+          )}
           <div className="flex items-start gap-2 mt-4 rounded-lg px-3 py-2.5 text-xs text-ink2" style={{ background: 'var(--panel2)' }}>
             <Info size={14} className="mt-0.5 shrink-0 text-ink3" />
-            <span><b>Executive HTML</b> is assembled in-console (open it to print → PDF); nothing leaves your boundary. <b>SARIF 2.1.0 · ASFF</b> are additionally produced by the engine (`save_sarif` / `save_asff`) from the hub in live mode.</span>
+            <span><b>Executive HTML</b> is assembled in-console (open it to print → PDF); nothing leaves your boundary. The <b>signed evidence bundle</b> is built and signed on the hub — the key never reaches this page — and records which controls the scan could <i>not</i> reach, so removing that section breaks its signature. <b>SARIF 2.1.0 · ASFF</b> are additionally produced by the engine (`save_sarif` / `save_asff`) from the hub in live mode.</span>
           </div>
         </Card>
       </div>
