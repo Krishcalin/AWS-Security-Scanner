@@ -38,6 +38,8 @@ import {
 } from 'lucide-react'
 import { nodeMeta, shortLabel, nodeKindOf, prettyRel, hopTactic } from '../lib/nodes'
 import { buildPathModel, sentenceFor } from '../lib/pathmodel'
+import { factorTable } from '../lib/riskfactors'
+import type { Axis, Origin, FactorRow } from '../lib/riskfactors'
 import type { PathModel, EvidenceItem } from '../lib/pathmodel'
 import { sevColor, sevBg } from '../lib/format'
 import { SeverityChip, PathBadges } from './paths'
@@ -353,26 +355,72 @@ function Narrative({ hops, step, onStep }: { hops: PathModel['hops']; step: numb
 }
 
 // ── score rail ──────────────────────────────────────────────────────────────
-const FACTORS = [
-  { key: 'exposure', label: 'Exposure', hint: 'how reachable the entry point is' },
-  { key: 'exploitability', label: 'Exploitability', hint: 'whether a usable flaw sits on the path' },
-  { key: 'privilege', label: 'Privilege', hint: 'what the identity on the path holds' },
-  { key: 'impact', label: 'Impact', hint: 'what the terminal is worth' },
-  { key: 'reach', label: 'Reach', hint: 'how much of the estate this opens' },
-]
+// ── the risk-factor table ───────────────────────────────────────────────────
+// Replaces a row of plain bars. A bar shows a value; this shows what the value MEANS,
+// what it drives (probability vs impact), where it came from (asset / path / threat
+// intelligence), and -- when the arithmetic actually decided the score -- what the score
+// would be if that one factor were neutral. See lib/riskfactors.ts for why "if neutral"
+// rather than "contribution".
+const AXIS_LABEL: Record<Axis, string> = { probability: 'likelihood', impact: 'impact' }
+const ORIGIN_LABEL: Record<Origin, string> = {
+  asset: 'asset', path: 'path', threat: 'threat intel',
+}
 
-function Bar({ label, hint, v }: { label: string; hint: string; v: number }) {
-  const pct = Math.max(0, Math.min(1, v)) * 100
+function StateChip({ state }: { state: FactorRow['state'] }) {
+  if (state === 'active') return null
+  const map: Record<string, [string, string, string]> = {
+    dominated: ['not in the product', 'var(--ink3)', 'var(--panel2)'],
+    saturated: ['clamped', 'var(--med)', 'var(--medbg)'],
+    overridden: ['overridden', 'var(--med)', 'var(--medbg)'],
+  }
+  const [text, fg, bg] = map[state]
   return (
-    <div>
-      <div className="flex items-baseline justify-between mb-1">
-        <span className="text-xs font-semibold text-ink">{label}</span>
-        <span className="font-mono text-xs font-bold text-ink2 tabular-nums">{v.toFixed(2)}</span>
+    <span className="text-[9px] font-bold uppercase tracking-wide rounded px-1.5 py-0.5"
+      style={{ color: fg, background: bg }}>{text}</span>
+  )
+}
+
+function FactorRowView({ row }: { row: FactorRow }) {
+  const pct = Math.max(0, Math.min(1, row.value)) * 100
+  const inactive = row.state !== 'active'
+  return (
+    <div style={{ opacity: inactive ? 0.62 : 1 }}>
+      <div className="flex items-baseline gap-2 mb-1">
+        <span className="text-xs font-semibold text-ink">{row.label}</span>
+        <StateChip state={row.state} />
+        <span className="ml-auto font-mono text-xs font-bold text-ink2 tabular-nums">
+          {row.value.toFixed(2)}
+        </span>
       </div>
       <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--line2)' }}>
-        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: 'var(--accent)' }} />
+        <div className="h-full rounded-full"
+          style={{ width: `${pct}%`,
+                   background: inactive ? 'var(--ink3)' : 'var(--accent)' }} />
       </div>
-      <div className="text-[10px] text-ink3 mt-1">{hint}</div>
+      <div className="text-[10px] text-ink3 mt-1 leading-snug">{row.meaning}</div>
+      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+        <span className="text-[9px] rounded px-1.5 py-0.5 font-semibold"
+          style={{ background: 'var(--panel2)', color: 'var(--ink3)' }}>
+          drives {AXIS_LABEL[row.axis]}
+        </span>
+        <span className="text-[9px] rounded px-1.5 py-0.5 font-semibold"
+          style={{ background: 'var(--panel2)', color: 'var(--ink3)' }}>
+          from {ORIGIN_LABEL[row.origin]}
+        </span>
+        {row.state === 'active' && row.withheld! > 0 && (
+          <span className="text-[9px] rounded px-1.5 py-0.5 font-semibold font-mono tabular-nums"
+            style={{ background: 'var(--accentdim)', color: 'var(--accent)' }}
+            title={`If this factor alone were 1.00, the score would be ${row.ifNeutral}.`}>
+            if neutral {row.ifNeutral} (+{row.withheld})
+          </span>
+        )}
+        {row.state === 'active' && row.withheld === 0 && (
+          <span className="text-[9px] text-ink3">already at maximum</span>
+        )}
+      </div>
+      {row.note && (
+        <div className="text-[10px] text-ink3 mt-1 leading-snug italic">{row.note}</div>
+      )}
     </div>
   )
 }
@@ -407,6 +455,7 @@ export function AttackPathCanvas({
   onFocusNode?: (nid: string) => void
 }) {
   const model = useModel(path, graph, catalog)
+  const table = useMemo(() => factorTable(path), [path])
   const [step, setStep] = useState(0)
 
   // Esc closes; ← / → walk the narrative, which is how this gets read.
@@ -465,10 +514,20 @@ export function AttackPathCanvas({
             <div className="text-[10px] font-mono text-ink3 rounded-lg px-2.5 py-2 mb-3" style={{ background: 'var(--panel2)' }}>
               exposure × exploitability × max(privilege, impact) × reach × boost
             </div>
-            <div className="flex flex-col gap-3">
-              {FACTORS.map((f) => (
-                <Bar key={f.key} label={f.label} hint={f.hint} v={Number(path.factors?.[f.key] ?? 0)} />
-              ))}
+
+            {/* What actually set the number. Shown FIRST and always, because when a floor
+                or cap bound, the factor rows below describe a derivation that did not
+                happen -- and a reader who skims must not miss that. */}
+            <div className="rounded-lg px-3 py-2.5 mb-3 text-[11px] leading-relaxed"
+              style={{
+                background: table.determinedBy === 'arithmetic' ? 'var(--panel2)' : 'var(--medbg)',
+                color: table.determinedBy === 'arithmetic' ? 'var(--ink2)' : 'var(--med)',
+              }}>
+              {table.verdict}
+            </div>
+
+            <div className="flex flex-col gap-3.5">
+              {table.rows.map((r) => <FactorRowView key={r.key} row={r} />)}
             </div>
             <p className="font-mono text-[11px] text-ink3 mt-3 leading-relaxed">{path.rationale}</p>
           </div>
