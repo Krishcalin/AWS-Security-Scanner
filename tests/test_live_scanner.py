@@ -118,7 +118,11 @@ class TestDataStructures(unittest.TestCase):
         # 64: +S3TABLES, VPCLATTICE, CODEARTIFACT, DIRECTORYSERVICE,
         # PROMETHEUS, XRAY -- batch 3, the first written on aws_checkdef from
         # the start rather than retrofitted onto it.
-        self.assertEqual(len(SECTIONS), 64)
+        # 69: +LAKEFORMATION, WORKSPACESWEB, STORAGEGATEWAY, PAYMENTCRYPTO,
+        # MANAGEDBLOCKCHAIN -- batch 4. MediaStore was in the requested set and
+        # is absent on purpose: AWS ended support for it on 2025-11-13, and a
+        # check that can never fire reads as coverage.
+        self.assertEqual(len(SECTIONS), 69)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

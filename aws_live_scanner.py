@@ -93,6 +93,7 @@ import aws_checkdef
 import aws_extsvc
 import aws_extsvc2
 import aws_extsvc3
+import aws_extsvc4
 import aws_segmentation
 import aws_shadowai
 import aws_ailog
@@ -241,6 +242,11 @@ SECTIONS = [
     # Batch 3.
     "S3TABLES", "VPCLATTICE", "CODEARTIFACT", "DIRECTORYSERVICE",
     "PROMETHEUS", "XRAY",
+    # Batch 4. MediaStore was in the requested set and is deliberately absent:
+    # AWS ended support for it on 2025-11-13, and a check that cannot fire reads
+    # as coverage. See aws_extsvc4 for the full note.
+    "LAKEFORMATION", "WORKSPACESWEB", "STORAGEGATEWAY", "PAYMENTCRYPTO",
+    "MANAGEDBLOCKCHAIN",
     "CORRELATE",
 ]
 
@@ -287,6 +293,11 @@ SECTION_LABELS = {
     "DIRECTORYSERVICE": "AWS DIRECTORY SERVICE",
     "PROMETHEUS":     "AMAZON MANAGED PROMETHEUS",
     "XRAY":           "AWS X-RAY",
+    "LAKEFORMATION":  "AWS LAKE FORMATION",
+    "WORKSPACESWEB":  "AMAZON WORKSPACES WEB",
+    "STORAGEGATEWAY": "AWS STORAGE GATEWAY",
+    "PAYMENTCRYPTO":  "AWS PAYMENT CRYPTOGRAPHY",
+    "MANAGEDBLOCKCHAIN": "AMAZON MANAGED BLOCKCHAIN",
     "ELASTICACHE":    "AMAZON ELASTICACHE",
     "OPENSEARCH":     "AMAZON OPENSEARCH",
     "DYNAMODB":       "AMAZON DYNAMODB",
@@ -8816,6 +8827,222 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     # BATCH 3 — declared via aws_checkdef (see aws_extsvc3)
     # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
+    # BATCH 4 — declared via aws_checkdef (see aws_extsvc4)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_lakeformation(self):
+        """LF-01/02 — IAM_ALLOWED_PRINCIPALS switches Lake Formation off."""
+        self._section_header("LAKEFORMATION")
+        try:
+            lf = self._client("lakeformation")
+            settings = (lf.get_data_lake_settings() or {}).get("DataLakeSettings") or {}
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("LF-01",
+                                           "lakeformation:GetDataLakeSettings")
+            settings = None
+
+        if settings is not None:
+            r = aws_extsvc4.lf_default_permissions(settings)
+            if r["bypassed"]:
+                self._add("FAIL", "LF-01", "LAKEFORMATION", "settings",
+                          f"{r['statement']} | settings")
+            elif r["known"]:
+                self._add("PASS", "LF-01", "LAKEFORMATION", "settings",
+                          f"Lake Formation default permissions do not grant "
+                          f"IAM_ALLOWED_PRINCIPALS | settings")
+
+        try:
+            perms = self._tokens(lf.list_permissions, "PrincipalResourcePermissions")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("LF-02", "lakeformation:ListPermissions")
+            return
+        r = aws_extsvc4.lf_grants(perms)
+        if r["bypassed"]:
+            self._add("FAIL", "LF-02", "LAKEFORMATION", "permissions",
+                      f"{r['statement']} | permissions")
+        else:
+            self._add("PASS", "LF-02", "LAKEFORMATION", "permissions",
+                      f"No Lake Formation resource grants IAM_ALLOWED_PRINCIPALS "
+                      f"| permissions")
+
+    def _check_workspacesweb(self):
+        """WSW-01/02 — a managed browser that exists to reach internal applications."""
+        self._section_header("WORKSPACESWEB")
+        try:
+            ww = self._client("workspaces-web")
+            portals = self._tokens(ww.list_portals, "portals", token_key="nextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("WSW-01", "WSW-02"):
+                    self._coverage.note_denied(cid, "workspaces-web:ListPortals")
+            return
+
+        for pt in portals:
+            arn = (pt or {}).get("portalArn")
+            if not arn:
+                continue
+            try:
+                full = (ww.get_portal(portalArn=arn) or {}).get("portal") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    for cid in ("WSW-01", "WSW-02"):
+                        self._coverage.note_denied(cid, "workspaces-web:GetPortal")
+                continue
+            r = aws_extsvc4.wsw_portal(full)
+            nm = r["name"] or arn
+            if not r["ip_restricted"]:
+                self._add("FAIL", "WSW-01", "WORKSPACESWEB", nm,
+                          f"{r['statement']} | {nm}")
+            else:
+                self._add("PASS", "WSW-01", "WORKSPACESWEB", nm,
+                          f"WorkSpaces Web portal {nm} has IP access settings | {nm}")
+            if not r["user_logging"] and not r["session_logging"]:
+                self._add("FAIL", "WSW-02", "WORKSPACESWEB", nm,
+                          f"{r['logging_statement']} | {nm}")
+            else:
+                self._add("PASS", "WSW-02", "WORKSPACESWEB", nm,
+                          f"WorkSpaces Web portal {nm} records user access | {nm}")
+
+    def _check_storagegateway(self):
+        """SGW-01/02 — a file share is a window onto an S3 bucket."""
+        self._section_header("STORAGEGATEWAY")
+        try:
+            sgw = self._client("storagegateway")
+            shares = self._tokens(sgw.list_file_shares, "FileShareInfoList",
+                                  token_key="Marker")
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("SGW-01", "SGW-02"):
+                    self._coverage.note_denied(cid, "storagegateway:ListFileShares")
+            return
+
+        nfs = [s.get("FileShareARN") for s in shares
+               if (s or {}).get("FileShareType") == "NFS" and s.get("FileShareARN")]
+        smb = [s.get("FileShareARN") for s in shares
+               if (s or {}).get("FileShareType") == "SMB" and s.get("FileShareARN")]
+
+        for i in range(0, len(nfs), 10):
+            try:
+                got = (sgw.describe_nfs_file_shares(
+                    FileShareARNList=nfs[i:i + 10]) or {}
+                ).get("NFSFileShareInfoList") or []
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied(
+                        "SGW-01", "storagegateway:DescribeNFSFileShares")
+                break
+            for sh in got:
+                r = aws_extsvc4.sgw_nfs_share(sh)
+                nm = r["arn"].split("/")[-1] or "?"
+                if r["world_open"]:
+                    self._add("FAIL", "SGW-01", "STORAGEGATEWAY", nm,
+                              f"{r['statement']} | {nm}")
+                else:
+                    self._add("PASS", "SGW-01", "STORAGEGATEWAY", nm,
+                              f"Storage Gateway NFS share {nm} restricts its client "
+                              f"list | {nm}")
+                e2 = aws_extsvc4.sgw_share_encryption(sh)
+                if e2["known"] and not e2["cmk"]:
+                    self._add("FAIL", "SGW-02", "STORAGEGATEWAY", nm,
+                              f"{e2['statement']} | {nm}")
+
+        for i in range(0, len(smb), 10):
+            try:
+                got = (sgw.describe_smb_file_shares(
+                    FileShareARNList=smb[i:i + 10]) or {}
+                ).get("SMBFileShareInfoList") or []
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied(
+                        "SGW-02", "storagegateway:DescribeSMBFileShares")
+                break
+            for sh in got:
+                r = aws_extsvc4.sgw_share_encryption(sh)
+                nm = r["arn"].split("/")[-1] or "?"
+                if r["known"] and not r["cmk"]:
+                    self._add("FAIL", "SGW-02", "STORAGEGATEWAY", nm,
+                              f"{r['statement']} | {nm}")
+                elif r["cmk"]:
+                    self._add("PASS", "SGW-02", "STORAGEGATEWAY", nm,
+                              f"Storage Gateway share {nm} uses a customer-managed "
+                              f"key | {nm}")
+
+    def _check_paymentcrypto(self):
+        """PAY-01 — the HSM boundary is why this service exists rather than KMS."""
+        self._section_header("PAYMENTCRYPTO")
+        try:
+            pc = self._client("payment-cryptography")
+            keys = self._tokens(pc.list_keys, "Keys", token_key="NextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("PAY-01", "payment-cryptography:ListKeys")
+            return
+
+        for k in keys:
+            arn = (k or {}).get("KeyArn")
+            if not arn:
+                continue
+            try:
+                full = (pc.get_key(KeyIdentifier=arn) or {}).get("Key") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("PAY-01",
+                                               "payment-cryptography:GetKey")
+                continue
+            r = aws_extsvc4.paycrypt_key(full)
+            nm = arn.split("/")[-1]
+            if r["exportable"]:
+                self._add("FAIL", "PAY-01", "PAYMENTCRYPTO", nm,
+                          f"{r['statement']} | {nm}")
+            elif r["known"]:
+                self._add("PASS", "PAY-01", "PAYMENTCRYPTO", nm,
+                          f"Payment Cryptography key {nm} is not exportable | {nm}")
+
+    def _check_managedblockchain(self):
+        """MBC-01 — the CA is what admits identities to an immutable ledger."""
+        self._section_header("MANAGEDBLOCKCHAIN")
+        try:
+            mb = self._client("managedblockchain")
+            networks = self._tokens(mb.list_networks, "Networks")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("MBC-01", "managedblockchain:ListMembers")
+            return
+
+        for net in networks:
+            nid = (net or {}).get("Id")
+            if not nid:
+                continue
+            try:
+                members = self._tokens(mb.list_members, "Members", NetworkId=nid)
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("MBC-01",
+                                               "managedblockchain:ListMembers")
+                continue
+            for m in members:
+                mid = (m or {}).get("Id")
+                if not mid or not (m or {}).get("IsOwned", True):
+                    continue
+                try:
+                    full = (mb.get_member(NetworkId=nid, MemberId=mid) or {}
+                            ).get("Member") or {}
+                except Exception as e:
+                    if self._is_access_denied(e):
+                        self._coverage.note_denied("MBC-01",
+                                                   "managedblockchain:GetMember")
+                    continue
+                r = aws_extsvc4.mbc_member(full)
+                nm = r["name"] or mid
+                if r["ca_logging_known"] and not r["ca_logging"]:
+                    self._add("FAIL", "MBC-01", "MANAGEDBLOCKCHAIN", nm,
+                              f"{r['statement']} | {nm}")
+                elif r["ca_logging"]:
+                    self._add("PASS", "MBC-01", "MANAGEDBLOCKCHAIN", nm,
+                              f"Managed Blockchain member {nm} publishes CA logs | {nm}")
+
     def _check_s3tables(self):
         """S3T-01/02 — S3 Tables buckets carry their OWN policy and encryption, which
         no existing S3 check inspects."""
@@ -15378,6 +15605,11 @@ class AWSLiveScanner:
             "DIRECTORYSERVICE": self._check_directoryservice,
             "PROMETHEUS":     self._check_prometheus,
             "XRAY":           self._check_xray,
+            "LAKEFORMATION":  self._check_lakeformation,
+            "WORKSPACESWEB":  self._check_workspacesweb,
+            "STORAGEGATEWAY": self._check_storagegateway,
+            "PAYMENTCRYPTO":  self._check_paymentcrypto,
+            "MANAGEDBLOCKCHAIN": self._check_managedblockchain,
             "ELASTICACHE":    self._check_elasticache,
             "OPENSEARCH":     self._check_opensearch,
             "DYNAMODB":       self._check_dynamodb,

@@ -3791,7 +3791,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
 # other. merge_detail refuses to shadow an id already present above.
 import aws_checkdef          # noqa: E402
 import aws_extsvc2
-import aws_extsvc3           # noqa: E402,F401  (imported for its registrations)
+import aws_extsvc3
+import aws_extsvc4           # noqa: E402,F401  (imported for its registrations)
 
 aws_checkdef.merge_detail(FINDING_DETAIL)
 
