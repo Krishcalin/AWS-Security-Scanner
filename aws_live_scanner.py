@@ -94,6 +94,7 @@ import aws_extsvc
 import aws_extsvc2
 import aws_extsvc3
 import aws_extsvc4
+import aws_extsvc5
 import aws_segmentation
 import aws_shadowai
 import aws_ailog
@@ -247,6 +248,9 @@ SECTIONS = [
     # as coverage. See aws_extsvc4 for the full note.
     "LAKEFORMATION", "WORKSPACESWEB", "STORAGEGATEWAY", "PAYMENTCRYPTO",
     "MANAGEDBLOCKCHAIN",
+    # Batch 5 -- first batch authored after the SDK pin moved to botocore 1.43.51,
+    # so the models these were verified against are the models the product ships.
+    "WORKMAIL", "SITEWISE", "IOTMANAGEDINT", "MAILMANAGER", "CODEGURUPROFILER",
     "CORRELATE",
 ]
 
@@ -298,6 +302,11 @@ SECTION_LABELS = {
     "STORAGEGATEWAY": "AWS STORAGE GATEWAY",
     "PAYMENTCRYPTO":  "AWS PAYMENT CRYPTOGRAPHY",
     "MANAGEDBLOCKCHAIN": "AMAZON MANAGED BLOCKCHAIN",
+    "WORKMAIL":       "AMAZON WORKMAIL",
+    "SITEWISE":       "AWS IOT SITEWISE",
+    "IOTMANAGEDINT":  "AWS IOT MANAGED INTEGRATIONS",
+    "MAILMANAGER":    "SES MAIL MANAGER",
+    "CODEGURUPROFILER": "AMAZON CODEGURU PROFILER",
     "ELASTICACHE":    "AMAZON ELASTICACHE",
     "OPENSEARCH":     "AMAZON OPENSEARCH",
     "DYNAMODB":       "AMAZON DYNAMODB",
@@ -8830,6 +8839,196 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     # BATCH 4 — declared via aws_checkdef (see aws_extsvc4)
     # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
+    # BATCH 5 — declared via aws_checkdef (see aws_extsvc5)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_workmail(self):
+        """WM-01/02/03 — a mailbox is a credential store with a login page."""
+        self._section_header("WORKMAIL")
+        ids = ("WM-01", "WM-02", "WM-03")
+        try:
+            wm = self._client("workmail")
+            orgs = self._tokens(wm.list_organizations, "OrganizationSummaries")
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ids:
+                    self._coverage.note_denied(cid, "workmail:ListOrganizations")
+            return
+
+        for o in orgs:
+            oid = (o or {}).get("OrganizationId")
+            if not oid:
+                continue
+            try:
+                rules = (wm.list_access_control_rules(OrganizationId=oid) or {}
+                         ).get("Rules") or []
+                r = aws_extsvc5.workmail_access_rules(oid, rules)
+                if r["unrestricted"]:
+                    self._add("FAIL", "WM-01", "WORKMAIL", oid, f"{r['statement']} | {oid}")
+                else:
+                    self._add("PASS", "WM-01", "WORKMAIL", oid,
+                              f"WorkMail organization {oid} has {r['restrictive']} "
+                              f"restricting access control rule(s) | {oid}")
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("WM-01",
+                                               "workmail:ListAccessControlRules")
+
+            try:
+                pol = wm.get_default_retention_policy(OrganizationId=oid) or {}
+                r = aws_extsvc5.workmail_retention(oid, pol)
+                if not r["has_policy"]:
+                    self._add("FAIL", "WM-02", "WORKMAIL", oid, f"{r['statement']} | {oid}")
+                else:
+                    self._add("PASS", "WM-02", "WORKMAIL", oid,
+                              f"WorkMail organization {oid} has a default retention "
+                              f"policy over {r['folders']} folder(s) | {oid}")
+            except Exception as e:
+                # EntityNotFound simply means no policy is set, which IS the finding.
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("WM-02",
+                                               "workmail:GetDefaultRetentionPolicy")
+                elif "NotFound" in str(e):
+                    r = aws_extsvc5.workmail_retention(oid, None)
+                    self._add("FAIL", "WM-02", "WORKMAIL", oid,
+                              f"{r['statement']} | {oid}")
+
+            try:
+                drules = (wm.list_mobile_device_access_rules(OrganizationId=oid) or {}
+                          ).get("Rules") or []
+                r = aws_extsvc5.workmail_device_rules(oid, drules)
+                if r["unrestricted"]:
+                    self._add("FAIL", "WM-03", "WORKMAIL", oid, f"{r['statement']} | {oid}")
+                else:
+                    self._add("PASS", "WM-03", "WORKMAIL", oid,
+                              f"WorkMail organization {oid} has {r['count']} mobile "
+                              f"device access rule(s) | {oid}")
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied(
+                        "WM-03", "workmail:ListMobileDeviceAccessRules")
+
+    def _check_sitewise(self):
+        """SW-01/02 — industrial telemetry from physical plant."""
+        self._section_header("SITEWISE")
+        try:
+            sw = self._client("iotsitewise")
+        except Exception:
+            return
+        try:
+            cfg = sw.describe_default_encryption_configuration() or {}
+            r = aws_extsvc5.sitewise_encryption(cfg)
+            if r["known"] and not r["cmk"]:
+                self._add("FAIL", "SW-01", "SITEWISE", "encryption",
+                          f"{r['statement']} | encryption")
+            elif r["cmk"]:
+                self._add("PASS", "SW-01", "SITEWISE", "encryption",
+                          f"IoT SiteWise uses a customer-managed KMS key | encryption")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied(
+                    "SW-01", "iotsitewise:DescribeDefaultEncryptionConfiguration")
+
+        try:
+            opts = sw.describe_logging_options() or {}
+            r = aws_extsvc5.sitewise_logging(opts)
+            if r["off"]:
+                self._add("FAIL", "SW-02", "SITEWISE", "logging",
+                          f"{r['statement']} | logging")
+            elif r["known"]:
+                self._add("PASS", "SW-02", "SITEWISE", "logging",
+                          f"IoT SiteWise logging is {r['level']} | logging")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("SW-02",
+                                           "iotsitewise:DescribeLoggingOptions")
+
+    def _check_iotmanagedint(self):
+        """IMI-01 — connection material for third-party device clouds."""
+        self._section_header("IOTMANAGEDINT")
+        try:
+            cfg = self._client(
+                "iot-managed-integrations").get_default_encryption_configuration() or {}
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied(
+                    "IMI-01",
+                    "iotmanagedintegrations:GetDefaultEncryptionConfiguration")
+            return
+        r = aws_extsvc5.imi_encryption(cfg)
+        if r["known"] and not r["cmk"]:
+            self._add("FAIL", "IMI-01", "IOTMANAGEDINT", "encryption",
+                      f"{r['statement']} | encryption")
+        elif r["cmk"]:
+            self._add("PASS", "IMI-01", "IOTMANAGEDINT", "encryption",
+                      f"IoT Managed Integrations uses a customer-managed key "
+                      f"| encryption")
+
+    def _check_mailmanager(self):
+        """MM-01 — a traffic policy that fails open."""
+        self._section_header("MAILMANAGER")
+        try:
+            mm = self._client("mailmanager")
+            policies = self._tokens(mm.list_traffic_policies, "TrafficPolicies",
+                                    token_key="NextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("MM-01", "ses:ListTrafficPolicies")
+            return
+
+        for tp in policies:
+            pid = (tp or {}).get("TrafficPolicyId")
+            if not pid:
+                continue
+            try:
+                full = mm.get_traffic_policy(TrafficPolicyId=pid) or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("MM-01", "ses:GetTrafficPolicy")
+                continue
+            r = aws_extsvc5.mailmanager_policy(
+                (tp or {}).get("TrafficPolicyName") or pid, full)
+            nm = r["name"] or pid
+            if r["fails_open"]:
+                self._add("FAIL", "MM-01", "MAILMANAGER", nm, f"{r['statement']} | {nm}")
+            elif r["known"]:
+                self._add("PASS", "MM-01", "MAILMANAGER", nm,
+                          f"SES Mail Manager traffic policy {nm} defaults to "
+                          f"{r['default_action']} | {nm}")
+
+    def _check_codeguruprofiler(self):
+        """CGP-01 — a profile is a map of the application's internals."""
+        self._section_header("CODEGURUPROFILER")
+        try:
+            cg = self._client("codeguruprofiler")
+            groups = self._tokens(cg.list_profiling_groups, "profilingGroupNames",
+                                  token_key="nextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("CGP-01",
+                                           "codeguru-profiler:ListProfilingGroups")
+            return
+
+        for g in groups:
+            name = g if isinstance(g, str) else (g or {}).get("name")
+            if not name:
+                continue
+            try:
+                pol = (cg.get_policy(profilingGroupName=name) or {}).get("policy")
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("CGP-01",
+                                               "codeguru-profiler:GetPolicy")
+                continue
+            r = aws_extsvc5.codeguru_policy(name, pol)
+            if r["public"]:
+                self._add("FAIL", "CGP-01", "CODEGURUPROFILER", name,
+                          f"{r['statement']} | {name}")
+            elif r["has_policy"]:
+                self._add("PASS", "CGP-01", "CODEGURUPROFILER", name,
+                          f"CodeGuru Profiler group {name} has no wildcard-principal "
+                          f"policy | {name}")
+
     def _check_lakeformation(self):
         """LF-01/02 — IAM_ALLOWED_PRINCIPALS switches Lake Formation off."""
         self._section_header("LAKEFORMATION")
@@ -15610,6 +15809,11 @@ class AWSLiveScanner:
             "STORAGEGATEWAY": self._check_storagegateway,
             "PAYMENTCRYPTO":  self._check_paymentcrypto,
             "MANAGEDBLOCKCHAIN": self._check_managedblockchain,
+            "WORKMAIL":       self._check_workmail,
+            "SITEWISE":       self._check_sitewise,
+            "IOTMANAGEDINT":  self._check_iotmanagedint,
+            "MAILMANAGER":    self._check_mailmanager,
+            "CODEGURUPROFILER": self._check_codeguruprofiler,
             "ELASTICACHE":    self._check_elasticache,
             "OPENSEARCH":     self._check_opensearch,
             "DYNAMODB":       self._check_dynamodb,

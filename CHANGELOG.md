@@ -7,6 +7,35 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Extended service coverage, batch 5** (`aws_extsvc5.py`, 5 sections, 8 checks) — the
+  first batch authored *after* the SDK pin moved, so the models these were verified
+  against are finally the models the product ships.
+  - **Amazon WorkMail** (`WM-01/02/03`) — a mailbox is a credential store with a login
+    page: password resets, MFA enrolment and signed approvals all arrive there, which is
+    why mailbox compromise is usually the first step rather than the objective. Without
+    access control rules any protocol is reachable from any network; without mobile
+    device rules any personal phone holds a **persistent offline replica that survives
+    credential revocation**; without retention, a compromise today exposes the entire
+    history, because nothing that was never deleted can be un-exposed.
+  - **AWS IoT SiteWise** (`SW-01/02`) — industrial telemetry from physical plant: asset
+    hierarchies describing how a facility is built, process values that are evidentiary
+    in a regulated plant. Logging defaults to `OFF`, and tampering with telemetry
+    surfaces first as an ingestion anomaly — with nowhere to appear.
+  - **AWS IoT Managed Integrations** (`IMI-01`) — a 2025 API that ships with its own
+    default key, so an account arrives there by not choosing. It holds connection
+    material for **third-party device clouds**: an outward path into systems whose logs
+    you cannot read.
+  - **SES Mail Manager** (`MM-01`) — `DefaultAction=ALLOW` fails **open**. A policy with
+    a long list of DENY statements reads as filtering, when it is filtering an
+    enumerated set and delivering everything else.
+  - **Amazon CodeGuru Profiler** (`CGP-01`) — profiles are production stack traces, so
+    the method names in them are a map of the application's internals assembled from the
+    running system.
+  - **Two more client-name/IAM-prefix traps, both caught automatically this time.** Mail
+    Manager signs as **`ses`**, and CodeGuru Profiler's prefix is **`codeguru-profiler`**
+    with a hyphen. These are the fourth and fifth instances; every previous one needed a
+    human to notice, and `test_iam_surface` validated both without being asked.
+
 - **Extended service coverage, batch 4** (`aws_extsvc4.py`, 5 sections, 8 checks).
   - **AWS Lake Formation** (`LF-01/02`) — the most consequential setting in the batch.
     `IAM_ALLOWED_PRINCIPALS` in the default database or table permissions means Lake

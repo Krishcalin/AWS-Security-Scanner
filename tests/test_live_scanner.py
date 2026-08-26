@@ -122,7 +122,10 @@ class TestDataStructures(unittest.TestCase):
         # MANAGEDBLOCKCHAIN -- batch 4. MediaStore was in the requested set and
         # is absent on purpose: AWS ended support for it on 2025-11-13, and a
         # check that can never fire reads as coverage.
-        self.assertEqual(len(SECTIONS), 69)
+        # 74: +WORKMAIL, SITEWISE, IOTMANAGEDINT, MAILMANAGER,
+        # CODEGURUPROFILER -- batch 5, the first authored after the SDK pin
+        # moved to botocore 1.43.51.
+        self.assertEqual(len(SECTIONS), 74)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:
