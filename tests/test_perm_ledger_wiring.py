@@ -79,6 +79,8 @@ def test_preflight_computes_the_ledger_from_our_own_role():
     s._preflight_permissions()
     assert s._perm_ledger is not None
     assert s._perm_ledger.missing_actions == (
+        "acm-pca:GetPolicy",
+        "acm-pca:ListCertificateAuthorities",
         "aoss:BatchGetCollection",
         "aoss:GetAccessPolicy",
         "aoss:GetSecurityPolicy",
@@ -114,6 +116,8 @@ def test_preflight_computes_the_ledger_from_our_own_role():
         "elasticmapreduce:DescribeCluster",
         "elasticmapreduce:GetBlockPublicAccessConfiguration",
         "elasticmapreduce:ListClusters",
+        "glue:GetDataCatalogEncryptionSettings",
+        "glue:GetDevEndpoints",
         "imagebuilder:GetImagePolicy",
         "imagebuilder:ListImages",
         "iot:DescribeCACertificate",
@@ -121,8 +125,16 @@ def test_preflight_computes_the_ledger_from_our_own_role():
         "iot:GetV2LoggingOptions",
         "iot:ListCACertificates",
         "iot:ListPolicies",
+        "lightsail:GetInstancePortStates",
+        "lightsail:GetInstances",
+        "lightsail:GetRelationalDatabases",
+        "network-firewall:DescribeFirewall",
+        "network-firewall:DescribeFirewallPolicy",
+        "network-firewall:DescribeLoggingConfiguration",
+        "network-firewall:ListFirewalls",
         "organizations:DescribePolicy",
         "organizations:ListPoliciesForTarget",
+        "quicksight:DescribeAccountSettings",
         "rds:DescribeDBClusterSnapshotAttributes",
         "rds:DescribeDBClusterSnapshots",
         "rds:DescribeDBClusters",
@@ -130,6 +142,9 @@ def test_preflight_computes_the_ledger_from_our_own_role():
         "s3vectors:GetVectorBucket",
         "s3vectors:GetVectorBucketPolicy",
         "s3vectors:ListVectorBuckets",
+        "sso:GetInlinePolicyForPermissionSet",
+        "sso:ListInstances",
+        "sso:ListPermissionSets",
         "transfer:DescribeServer",
         "transfer:ListServers")
 
@@ -154,7 +169,7 @@ def test_preflight_records_the_blocked_checks_as_not_evaluated():
     # checks. The preflight derives this set from the ledger, so it picked all three
     # up without being told - which is the behaviour the runtime denial path in
     # _grade_guardrails was corrected to match.
-    assert set(s._coverage.not_evaluated) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MART-01", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "CB-01", "CB-02", "DOCDB-01", "DOCDB-02", "DOCDB-03", "EMR-01", "EMR-02", "IMGB-01", "IOT-01", "IOT-02", "IOT-03", "XFER-01", "XFER-02", "XFER-03", "NITRO-01", "NITRO-02", "PERIM-01", "PERIM-02", "PERIM-03", "SHAI-01", "SHAI-02", "SHAI-03", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
+    assert set(s._coverage.not_evaluated) == {"AGC-01", "AGC-02", "AGC-03", "AGC-04", "AGC-05", "AGC-06", "AGC-07", "AGC-08", "AGT-03", "AGT-04", "AGY-01", "AGY-02", "AGY-03", "AIGRD-01", "AIGRD-02", "AIGRD-04", "AILOG-04", "AILOG-05", "AILOG-06", "AMEM-02", "MART-01", "MCP-01", "MCP-02", "MCP-03", "MCP-04", "GLUE-01", "GLUE-02", "LSAIL-01", "LSAIL-02", "NFW-01", "NFW-02", "NFW-03", "PCA-01", "QS-01", "SSO-01", "CB-01", "CB-02", "DOCDB-01", "DOCDB-02", "DOCDB-03", "EMR-01", "EMR-02", "IMGB-01", "IOT-01", "IOT-02", "IOT-03", "XFER-01", "XFER-02", "XFER-03", "NITRO-01", "NITRO-02", "PERIM-01", "PERIM-02", "PERIM-03", "SHAI-01", "SHAI-02", "SHAI-03", "TFLOW-01", "VEC-01", "VEC-02", "VEC-03", "VEC-04", "VEC-05", "VEC-06", "VEC-07"}
     assert not s._coverage.complete
 
 
@@ -221,6 +236,8 @@ def test_the_scan_result_carries_coverage_and_the_ledger():
     assert "AGT-03" in payload["coverage"]["not_evaluated"]
     assert payload["permission_ledger"] is not None
     assert payload["permission_ledger"]["missing_actions"] == [
+        "acm-pca:GetPolicy",
+        "acm-pca:ListCertificateAuthorities",
         "aoss:BatchGetCollection",
         "aoss:GetAccessPolicy",
         "aoss:GetSecurityPolicy",
@@ -256,6 +273,8 @@ def test_the_scan_result_carries_coverage_and_the_ledger():
         "elasticmapreduce:DescribeCluster",
         "elasticmapreduce:GetBlockPublicAccessConfiguration",
         "elasticmapreduce:ListClusters",
+        "glue:GetDataCatalogEncryptionSettings",
+        "glue:GetDevEndpoints",
         "imagebuilder:GetImagePolicy",
         "imagebuilder:ListImages",
         "iot:DescribeCACertificate",
@@ -263,8 +282,16 @@ def test_the_scan_result_carries_coverage_and_the_ledger():
         "iot:GetV2LoggingOptions",
         "iot:ListCACertificates",
         "iot:ListPolicies",
+        "lightsail:GetInstancePortStates",
+        "lightsail:GetInstances",
+        "lightsail:GetRelationalDatabases",
+        "network-firewall:DescribeFirewall",
+        "network-firewall:DescribeFirewallPolicy",
+        "network-firewall:DescribeLoggingConfiguration",
+        "network-firewall:ListFirewalls",
         "organizations:DescribePolicy",
         "organizations:ListPoliciesForTarget",
+        "quicksight:DescribeAccountSettings",
         "rds:DescribeDBClusterSnapshotAttributes",
         "rds:DescribeDBClusterSnapshots",
         "rds:DescribeDBClusters",
@@ -272,6 +299,9 @@ def test_the_scan_result_carries_coverage_and_the_ledger():
         "s3vectors:GetVectorBucket",
         "s3vectors:GetVectorBucketPolicy",
         "s3vectors:ListVectorBuckets",
+        "sso:GetInlinePolicyForPermissionSet",
+        "sso:ListInstances",
+        "sso:ListPermissionSets",
         "transfer:DescribeServer",
         "transfer:ListServers"]
 
@@ -301,6 +331,6 @@ def test_the_annotated_policy_reaches_the_payload():
     # 15: slice 2.3 added GetGateway and ListGatewayTargets, which are what let
     # AGC-05 grade inbound authorization against the OUTBOUND configuration
     # rather than reporting authorizerType as a boolean.
-    assert len(rows) == 53
+    assert len(rows) == 68
     for row in rows:
         assert row["why"] and row["enables"] and row["forfeited_if_declined"]

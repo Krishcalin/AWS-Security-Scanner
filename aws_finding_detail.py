@@ -3786,6 +3786,15 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
     },
 }
 
+# Detail pages for checks declared via aws_checkdef come from the same declaration that
+# produced their severity and remediation, so a check cannot exist with one and not the
+# other. merge_detail refuses to shadow an id already present above.
+import aws_checkdef          # noqa: E402
+import aws_extsvc2           # noqa: E402,F401  (imported for its registrations)
+
+aws_checkdef.merge_detail(FINDING_DETAIL)
+
+
 
 def get_detail(check_id: str) -> Optional[Dict[str, object]]:
     """Return the detailed write-up for a check id, or None if none is catalogued."""
