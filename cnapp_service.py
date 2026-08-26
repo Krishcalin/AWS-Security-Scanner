@@ -156,11 +156,16 @@ def serialize_scanner(sc) -> dict:
     node-link graph, needed to rebuild an org-wide graph later)."""
     import aws_live_scanner as als
     score = als.compute_risk_score(sc.results)
+    # The score counts only what was OBSERVED, so a refused read raises it. Attach
+    # what the scan could not see; the score itself is untouched.
+    qual = als.qualified_posture(
+        sc.results, dict(getattr(getattr(sc, "_coverage", None), "not_evaluated", {})))
     return {
         "account": sc.account,
         "region": sc.region,
         "posture_score": score,
-        "posture_grade": als.score_to_grade(score),
+        "posture_grade": qual.grade,   # None when withheld -- see qualify(); do NOT fall back here
+        "posture_coverage": qual.to_dict(),
         "summary": {
             "PASS": sum(1 for r in sc.results if r.status == "PASS"),
             "FAIL": sum(1 for r in sc.results if r.status == "FAIL"),

@@ -2025,6 +2025,31 @@ def compute_risk_score(results: List[Result]) -> float:
     return max(0.0, min(100.0, round(100 - penalty, 1)))
 
 
+def qualified_posture(results: List[Result],
+                     not_evaluated: Optional[Dict[str, str]] = None):
+    """Posture score plus what the scan could not evaluate.
+
+    ``compute_risk_score`` is 100 - the penalty for every FAIL it SAW. A check that
+    returned AccessDenied contributes no penalty, so losing a permission raises the
+    score: on a four-check example, losing iam:ListUsers moved an account from 75/C
+    to 85/B. The scan got worse and the grade improved.
+
+    This does not change that arithmetic -- the score is written to
+    ``scans.posture_score`` and accumulates into 24 months of history, and silently
+    re-weighting it would rewrite every dashboard and every trend line. It adds the
+    half that was always missing, and withholds the LETTER GRADE when coverage is
+    too low, because the grade is the artefact that travels without its caveat.
+    """
+    import aws_riskscore
+    return aws_riskscore.qualify(
+        compute_risk_score(results),
+        {r.check_id for r in results},
+        not_evaluated or {},
+        check_severity=CHECK_SEVERITY,
+        severity_weights=SEVERITY_WEIGHTS,
+        grade_fn=score_to_grade)
+
+
 def score_to_grade(score: float) -> str:
     if score >= 90: return "A"
     if score >= 80: return "B"
@@ -16586,15 +16611,28 @@ class AWSLiveScanner:
         return sorted((seen[cid] for cid in order),
                       key=lambda x: (self._SEV_ORDER.get(x["severity"], 4), x["check_id"]))
 
+    def qualified_posture(self):
+        """This scan's posture score with its coverage attached.
+
+        Reads ``self._coverage.not_evaluated``, which the scan has been building
+        all along at every AccessDenied -- the only moment we know a check was
+        refused. Scoring simply threw it away."""
+        return qualified_posture(self.results,
+                                 dict(getattr(self._coverage, "not_evaluated", {})))
+
     def save_json(self, path: str):
         score = compute_risk_score(self.results)
+        # The score counts only what was OBSERVED, so a refused read raises it.
+        # qualify() leaves the number alone and adds what the scan could not see.
+        qual = self.qualified_posture()
         data = {
             "scanner":   f"AWS Live Security Scanner v{VERSION}",
             "account":   self.account,
             "region":    self.region,
             "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
             "posture_score": score,
-            "posture_grade": score_to_grade(score),
+            "posture_grade": qual.grade,   # None when withheld -- see qualify(); do NOT fall back here
+            "posture_coverage": qual.to_dict(),
             "summary": {
                 "PASS": sum(1 for r in self.results if r.status == "PASS"),
                 "FAIL": sum(1 for r in self.results if r.status == "FAIL"),

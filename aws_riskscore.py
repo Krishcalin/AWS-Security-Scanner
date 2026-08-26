@@ -577,6 +577,189 @@ def score(
         weight_coverage=round(coverage, 6))
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# The same rule, applied to the posture score that actually ships.
+#
+# `aws_live_scanner.compute_risk_score` is 100 − Σ(severity penalty for each FAIL).
+# It counts only what it observed, so a check that was REFUSED contributes no
+# penalty and the score goes UP. Measured on a four-check example: losing
+# `iam:ListUsers` moved an account from 75/C to 85/B. The scan got worse and the
+# grade improved.
+#
+# That number is written to `scans.posture_score`, drives the console grade, and
+# accumulates into the 24-month history OW2-CC-006 requires — so the defect is not
+# cosmetic, it is baked into the trend line.
+#
+# WHY THIS DOES NOT CHANGE THE ARITHMETIC. Re-weighting a shipped score silently
+# rewrites everyone's dashboards and their history; `aws_epistemics` already
+# records that as a change needing its own regression baseline and its own
+# conversation. So :func:`qualify` leaves the number EXACTLY as it was for a
+# complete scan — same score, same grade, byte-identical — and adds what was
+# always missing: what the scan could not see, and how much the score could move
+# if it could have.
+#
+# `unassessed_penalty` is the honest form of that. Rather than scoring a refused
+# check as a pass (today) or as a failure (equally invented), it reports the
+# penalty band that could not be assessed: "85, and up to 20 points of that is
+# unmeasured" is a true statement where "85" alone is not.
+# ══════════════════════════════════════════════════════════════════════════════
+
+POSTURE_COVERAGE_FLOOR = 0.9
+"""Below this share of declared checks evaluated, the GRADE is withheld.
+
+Deliberately strict. A letter grade is the most-copied artefact in the product —
+it lands in a scorecard, a board pack and an auditor's evidence file, all of which
+strip the caveat. The score survives so trend lines do not break; the grade, which
+travels alone, does not."""
+
+WITHHELD = (
+    "Grade withheld: too much of the estate was not evaluated for a letter to mean "
+    "anything. The score is still shown because it is a true statement about what "
+    "was read — but it is a ceiling, not a verdict.")
+
+
+@dataclass(frozen=True)
+class QualifiedPosture:
+    """A posture score carrying what the scan could not see.
+
+    ``score`` is unchanged from :func:`aws_live_scanner.compute_risk_score`. Every
+    other field is new information, never a correction.
+    """
+
+    score: float
+    grade: Optional[str]
+    evaluated: int
+    not_evaluated: int
+    unassessed_penalty: float
+    provisional: bool = False
+    withheld: bool = False
+    top_unassessed: Tuple[Tuple[str, str], ...] = ()
+    unknown_severity: int = 0
+    reason: str = ""
+
+    @property
+    def coverage(self) -> float:
+        total = self.evaluated + self.not_evaluated
+        return 1.0 if not total else self.evaluated / total
+
+    @property
+    def worst_case_score(self) -> float:
+        """Where the score would land if every unevaluated check had failed.
+
+        Not a prediction — the other end of the interval the scan actually
+        establishes. The true score lies somewhere in [worst_case, score].
+        """
+        return round(max(0.0, self.score - self.unassessed_penalty), 1)
+
+    @property
+    def complete(self) -> bool:
+        return self.not_evaluated == 0
+
+    def caveat(self) -> str:
+        if self.complete:
+            return ""
+        bits = ["%d of %d checks were not evaluated (%.0f%% coverage)."
+                % (self.not_evaluated, self.evaluated + self.not_evaluated,
+                   100.0 * self.coverage)]
+        if self.unassessed_penalty > 0:
+            bound = "would be at worst" if self.unknown_severity else "would be"
+            bits.append(
+                "Had they all failed the score %s %.1f, so this posture is a "
+                "ceiling rather than a measurement." % (bound, self.worst_case_score))
+        if self.unknown_severity:
+            bits.append(
+                "%d of them %s no declared severity, so that figure is a lower "
+                "bound on the damage, not the whole of it."
+                % (self.unknown_severity,
+                   "carries" if self.unknown_severity == 1 else "carry"))
+        if self.withheld:
+            bits.append(WITHHELD)
+        elif self.provisional:
+            bits.append("Grade is provisional.")
+        if self.top_unassessed:
+            bits.append("Largest gaps: %s." % ", ".join(
+                "%s (%s)" % (cid, why) for cid, why in self.top_unassessed))
+        return " ".join(bits)
+
+    def to_dict(self) -> dict:
+        return {
+            "posture_score": self.score,
+            "posture_grade": self.grade,
+            "posture_grade_provisional": self.provisional,
+            "posture_grade_withheld": self.withheld,
+            "checks_evaluated": self.evaluated,
+            "checks_not_evaluated": self.not_evaluated,
+            "coverage_pct": round(100.0 * self.coverage, 1),
+            "unassessed_penalty": round(self.unassessed_penalty, 1),
+            "unassessed_penalty_is_lower_bound": bool(self.unknown_severity),
+            "unassessed_unknown_severity": self.unknown_severity,
+            "worst_case_score": self.worst_case_score,
+            "caveat": self.caveat(),
+        }
+
+
+def qualify(
+    score: float,
+    evaluated_check_ids: Iterable[str],
+    not_evaluated: Mapping[str, str],
+    *,
+    check_severity: Optional[Mapping[str, str]] = None,
+    severity_weights: Optional[Mapping[str, float]] = None,
+    grade_fn: Optional[object] = None,
+    coverage_floor: float = POSTURE_COVERAGE_FLOOR,
+) -> QualifiedPosture:
+    """Attach coverage to a posture score without altering it.
+
+    ``not_evaluated`` is ``{check_id: reason}`` — the shape
+    :class:`aws_perm_ledger.CoverageManifest.not_evaluated` already produces, so
+    the scanner has been collecting this all along and only ever discarded it at
+    scoring time.
+
+    ``check_severity`` and ``severity_weights`` are injected rather than imported
+    so this module stays free of the 17k-line scanner; pass
+    ``aws_live_scanner.CHECK_SEVERITY`` and ``.SEVERITY_WEIGHTS``.
+    """
+    evaluated = {c for c in evaluated_check_ids if c}
+    missing = {k: v for k, v in (not_evaluated or {}).items() if k not in evaluated}
+
+    sev_map = check_severity or {}
+    weights = severity_weights or {}
+    penalty = 0.0
+    unknown_severity = 0
+    ranked: List[Tuple[float, str, str]] = []
+    for cid, why in missing.items():
+        sev = sev_map.get(cid)
+        if sev is None or sev not in weights:
+            # The same phantom zero, one level down: a refused check whose severity
+            # nobody declared is not a costless one. Its penalty is unknown, so it is
+            # counted apart and makes unassessed_penalty a LOWER BOUND rather than
+            # being quietly rounded to nothing.
+            unknown_severity += 1
+            ranked.append((0.0, cid, why))
+            continue
+        p = float(weights.get(sev, 0.0))
+        penalty += p
+        ranked.append((p, cid, why))
+    ranked.sort(key=lambda t: (-t[0], t[1]))
+
+    grade = grade_fn(score) if callable(grade_fn) else None
+    n_missing = len(missing)
+    total = len(evaluated) + n_missing
+    cov = 1.0 if not total else len(evaluated) / total
+
+    withheld = bool(n_missing) and cov < coverage_floor
+    provisional = bool(n_missing) and not withheld
+    if withheld:
+        grade = None
+
+    return QualifiedPosture(
+        score=score, grade=grade, evaluated=len(evaluated), not_evaluated=n_missing,
+        unassessed_penalty=penalty, provisional=provisional, withheld=withheld,
+        top_unassessed=tuple((cid, why) for _, cid, why in ranked[:3]),
+        unknown_severity=unknown_severity,
+        reason=WITHHELD if withheld else "")
+
+
 def drivers(result: RiskScore, top: int = 3) -> Tuple[Contribution, ...]:
     """The factors carrying the score, largest first.
 
