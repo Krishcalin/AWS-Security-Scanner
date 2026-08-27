@@ -783,6 +783,52 @@ class PlatformService:
         out.sort(key=lambda e: (order.get(e.get("severity", ""), 4), e.get("check_id", "")))
         return out
 
+    # ── Scorecards (FR-2) ────────────────────────────────────────────────────
+    def scorecards(self, *, workspace_id: Optional[str] = None,
+                   since_epoch: Optional[int] = None, period: str = "") -> dict:
+        """Assemble the FR-2 portfolio pack for a workspace.
+
+        Every input aws_scorecard.build() cannot be given is WITHHELD by that module
+        with a stated reason rather than defaulted, and three are genuinely absent
+        today:
+
+          * risk factors per application -- the composite is not yet wired to live
+            factor inputs, so every grade is withheld. That is the honest state; a
+            grade derived from finding counts would not be the published model.
+          * asset counts per application -- so peer rank is withheld rather than
+            computed on raw counts (OW2-SC-004).
+          * prior-period posture -- so no trend, rather than "0% change".
+
+        What IS real: attribution and its coverage, open counts, the SLA closure
+        rate with its D4 exception pairing, and the excepted segregation.
+        """
+        import aws_scorecard
+        if self.applications is None or self.state is None:
+            raise ValueError("scorecards need the application registry and a state store")
+
+        apps = self.applications.applications(self._scoped_ws(workspace_id))
+        rows: List[dict] = []
+        waived: set = set()
+        windows: Dict[str, list] = {}
+        now = self.clock()
+        for a in self.registry.list_accounts(onboarding_status="active",
+                                             workspace_id=self._scoped_ws(workspace_id)):
+            acct = a["account_id"]
+            rows.extend(self.state.findings_for_period(acct, since_epoch))
+            for w in self.state.list_waivers(acct, scan_epoch=now):
+                if w.get("state") != "active" or not w.get("finding_key"):
+                    continue
+                # An active waiver both segregates the finding (OW2-SC-008) and
+                # pauses its SLA clock (OW2-AR-031) -- the same approval, both effects.
+                waived.add(w["finding_key"])
+                windows.setdefault(w["finding_key"], []).append(
+                    (w.get("created_epoch") or 0, w.get("expires_epoch")))
+
+        pack = aws_scorecard.build(rows, apps, now_epoch=now,
+                                   exception_windows=windows, excepted_keys=waived,
+                                   period=period)
+        return pack.to_dict()
+
     # ── Projects (LBI/MBI/HBI business-impact grouping; read-only, display-only) ─
     @staticmethod
     def _finding_in_project(entry: dict, proj: dict) -> bool:

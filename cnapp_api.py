@@ -597,6 +597,18 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         if not _app_store().delete(_app_ws(scope), app_id):
             raise HTTPException(status_code=404, detail="application not found")
 
+    @app.get("/scorecards")
+    def scorecards(period: str = "", since_epoch: Optional[int] = None,
+                   scope: Scope = Depends(require("auditor"))):
+        """The FR-2 portfolio pack. Auditor-readable: a scorecard is what an owner
+        and an auditor both read, and neither of them should need write access to
+        see how their own applications are doing."""
+        try:
+            return service.scorecards(workspace_id=scope.workspace_id,
+                                      since_epoch=since_epoch, period=period)
+        except ValueError as e:
+            raise HTTPException(status_code=501, detail=str(e))
+
     @app.post("/controls/preview")
     def preview_control(body: WqlReq, scope: Scope = Depends(require("auditor"))):
         """Run a candidate query WITHOUT saving it, so an author sees what their control

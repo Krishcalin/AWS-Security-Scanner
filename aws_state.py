@@ -910,6 +910,30 @@ class StateStore:
             "ORDER BY severity, finding_key", (account,))
         return [dict(r) for r in rows]
 
+    def findings_for_period(self, account: str,
+                            since_epoch: Optional[int] = None) -> List[Dict]:
+        """Open findings PLUS those resolved since ``since_epoch``.
+
+        `open_findings` alone is the wrong input for a scorecard: OW2-KM-001(a)
+        measures the share of findings CLOSED within SLA, so a set containing no
+        closures reports 0% for a team that closed everything. That is wrong in the
+        pessimistic direction rather than the flattering one, which makes it no more
+        acceptable -- a scorecard that understates an owner's work gets ignored, and
+        an ignored scorecard measures nothing.
+
+        ``since_epoch=None`` returns every resolved finding ever, which is the right
+        default for a first scorecard and the wrong one for a monthly cadence; the
+        caller passes the period start.
+        """
+        sql = ("SELECT * FROM findings WHERE account=? AND (status='open' OR "
+               "(status='resolved'")
+        args: List = [account]
+        if since_epoch is not None:
+            sql += " AND resolved_epoch >= ?"
+            args.append(int(since_epoch))
+        sql += ")) ORDER BY severity, finding_key"
+        return [dict(r) for r in self._be.query_all(sql, args)]
+
     # ── unused-access persistence (Phase 5C) ──────────────────────────────────
     # ── MCP tool surface (v15, slice 3.3) ────────────────────────────────────
     def get_mcp_surface(self, account: str, gateway_arn: str) -> Optional[Dict]:
