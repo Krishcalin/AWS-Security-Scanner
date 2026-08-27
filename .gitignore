@@ -25,6 +25,14 @@ build/
 dist/
 *.egg-info/
 .eggs/
+# The air-gap wheelhouse: ~24MB of third-party wheels that
+# scripts/build_offline_bundle.sh downloads on a CONNECTED build host (and
+# rm -rf's on every run). Regenerable from requirements.txt, so it is a build
+# artifact, not source. .dockerignore DELIBERATELY keeps it in the build
+# context -- Docker reads that file, not this one -- so ignoring it here does
+# not affect the image build.
+wheelhouse/
+overwatch-airgap-*.tar.gz
 
 # Virtual environments
 .venv/
