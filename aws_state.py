@@ -35,7 +35,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-SCHEMA_VERSION = 16  # v16: custom_controls (user-authored saved-WQL Controls)
+SCHEMA_VERSION = 17  # v17: applications (the FR-2 registry ownership attribution needs)
 KEY_VERSION = 1
 
 # Caller-injected scan timestamp (one per run). epoch = arithmetic column,
@@ -129,6 +129,24 @@ CREATE TABLE IF NOT EXISTS scan_coverage(
 -- supplies the tools, which is the half of a rug pull the account can see. The half
 -- it cannot -- the same server serving different tools -- is why MCP-04 exists, and
 -- why this table is an anchor rather than an answer.
+CREATE TABLE IF NOT EXISTS applications(
+  app_id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  owner TEXT NOT NULL DEFAULT '',
+  portfolio TEXT NOT NULL DEFAULT '',
+  criticality TEXT NOT NULL DEFAULT 'unclassified'
+    CHECK(criticality IN ('crown-jewel','high','standard','unclassified')),
+  accounts_json TEXT NOT NULL DEFAULT '[]',
+  tag_selectors_json TEXT NOT NULL DEFAULT '[]',
+  resource_arns_json TEXT NOT NULL DEFAULT '[]',
+  created_by TEXT,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+-- Name uniqueness is PER WORKSPACE, mirroring custom_controls: two tenants may
+-- each run an application called "Payments" and neither should block the other.
+CREATE UNIQUE INDEX IF NOT EXISTS ix_app_ws_name ON applications(workspace_id, name);
+CREATE INDEX IF NOT EXISTS ix_app_ws ON applications(workspace_id);
+
 CREATE TABLE IF NOT EXISTS custom_controls(
   control_id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
