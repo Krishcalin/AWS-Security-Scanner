@@ -25,6 +25,8 @@ import sys
 
 import pytest
 
+from _layout import module_files
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -78,10 +80,7 @@ def _add_node_literals():
     subdirectory it returns no paths, the kind set is empty, and parity against
     the console holds trivially -- a green test asserting nothing.
     """
-    paths = glob.glob(os.path.join(ROOT, "*.py"))
-    assert len(paths) >= 50, (
-        "only %d python files found in %s -- the sweep is broken, so parity "
-        "would hold vacuously (glob(*.py) does not recurse)" % (len(paths), ROOT))
+    paths = module_files()
     kinds = set()
     for path in paths:
         kinds.update(re.findall(r'add_node\([^,]+,\s*"([A-Za-z][A-Za-z0-9_]*)"',

@@ -29,6 +29,8 @@ import sys
 
 import pytest
 
+from _layout import module_path
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -227,7 +229,7 @@ def test_d7_the_ai_detection_story_stands_alone():
     """The reason D7 costs nothing: the detections it might have depended on derive from
     CloudTrail, which every account already has."""
     import ast as _ast
-    src = _src(ROOT / "aws_airules.py")
+    src = _src(module_path("aws_airules.py"))
     imported = set()
     for node in _ast.walk(_ast.parse(src)):
         if isinstance(node, _ast.Import):
@@ -262,5 +264,5 @@ def test_d3_added_no_api_call_and_no_permission():
     from engine import aws_perm_ledger as L
     acts = {r.action for reqs in L.REQUIREMENTS.values() for r in reqs}
     assert not any("cbom" in a.lower() for a in acts)
-    src = _src(ROOT / "aws_cbom.py")
+    src = _src(module_path("aws_cbom.py"))
     assert "boto3" not in src.replace("no boto3", "")

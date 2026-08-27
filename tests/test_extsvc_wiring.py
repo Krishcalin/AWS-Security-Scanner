@@ -24,6 +24,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine import aws_live_scanner as A
 
+from _layout import module_path
+
 SECTIONS = {
     "_check_iot": ("IOT-01", "IOT-02", "IOT-03"),
     "_check_emr": ("EMR-01", "EMR-02"),
@@ -328,9 +330,7 @@ def test_each_section_is_registered_labelled_and_dispatched(section):
     method = f"_check_{section.lower()}"
     assert hasattr(A.AWSLiveScanner, method), method
     # the dispatch table is an inline dict literal, so assert on the source
-    src = io.open(os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "aws_live_scanner.py"), encoding="utf-8").read()
+    src = io.open(module_path("aws_live_scanner.py"), encoding="utf-8").read()
     assert f'"{section}":' in src and f"self.{method}," in src
 
 

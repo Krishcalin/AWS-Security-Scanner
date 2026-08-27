@@ -123,7 +123,11 @@ def _report_logo() -> str:
     import base64
     import os
     try:
-        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "overwatch-mark-96.png")
+        # docs/ is at the REPO ROOT; this module is in engine/. Note the read
+        # below is wrapped in `except Exception`, so getting this path wrong does
+        # not raise -- the logo simply disappears from every report and nothing
+        # says why. That is why test_data_paths.py pins it.
+        p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "overwatch-mark-96.png")
         with open(p, "rb") as f:
             return "<img src='data:image/png;base64," + base64.b64encode(f.read()).decode("ascii") + "' alt='OverWatch'>"
     except Exception:

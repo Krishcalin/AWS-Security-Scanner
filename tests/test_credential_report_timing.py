@@ -25,6 +25,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine import aws_live_scanner as A
 
+from _layout import module_path
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -41,7 +43,7 @@ def test_the_shipped_poll_values_are_what_ships():
     """Pinned because conftest zeroes them. A scan that stops waiting would read an
     asynchronous report before it is ready, on exactly the fresh accounts where the
     report takes longest."""
-    src = io.open(os.path.join(ROOT, "aws_live_scanner.py"), encoding="utf-8").read()
+    src = io.open(module_path("aws_live_scanner.py"), encoding="utf-8").read()
     assert re.search(r"^CRED_REPORT_ATTEMPTS = 10\b", src, re.M)
     assert re.search(r"^CRED_REPORT_POLL_SECONDS = 2\b", src, re.M)
     assert re.search(r"^CRED_REPORT_RETRY_SECONDS = 5\b", src, re.M)
@@ -50,7 +52,7 @@ def test_the_shipped_poll_values_are_what_ships():
 def test_the_shipped_budget_stays_bounded():
     """~18s of polling plus a 5s retry. Bounded on purpose: a never-COMPLETE state must
     not be able to stall a whole scan."""
-    src = io.open(os.path.join(ROOT, "aws_live_scanner.py"), encoding="utf-8").read()
+    src = io.open(module_path("aws_live_scanner.py"), encoding="utf-8").read()
     attempts = int(re.search(r"^CRED_REPORT_ATTEMPTS = (\d+)\b", src, re.M).group(1))
     poll = int(re.search(r"^CRED_REPORT_POLL_SECONDS = (\d+)\b", src, re.M).group(1))
     retry = int(re.search(r"^CRED_REPORT_RETRY_SECONDS = (\d+)\b", src, re.M).group(1))
@@ -139,7 +141,7 @@ def test_the_report_is_cached_and_not_regenerated():
 def test_the_scanner_has_no_unparameterised_sleeps_left():
     """Any new fixed sleep would reintroduce the same tax. Both remaining calls take a
     module constant the suite can zero."""
-    src = io.open(os.path.join(ROOT, "aws_live_scanner.py"), encoding="utf-8").read()
+    src = io.open(module_path("aws_live_scanner.py"), encoding="utf-8").read()
     sleeps = re.findall(r"time\.sleep\(([^)]*)\)", src)
     assert sleeps, "expected the credential-report sleeps to still exist"
     for arg in sleeps:

@@ -24,6 +24,8 @@ from engine import aws_graph
 from engine import aws_live_scanner as A
 from engine import aws_segmentation as S
 
+from _layout import module_path
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -152,7 +154,7 @@ def test_segrec_does_not_collide_with_the_existing_seg_checks():
 
 def _dup_map(filename, targets):
     """{map name: [check ids declared more than once in that one dict literal]}."""
-    src = io.open(os.path.join(ROOT, filename), encoding="utf-8").read()
+    src = io.open(module_path(filename), encoding="utf-8").read()
     out = {}
     for node in ast.walk(ast.parse(src)):
         if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Dict):

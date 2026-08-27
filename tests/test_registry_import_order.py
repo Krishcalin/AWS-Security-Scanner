@@ -25,6 +25,8 @@ import sys
 
 import pytest
 
+from _layout import iter_modules, layer_of, module_path
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 #: consumer module -> the map it must populate for every registered check
@@ -37,7 +39,7 @@ CONSUMERS = {
 PROBE = """
 import json, sys
 sys.path.insert(0, {root!r})
-import {module} as consumer
+from {pkg} import {module} as consumer
 from engine import aws_checkdef as C
 maps = {maps!r}
 missing = {{}}
@@ -53,7 +55,7 @@ print(json.dumps({{"registered": len(C.REGISTRY), "missing": missing}}))
 def _probe(module, maps):
     """Import ONE consumer in a fresh interpreter and report what it is missing."""
     out = subprocess.run(
-        [sys.executable, "-c", PROBE.format(root=ROOT, module=module, maps=maps)],
+        [sys.executable, "-c", PROBE.format(root=ROOT, pkg=layer_of(module), module=module, maps=maps)],
         capture_output=True, text=True, cwd=ROOT, timeout=180)
     assert out.returncode == 0, f"{module} failed to import alone:\n{out.stderr[-2000:]}"
     return json.loads(out.stdout.strip().splitlines()[-1])
@@ -88,16 +90,19 @@ def test_the_declaring_modules_are_imported_by_every_consumer():
     import io
     import re
     declaring = set()
-    for name in sorted(os.listdir(ROOT)):
-        if not name.startswith("aws_") or not name.endswith(".py"):
+    for name, src in iter_modules():
+        if not name.startswith("aws_"):
             continue
-        src = io.open(os.path.join(ROOT, name), encoding="utf-8").read()
         if re.search(r"^CHECKS\s*=\s*_cd\.register\(", src, re.M):
             declaring.add(name[:-3])
     assert declaring, "no declaring modules found — has the registry pattern changed?"
     for consumer in CONSUMERS:
-        src = io.open(os.path.join(ROOT, consumer + ".py"), encoding="utf-8").read()
-        imported = set(re.findall(r"^import (aws_\w+)", src, re.M))
+        src = io.open(module_path(consumer + ".py"), encoding="utf-8").read()
+        # Matches both `import aws_x` and the post-split
+        # `from engine import aws_x`. Reading source rather than importing
+        # is the whole point of this check -- it must state the requirement
+        # in the form the file actually uses.
+        imported = set(re.findall(r"^(?:from \w+ )?import (aws_\w+)", src, re.M))
         missing = sorted(declaring - imported)
         assert not missing, (
             f"{consumer}.py does not import {missing}, which declare checks via "

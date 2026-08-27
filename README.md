@@ -146,16 +146,16 @@ The IaC scanner performs **pure static analysis** of AWS Infrastructure-as-Code 
 
 ```bash
 # Scan a directory of IaC files
-python aws_offline_scanner.py /path/to/infra/
+python -m engine.aws_offline_scanner /path/to/infra/
 
 # Scan a single CloudFormation template
-python aws_offline_scanner.py template.yaml --html report.html
+python -m engine.aws_offline_scanner template.yaml --html report.html
 
 # Scan Terraform files with severity filter
-python aws_offline_scanner.py main.tf --json findings.json --severity HIGH
+python -m engine.aws_offline_scanner main.tf --json findings.json --severity HIGH
 
 # Verbose mode
-python aws_offline_scanner.py /path/to/cf/ --verbose --severity MEDIUM
+python -m engine.aws_offline_scanner /path/to/cf/ --verbose --severity MEDIUM
 ```
 
 ### CLI Reference (IaC Scanner)
@@ -298,46 +298,46 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 
 ```bash
 # Run full audit (all 44 sections, 296 severity-mapped checks)
-python aws_live_scanner.py
+python -m engine.aws_live_scanner
 
 # Target a specific region
-python aws_live_scanner.py --region us-east-1
+python -m engine.aws_live_scanner --region us-east-1
 
 # Run specific sections only (comma-separated, single argument)
-python aws_live_scanner.py --sections IAM,S3,VPC
+python -m engine.aws_live_scanner --sections IAM,S3,VPC
 
 # Run only the IAM privilege-escalation path analysis
-python aws_live_scanner.py --sections IAMPRIVESC
+python -m engine.aws_live_scanner --sections IAMPRIVESC
 
 # Save JSON + HTML reports and evidence artefacts
-python aws_live_scanner.py --json report.json --html report.html --output-dir ./audit_output
+python -m engine.aws_live_scanner --json report.json --html report.html --output-dir ./audit_output
 
 # CI/CD: emit SARIF for GitHub code scanning and fail the build on HIGH+ findings
-python aws_live_scanner.py --sarif results.sarif --fail-on HIGH
+python -m engine.aws_live_scanner --sarif results.sarif --fail-on HIGH
 
 # Push findings into AWS Security Hub (ASFF)
-python aws_live_scanner.py --asff findings.asff.json
+python -m engine.aws_live_scanner --asff findings.asff.json
 aws securityhub batch-import-findings --findings file://findings.asff.json
 
 # CNAPP: all regions, compliance scorecard, and export the identity security graph
-python aws_live_scanner.py --all-regions --compliance --graph graph.json
+python -m engine.aws_live_scanner --all-regions --compliance --graph graph.json
 
 # Multi-account: scan every account in the Organization via an assumable read-only role
-python aws_live_scanner.py --org --assume-role OrganizationAccountAccessRole --json org.json
+python -m engine.aws_live_scanner --org --assume-role OrganizationAccountAccessRole --json org.json
 
 # Multi-account: scan an explicit account list with an ExternalId
-python aws_live_scanner.py --accounts 111122223333,444455556666 --assume-role AuditRole --external-id my-id
+python -m engine.aws_live_scanner --accounts 111122223333,444455556666 --assume-role AuditRole --external-id my-id
 
 # Show only what changed since the last scan
-python aws_live_scanner.py --json today.json --baseline yesterday.json
+python -m engine.aws_live_scanner --json today.json --baseline yesterday.json
 
 # Network micro-segmentation: Layer-A SG analysis (SEG-01..06) runs automatically inside
 # EXPOSURE; add the opt-in Layer-B VPC Flow-Log overlay (FLOW-01..03) for evidence-based
 # scope-down. Needs the optional resource-scoped logs:StartQuery grant; fails open otherwise.
-python aws_live_scanner.py --sections EXPOSURE --flow-logs
+python -m engine.aws_live_scanner --sections EXPOSURE --flow-logs
 
 # Verbose mode
-python aws_live_scanner.py --verbose
+python -m engine.aws_live_scanner --verbose
 ```
 
 ### CLI Reference (Live Scanner)
@@ -474,7 +474,7 @@ jobs:
           role-to-assume: arn:aws:iam::<ACCOUNT>:role/security-audit
           aws-region: eu-west-1
       - run: pip install boto3
-      - run: python aws_live_scanner.py --sarif results.sarif --fail-on HIGH
+      - run: python -m engine.aws_live_scanner --sarif results.sarif --fail-on HIGH
       - uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
@@ -483,7 +483,7 @@ jobs:
 
 - **SARIF** maps severity → level (CRITICAL/HIGH → `error`) and sets
   `security-severity` so findings surface in the GitHub Security tab.
-- **ASFF** imports into Security Hub: `python aws_live_scanner.py --asff f.json &&
+- **ASFF** imports into Security Hub: `python -m engine.aws_live_scanner --asff f.json &&
   aws securityhub batch-import-findings --findings file://f.json` (≤100/call).
 
 **Shift-left IaC gate (no cloud, no hub).** The **offline** IaC scanner

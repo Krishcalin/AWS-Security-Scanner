@@ -10,8 +10,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine import aws_offline_scanner as sc
 
+from _layout import module_path
+
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SCANNER = os.path.join(_ROOT, "aws_offline_scanner.py")
+_SCANNER = module_path("aws_offline_scanner.py")
 
 
 def _f(rule_id, severity, file_path="main.tf", line_num=10):

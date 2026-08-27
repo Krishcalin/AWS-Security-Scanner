@@ -60,3 +60,15 @@ from hub.cnapp_api import Principal
 ```
 
 The uvicorn entry point is `hub.cnapp_server:create_app_from_env`.
+
+## Running the CLIs
+
+Modules are packages now, so a bare script path no longer works — it puts
+`engine/` on `sys.path` instead of the repository root, and `from engine import
+...` then fails. Use `-m` from the repository root:
+
+```bash
+python -m engine.aws_live_scanner --help
+python -m engine.aws_offline_scanner --help
+python -m hub.cnapp_mcp
+```

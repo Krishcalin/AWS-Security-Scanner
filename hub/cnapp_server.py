@@ -175,7 +175,7 @@ def create_app_from_env(*, service=None, current_principal=None):
     from hub import cnapp_api
     svc = service if service is not None else build_service()
     static_dir = os.environ.get("CNAPP_STATIC_DIR", os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "frontend", "dist"))
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "dist"))
     return cnapp_api.create_hosted_app(svc, static_dir=static_dir,
                                        current_principal=current_principal)
 
@@ -213,7 +213,7 @@ def create_app_with_local_auth(*, service=None):
     cnapp_authn.bootstrap_admin(store, workspaces)
 
     static_dir = os.environ.get("CNAPP_STATIC_DIR", os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "frontend", "dist"))
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "dist"))
     return cnapp_api.create_hosted_app(
         svc, static_dir=static_dir,
         current_principal=cnapp_authn_api.session_principal_dependency(store, workspaces),

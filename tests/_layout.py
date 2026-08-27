@@ -79,3 +79,16 @@ def module_files() -> list:
     assert len(paths) >= 50, (
         "only %d module files found -- the walk is broken" % len(paths))
     return paths
+
+
+def layer_of(module: str) -> str:
+    """Which layer a module lives in ("engine" / "hub" / "store").
+
+    For building an import statement in a subprocess probe, where the module
+    name is a runtime value and no import rewrite can reach it.
+    """
+    name = module if module.endswith(".py") else module + ".py"
+    for layer in LAYERS:
+        if os.path.isfile(os.path.join(ROOT, layer, name)):
+            return layer
+    raise FileNotFoundError("%s is in none of %s" % (name, "/".join(LAYERS)))

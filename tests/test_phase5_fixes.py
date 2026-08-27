@@ -112,7 +112,9 @@ def test_eol_edges_flushed_without_vuln_section():
 
 def test_epilogue_flush_is_in_run_source():
     # guard that the epilogue flush actually exists in run() (not only exercised via helper)
-    import inspect, aws_live_scanner
+    import inspect
+
+    from engine import aws_live_scanner
     src = inspect.getsource(aws_live_scanner.AWSLiveScanner.run)
     assert "_replay_eol_edges" in src and "_eol_graph_payloads" in src
 

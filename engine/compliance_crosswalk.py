@@ -41,7 +41,11 @@ _CONFIDENCE = ("high", "medium", "low")
 _CONF_RANK = {"low": 0, "medium": 1, "high": 2}
 _NATIVE_IDS = frozenset({"CIS", "PCI-DSS", "HIPAA", "SOC2", "NIST"})
 
-_DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+# compliance/ sits at the REPO ROOT and this module lives in engine/, so the
+# anchor climbs out of the package first. Before the engine/hub/store split it
+# was one dirname; a single missing dirname here is the whole crosswalk failing
+# to load.
+_DEFAULT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                              "compliance", "crosswalk.json")
 
 # memoization (production loads once, like COMPLIANCE_MAP being import-time)

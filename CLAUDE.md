@@ -224,7 +224,7 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 
 ### CLI
 ```bash
-python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
+python -m engine.aws_offline_scanner <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
 ## Live Audit Scanner (`aws_live_scanner.py` v2.39.0)
@@ -932,7 +932,7 @@ Findings can be emitted in machine formats and used to gate pipelines:
 
 ### CLI
 ```bash
-python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
+python -m engine.aws_live_scanner [--region REGION] [--json FILE] [--html FILE] \
     [--sarif FILE] [--asff FILE] [--baseline FILE] [--fail-on SEVERITY] \
     [--output-dir DIR] [--sections SEC1,SEC2,...] \
     [--all-regions] [--compliance] [--graph FILE] \
