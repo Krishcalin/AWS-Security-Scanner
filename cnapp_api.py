@@ -191,7 +191,7 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         schedule: str = "off"       # off | hourly | daily | weekly | interval:<seconds>
 
     class ConnectorReq(BaseModel):
-        type: str = Field(pattern=r"^(jira|slack|pagerduty|splunk|webhook)$")
+        type: str = Field(pattern=r"^(jira|slack|pagerduty|splunk|webhook|sdp)$")
         name: str
         config: dict = Field(default_factory=dict)
         secret: Optional[str] = None       # one-time plaintext; stored ONLY as a ref

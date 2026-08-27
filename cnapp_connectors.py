@@ -46,6 +46,7 @@ import base64
 import hashlib
 import hmac
 import json
+import urllib.parse
 import string
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -59,7 +60,7 @@ from cnapp_onboarding import _RESOLVABLE_SCHEMES, SecretReader, SecretWriter
 # leaf (importing aws_remediate would drag the whole scanner/correlate graph in,
 # defeating "offline-testable"). Kept identical in value on purpose.
 _SEV_ORDER = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1, "": 0}
-_CONNECTOR_TYPES = ("jira", "slack", "pagerduty", "splunk", "webhook")
+_CONNECTOR_TYPES = ("jira", "slack", "pagerduty", "splunk", "webhook", "sdp")
 _AFFECTED_CAP = 20              # truncate affected[] in a message body → "and K more"
 
 
@@ -496,6 +497,96 @@ def render_splunk(connector: Connector, f: EnrichedFinding, *, template: str = N
     return envelope
 
 
+
+# ── ManageEngine ServiceDesk Plus (OW2-CC-020) ───────────────────────────────
+# SDP is the first connector that is NOT JSON on the wire. The v3 API takes a
+# FORM-ENCODED body whose single `input_data` field carries the JSON, and it
+# reports a logical failure INSIDE an HTTP 200 via response_status.status_code.
+# Both facts need SDP-specific handling; getting either wrong yields a connector
+# that returns 200 and creates nothing, which is exactly the failure D13 warns
+# about when a vendor contract is taken on trust.
+#
+# On-premise and Cloud differ in auth and base path, and CON-01 (data residency,
+# self-hosted) means the on-premise shape is the default here. `deployment` is an
+# explicit config key rather than something inferred from the URL, because
+# guessing wrong fails at delivery time rather than at configuration time.
+
+_SDP_OK = 2000                    # v3 success; anything else is a logical failure
+
+#: Mirrors aws_sla.DEFAULT_SLA_DAYS (OW2-AR-031). A severity absent here gets NO
+#: due date rather than an invented one.
+_SDP_SLA_DAYS = {"CRITICAL": 15, "HIGH": 30, "MEDIUM": 60, "LOW": 90}
+
+_SDP_PRIORITY = {"CRITICAL": "High", "HIGH": "High", "MEDIUM": "Medium",
+                 "LOW": "Low", "INFO": "Low"}
+
+
+def render_sdp(connector: Connector, f: EnrichedFinding, *,
+               template: str = None, hub_base: str = "",
+               now_epoch: int = 0) -> dict:
+    """PURE. The ``{"request": {...}}`` object SDP v3 expects inside `input_data`.
+
+    Carries the OW2-CC-022 payload: check id, severity, affected resources,
+    remediation guidance, an SLA due date and a deep link back to the finding.
+
+    The description is PLAIN TEXT. SDP renders HTML only when the instance is
+    configured for it, and a ticket full of unrendered markup is worse than one
+    that is plain.
+    """
+    cfg = connector.config or {}
+    sev = (f.severity or "").upper()
+    shown, more = _affected_lines(f)
+
+    lines: List[str] = []
+    if f.risk:
+        lines += ["RISK", f.risk, ""]
+    if f.impact:
+        lines += ["BUSINESS IMPACT", f.impact, ""]
+    if f.steps:
+        lines.append("REMEDIATION")
+        lines += ["%d. %s" % (i, s) for i, s in enumerate(f.steps[:20], 1)]
+        lines.append("")
+    if f.remediation_cmd:
+        lines += ["COMMAND", f.remediation_cmd[:1500], ""]
+    lines.append("AFFECTED (%d distinct)" % f.distinct)
+    lines += list(shown)
+    if more:
+        lines.append("... and %d more" % more)
+    lines += ["", "Account: %s" % f.account, "Check: %s" % f.check_id,
+              "Section: %s" % f.section,
+              "On attack path: %s" % ("yes" if f.on_attack_path else "no")]
+    if f.compliance:
+        lines.append("Compliance: %s" % ", ".join(
+            "%s %s" % (k, v) for k, v in sorted(f.compliance.items())))
+    if hub_base:
+        lines += ["", "Open in OverWatch: %s/findings/%s?account=%s"
+                  % (hub_base.rstrip("/"), f.check_id, f.account)]
+
+    subject = (_safe_format(template, _tmpl_params(f)) if template
+               else "[%s] %s - %s (%s)" % (sev or "FINDING", f.check_id,
+                                           f.section, f.account))
+
+    request: Dict[str, object] = {
+        "subject": subject[:250],
+        "description": "\n".join(lines),
+        "priority": {"name": cfg.get("priority") or _SDP_PRIORITY.get(sev, "Medium")},
+    }
+    # Instance-specific lookups: only sent when the operator configured them, so
+    # a default SDP install is not rejected for naming a group it does not have.
+    for field, key in (("group", "group"), ("category", "category"),
+                       ("subcategory", "subcategory"), ("requester", "requester"),
+                       ("technician", "technician"), ("template", "sdp_template")):
+        val = cfg.get(key)
+        if val:
+            request[field] = {"name": val}
+
+    days = _SDP_SLA_DAYS.get(sev)
+    if days is not None and now_epoch:
+        # SDP wants epoch MILLISECONDS, as a string.
+        request["due_by_time"] = {"value": str((int(now_epoch) + days * 86400) * 1000)}
+    return {"request": request}
+
+
 def render_webhook(connector: Connector, f: EnrichedFinding, *, event_id: str,
                    now_epoch: int, hub_base: str = "", type_override: str = None) -> bytes:
     """PURE + byte-stable. The OverWatch event envelope, serialized ONCE to minified
@@ -530,6 +621,7 @@ def render_webhook(connector: Connector, f: EnrichedFinding, *, event_id: str,
 
 
 RENDERERS = {"jira": render_jira, "slack": render_slack, "pagerduty": render_pagerduty,
+             "sdp": render_sdp,
              "splunk": render_splunk, "webhook": render_webhook}
 
 
@@ -555,6 +647,9 @@ def render(connector: Connector, f: EnrichedFinding, *, template: str = None,
                                 template=template, hub_base=hub_base)
     if t == "splunk":
         return render_splunk(connector, f, template=template)
+    if t == "sdp":
+        return render_sdp(connector, f, template=template, hub_base=hub_base,
+                          now_epoch=now_epoch)
     if t == "webhook":
         return render_webhook(connector, f, event_id=event_id, now_epoch=now_epoch,
                               hub_base=hub_base)
@@ -565,6 +660,23 @@ def render(connector: Connector, f: EnrichedFinding, *, template: str = None,
 #  Request assembly (pure given the already-resolved secret) + response decode
 # ═══════════════════════════════════════════════════════════════════════════════
 _JSON_HDR = {"Content-Type": "application/json", "Accept": "application/json"}
+
+
+def _sdp_url(cfg: Dict) -> str:
+    """The v3 create-request endpoint.
+
+    Cloud nests the portal in the path (`/app/<portal>/api/v3/requests`);
+    on-premise does not. An operator who sets `base_url` to the full endpoint
+    already gets it used verbatim, because instances behind a reverse proxy do
+    not always match either shape.
+    """
+    base = (cfg.get("base_url") or "").rstrip("/")
+    if base.endswith("/requests"):
+        return base
+    if (cfg.get("deployment") or "onprem") == "cloud":
+        portal = cfg.get("portal") or "itdesk"
+        return f"{base}/app/{portal}/api/v3/requests"
+    return f"{base}/api/v3/requests"
 
 
 def _pd_host(cfg: Dict) -> str:
@@ -607,6 +719,27 @@ def request_for(connector: Connector, payload: Union[dict, bytes], secret: Optio
                            {"Content-Type": "application/json",
                             "Authorization": f"Splunk {secret or ''}"},
                            json_body=payload)
+    if t == "sdp":
+        # SDP v3 is form-encoded: the whole JSON goes in ONE field named
+        # input_data. Sending it as a JSON body returns 200 and creates nothing,
+        # which is the quietest possible way for this connector to be broken.
+        body = urllib.parse.urlencode(
+            {"input_data": json.dumps(payload, separators=(",", ":"))}
+        ).encode("utf-8")
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            # Without the vendor Accept header SDP may answer with an older
+            # schema, so it is not optional.
+            "Accept": "application/vnd.manageengine.sdp.v3+json",
+        }
+        if (cfg.get("deployment") or "onprem") == "cloud":
+            # Cloud: OAuth bearer issued by Zoho Accounts.
+            headers["Authorization"] = f"Zoho-oauthtoken {secret or ''}"
+        else:
+            # On-premise: a static technician authtoken in its own header. This
+            # is the default because CON-01 puts this deployment self-hosted.
+            headers["authtoken"] = secret or ""
+        return HttpRequest("POST", _sdp_url(cfg), headers, raw_body=body)
     if t == "webhook":
         raw = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json", "User-Agent": "OverWatch-Connector/1"}
@@ -657,6 +790,32 @@ def interpret_response(connector: Connector, resp: HttpResp) -> DispatchResult:
         if sc == 200 and text.strip() == "ok":
             return DispatchResult(True, sc, detail="ok")
         return DispatchResult(False, sc, error=(text.strip() or f"HTTP {sc}"))
+    if t == "sdp":
+        # A logical failure arrives INSIDE an HTTP 200: response_status.status_code
+        # is 2000 on success and something else otherwise. Trusting the HTTP status
+        # alone would record every rejected ticket as delivered.
+        j = _try_json(text) or {}
+        st = j.get("response_status") or {}
+        if isinstance(st, list):                      # some builds wrap it in a list
+            st = st[0] if st else {}
+        code = st.get("status_code")
+        if sc in (200, 201) and code == _SDP_OK:
+            req = j.get("request") or {}
+            rid = str(req.get("id") or "")
+            base = (cfg.get("base_url") or "").rstrip("/")
+            detail = (f"{base}/WorkOrder.do?woMode=viewWO&woID={rid}"
+                      if (base and rid) else (rid or "created"))
+            return DispatchResult(True, sc, external_ref=rid or None, detail=detail)
+        msgs = []
+        for m in (st.get("messages") or []):
+            if isinstance(m, dict):
+                msgs.append(str(m.get("message") or m.get("field") or m))
+            else:
+                msgs.append(str(m))
+        err = "; ".join(msgs) or st.get("status") or f"HTTP {sc}"
+        if code is not None:
+            err = f"SDP {code}: {err}"
+        return DispatchResult(False, sc, error=err)
     if t == "pagerduty":
         j = _try_json(text) or {}
         if sc == 202 and j.get("status") == "success":

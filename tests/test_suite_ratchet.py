@@ -130,6 +130,7 @@ FLOORS = {
     "test_codetocloud.py": 18,
     "test_compliance_api.py": 4,
     "test_compliance_crosswalk.py": 24,
+    "test_connector_sdp.py": 24,
     "test_console_node_parity.py": 13,
     "test_controls.py": 15,
     "test_copilot.py": 18,

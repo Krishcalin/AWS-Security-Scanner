@@ -48,6 +48,20 @@ const TYPES: Record<ConnectorType, TypeMeta> = {
       { key: 'sourcetype', label: 'Sourcetype', placeholder: 'overwatch:finding' },
     ],
   },
+  sdp: {
+    label: 'ServiceDesk Plus', color: '#1d4ed8', secretLabel: 'Technician authtoken (on-prem) / OAuth token (cloud)',
+    blurb: 'Auto-create a ServiceDesk Plus request per finding, with the risk, remediation steps, affected resources, an SLA due date and a link back. Idempotent: one open finding is one ticket.',
+    fields: [
+      { key: 'base_url', label: 'Base URL', placeholder: 'https://sdp.internal.example', hint: 'Or paste the full /api/v3/requests endpoint' },
+      { key: 'deployment', label: 'Deployment', kind: 'select', opts: ['onprem', 'cloud'] },
+      { key: 'portal', label: 'Portal (cloud only)', placeholder: 'itdesk' },
+      { key: 'group', label: 'Group (optional)', placeholder: 'Cloud Security', hint: 'Must already exist in SDP' },
+      { key: 'category', label: 'Category (optional)', placeholder: 'Security' },
+      { key: 'requester', label: 'Requester (optional)', placeholder: 'security@acme.com' },
+      { key: 'technician', label: 'Technician (optional)' },
+      { key: 'priority', label: 'Priority override (optional)', hint: 'Default maps from severity' },
+    ],
+  },
   webhook: {
     label: 'Webhook', color: '#0f766e', secretLabel: 'Signing secret', secretOptional: true,
     blurb: 'POST a signed OverWatch event envelope to an HTTPS URL. Standard-Webhooks + X-Hub-Signature-256 headers. https-only; the IMDS address is always blocked.',
@@ -55,7 +69,7 @@ const TYPES: Record<ConnectorType, TypeMeta> = {
   },
 }
 
-const TYPE_ORDER: ConnectorType[] = ['jira', 'slack', 'pagerduty', 'splunk', 'webhook']
+const TYPE_ORDER: ConnectorType[] = ['jira', 'sdp', 'slack', 'pagerduty', 'splunk', 'webhook']
 
 function TypeBadge({ t }: { t: ConnectorType }) {
   const m = TYPES[t]

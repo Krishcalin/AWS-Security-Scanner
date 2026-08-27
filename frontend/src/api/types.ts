@@ -257,7 +257,7 @@ export interface ValidationResult {
 }
 
 // ── connector framework (Settings) — masked shapes; a secret is NEVER returned ──
-export type ConnectorType = 'jira' | 'slack' | 'pagerduty' | 'splunk' | 'webhook'
+export type ConnectorType = 'jira' | 'slack' | 'pagerduty' | 'splunk' | 'webhook' | 'sdp'
 
 // The masked connector (cnapp_connectors.ConnectorStore._mask_connector): the API
 // exposes `secret_configured` (bool), never the secret ref or value.
