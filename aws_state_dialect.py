@@ -262,7 +262,7 @@ POSTGRES_DDL: List[str] = [
     # Only diff: *_at/*_epoch are BIGINT here and AUTOINCREMENT -> IDENTITY. ─────────
     """CREATE TABLE IF NOT EXISTS connectors(
        connector_id TEXT PRIMARY KEY,
-       type TEXT NOT NULL CHECK(type IN ('jira','slack','pagerduty','splunk','webhook')),
+       type TEXT NOT NULL CHECK(type IN ('jira','slack','pagerduty','splunk','webhook','sdp')),
        name TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0,
        config_json TEXT NOT NULL DEFAULT '{}', secret_ref TEXT, created_by TEXT,
        last_test_at BIGINT, last_test_status TEXT, last_test_detail TEXT,
@@ -504,6 +504,48 @@ SQLITE_ROLE_REBUILD: List[str] = [
     "CREATE INDEX IF NOT EXISTS ix_wsmem_principal "
     "ON workspace_members(principal)",
 ]
+
+
+SQLITE_CONNECTOR_TYPE_REBUILD: List[str] = [
+    """CREATE TABLE connectors__sdp(
+       connector_id TEXT PRIMARY KEY,
+       type TEXT NOT NULL
+         CHECK(type IN ('jira','slack','pagerduty','splunk','webhook','sdp')),
+       name TEXT NOT NULL,
+       enabled INTEGER NOT NULL DEFAULT 0,
+       config_json TEXT NOT NULL DEFAULT '{}',
+       secret_ref TEXT,
+       created_by TEXT,
+       last_test_at INTEGER, last_test_status TEXT, last_test_detail TEXT,
+       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)""",
+    """INSERT INTO connectors__sdp
+       SELECT connector_id, type, name, enabled, config_json, secret_ref,
+              created_by, last_test_at, last_test_status, last_test_detail,
+              created_at, updated_at FROM connectors""",
+    # connector_rules has ON DELETE CASCADE against connectors, so the drop runs
+    # with foreign keys OFF (the caller disables them) -- otherwise the rebuild
+    # deletes every rule attached to every connector.
+    "DROP TABLE connectors",
+    "ALTER TABLE connectors__sdp RENAME TO connectors",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_conn_name ON connectors(name)",
+]
+
+
+def sqlite_needs_connector_type_upgrade(conn) -> bool:
+    """True when the live table still refuses the 'sdp' connector type.
+
+    Same reasoning as the role upgrade below: CREATE TABLE IF NOT EXISTS never
+    touches an existing table, so a database created before ServiceDesk Plus
+    keeps the old five-type CHECK however it is stamped. The symptom is a
+    connector that cannot be created, reported -- before this was fixed -- as a
+    NAME COLLISION, because sqlite3.IntegrityError covers both.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' "
+        "AND name='connectors'").fetchone()
+    if not row or not row[0]:
+        return False                       # table not created yet; DDL covers it
+    return "'sdp'" not in row[0]
 
 
 def sqlite_needs_role_upgrade(conn) -> bool:

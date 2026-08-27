@@ -264,6 +264,19 @@ class SqliteBackend(Backend):
             for stmt in aws_state_dialect.SQLITE_ROLE_REBUILD:
                 self.raw.execute(stmt)
             self.raw.commit()
+        # Widen the connectors type CHECK for ServiceDesk Plus. Same
+        # stored-schema test as the role upgrade, and for the same reason.
+        if aws_state_dialect.sqlite_needs_connector_type_upgrade(self.raw):
+            # connector_rules cascades on a connectors delete, so the rebuild
+            # must run with foreign keys off or it takes every rule with it.
+            fk = self.raw.execute("PRAGMA foreign_keys").fetchone()[0]
+            self.raw.execute("PRAGMA foreign_keys=OFF")
+            try:
+                for stmt in aws_state_dialect.SQLITE_CONNECTOR_TYPE_REBUILD:
+                    self.raw.execute(stmt)
+                self.raw.commit()
+            finally:
+                self.raw.execute("PRAGMA foreign_keys=%d" % (1 if fk else 0))
 
 
 class PostgresBackend(Backend):

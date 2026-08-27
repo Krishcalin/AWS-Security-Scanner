@@ -224,7 +224,7 @@ CREATE INDEX IF NOT EXISTS ix_conn_due ON connection_health(next_due_epoch);
 -- Managed by cnapp_connectors.ConnectorStore. BIGINT twins in POSTGRES_DDL.
 CREATE TABLE IF NOT EXISTS connectors(
   connector_id TEXT PRIMARY KEY,
-  type TEXT NOT NULL CHECK(type IN ('jira','slack','pagerduty','splunk','webhook')),
+  type TEXT NOT NULL CHECK(type IN ('jira','slack','pagerduty','splunk','webhook','sdp')),
   name TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 0,
   config_json TEXT NOT NULL DEFAULT '{}',

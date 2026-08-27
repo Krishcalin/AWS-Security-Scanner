@@ -1050,6 +1050,119 @@ def _event_id(connector_id: str, identity: str) -> str:
     return "ow_evt_" + hashlib.sha1(f"{connector_id}|{identity}".encode()).hexdigest()[:16]
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  OW2-AR-002 baseline rules
+#
+#  The SRS says five rules "shall ship enabled (configurable thereafter)". They
+#  did not exist, which meant a connector -- including the ServiceDesk Plus one --
+#  fired nothing until an operator hand-authored a rule for it. A ticketing
+#  integration that files no tickets is the quietest kind of not-working.
+#
+#  WHAT THESE RULES HONESTLY DO
+#  ----------------------------
+#  Three of the five map cleanly onto what the connector plane can do today.
+#  TWO DO NOT, and are shipped as tickets with that stated rather than silently
+#  redefined:
+#
+#    (b) "raise a change record for patching" -- OverWatch has no change-record
+#        action. This files a TICKET tagged as a patch change request; linking it
+#        to a real ServiceDesk Plus change object is OW2-AR-012 and is not built.
+#    (e) "initiate an IAM review workflow" -- there is no workflow engine. This
+#        files a TICKET routed for IAM review; the accept/remediate/except
+#        outcome capture OW2-ID-004 asks for is not built.
+#
+#  Calling either of those "done" would be the kind of quiet redefinition this
+#  codebase spends most of its effort refusing, so each carries a `gap` string
+#  that travels into the seeded rule's name and out through the API.
+#
+#  ON RULE (d)'s FIVE MINUTES
+#  --------------------------
+#  "root account usage detected -> immediate CISO alert (<=5 minutes)" is a
+#  DELIVERY-LATENCY requirement, not a rule predicate. This rule matches the
+#  finding; whether the alert lands inside five minutes depends on scan cadence
+#  (OW2-PER-002 permits a 24-hour cycle), which is review defect D-also-worth-a-
+#  line and is recorded on the rule rather than assumed away.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+#: Connector types that create a ticket or a record someone works.
+_TICKETING = ("sdp", "jira")
+
+BASELINE_RULES: Tuple[Dict, ...] = (
+    {
+        "key": "ar002-a-public-s3",
+        "srs": "OW2-AR-002(a)",
+        "name": "Public S3 bucket detected",
+        "spec": {"check_globs": ["S3-01", "S3-09"], "min_severity": "HIGH",
+                 "priority": 10},
+        "suits": _TICKETING,
+        "gap": "",
+    },
+    {
+        "key": "ar002-b-critical-vuln-ec2",
+        "srs": "OW2-AR-002(b)",
+        "name": "Critical vulnerability on a workload (patch change request)",
+        "spec": {"check_globs": ["VULN-*", "CWPP-*", "WINVULN-*"],
+                 "min_severity": "CRITICAL", "priority": 10},
+        "suits": _TICKETING,
+        "gap": ("files a ticket, not a native change record -- OverWatch has no "
+                "change-record action (OW2-AR-012 is not built)"),
+    },
+    {
+        "key": "ar002-c-user-without-mfa",
+        "srs": "OW2-AR-002(c)",
+        "name": "Console user without MFA",
+        "spec": {"check_globs": ["IAM-04"], "min_severity": "MEDIUM",
+                 "priority": 40},
+        "suits": ("sdp", "jira", "slack"),
+        "gap": "",
+    },
+    {
+        "key": "ar002-d-root-usage",
+        "srs": "OW2-AR-002(d)",
+        "name": "Root account used (CISO alert)",
+        "spec": {"check_globs": ["IAM-07"], "min_severity": "LOW",
+                 "priority": 1},
+        "suits": ("sdp", "jira", "slack", "pagerduty", "splunk"),
+        "gap": ("the rule matches; the <=5-minute alert window depends on scan "
+                "cadence, which OW2-PER-002 permits to be 24 hours"),
+    },
+    {
+        "key": "ar002-e-excessive-privilege",
+        "srs": "OW2-AR-002(e)",
+        "name": "Excessive IAM privilege (IAM review)",
+        "spec": {"check_globs": ["IAMPE-*"], "min_severity": "HIGH",
+                 "priority": 20},
+        "suits": _TICKETING,
+        "gap": ("files a ticket routed for review, not a workflow -- the "
+                "accept/remediate/except capture in OW2-ID-004 is not built"),
+    },
+)
+
+
+def baseline_rules_for(connector_type: str) -> List[Dict]:
+    """The AR-002 rules that suit this connector type.
+
+    A PagerDuty connector does not get the public-bucket rule: paging on-call for
+    a misconfiguration nobody can act on at 3am is how an integration gets muted,
+    and a muted integration reports zero and means nothing.
+    """
+    t = (connector_type or "").lower()
+    return [dict(r) for r in BASELINE_RULES if t in r["suits"]]
+
+
+def baseline_rule_spec(rule: Dict, *, created_by: str = "baseline") -> Dict:
+    """The `upsert_rule` spec for one baseline rule.
+
+    The gap, where there is one, is appended to the NAME so it appears in the
+    console rule list and in the delivery ledger -- not only in this file.
+    """
+    name = rule["name"]
+    if rule.get("gap"):
+        name = "%s [%s]" % (name, rule["gap"])
+    return {**rule["spec"], "name": "%s - %s" % (rule["srs"], name),
+            "enabled": True, "created_by": created_by}
+
+
 def rule_matches(rule: ConnectorRule, f: EnrichedFinding) -> bool:
     """PURE. AND across condition groups, OR within a list. An unspecified group is
     a wildcard. not_check_globs is a VETO. on_attack_path is tri-state (None=any)."""
@@ -1628,8 +1741,18 @@ def _hydrate_ledger(row) -> LedgerRow:
 
 
 def _is_unique_violation(e: Exception) -> bool:
+    """True only for a UNIQUE collision.
+
+    sqlite3.IntegrityError covers UNIQUE and CHECK alike, and the old test
+    matched on "integrity" in the class name -- so a rejected connector TYPE was
+    reported to the operator as "connector name already in use". They would then
+    go looking for a name collision that does not exist. A CHECK failure is a
+    different fault and must not be laundered into this one.
+    """
     name = type(e).__name__.lower()
     msg = str(e).lower()
+    if "check constraint" in msg or "violates check" in msg:
+        return False
     return ("unique" in name or "integrity" in name or "unique" in msg
             or "duplicate key" in msg)
 

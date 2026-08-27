@@ -875,6 +875,18 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     # ── connectors (admin mutate, viewer read) ────────────────────────────────
     # The connector control plane wields outbound HTTP + operator secrets, so every
     # mutation is admin; reads are viewer and NEVER return a secret (masked shape).
+    @app.get("/connectors/baseline-rules")
+    def baseline_rules(type: str = "sdp",
+                       scope: Scope = Depends(require("auditor"))):
+        """The OW2-AR-002 rules a connector of this type is seeded with.
+
+        Readable before creating anything, because "shall ship enabled" is only
+        reassuring if you can see what it turned on.
+        """
+        import cnapp_connectors as _cc
+        return [{"srs": r["srs"], "name": r["name"], "gap": r["gap"] or None,
+                 "spec": r["spec"]} for r in _cc.baseline_rules_for(type)]
+
     @app.post("/connectors", status_code=201)
     def create_connector(body: ConnectorReq, scope: Scope = Depends(require("admin"))):
         # no {connector_id} path param, so isolation is by BINDING the new connector to the

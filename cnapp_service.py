@@ -2095,7 +2095,8 @@ class PlatformService:
 
     def create_connector(self, *, type: str, name: str, config: dict,
                          secret: Optional[str] = None, created_by: str = "",
-                         workspace_id: Optional[str] = None) -> dict:
+                         workspace_id: Optional[str] = None,
+                         seed_baseline: bool = True) -> dict:
         """Create a connector. The one-time plaintext ``secret`` is handed to the
         injected secret_writer and only the returned ref is persisted; the response
         is masked (secret_configured bool). enabled defaults to 0 (safe by default).
@@ -2111,6 +2112,16 @@ class PlatformService:
                                        secret_ref=ref, enabled=False, created_by=created_by)
                 if self.workspaces is not None:
                     self.workspaces.bind_connector(cid, workspace_id or DEFAULT_WORKSPACE, now)
+                if seed_baseline:
+                    # OW2-AR-002: the baseline rules "shall ship enabled". They are
+                    # seeded ENABLED here -- and nothing fires, because the connector
+                    # itself defaults to disabled two lines above. Both properties
+                    # hold at once: the rules exist and are on, and turning the
+                    # connector on is still a deliberate act.
+                    for rule in cc.baseline_rules_for(type):
+                        store.upsert_rule(
+                            cid, now_epoch=now,
+                            spec=cc.baseline_rule_spec(rule, created_by="baseline"))
         except Exception as e:
             # connectors.name is GLOBALLY unique (a pre-tenancy constraint). A collision — even
             # against another tenant's name — must surface as a clean 400 "name already in use",
@@ -2119,7 +2130,14 @@ class PlatformService:
             if cc._is_unique_violation(e):
                 raise ValueError("connector name already in use")
             raise
-        return cc.ConnectorStore._mask_connector(store.get_connector(cid))
+        out = cc.ConnectorStore._mask_connector(store.get_connector(cid))
+        # What was armed travels back with the object: a rule the operator cannot
+        # see is a rule they cannot disable, and two of the five carry a stated gap
+        # between what AR-002 asks for and what the connector plane can do.
+        out["baseline_rules"] = [
+            {"srs": r["srs"], "name": r["name"], "gap": r["gap"] or None}
+            for r in (cc.baseline_rules_for(type) if seed_baseline else [])]
+        return out
 
     def list_connectors(self, *, workspace_id: Optional[str] = None) -> List[dict]:
         store = self._require_connectors()
