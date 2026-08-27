@@ -750,3 +750,97 @@ export interface OciImageRow {
   critical: number
   high: number
 }
+
+// ── FR-2: the application registry and its scorecards ────────────────────────
+// `warnings` travels WITH the object rather than in a side channel: a mis-scoped
+// application renders a clean scorecard and is indistinguishable from a healthy
+// one, so the console has to say so where the author is looking.
+export interface Application {
+  id: string
+  workspace_id: string
+  name: string
+  owner: string
+  portfolio: string
+  criticality: 'crown-jewel' | 'high' | 'standard' | 'unclassified'
+  accounts: string[]
+  tag_selectors: [string, string][]
+  resource_arns: string[]
+  created_by: string
+  created_at: number | null
+  updated_at: number | null
+  warnings: string[]
+}
+
+export interface ApplicationInput {
+  name: string
+  owner?: string
+  portfolio?: string
+  criticality?: string
+  accounts?: string[]
+  tag_selectors?: { key: string; value: string }[]
+  resource_arns?: string[]
+}
+
+/** A closure rate that cannot be read without the approvals that produced it. */
+export interface ScorecardSla {
+  severity: string
+  pct: number
+  unadjusted_pct: number
+  exception_derived_points: number
+  in_sla: number
+  considered: number
+  exception_assisted: number
+  deferred_breaches: number
+  headline: string
+}
+
+export interface ScorecardTrend {
+  previous: number
+  current: number
+  delta: number
+  direction: 'improved' | 'worsened' | 'unchanged'
+  render: string
+}
+
+export interface Scorecard {
+  app_id: string
+  name: string
+  owner: string
+  portfolio: string
+  criticality: string
+  posture: number | null
+  grade: string | null
+  grade_withheld: string | null
+  open_critical: number
+  open_high: number
+  excepted: number
+  findings_total: number
+  top_findings: string[]
+  top_findings_total: number
+  top_findings_truncated: boolean
+  assets: number | null
+  per_100_assets: number | null
+  rank: number | null
+  peers: number
+  rank_withheld: string | null
+  trend: ScorecardTrend | null
+  sla: ScorecardSla | null
+  sla_line: string
+  kras: unknown[]
+  caveats: string[]
+}
+
+export interface ScorecardPack {
+  period: string
+  headline: string
+  coverage: {
+    total: number
+    attributed: number
+    unattributed: number
+    ambiguous: number
+    pct: number
+    complete: boolean
+    headline: string
+  }
+  scorecards: Scorecard[]
+}

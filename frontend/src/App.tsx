@@ -25,6 +25,8 @@ import { Query } from './routes/Query'
 import { Runtime } from './routes/Runtime'
 import { Data } from './routes/Data'
 import { Registries } from './routes/Registries'
+import { Applications } from './routes/Applications'
+import { Scorecards } from './routes/Scorecards'
 import { TopRisks } from './routes/TopRisks'
 import { DASHBOARDS } from './lib/dashboards'
 import { TourProvider } from './lib/tour/TourProvider'
@@ -65,6 +67,8 @@ export default function App() {
               <Route path="/runtime" element={<Runtime />} />
               <Route path="/data" element={<Data />} />
               <Route path="/top-risks" element={<TopRisks />} />
+              <Route path="/applications" element={<Applications />} />
+              <Route path="/scorecards" element={<Scorecards />} />
               {DASHBOARDS.map((d) => (
                 <Route key={d.slug} path={`/${d.slug}`} element={<CategoryDashboard spec={d} />} />
               ))}

@@ -13,6 +13,7 @@ import type {
   RegistryRepo, RegistryImage, RegistryConnectorRow, OciImageRow,
   CopilotAnswer, BlastRadius, Project, ProjectDetail, ControlRow,
   EdrCoverage, OrgEdrCoverage, RuntimeIncident, DataInventory, OrgDataInventory, PolicyRow,
+  Application, ApplicationInput, ScorecardPack,
 } from './types'
 import { deriveCrosswalk } from '../lib/crosswalk'
 import { computeBlastRadius, cmpId } from '../lib/blast'
@@ -649,6 +650,41 @@ const dataApi = {
   },
 }
 
+// ── FR-2 registry + scorecards ───────────────────────────────────────────────
+// SAMPLE mode returns an EMPTY pack rather than fabricated applications. A demo
+// that invents owners and grades teaches the reader that the numbers are decor;
+// an empty registry with a note teaches them what the feature is for.
+const SAMPLE_FR2_NOTE = 'The application registry is a live-hub feature. '
+  + 'Sample mode has no registry, so nothing is shown rather than invented.'
+
+const fr2Api = {
+  sampleFr2Note: (): string | null => (SAMPLE ? SAMPLE_FR2_NOTE : null),
+
+  listApplications: (): Promise<Application[]> =>
+    SAMPLE ? Promise.resolve([]) : get<Application[]>(`${API_BASE}/applications`),
+
+  createApplication: (body: ApplicationInput): Promise<Application> =>
+    post<Application>('/applications', body),
+
+  updateApplication: (id: string, body: Partial<ApplicationInput>): Promise<Application> =>
+    put<Application>(`/applications/${encodeURIComponent(id)}`, body),
+
+  deleteApplication: (id: string): Promise<void> =>
+    send<void>('DELETE', `/applications/${encodeURIComponent(id)}`),
+
+  scorecards: (): Promise<ScorecardPack> =>
+    SAMPLE
+      ? Promise.resolve({
+        period: '', headline: SAMPLE_FR2_NOTE,
+        coverage: {
+          total: 0, attributed: 0, unattributed: 0, ambiguous: 0,
+          pct: 0, complete: false, headline: SAMPLE_FR2_NOTE,
+        },
+        scorecards: [],
+      })
+      : get<ScorecardPack>(`${API_BASE}/scorecards`),
+}
+
 export const api = {
   ...connectorApi,
   ...complianceApi,
@@ -660,6 +696,7 @@ export const api = {
   ...policiesApi,
   ...edrApi,
   ...dataApi,
+  ...fr2Api,
   copilot: (scope: string, question: string): Promise<CopilotAnswer> =>
     SAMPLE ? sampleCopilot(question)
       : post<CopilotAnswer>(scope === 'org' ? '/org/copilot' : `/accounts/${scope}/copilot`, { question }),

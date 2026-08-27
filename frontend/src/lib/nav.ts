@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Waypoints, CircleAlert, ShieldAlert, Boxes, KeyRound,
   ShieldCheck, Wrench, FileText, Cloud, Settings2, PackageCheck,
   Globe, Database, Container, BrainCircuit, UserRoundMinus, FolderKanban, Terminal, Radar,
-  Server, ShieldUser, LayoutGrid,
+  Server, ShieldUser, LayoutGrid, ClipboardCheck, AppWindow,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -19,6 +19,8 @@ export const NAV_MAIN: NavItem[] = [
   { to: '/', label: 'Overview', icon: LayoutDashboard },
   { to: '/attack-paths', label: 'Attack Paths', icon: Waypoints, hero: true },
   { to: '/projects', label: 'Projects', icon: FolderKanban },
+  // Scorecards sits beside Projects: both answer "whose is this".
+  { to: '/scorecards', label: 'Scorecards', icon: ClipboardCheck },
   { to: '/findings', label: 'Findings', icon: CircleAlert },
   { to: '/vulnerabilities', label: 'Vulnerabilities', icon: ShieldAlert },
   { to: '/runtime', label: 'Runtime', icon: Radar },
@@ -36,6 +38,9 @@ export const NAV_MAIN: NavItem[] = [
 
 export const NAV_ADMIN: NavItem[] = [
   { to: '/accounts', label: 'Cloud Accounts', icon: Cloud },
+  // The registry is administrative: editing it re-attributes other
+  // people's findings, so it lives with the other admin surfaces.
+  { to: '/applications', label: 'Applications', icon: AppWindow },
   { to: '/settings', label: 'Settings', icon: Settings2 },
   // Beside My Security because both answer "who may do what here" — one about
   // everybody's access, one about your own.
