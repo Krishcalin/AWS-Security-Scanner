@@ -7,6 +7,10 @@ import { Card, Loader, ErrorNote, Empty, SevDot, Chip } from '../components/ui'
 import { FindingDetail } from '../components/FindingDetail'
 import { sevColor } from '../lib/format'
 import { useDeepLinkPanel } from '../lib/deeplink'
+import { capNote } from '../lib/cap'
+import { Link } from 'react-router'
+import { pathLinks } from '../lib/deeplink'
+import type { PathLink } from '../lib/deeplink'
 import type { FindingCatalogEntry, OrgOverview, AccountSummary } from '../api/types'
 
 type Source = 'all' | 'misconfig' | 'vuln' | 'data'
@@ -41,7 +45,7 @@ function Pill({ active, onClick, children, tone }: { active: boolean; onClick: (
   )
 }
 
-export function FindingRow({ e, onPath, onOpen, dataTour }: { e: FindingCatalogEntry; onPath: boolean; onOpen: () => void; dataTour?: string }) {
+export function FindingRow({ e, onPath, onOpen, dataTour }: { e: FindingCatalogEntry; onPath: PathLink | null; onOpen: () => void; dataTour?: string }) {
   const [exp, setExp] = useState(false)
   return (
     <div data-tour={dataTour} className="rounded-xl border border-line bg-panel hover:border-accent/40 transition-colors">
@@ -50,11 +54,33 @@ export function FindingRow({ e, onPath, onOpen, dataTour }: { e: FindingCatalogE
         <span className="font-mono text-sm font-bold text-ink w-24 shrink-0">{e.check_id}</span>
         <span className="hidden sm:inline"><Chip>{e.section}</Chip></span>
         <span className="text-sm text-ink2 flex-1 min-w-0 truncate">{firstSentence(e.risk)}</span>
-        {onPath && <Waypoints size={14} style={{ color: 'var(--crit)' }} aria-label="On attack path" />}
-        <div className="hidden md:flex gap-1">
+        {onPath && (
+          // The marker used to be inert: it sat inside the row's onClick, so
+          // clicking it opened the finding detail and never the graph. Reaching
+          // the path cost a context switch at exactly the moment of triage.
+          <Link
+            to={`/attack-paths?path=${encodeURIComponent(onPath.id)}`}
+            onClick={(ev: React.MouseEvent) => ev.stopPropagation()}
+            title={onPath.count > 1
+              ? `On ${onPath.count} attack paths — open the highest-ranked`
+              : 'On an attack path — open it'}
+            aria-label={onPath.count > 1
+              ? `On ${onPath.count} attack paths, open the highest-ranked`
+              : 'On an attack path, open it'}
+            className="shrink-0 rounded p-0.5 hover:bg-panel2 focus:outline-none focus:ring-1 focus:ring-accent"
+          >
+            <Waypoints size={14} style={{ color: 'var(--crit)' }} />
+          </Link>
+        )}
+        <div className="hidden md:flex gap-1 items-center">
           {Object.keys(e.compliance).slice(0, 3).map((fw) => (
             <span key={fw} className="text-[10px] font-semibold text-ink3 rounded px-1.5 py-0.5" style={{ background: 'var(--panel2)' }}>{fw}</span>
           ))}
+          {capNote(3, Object.keys(e.compliance).length) && (
+            <span className="text-[10px] text-ink3" title={Object.keys(e.compliance).join(', ')}>
+              {capNote(3, Object.keys(e.compliance).length)}
+            </span>
+          )}
         </div>
         {e.account && <span className="font-mono text-[11px] text-ink3 w-28 hidden lg:block truncate">{e.account}</span>}
         <span className="text-xs text-ink3 w-16 text-right shrink-0 tabular-nums">{e.distinct} res</span>
@@ -80,14 +106,14 @@ export function Findings() {
   const isOrg = scope === 'org'
   const { data, loading, error } = useFetch<FindingCatalogEntry[]>(
     () => (isOrg ? api.orgFindings() : api.findings(scope)), [scope])
-  const paths = useFetch<string[]>(
+  // check_id -> the highest-ranked path it drives, plus how many it drives in all.
+  // Paths arrive ranked, so the FIRST path to claim a check is the one worth
+  // opening; later ones only increment the count. Keeping the count is what lets
+  // the marker avoid implying the linked path is the only one.
+  const paths = useFetch<Record<string, PathLink>>(
     () => (isOrg ? api.orgOverview().then((o: OrgOverview) => o.top_attack_paths)
       : api.accountSummary(scope).then((s: AccountSummary) => s.attack_paths))
-      .then((ps) => {
-        const set = new Set<string>()
-        ps.forEach((p) => p.driving_findings.forEach((df) => set.add(df.split(':')[0])))
-        return [...set]
-      }), [scope])
+      .then(pathLinks), [scope])
 
   const [tab, setTab] = useState<Source>('all')
   const [q, setQ] = useState('')
@@ -106,8 +132,9 @@ export function Findings() {
   // finding even when the active tab/severity/on-path filters would hide it.
   const open = openId ? (data.find((e) => e.check_id === openId) ?? null) : null
 
-  const onPathSet = new Set(paths.data ?? [])
-  const isOnPath = (e: FindingCatalogEntry) => onPathSet.has(e.check_id)
+  const pathBy = paths.data ?? {}
+  const linkFor = (e: FindingCatalogEntry): PathLink | null => pathBy[e.check_id] ?? null
+  const isOnPath = (e: FindingCatalogEntry) => linkFor(e) !== null
   const counts: Record<Source, number> = { all: data.length, misconfig: 0, vuln: 0, data: 0 }
   data.forEach((e) => { counts[sourceOf(e)]++ })
 
@@ -190,7 +217,7 @@ export function Findings() {
                 </div>
               )}
               {grp.items.map((e, i) => (
-                <FindingRow key={`${e.account ?? ''}${e.check_id}${i}`} e={e} onPath={isOnPath(e)}
+                <FindingRow key={`${e.account ?? ''}${e.check_id}${i}`} e={e} onPath={linkFor(e)}
                   dataTour={gi === 0 && i === 0 ? 'finding-row-0' : undefined} onOpen={() => setOpenId(e.check_id)} />
               ))}
             </div>

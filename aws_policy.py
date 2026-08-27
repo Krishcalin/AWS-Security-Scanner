@@ -160,7 +160,12 @@ def policy_finding(policy: dict, account_id: str, matched: dict) -> dict:
         "risk": policy.get("description") or f"Policy '{name}' matched {n} item(s).",
         "impact": policy.get("impact") or "",
         "steps": policy.get("steps") or [],
+        # Mirrors cnapp_service.capped(): the list says how much of itself it
+        # is. The TS twin in frontend/src/lib/policy.ts emits the identical
+        # fields -- tests/../policy.test.ts asserts the two are byte-equal.
         "affected": affected[:500],
+        "affected_total": len(affected),
+        "affected_truncated": len(affected) > 500,
         "count": n,
         "distinct": len(set(affected)),
         "account": account_id,

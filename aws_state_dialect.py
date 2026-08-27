@@ -181,6 +181,22 @@ POSTGRES_DDL: List[str] = [
        scan_id TEXT NOT NULL, account TEXT NOT NULL, region TEXT NOT NULL, check_id TEXT NOT NULL,
        PRIMARY KEY(scan_id,account,region,check_id))""",
     # sqlite twin in aws_state._DDL. Only diff: created_at/updated_at are BIGINT.
+    """CREATE TABLE IF NOT EXISTS applications(
+       app_id TEXT PRIMARY KEY,
+       workspace_id TEXT NOT NULL,
+       name TEXT NOT NULL,
+       owner TEXT NOT NULL DEFAULT '',
+       portfolio TEXT NOT NULL DEFAULT '',
+       criticality TEXT NOT NULL DEFAULT 'unclassified'
+         CHECK(criticality IN ('crown-jewel','high','standard','unclassified')),
+       accounts_json TEXT NOT NULL DEFAULT '[]',
+       tag_selectors_json TEXT NOT NULL DEFAULT '[]',
+       resource_arns_json TEXT NOT NULL DEFAULT '[]',
+       created_by TEXT,
+       created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS ix_app_ws_name ON applications(workspace_id, name)""",
+    """CREATE INDEX IF NOT EXISTS ix_app_ws ON applications(workspace_id)""",
+    # sqlite twin in aws_state._DDL. Only diff: created_at/updated_at are BIGINT.
     """CREATE TABLE IF NOT EXISTS custom_controls(
        control_id TEXT PRIMARY KEY,
        workspace_id TEXT NOT NULL,

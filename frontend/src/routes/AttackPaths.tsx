@@ -12,6 +12,7 @@ import { BlastRadius } from '../components/BlastRadius'
 import { sevColor } from '../lib/format'
 import { shortLabel } from '../lib/nodes'
 import { useDeepLinkPanel, pathId, matchPath } from '../lib/deeplink'
+import { capNote } from '../lib/cap'
 import type { OrgOverview, AccountSummary, AttackPath, ChokePoint, GraphFull, FindingCatalogEntry } from '../api/types'
 
 // ── filter pill ───────────────────────────────────────────────────────────────
@@ -49,6 +50,9 @@ function PathCard({ p, onOpen, dataTour }: { p: AttackPath; onOpen: () => void; 
             {p.driving_findings.slice(0, 4).map((f, i) => (
               <span key={i} className="font-mono text-[10px] rounded px-1.5 py-0.5" style={{ background: 'var(--panel2)', color: 'var(--ink2)' }}>{f}</span>
             ))}
+            {capNote(4, p.driving_findings.length) && (
+              <span className="text-[10px] text-ink3" title={p.driving_findings.join(', ')}>{capNote(4, p.driving_findings.length)}</span>
+            )}
           </div>
         ) : <span />}
         <span className="flex items-center gap-1 text-accent text-xs font-semibold shrink-0">Explore <ArrowRight size={12} /></span>
@@ -296,6 +300,7 @@ export function AttackPaths() {
               )}
               {chokes.length === 0 ? <Empty icon={<Scissors size={24} />}>No choke points.</Empty>
                 : chokes.slice(0, 6).map((c, i) => <ChokeRow key={i} c={c} />)}
+              {capNote(6, chokes.length) && <div className="text-[11px] text-ink3 pt-1">{capNote(6, chokes.length)}</div>}
             </div>
           </Card>
 

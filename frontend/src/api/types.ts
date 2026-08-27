@@ -141,7 +141,14 @@ export interface OrgOverview {
   crown_jewels_at_risk: number
   accounts: { account: string; region: string; posture_score: number | null; critical_paths: number }[]
   top_attack_paths: AttackPath[]
+  // Declared truncation (cnapp_service.capped): the server cut these lists and says
+  // by how much. Absent on an older hub -- treat undefined as "not declared",
+  // never as "nothing dropped". See lib/cap.serverCapNote.
+  top_attack_paths_total?: number
+  top_attack_paths_truncated?: boolean
   top_choke_points: ChokePoint[]
+  top_choke_points_total?: number
+  top_choke_points_truncated?: boolean
 }
 
 /** What a scan did NOT establish. `complete` is false if anything was refused,
@@ -184,7 +191,11 @@ export interface AccountSummary {
   compliance_scorecard: ComplianceScorecard
   graph: GraphStats | null
   attack_paths: AttackPath[]
+  attack_paths_total?: number
+  attack_paths_truncated?: boolean
   choke_points: ChokePoint[]
+  choke_points_total?: number
+  choke_points_truncated?: boolean
   coverage?: Coverage | null
   permission_ledger?: PermissionLedger | null
 }
@@ -530,6 +541,10 @@ export interface FindingCatalogEntry {
   count: number
   distinct: number
   account?: string
+  // Declared truncation on `affected` (mirrors cnapp_service.capped and
+  // aws_policy.policy_finding). Optional: not every producer declares yet.
+  affected_total?: number
+  affected_truncated?: boolean
 }
 
 // ── external-vuln ingest plane (SARIF/CycloneDX/SPDX) ────────────────────────

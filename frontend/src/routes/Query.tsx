@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Terminal, Play, BookOpen, ShieldCheck, AlertTriangle, CheckCircle2, FileCheck2 } from 'lucide-react'
 import { useScope } from '../state/scope'
 import { useFetch } from '../lib/useFetch'
+import { capNote } from '../lib/cap'
 import { api } from '../api/client'
 import { activeAccountIds } from '../lib/orgdata'
 import { Card, Loader, ErrorNote, Empty, SevDot } from '../components/ui'
@@ -18,11 +19,11 @@ const errString = (e: unknown): string => (e instanceof Error ? e.message : Stri
 // A compact preview of a row's props (booleans render as a bare flag / =false, else key=value).
 function PropChips({ props }: { props: Record<string, unknown> }) {
   const ORDER = ['crown_jewel', 'public', 'encrypted', 'severity', 'sensitivity', 'kev', 'region', 'account']
-  const keys = Object.keys(props)
+  const all = Object.keys(props)
     .filter((k) => k !== 'name' && props[k] !== null && typeof props[k] !== 'object')
     .sort((a, b) => (ORDER.indexOf(a) + 1 || 99) - (ORDER.indexOf(b) + 1 || 99))
-    .slice(0, 5)
-  if (!keys.length) return <span className="text-ink3 text-xs">—</span>
+  const keys = all.slice(0, 5)
+  if (!all.length) return <span className="text-ink3 text-xs">—</span>
   return (
     <div className="flex flex-wrap gap-1">
       {keys.map((k) => {
@@ -33,6 +34,9 @@ function PropChips({ props }: { props: Record<string, unknown> }) {
             style={{ color: 'var(--ink2)', background: 'var(--panel2)' }}>{label}</span>
         )
       })}
+      {capNote(5, all.length) && (
+        <span className="text-[11px] text-ink3 self-center" title={all.join(', ')}>{capNote(5, all.length)}</span>
+      )}
     </div>
   )
 }
