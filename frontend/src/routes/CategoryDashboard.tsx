@@ -5,7 +5,8 @@ import { Card, Loader, ErrorNote, Empty } from '../components/ui'
 import { FindingDetail } from '../components/FindingDetail'
 import { FindingRow } from './Findings'
 import { sevColor } from '../lib/format'
-import { useDeepLinkPanel } from '../lib/deeplink'
+import { useDeepLinkPanel, pathLinks } from '../lib/deeplink'
+import type { PathLink } from '../lib/deeplink'
 import { findingInDashboard, type DashboardSpec } from '../lib/dashboards'
 import type { FindingCatalogEntry, OrgOverview, AccountSummary } from '../api/types'
 
@@ -19,14 +20,10 @@ export function CategoryDashboard({ spec }: { spec: DashboardSpec }) {
   const Icon = spec.icon
   const { data, loading, error } = useFetch<FindingCatalogEntry[]>(
     () => (isOrg ? api.orgFindings() : api.findings(scope)), [scope, spec.slug])
-  const paths = useFetch<string[]>(
+  const paths = useFetch<Record<string, PathLink>>(
     () => (isOrg ? api.orgOverview().then((o: OrgOverview) => o.top_attack_paths)
       : api.accountSummary(scope).then((s: AccountSummary) => s.attack_paths))
-      .then((ps) => {
-        const set = new Set<string>()
-        ps.forEach((p) => p.driving_findings.forEach((df) => set.add(df.split(':')[0])))
-        return [...set]
-      }), [scope])
+      .then(pathLinks), [scope])
   const [openId, setOpenId] = useDeepLinkPanel('detail')
 
   if (loading) return <Loader />
@@ -37,7 +34,7 @@ export function CategoryDashboard({ spec }: { spec: DashboardSpec }) {
   // account+check_id — else clicking account B's row opens account A's (sorted-first) finding.
   const keyOf = (e: FindingCatalogEntry) => (e.account ? `${e.account}::${e.check_id}` : e.check_id)
   const rows = data.filter((e) => findingInDashboard(e, spec))
-  const onPathSet = new Set(paths.data ?? [])
+  const pathBy = paths.data ?? {}
   const open = openId ? (data.find((e) => keyOf(e) === openId) ?? null) : null
   const counts = SEVS.map((s) => ({ sev: s, n: rows.filter((r) => r.severity === s).length }))
 
@@ -67,12 +64,12 @@ export function CategoryDashboard({ spec }: { spec: DashboardSpec }) {
         <div className="flex flex-col gap-2">
           {rows.map((e, i) => (
             <FindingRow key={`${e.account ?? ''}${e.check_id}${i}`} e={e}
-              onPath={onPathSet.has(e.check_id)} onOpen={() => setOpenId(keyOf(e))} />
+              onPath={pathBy[e.check_id] ?? null} onOpen={() => setOpenId(keyOf(e))} />
           ))}
         </div>
       )}
 
-      {open && <FindingDetail e={open} onPath={onPathSet.has(open.check_id)} onClose={() => setOpenId(null)} />}
+      {open && <FindingDetail e={open} onPath={Boolean(pathBy[open.check_id])} onClose={() => setOpenId(null)} />}
     </div>
   )
 }

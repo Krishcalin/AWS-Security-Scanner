@@ -9,6 +9,7 @@ import { api } from '../api/client'
 import { Card, Loader, ErrorNote, Empty } from '../components/ui'
 import { sevColor } from '../lib/format'
 import { useDeepLinkPanel, matchVuln, vulnKey } from '../lib/deeplink'
+import { capNote } from '../lib/cap'
 import type { IngestedVuln } from '../api/types'
 
 const RANK: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 }
@@ -58,6 +59,9 @@ function Row({ v, open, onToggle, dataTour }: { v: IngestedVuln; open: boolean; 
           {v.sources.slice(0, 2).map((s) => (
             <span key={s} className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-panel2 text-ink2">{srcLabel(s)}</span>
           ))}
+          {capNote(2, v.sources.length) && (
+            <span className="text-[10px] text-ink3" title={v.sources.join(', ')}>{capNote(2, v.sources.length)}</span>
+          )}
         </div>
       </button>
       {open && (

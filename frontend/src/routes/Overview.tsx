@@ -8,6 +8,7 @@ import { Card, GradeDial, Loader, ErrorNote, Empty, SevDot, StackBar } from '../
 import { SeverityChip, PathBadges, PathChain, ChokeRow } from '../components/paths'
 import { DriftCard } from '../components/DriftCard'
 import { SEVERITIES, sevColor, scoreColor, gradeColor } from '../lib/format'
+import { serverCapNote } from '../lib/cap'
 import type { OrgOverview as TOrg, AccountSummary, AttackPath, IngestedVuln } from '../api/types'
 
 /** External-CVE reachability roll-up — renders only when the account has ingested
@@ -151,6 +152,9 @@ function OrgView() {
           <div className="px-5 pb-5 flex flex-col gap-2.5">
             {o.top_attack_paths.length === 0 ? <Empty icon={<Waypoints size={26} />}>No attack paths — clean across the org.</Empty>
               : o.top_attack_paths.slice(0, 5).map((p, i) => <PathRow key={i} p={p} dataTour={i === 0 ? 'top-path-0' : undefined} />)}
+            {/* Two cuts stack: the server capped the list (top_attack_paths_total)
+                and this panel shows five of what survived. Report the wider one. */}
+            {serverCapNote(Math.min(5, o.top_attack_paths.length), o.top_attack_paths_total ?? o.top_attack_paths.length) && <div className="text-[11px] text-ink3 pt-1">{serverCapNote(Math.min(5, o.top_attack_paths.length), o.top_attack_paths_total ?? o.top_attack_paths.length)}</div>}
           </div>
         </Card>
         <Card>
@@ -164,6 +168,7 @@ function OrgView() {
             )}
             {o.top_choke_points.length === 0 ? <Empty icon={<Scissors size={24} />}>No choke points.</Empty>
               : o.top_choke_points.slice(0, 4).map((c, i) => <ChokeRow key={i} c={c} />)}
+            {serverCapNote(Math.min(4, o.top_choke_points.length), o.top_choke_points_total ?? o.top_choke_points.length) && <div className="text-[11px] text-ink3 pt-1">{serverCapNote(Math.min(4, o.top_choke_points.length), o.top_choke_points_total ?? o.top_choke_points.length)}</div>}
           </div>
         </Card>
       </div>
@@ -261,6 +266,7 @@ function AccountView({ id }: { id: string }) {
           <div className="px-5 pb-5 flex flex-col gap-2.5">
             {s.attack_paths.length === 0 ? <Empty icon={<Waypoints size={26} />}>No attack paths for this account.</Empty>
               : s.attack_paths.slice(0, 5).map((p, i) => <PathRow key={i} p={p} />)}
+            {serverCapNote(Math.min(5, s.attack_paths.length), s.attack_paths_total ?? s.attack_paths.length) && <div className="text-[11px] text-ink3 pt-1">{serverCapNote(Math.min(5, s.attack_paths.length), s.attack_paths_total ?? s.attack_paths.length)}</div>}
           </div>
         </Card>
 

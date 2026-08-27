@@ -2014,6 +2014,8 @@
         "affected": [
           "finding:S3-01"
         ],
+        "affected_total": 1,
+        "affected_truncated": false,
         "count": 1,
         "distinct": 1,
         "account": "111122223333"
@@ -2045,6 +2047,8 @@
         "affected": [
           "finding:S3-01"
         ],
+        "affected_total": 1,
+        "affected_truncated": false,
         "count": 1,
         "distinct": 1,
         "account": "111122223333"
@@ -2087,6 +2091,8 @@
         "affected": [
           "arn:aws:s3:::crown-public"
         ],
+        "affected_total": 1,
+        "affected_truncated": false,
         "count": 1,
         "distinct": 1,
         "account": "111122223333"
@@ -2125,6 +2131,8 @@
           "arn:aws:s3:::crown-public",
           "finding:S3-01"
         ],
+        "affected_total": 3,
+        "affected_truncated": false,
         "count": 3,
         "distinct": 3,
         "account": "111122223333"
@@ -2155,6 +2163,8 @@
           "finding:S3-01",
           "finding:S3-02"
         ],
+        "affected_total": 2,
+        "affected_truncated": false,
         "count": 2,
         "distinct": 2,
         "account": "111122223333"
@@ -2197,6 +2207,8 @@
           "finding:IAM-05",
           "finding:S3-02"
         ],
+        "affected_total": 3,
+        "affected_truncated": false,
         "count": 3,
         "distinct": 3,
         "account": "111122223333"

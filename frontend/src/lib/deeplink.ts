@@ -84,6 +84,32 @@ export function pathId(p: Pick<AttackPath, 'entry' | 'terminal' | 'nodes'>): str
   return `${lastSeg(p.entry)}__${lastSeg(p.terminal)}__${shortHash(p.nodes.join('>'))}`
 }
 
+/** Where a finding's attack-path marker leads, and how many paths it drives. */
+export type PathLink = { id: string; count: number }
+
+/**
+ * Map each driving check_id to the HIGHEST-RANKED path it drives, plus how many
+ * paths it drives in all.
+ *
+ * Paths arrive ranked, so the first path to claim a check is the one worth
+ * opening. The count is kept because a marker that links to one path while the
+ * finding drives five would imply the other four do not exist -- the same
+ * silent-narrowing this codebase refuses everywhere else.
+ */
+export function pathLinks(ps: AttackPath[]): Record<string, PathLink> {
+  const map: Record<string, PathLink> = {}
+  ps.forEach((p) => {
+    const id = pathId(p)
+    p.driving_findings.forEach((df) => {
+      const check = df.split(':')[0]
+      const hit = map[check]
+      if (hit) hit.count += 1
+      else map[check] = { id, count: 1 }
+    })
+  })
+  return map
+}
+
 /** Match an attack path against a `?path=` value (resolve from the UNFILTERED list). */
 export function matchPath(paths: AttackPath[], id: string | null): AttackPath | null {
   if (!id) return null

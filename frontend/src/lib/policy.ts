@@ -129,7 +129,10 @@ export function policyFinding(policy: PolicyDef, account: string, matched: Polic
     risk: policy.description || `Policy '${name}' matched ${n} item(s).`,
     impact: policy.impact || '',
     steps: policy.steps || [],
+    // Mirrors cnapp_service.capped(): the list says how much of itself it is.
     affected: affected.slice(0, 500),
+    affected_total: affected.length,
+    affected_truncated: affected.length > 500,
     count: n,
     distinct: new Set(affected).size,
     account,

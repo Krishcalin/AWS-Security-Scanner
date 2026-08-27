@@ -105,7 +105,7 @@ export function ProjectView() {
       ) : (
         <div className="flex flex-col gap-2">
           {data.findings.map((e, i) => (
-            <FindingRow key={`${e.account ?? ''}${e.check_id}${i}`} e={e} onPath={false} onOpen={() => { /* detail is read-only here */ }} />
+            <FindingRow key={`${e.account ?? ''}${e.check_id}${i}`} e={e} onPath={null} onOpen={() => { /* detail is read-only here */ }} />
           ))}
         </div>
       )}
