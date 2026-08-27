@@ -104,9 +104,14 @@ def test_no_module_still_claims_the_old_pin_is_current():
     """Several modules name the pinned version in their docstring as the thing they were
     verified against. A stale one is a claim about provenance that is no longer true."""
     stale = []
-    for name in sorted(os.listdir(ROOT)):
-        if not name.startswith("aws_") or not name.endswith(".py"):
-            continue
+    names = [n for n in sorted(os.listdir(ROOT))
+             if n.startswith("aws_") and n.endswith(".py")]
+    # Without this the sweep reports "no stale pins" when it read no files at
+    # all -- indistinguishable, in the suite output, from having checked them.
+    assert len(names) >= 50, (
+        "only %d aws_ modules found in %s -- the sweep is broken, not clean "
+        "(os.listdir does not recurse)" % (len(names), ROOT))
+    for name in names:
         src = io.open(os.path.join(ROOT, name), encoding="utf-8").read()
         for line in src.split("\n"):
             if "1.40.51" in line and ("pins" in line or "pinned" in line

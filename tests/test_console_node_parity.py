@@ -72,11 +72,21 @@ def _read(path):
 
 
 def _add_node_literals():
-    """The one emission shape a regex reads reliably: add_node(id, "Kind")."""
+    """The one emission shape a regex reads reliably: add_node(id, "Kind").
+
+    The glob is NOT recursive, so if these modules ever move into a
+    subdirectory it returns no paths, the kind set is empty, and parity against
+    the console holds trivially -- a green test asserting nothing.
+    """
+    paths = glob.glob(os.path.join(ROOT, "*.py"))
+    assert len(paths) >= 50, (
+        "only %d python files found in %s -- the sweep is broken, so parity "
+        "would hold vacuously (glob(*.py) does not recurse)" % (len(paths), ROOT))
     kinds = set()
-    for path in glob.glob(os.path.join(ROOT, "*.py")):
+    for path in paths:
         kinds.update(re.findall(r'add_node\([^,]+,\s*"([A-Za-z][A-Za-z0-9_]*)"',
                                 _read(path)))
+    assert kinds, "no add_node(id, \"Kind\") literals found at all"
     return kinds - {PLACEHOLDER}
 
 

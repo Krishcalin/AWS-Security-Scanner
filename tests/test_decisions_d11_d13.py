@@ -45,10 +45,33 @@ def _src(path: str) -> str:
         return fh.read()
 
 
+#: Below this, assume the walk is broken rather than that the codebase shrank.
+#: Currently ~108 modules match; the floor only has to be high enough that an
+#: EMPTY or nearly-empty root cannot slip past. Lower it deliberately, in a
+#: commit that says why, if the module count ever genuinely falls.
+_MIN_MODULES = 50
+
+
 def _modules():
-    for name in sorted(os.listdir(ROOT)):
-        if name.endswith(".py") and (name.startswith("aws_") or name.startswith("cnapp_")):
-            yield name, _src(os.path.join(ROOT, name))
+    """Every root aws_/cnapp_ module, as (name, source).
+
+    Returns a LIST, not a generator, and refuses to be empty. Its callers collect
+    offenders and assert the offender list is empty -- so a walk that yields
+    nothing asserts empty against empty and PASSES, reporting a control that
+    never ran. That is the failure this whole codebase exists to refuse, and it
+    would be reached by something as ordinary as moving these modules into a
+    subdirectory: os.listdir does not recurse.
+    """
+    found = [(name, _src(os.path.join(ROOT, name)))
+             for name in sorted(os.listdir(ROOT))
+             if name.endswith(".py") and (name.startswith("aws_")
+                                          or name.startswith("cnapp_"))]
+    assert len(found) >= _MIN_MODULES, (
+        "only %d aws_/cnapp_ modules found in %s -- the walk is broken, so every "
+        "check built on it would pass without inspecting anything. If the modules "
+        "moved, point ROOT at their new home; os.listdir does not recurse."
+        % (len(found), ROOT))
+    return found
 
 
 # ── the record itself ───────────────────────────────────────────────────────
