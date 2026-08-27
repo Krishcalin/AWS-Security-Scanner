@@ -252,6 +252,7 @@ class PlatformService:
                  projects: Optional[List[dict]] = None,
                  controls: Optional[List[dict]] = None,
                  custom_controls=None,
+                 applications=None,
                  policies: Optional[List[dict]] = None,
                  registry_connectors: Optional[List[dict]] = None,
                  registry_request: Optional[Callable] = None,
@@ -315,6 +316,11 @@ class PlatformService:
         # Authored controls keep the SAME display-only discipline: WARN, never FAIL, so a
         # customer's own query can never move the posture score it is being compared on.
         self.custom_controls = custom_controls
+        # The FR-2 application registry (schema v17). Optional for the same
+        # reason custom_controls is: an offline or single-account deployment has
+        # no workspace store to scope it to, and the routes 501 rather than
+        # pretending the feature is present.
+        self.applications = applications
         # ── Policies (policy-as-code; the custom-rule engine) ─────────────────
         # Read-only, config-driven rules ({id,name,match:{op?,graph?,finding?},...}) that combine a
         # graph condition (WQL) and/or a finding-catalog condition (compliance-as-code). Same

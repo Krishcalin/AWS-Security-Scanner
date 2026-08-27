@@ -125,6 +125,7 @@ def build_service():
     import aws_state
     import cnapp_backend
     import cnapp_connectors
+    import cnapp_application
     import cnapp_customcontrol
     import cnapp_metering
     import cnapp_registry
@@ -155,6 +156,7 @@ def build_service():
         # Authored controls (v16) share the SAME backend as every other store, so a
         # deployment gets one connection pool rather than a second one per feature.
         custom_controls=cnapp_customcontrol.CustomControlStore(be),
+        applications=cnapp_application.ApplicationStore(be),
         policies=_load_policies(),
         registry_connectors=_load_registry_connectors(),
     )

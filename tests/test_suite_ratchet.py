@@ -105,6 +105,7 @@ FLOORS = {
     "test_aispm.py": 18,
     "test_aispm_graph.py": 13,
     "test_application_registry.py": 30,
+    "test_applications_api.py": 19,
     "test_authn.py": 20,
     "test_aws_kube.py": 14,
     "test_backend_pg.py": 21,

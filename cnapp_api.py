@@ -243,6 +243,30 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         compliance: Optional[dict] = None
         enabled: Optional[bool] = None
 
+    class ApplicationReq(BaseModel):
+        """An Application (FR-2 / AD-02). Validation runs in cnapp_application at WRITE
+        time against the aws_ownership.Application dataclass, so a selector that could
+        never match is a 400 here rather than an entry that scores clean forever."""
+        name: str
+        owner: str = ""
+        portfolio: str = ""
+        criticality: str = Field(default="unclassified",
+                                 pattern=r"^(crown-jewel|high|standard|unclassified)$")
+        accounts: List[str] = Field(default_factory=list)
+        tag_selectors: List[dict] = Field(default_factory=list)
+        resource_arns: List[str] = Field(default_factory=list)
+        id: Optional[str] = None
+
+    class ApplicationUpdateReq(BaseModel):
+        name: Optional[str] = None
+        owner: Optional[str] = None
+        portfolio: Optional[str] = None
+        criticality: Optional[str] = Field(
+            default=None, pattern=r"^(crown-jewel|high|standard|unclassified)$")
+        accounts: Optional[List[str]] = None
+        tag_selectors: Optional[List[dict]] = None
+        resource_arns: Optional[List[str]] = None
+
     class WqlReq(BaseModel):
         query: dict                                  # a WQL query object (validated by aws_wql.parse)
 
@@ -501,6 +525,77 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     def delete_control(control_id: str, scope: Scope = Depends(require("admin"))):
         if not _control_store().delete(_control_ws(scope), control_id):
             raise HTTPException(status_code=404, detail="control not found")
+
+    # ── Application registry (v17): the AD-02 dependency FR-2 rests on ──────────
+    # Writes are ws-admin gated for the same reason Controls are, and one more: an
+    # Application decides WHOSE findings these are and who receives the scorecard.
+    # Editing one re-attributes other people's work.
+    def _app_store():
+        store = getattr(service, "applications", None)
+        if store is None:
+            raise HTTPException(
+                status_code=501,
+                detail="the application registry is not enabled on this deployment")
+        return store
+
+    def _app_ws(scope) -> str:
+        if not scope.workspace_id:
+            raise HTTPException(
+                status_code=400,
+                detail="select a workspace before defining an application")
+        return scope.workspace_id
+
+    def _with_warnings(record: dict) -> dict:
+        """Attach the non-fatal problems to the response.
+
+        A mis-scoped application does not fail loudly: it renders a scorecard,
+        reports zero findings, and is indistinguishable from one that is genuinely
+        clean. Returning the warnings WITH the created object is what lets the
+        console say so at the moment of saving, rather than leaving the author to
+        infer it from a suspiciously good grade weeks later.
+        """
+        import cnapp_application
+        return {**record, "warnings": list(cnapp_application.warnings_for(record))}
+
+    @app.get("/applications")
+    def list_applications(scope: Scope = Depends(require("auditor"))):
+        return [_with_warnings(a) for a in _app_store().list(scope.workspace_id)]
+
+    @app.get("/applications/{app_id}")
+    def get_application(app_id: str, scope: Scope = Depends(require("auditor"))):
+        out = _app_store().get(scope.workspace_id, app_id)
+        if out is None:
+            raise HTTPException(status_code=404, detail="application not found")
+        return _with_warnings(out)
+
+    @app.post("/applications", status_code=201)
+    def create_application(body: ApplicationReq,
+                           scope: Scope = Depends(require("admin"))):
+        import cnapp_application
+        try:
+            out = _app_store().create(_app_ws(scope), body.model_dump(),
+                                      created_by=scope.principal.subject)
+        except cnapp_application.ApplicationError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return _with_warnings(out)
+
+    @app.put("/applications/{app_id}")
+    def update_application(app_id: str, body: ApplicationUpdateReq,
+                           scope: Scope = Depends(require("admin"))):
+        import cnapp_application
+        try:
+            out = _app_store().update(_app_ws(scope), app_id,
+                                      body.model_dump(exclude_none=True))
+        except cnapp_application.ApplicationError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if out is None:
+            raise HTTPException(status_code=404, detail="application not found")
+        return _with_warnings(out)
+
+    @app.delete("/applications/{app_id}", status_code=204)
+    def delete_application(app_id: str, scope: Scope = Depends(require("admin"))):
+        if not _app_store().delete(_app_ws(scope), app_id):
+            raise HTTPException(status_code=404, detail="application not found")
 
     @app.post("/controls/preview")
     def preview_control(body: WqlReq, scope: Scope = Depends(require("auditor"))):
