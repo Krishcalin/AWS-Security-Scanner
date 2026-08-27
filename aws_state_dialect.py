@@ -480,6 +480,14 @@ POSTGRES_ALTERS: List[str] = [
     "workspace_members_role_check",
     "ALTER TABLE workspace_members ADD CONSTRAINT workspace_members_role_check "
     "CHECK (role IN ('auditor','viewer','ingest','analyst','admin'))",
+    # Same bug, second occurrence: a database created before ServiceDesk Plus
+    # keeps the five-type CHECK, so an 'sdp' connector cannot be created at all.
+    # DROP ... IF EXISTS then ADD is idempotent and needs no probe -- unlike the
+    # sqlite side, Postgres can drop a CHECK in place, so there is no table
+    # rebuild and nothing for connector_rules to cascade off.
+    "ALTER TABLE connectors DROP CONSTRAINT IF EXISTS connectors_type_check",
+    "ALTER TABLE connectors ADD CONSTRAINT connectors_type_check "
+    "CHECK (type IN ('jira','slack','pagerduty','splunk','webhook','sdp'))",
 ]
 
 #: SQLite cannot drop a CHECK constraint, so the table is rebuilt: create the

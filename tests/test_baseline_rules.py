@@ -297,3 +297,61 @@ def test_a_check_failure_is_not_reported_as_a_name_collision():
     unique = sqlite3.IntegrityError("UNIQUE constraint failed: connectors.name")
     assert C._is_unique_violation(check) is False
     assert C._is_unique_violation(unique) is True
+
+
+# ── the same widening, on the engine that is actually deployed ─────────────
+
+def _types_in(text):
+    """The CONNECTOR types a CHECK clause admits, as a set.
+
+    Scoped by naming 'jira': the schema carries a SECOND `type IN (...)` on
+    connector_rules for the match mode ('exact','glob'), and taking the first
+    match compares the wrong constraint -- which is how this helper was first
+    written. It failed loudly rather than passing on the wrong pair, which is
+    the only reason it was caught.
+    """
+    import re
+    hits = [m.group(1) for m in re.finditer(r"type IN \(([^)]*)\)", text)
+            if "'jira'" in m.group(1)]
+    assert len(hits) == 1, (
+        "expected exactly one connector-type CHECK, found %d" % len(hits))
+    return {t.strip().strip("'") for t in hits[0].split(",")}
+
+
+def test_postgres_also_widens_the_connector_type_check():
+    """The sqlite rebuild alone left the DEPLOYED engine refusing 'sdp'.
+
+    CREATE TABLE IF NOT EXISTS leaves an existing table alone on Postgres too,
+    so a database created before ServiceDesk Plus keeps the five-type CHECK and
+    the connector cannot be created at all -- a fix that works only on the
+    development engine is not a fix.
+    """
+    import aws_state_dialect
+    joined = " ".join(aws_state_dialect.POSTGRES_ALTERS)
+    assert "connectors_type_check" in joined
+    assert "'sdp'" in joined
+
+
+def test_the_postgres_connector_upgrade_is_idempotent():
+    """migrate() runs on every open; a DROP without IF EXISTS fails the second
+    time and takes the whole startup with it."""
+    import aws_state_dialect
+    stmts = [s for s in aws_state_dialect.POSTGRES_ALTERS
+             if "connectors_type_check" in s]
+    assert len(stmts) == 2
+    assert "DROP CONSTRAINT IF EXISTS" in stmts[0]
+    assert stmts[1].startswith("ALTER TABLE connectors ADD CONSTRAINT")
+
+
+def test_both_engines_admit_exactly_the_same_connector_types():
+    """Drift between the two CHECKs means a connector that works in development
+    and is rejected in production, or the reverse. Pin them to each other and to
+    the type list the engine itself dispatches on."""
+    import aws_state
+    import aws_state_dialect
+    pg = _types_in(" ".join(
+        s for s in aws_state_dialect.POSTGRES_ALTERS if "connectors" in s))
+    lite = _types_in(" ".join(aws_state_dialect.SQLITE_CONNECTOR_TYPE_REBUILD))
+    ddl = _types_in(aws_state._DDL)
+    assert pg == lite == ddl == set(C._CONNECTOR_TYPES), (
+        "the two CHECKs, the DDL and the engine's own type list must agree")

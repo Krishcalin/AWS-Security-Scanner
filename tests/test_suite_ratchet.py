@@ -109,7 +109,7 @@ FLOORS = {
     "test_authn.py": 20,
     "test_aws_kube.py": 14,
     "test_backend_pg.py": 21,
-    "test_baseline_rules.py": 24,
+    "test_baseline_rules.py": 27,
     "test_blast_radius.py": 12,
     "test_cbom.py": 29,
     "test_cdr_api.py": 10,
