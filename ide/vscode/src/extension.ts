@@ -30,7 +30,7 @@ function sevOf(s: string): vscode.DiagnosticSeverity {
 function runScanner(file: string): Promise<ScanReport> {
   const cfg = vscode.workspace.getConfiguration('overwatch')
   const python = cfg.get<string>('python', 'python3')
-  const scanner = cfg.get<string>('scannerPath', 'aws_offline_scanner.py')
+  const scanner = cfg.get<string>('scannerPath', 'engine/aws_offline_scanner.py')
   const out = join(tmpdir(), `overwatch-iac-${Date.now()}.json`)
   return new Promise((resolve, reject) => {
     execFile(python, [scanner, file, '--json', out], { timeout: 60_000 }, async (err) => {

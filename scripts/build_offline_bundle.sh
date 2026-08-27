@@ -9,7 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:-$(grep -m1 '^VERSION' aws_live_scanner.py | cut -d'"' -f2)}"
+VERSION="${1:-$(grep -m1 '^VERSION' engine/aws_live_scanner.py | cut -d'"' -f2)}"
 ARCH="${WHEEL_PLATFORM:-manylinux2014_x86_64}"
 PYV="${PYTHON_VERSION:-3.12}"
 OUT="overwatch-airgap-${VERSION}"

@@ -19,17 +19,23 @@ if [ ! -e "$OW_PATH" ]; then
   echo "::error::path not found: $OW_PATH"; exit 1
 fi
 
-# The scanner lives at the repo root; resolve it relative to this action, whichever checkout
+# The scanner lives in engine/; resolve it relative to this action, whichever checkout
 # layout is in play (the action may be vendored under .github/actions or referenced by ref).
+# The legacy repo-root paths are kept as FALLBACKS so the action still works when it is
+# pinned to a ref from before the engine/hub/store split. aws_offline_scanner has no
+# cross-package imports, so it still runs by path -- only the path moved.
 SCANNER=""
 for cand in \
+  "$GITHUB_WORKSPACE/engine/aws_offline_scanner.py" \
+  "$(dirname "$0")/../../../engine/aws_offline_scanner.py" \
+  "engine/aws_offline_scanner.py" \
   "$GITHUB_WORKSPACE/aws_offline_scanner.py" \
   "$(dirname "$0")/../../../aws_offline_scanner.py" \
   "aws_offline_scanner.py"; do
   if [ -f "$cand" ]; then SCANNER="$cand"; break; fi
 done
 if [ -z "$SCANNER" ]; then
-  echo "::error::aws_offline_scanner.py not found (check out the OverWatch repo before this step)"; exit 1
+  echo "::error::engine/aws_offline_scanner.py not found (check out the OverWatch repo before this step)"; exit 1
 fi
 
 ARGS=("$SCANNER" "$OW_PATH" --sarif "$OW_SARIF" --fail-on "$OW_FAIL_ON")

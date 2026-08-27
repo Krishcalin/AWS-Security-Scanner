@@ -16,7 +16,10 @@ on:
   workflow_dispatch: {}
   push:
     paths:
-      - "aws_sidescan_fs.py"
+      # engine/ since the flat root was split into engine/ + hub/ + store/.
+      # A path filter naming a file that no longer exists does not error -- the
+      # job simply never runs again, which is the quietest way to lose CI.
+      - "engine/aws_sidescan_fs.py"
       - "tests/test_sidescan_fs.py"
       - ".github/workflows/extractor-fs-validation.yml"
 
@@ -65,4 +68,9 @@ jobs:
       # assertion here (a mkfs'd rootfs with a known dpkg/rpm DB must inventory correctly and
       # match a DictExtractor double). Until then the parse stays inert (CWPP-04 INFO).
       - name: DissectExtractor golden-image parse (pending — see follow-on)
-        run: echo "TODO: validate the dissect.target ext4/xfs parse against a golden rootfs, then flip VERSION"
+        # Block scalar on purpose: the message contains ": ", which YAML reads as a
+        # mapping separator in a plain scalar. As a one-liner this made the WHOLE
+        # workflow file unparseable, so GitHub never ran the job at all -- it was
+        # not that the step was inert, it was that the file was invalid.
+        run: |
+          echo "TODO: validate the dissect.target ext4/xfs parse against a golden rootfs, then flip VERSION"

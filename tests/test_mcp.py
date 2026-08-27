@@ -398,7 +398,14 @@ def test_the_documented_scanner_flags_exist():
                         and a.value.startswith("-"):
                     known.add(a.value)
     assert "--json" in known, "flag extraction failed; the guard would pass vacuously"
-    used = set(re.findall(r"aws_live_scanner\.py[^\n`]*?(--[a-z][a-z0-9-]*)", _docs()))
+    # Matches both the historical `aws_live_scanner.py --flag` and the
+    # current `python -m engine.aws_live_scanner --flag`. The invocation
+    # changed when the flat root became engine/ + hub/ + store/; the FLAGS
+    # did not, and the flags are what this guard is about. The `assert used`
+    # below is what caught the doc rewrite -- without it this would have
+    # quietly checked nothing and still passed.
+    used = set(re.findall(
+        r"aws_live_scanner(?:\.py)?[^\n`]*?(--[a-z][a-z0-9-]*)", _docs()))
     assert used, "no scanner command found in docs/MCP.md to check"
     missing = used - known
     assert not missing, f"docs/MCP.md uses flags the scanner does not define: {missing}"

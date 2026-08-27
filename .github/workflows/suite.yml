@@ -1,0 +1,82 @@
+# The full test suite — the one that guards the invariants.
+#
+# WHY THIS EXISTS
+# ---------------
+# Until now the only workflow ran a single file (tests/test_sidescan_fs.py), so
+# ~5,500 tests never executed on a push. Three defects sat undetected as a direct
+# result, and all three were found by hand in one afternoon:
+#
+#   * test_correlate_frozen pinned a sha256 of the WORKING-TREE bytes of
+#     aws_correlate.py. With core.autocrlf=true and no .gitattributes those are
+#     CRLF on Windows and LF everywhere else, so the recorded value was a
+#     Windows-only hash and the freeze would have failed on any Linux checkout.
+#   * requirements-dev.txt pinned python-hcl2==7.4.0, a version that exists on no
+#     platform. `pip install -r requirements-dev.txt` therefore failed outright
+#     and installed NOTHING — the suite could not even be set up from a clean
+#     checkout.
+#   * Nothing pulled an HTTP client, so starlette's TestClient raised at import
+#     and 29 test modules errored during collection.
+#
+# TWO OPERATING SYSTEMS ON PURPOSE
+# --------------------------------
+# This repo is developed on Windows and deployed on Linux in a container, and the
+# gap between them is a live source of bugs here (line endings above; path
+# separators elsewhere). A single-OS matrix would have missed the frozen-hash
+# defect completely. Both legs must pass.
+name: suite
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch: {}
+
+concurrency:
+  # A newer push supersedes an in-flight run on the same ref.
+  group: suite-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false      # report BOTH legs; an OS-specific failure is the point
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run the suite
+        # -p no:randomly matches how the suite is run locally; the ordering
+        # ratchets assume it.
+        run: python -m pytest tests -q -p no:randomly
+
+  layering:
+    # Cheap and fast, so it reports separately: if this fails, the architecture
+    # boundary has been crossed and that is worth seeing without reading a
+    # 5,500-line log. Runs on Linux only — it reads source, not behaviour.
+    name: architecture boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: hub -> engine -> store, downward only
+        run: python -m pytest tests/test_layering.py tests/test_data_paths.py -q -p no:randomly

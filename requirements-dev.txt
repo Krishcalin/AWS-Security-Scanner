@@ -2,6 +2,15 @@
 -r requirements.txt
 pytest==9.0.3
 pyyaml==6.0.3
-# python-hcl2 is OPTIONAL — tests/test_terraform_parity.py uses it if present
-# (pytest.importorskip) and falls back to a structural regex check otherwise.
-python-hcl2==7.4.0
+# starlette's TestClient needs an HTTP client, and 29 test modules use it. Without
+# this the whole suite ERRORS AT COLLECTION on a clean machine -- which is one of
+# the reasons the suite had never been run in CI. starlette 1.3.x asks for httpx2
+# specifically; plain httpx still works but emits a deprecation warning.
+httpx2==2.12.0
+#
+# REMOVED: python-hcl2==7.4.0. That version does not exist on any platform (the
+# published versions jump 7.3.1 -> 8.1.0), so `pip install -r requirements-dev.txt`
+# failed outright and installed NOTHING. Nothing in the repo imports hcl2 -- the
+# comment claiming tests/test_terraform_parity.py uses it was wrong; that file
+# importorskips `yaml`, not hcl2. Re-add it, at a real version, if a test ever
+# genuinely needs it.

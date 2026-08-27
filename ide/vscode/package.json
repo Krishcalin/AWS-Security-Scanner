@@ -25,8 +25,8 @@
           "description": "Python interpreter used to run the offline scanner."
         },
         "overwatch.scannerPath": {
-          "type": "string", "default": "aws_offline_scanner.py",
-          "description": "Path to aws_offline_scanner.py (defaults to the repo root / PATH)."
+          "type": "string", "default": "engine/aws_offline_scanner.py",
+          "description": "Path to aws_offline_scanner.py (defaults to engine/ in the repo, or PATH)."
         }
       }
     }

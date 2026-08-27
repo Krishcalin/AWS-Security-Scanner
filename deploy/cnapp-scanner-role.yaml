@@ -255,7 +255,7 @@ Resources:
               # but not GetKnowledgeBase; ListAgentActionGroups but not
               # GetAgentActionGroup; ListDataSources but not GetDataSource. Two of those
               # are one word apart, which is why inspection missed this for so long and
-              # computation did not — aws_perm_ledger.py derives exactly this list from
+              # computation did not — engine/aws_perm_ledger.py derives exactly this list from
               # the role's own attached policies and tests/test_perm_ledger.py pins it.
               #
               # Always-on, unlike the opt-in blocks below: these read CONFIGURATION, the
