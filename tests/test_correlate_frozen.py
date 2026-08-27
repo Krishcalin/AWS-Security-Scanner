@@ -10,15 +10,24 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_state
-import cnapp_connectors as cc
-from aws_graph import SecurityGraph
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
+from store import aws_state
+from hub import cnapp_connectors as cc
+from engine.aws_graph import SecurityGraph
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
+
+from _layout import module_path
 
 # Pin recorded when Slice-4 landed. If aws_correlate.py legitimately changes, update this
 # hash IN THE SAME COMMIT and explain why in the message — never silently.
-CORRELATE_SHA256 = "e5afca6be008e0f2ca68d511781e6b5fd3a89fdf11636887bce63c5738cc723c"
+#
+# NEWLINES ARE NORMALISED BEFORE HASHING. The original pin hashed the raw
+# working-tree bytes, and with core.autocrlf=true and no .gitattributes those
+# are CRLF on Windows and LF everywhere else -- so the recorded value was a
+# Windows-only hash and this freeze failed on any Linux checkout. It went
+# unnoticed because CI runs one unrelated test file. The content guarantee is
+# unchanged; only the measurement is now portable.
+CORRELATE_SHA256 = "ee6d157e61324e96b7e65edd45818fd77a926805136cd10ac6b3bf1b5096081b"
 
 ACCT = "111122223333"
 INST = f"arn:aws:ec2:us-east-1:{ACCT}:instance/i-1"
@@ -31,8 +40,9 @@ BUNDLE = {"records": [{"id": "CVE-2021-44228", "aliases": ["CVE-2021-44228"],
 
 
 def test_aws_correlate_is_byte_frozen():
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "aws_correlate.py")
-    got = hashlib.sha256(open(path, "rb").read()).hexdigest()
+    path = module_path("aws_correlate.py")
+    raw = open(path, "rb").read()
+    got = hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest()
     assert got == CORRELATE_SHA256, (
         "aws_correlate.py changed — Slice-4 must not touch it. If the change is intended, "
         "update CORRELATE_SHA256 in the same commit with a justification.")

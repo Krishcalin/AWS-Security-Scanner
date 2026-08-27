@@ -28,7 +28,11 @@ COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.
 COPY --from=deps /usr/local/bin /usr/local/bin
 # application code + compliance crosswalk data + the prebuilt SPA (dist is INCLUDED in the
 # build context via .dockerignore even though it is git-ignored)
-COPY *.py ./
+# The three layers. engine/ scans, hub/ serves, store/ persists; store is
+# imported by both and imports neither. Formerly 109 modules flat in the root.
+COPY engine/ ./engine/
+COPY hub/ ./hub/
+COPY store/ ./store/
 COPY compliance/ ./compliance/
 # The prebuilt SPA. It MUST have been built with VITE_DATA_SOURCE=live:
 # frontend/src/api/client.ts defaults to 'sample', and a sample bundle has the
@@ -42,5 +46,5 @@ USER overwatch
 EXPOSE 8080
 # factory entrypoint: no module-level app => no import-time disk side effect. Auth is
 # FAIL-CLOSED until a real current_principal is wired (see cnapp_server.py).
-CMD ["uvicorn", "cnapp_server:create_app_from_env", "--factory", \
+CMD ["uvicorn", "hub.cnapp_server:create_app_from_env", "--factory", \
      "--host", "0.0.0.0", "--port", "8080"]

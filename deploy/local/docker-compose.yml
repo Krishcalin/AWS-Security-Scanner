@@ -37,7 +37,7 @@ services:
 
   app:
     build:
-      context: ../..                    # repo root: the image copies *.py, compliance/, frontend/dist/
+      context: ../..                    # repo root: the image copies engine/ hub/ store/, compliance/, frontend/dist/
       dockerfile: deploy/local/Dockerfile
     container_name: overwatch-app
     environment:

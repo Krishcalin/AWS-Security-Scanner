@@ -28,7 +28,11 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=deps /usr/local/bin /usr/local/bin
-COPY *.py ./
+# The three layers. engine/ scans, hub/ serves, store/ persists; store is
+# imported by both and imports neither. Formerly 109 modules flat in the root.
+COPY engine/ ./engine/
+COPY hub/ ./hub/
+COPY store/ ./store/
 COPY compliance/ ./compliance/
 # The PREBUILT SPA. It must have been built with VITE_DATA_SOURCE=live, or the
 # console silently runs on static fixtures: no sign-in, no user menu, no logout —
@@ -50,5 +54,5 @@ EXPOSE 8080
 #
 # `local_server.py` (unauthenticated superadmin, no login) stays in the image for a
 # no-login smoke test, but it is deliberately NOT the default any more.
-CMD ["uvicorn", "cnapp_server:create_app_with_local_auth", "--factory", \
+CMD ["uvicorn", "hub.cnapp_server:create_app_with_local_auth", "--factory", \
      "--host", "0.0.0.0", "--port", "8080"]

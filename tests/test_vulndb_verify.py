@@ -8,7 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_ed25519
+from engine import aws_ed25519
 from test_live_scanner import make_scanner
 
 FEED = {"records": [{"id": "CVE-1", "affected": [{"package": {"ecosystem": "Debian:12",

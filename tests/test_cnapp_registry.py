@@ -9,10 +9,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_state
-import aws_state_dialect
-from cnapp_registry import (ACCT_COLS, ACCT_UPDATE, AccountRegistry)
-from cnapp_validate import ConnectionHealth, ValidationResult, CheckResult, cadence
+from store import aws_state
+from store import aws_state_dialect
+from hub.cnapp_registry import (ACCT_COLS, ACCT_UPDATE, AccountRegistry)
+from hub.cnapp_validate import ConnectionHealth, ValidationResult, CheckResult, cadence
 
 ACCT = "210987654321"
 

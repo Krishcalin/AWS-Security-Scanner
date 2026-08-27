@@ -19,7 +19,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_perm_ledger as L
+from engine import aws_perm_ledger as L
 from perm_ledger_baseline import BASELINE
 
 # The bedrock/sagemaker/lambda actions SecurityAudit v92 really grants, transcribed
@@ -250,7 +250,7 @@ def test_the_manifest_round_trips():
 
 # ── the table itself ────────────────────────────────────────────────────────
 def test_every_requirement_names_a_real_check():
-    from aws_live_scanner import CHECK_SEVERITY
+    from engine.aws_live_scanner import CHECK_SEVERITY
     unknown = sorted(c for c in L.REQUIREMENTS if c not in CHECK_SEVERITY)
     assert not unknown, f"requirement table names checks that do not exist: {unknown}"
 

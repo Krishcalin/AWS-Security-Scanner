@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aws_live_scanner import COMPLIANCE_MAP
+from engine.aws_live_scanner import COMPLIANCE_MAP
 from test_live_scanner import make_scanner, MockPaginator
 
 

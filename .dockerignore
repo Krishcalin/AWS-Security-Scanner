@@ -22,4 +22,5 @@ frontend/index.html
 frontend/*.json
 frontend/*.ts
 frontend/*.js
-# keep: *.py, requirements*.txt, wheelhouse/, compliance/, frontend/dist/, deploy/
+# keep: engine/ hub/ store/, requirements*.txt, wheelhouse/, compliance/,
+#       frontend/dist/, deploy/

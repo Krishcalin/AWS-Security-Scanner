@@ -36,8 +36,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_finding_detail
-from aws_live_scanner import CHECK_SEVERITY, COMPLIANCE_MAP, REMEDIATION_MAP
+from engine import aws_finding_detail
+from engine.aws_live_scanner import CHECK_SEVERITY, COMPLIANCE_MAP, REMEDIATION_MAP
 
 DETAIL_MAP = aws_finding_detail.FINDING_DETAIL
 

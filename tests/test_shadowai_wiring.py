@@ -25,16 +25,16 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_perm_ledger as L
-import aws_shadowai as SA
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_perm_ledger as L
+from engine import aws_shadowai as SA
+from engine.aws_live_scanner import AWSLiveScanner
 
 ML_ROLE = "arn:aws:iam::123456789012:role/MLPlatform"
 APP_ROLE = "arn:aws:iam::123456789012:role/PaymentsApp"
 
 
 def _scanner(clients, owners=(), scanned=("us-east-1",)):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["SHADOW_AI"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: clients.get(svc, MagicMock())
@@ -198,7 +198,7 @@ def test_the_saas_gap_is_stated_on_every_scan():
 def test_the_owner_flag_reaches_the_scanner():
     """Every test above sets _ai_owners by hand. This is the one that crosses the seam
     from the flag — the gap that made --pentest-results dead code in slice 3.5."""
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     from types import SimpleNamespace
     s = _scanner({})
     args = SimpleNamespace(
@@ -212,7 +212,7 @@ def test_the_owner_flag_reaches_the_scanner():
 
 
 def test_an_absent_flag_leaves_an_empty_owner_set():
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     from types import SimpleNamespace
     s = _scanner({}, owners=["stale"])
     args = SimpleNamespace(
@@ -226,7 +226,7 @@ def test_an_absent_flag_leaves_an_empty_owner_set():
 
 # ── the ledger ──────────────────────────────────────────────────────────────
 def test_every_shadow_ai_check_is_in_the_ledger():
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     shai = {c for c in A.CHECK_SEVERITY if c.startswith("SHAI-")}
     assert shai <= set(L.REQUIREMENTS), shai - set(L.REQUIREMENTS)
 

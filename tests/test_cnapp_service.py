@@ -11,10 +11,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_live_scanner as als
-from aws_graph import SecurityGraph
-from cnapp_registry import AccountRegistry
-from cnapp_service import (InMemoryResultStore, PlatformService, ScanSpec,
+from engine import aws_live_scanner as als
+from engine.aws_graph import SecurityGraph
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import (InMemoryResultStore, PlatformService, ScanSpec,
                            aggregate_overview, serialize_scanner)
 
 ACCT = "210987654321"

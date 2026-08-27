@@ -22,7 +22,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_live_scanner as A
+from engine import aws_live_scanner as A
+
+from _layout import module_path
 
 SECTIONS = {
     "_check_iot": ("IOT-01", "IOT-02", "IOT-03"),
@@ -35,7 +37,7 @@ SECTIONS = {
 
 
 def _scanner(client=None):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = A.AWSLiveScanner(region="us-east-1", verbose=False, sections=["IOT"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: client if client is not None else MagicMock()
@@ -328,9 +330,7 @@ def test_each_section_is_registered_labelled_and_dispatched(section):
     method = f"_check_{section.lower()}"
     assert hasattr(A.AWSLiveScanner, method), method
     # the dispatch table is an inline dict literal, so assert on the source
-    src = io.open(os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "aws_live_scanner.py"), encoding="utf-8").read()
+    src = io.open(module_path("aws_live_scanner.py"), encoding="utf-8").read()
     assert f'"{section}":' in src and f"self.{method}," in src
 
 
@@ -338,7 +338,7 @@ def test_each_section_is_registered_labelled_and_dispatched(section):
 def test_every_new_check_is_fully_mapped(cid):
     """The lockstep rule: a check that scores but cannot be explained or fixed is
     worse than no check at all."""
-    import aws_finding_detail as D
+    from engine import aws_finding_detail as D
     assert cid in A.CHECK_SEVERITY
     assert cid in A.COMPLIANCE_MAP
     assert cid in A.REMEDIATION_MAP

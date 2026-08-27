@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_copilot as C
+from engine import aws_copilot as C
 
 F = [
     {"check_id": "S3-01", "section": "S3", "severity": "HIGH", "status": "FAIL",

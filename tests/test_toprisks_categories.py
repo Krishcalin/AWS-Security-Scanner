@@ -30,7 +30,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from aws_live_scanner import CHECK_SEVERITY  # noqa: E402
+from engine.aws_live_scanner import CHECK_SEVERITY  # noqa: E402
 
 TOPRISKS = os.path.join(ROOT, "frontend", "src", "lib", "toprisks.ts")
 

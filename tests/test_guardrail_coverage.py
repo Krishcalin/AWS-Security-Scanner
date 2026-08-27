@@ -21,9 +21,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_aispm
-import aws_graph
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_aispm
+from engine import aws_graph
+from engine.aws_live_scanner import AWSLiveScanner
 
 AGENT_A = "arn:aws:bedrock:us-east-1:123456789012:agent/EXPOSEDCROWN"
 AGENT_B = "arn:aws:bedrock:us-east-1:123456789012:agent/EXPOSEDONLY"
@@ -120,7 +120,7 @@ def test_it_works_without_a_graph():
 
 # ── the scanner surface ─────────────────────────────────────────────────────
 def _scanner(resources):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["DATA"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: MagicMock()
@@ -155,8 +155,8 @@ def test_an_account_with_no_agents_says_nothing():
 
 
 def test_the_check_is_fully_mapped():
-    import aws_finding_detail as D
-    from aws_live_scanner import CHECK_SEVERITY, COMPLIANCE_MAP, REMEDIATION_MAP
+    from engine import aws_finding_detail as D
+    from engine.aws_live_scanner import CHECK_SEVERITY, COMPLIANCE_MAP, REMEDIATION_MAP
     assert "AGT-06" in CHECK_SEVERITY
     assert "AGT-06" in COMPLIANCE_MAP
     assert "AGT-06" in REMEDIATION_MAP

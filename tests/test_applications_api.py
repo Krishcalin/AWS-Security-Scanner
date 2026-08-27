@@ -30,17 +30,17 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cnapp_api
-from cnapp_api import Principal
+from hub import cnapp_api
+from hub.cnapp_api import Principal
 
 pytestmark = pytest.mark.skipif(not cnapp_api._HAVE_FASTAPI,
                                 reason="fastapi not installed")
 
-import aws_state  # noqa: E402
-import cnapp_application  # noqa: E402
-from cnapp_registry import AccountRegistry  # noqa: E402
-from cnapp_service import InMemoryResultStore, PlatformService  # noqa: E402
-from cnapp_workspace import WorkspaceStore  # noqa: E402
+from store import aws_state  # noqa: E402
+from hub import cnapp_application  # noqa: E402
+from hub.cnapp_registry import AccountRegistry  # noqa: E402
+from hub.cnapp_service import InMemoryResultStore, PlatformService  # noqa: E402
+from hub.cnapp_workspace import WorkspaceStore  # noqa: E402
 
 SUPER = Principal(subject="root", is_superadmin=True)
 

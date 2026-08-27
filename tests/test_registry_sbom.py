@@ -8,9 +8,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_registry_sbom as R
-import aws_ingest
-import aws_sidescan
+from engine import aws_registry_sbom as R
+from engine import aws_ingest
+from engine import aws_sidescan
 
 
 def _pkg(name="openssl", version="1.1.1w",

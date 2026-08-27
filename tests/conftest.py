@@ -32,7 +32,7 @@ def _no_credential_report_sleeps():
     Session-scoped and autouse: the cost is paid by any test that constructs a scanner
     and reaches an IAM path, which is far more of them than the handful that mention
     credential reports by name."""
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
 
     saved = (A.CRED_REPORT_ATTEMPTS, A.CRED_REPORT_POLL_SECONDS,
              A.CRED_REPORT_RETRY_SECONDS)

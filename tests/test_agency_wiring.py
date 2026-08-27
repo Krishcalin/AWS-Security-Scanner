@@ -20,9 +20,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_agency as G
-import aws_live_scanner as A
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_agency as G
+from engine import aws_live_scanner as A
+from engine.aws_live_scanner import AWSLiveScanner
 
 
 def fn(name, confirm=None):
@@ -46,7 +46,7 @@ def group(name="tools", *, signature=None, state="ENABLED", functions=None,
 
 
 def _scanner():
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False,
                            sections=["BEDROCK_AGENTS"])
         s.account = "123456789012"
@@ -166,7 +166,7 @@ def test_the_slice_added_no_new_iam_action():
     """It rides on get_agent_action_group, which AGT-04 already calls and slice 1.2
     already granted. If that stops being true the justification for the slice changes,
     and this is where it surfaces."""
-    import aws_perm_ledger as L
+    from engine import aws_perm_ledger as L
     agy = {r.action for c in ("AGY-01", "AGY-02", "AGY-03")
            for r in L.REQUIREMENTS[c]}
     assert agy == {"bedrock:GetAgentActionGroup"}
@@ -177,7 +177,7 @@ def test_the_slice_added_no_new_iam_action():
 
 def test_declining_that_one_action_now_names_the_agency_checks_too():
     """The ledger's contract: decline an action and it tells you everything you lose."""
-    import aws_perm_ledger as L
+    from engine import aws_perm_ledger as L
     led = L.evaluate([{"effect": "Allow", "actions": {"iam:get*"}, "resources": {"*"},
                        "not_resources": set(), "condition": None}])
     lost = set(led.forfeit(["bedrock:GetAgentActionGroup"]))
@@ -194,7 +194,7 @@ def test_the_assessment_runs_off_detail_the_loop_already_fetched():
 
 # ── mapping ─────────────────────────────────────────────────────────────────
 def test_the_checks_are_fully_mapped():
-    import aws_finding_detail as D
+    from engine import aws_finding_detail as D
     for cid in ("AGY-01", "AGY-02", "AGY-03"):
         assert cid in A.CHECK_SEVERITY, cid
         assert cid in A.COMPLIANCE_MAP, cid

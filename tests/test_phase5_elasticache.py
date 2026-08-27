@@ -104,7 +104,7 @@ def test_elc01_still_works_and_no_early_return_regression():
 
 
 def test_maps_lockstep():
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     for cid in ("ELC-05", "ELC-06"):
         assert cid in A.CHECK_SEVERITY and cid in A.COMPLIANCE_MAP and cid in A.REMEDIATION_MAP
         assert "aws " in A.REMEDIATION_MAP[cid].lower()

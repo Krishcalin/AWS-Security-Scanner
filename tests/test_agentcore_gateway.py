@@ -27,9 +27,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_agentcore as G
-import aws_live_scanner as A
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_agentcore as G
+from engine import aws_live_scanner as A
+from engine.aws_live_scanner import AWSLiveScanner
 
 GW_ARN = "arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/tools-a1b2c3d4e5"
 ROLE = "arn:aws:iam::123456789012:role/GatewayRole"
@@ -142,7 +142,7 @@ def test_grading_never_raises_on_malformed_input(bad):
 
 # ── the scanner surface ─────────────────────────────────────────────────────
 def _scanner(ac):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["AGENTCORE"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: (ac if svc == "bedrock-agentcore-control"
@@ -263,7 +263,7 @@ def test_an_sdk_without_get_gateway_does_not_raise():
 
 # ── mapping ─────────────────────────────────────────────────────────────────
 def test_the_checks_are_fully_mapped():
-    import aws_finding_detail as D
+    from engine import aws_finding_detail as D
     for cid in ("AGC-05", "AGC-06"):
         assert cid in A.CHECK_SEVERITY, cid
         assert cid in A.COMPLIANCE_MAP, cid
@@ -274,7 +274,7 @@ def test_the_checks_are_fully_mapped():
 def test_the_detail_explains_that_permissive_inbound_can_be_correct():
     """If the write-up does not say why AUTHENTICATE_ONLY exists, an operator reading a
     CRITICAL will 'fix' a working delegated design by bolting on a second authorizer."""
-    import aws_finding_detail as D
+    from engine import aws_finding_detail as D
     risk = D.FINDING_DETAIL["AGC-05"]["risk"].lower()
     assert "on purpose" in risk or "deliberate" in risk
     assert "caller" in risk and "authenticate_only" in risk
@@ -387,7 +387,7 @@ def test_an_sdk_without_the_new_operations_does_not_raise():
 
 
 def test_the_credential_checks_are_fully_mapped():
-    import aws_finding_detail as D
+    from engine import aws_finding_detail as D
     for cid in ("AGC-07", "AGC-08"):
         assert cid in A.CHECK_SEVERITY and cid in A.COMPLIANCE_MAP
         assert cid in A.REMEDIATION_MAP and cid in D.FINDING_DETAIL

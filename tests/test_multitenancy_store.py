@@ -6,8 +6,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from cnapp_registry import AccountRegistry
-from cnapp_workspace import WorkspaceStore
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_workspace import WorkspaceStore
 
 
 def _fx():

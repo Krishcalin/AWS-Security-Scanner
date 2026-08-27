@@ -20,10 +20,12 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_state
-import aws_state_dialect
-import cnapp_api
-import cnapp_workspace as ws
+from store import aws_state
+from store import aws_state_dialect
+from hub import cnapp_api
+from hub import cnapp_workspace as ws
+
+from _layout import module_path
 
 
 # ── the ordering is the authorisation model ─────────────────────────────────
@@ -115,7 +117,7 @@ def test_the_legacy_name_is_still_permitted_by_the_ddl():
 def test_a_role_stores_and_reads_back_on_sqlite(tmp_path):
     """Exercises the STORE, not the rank table. Every previous RBAC test built
     a Principal in memory, which is why the constraint bug survived."""
-    import cnapp_backend
+    from store import cnapp_backend
 
     be = cnapp_backend.backend_for(f"sqlite:///{tmp_path/'rbac.db'}")
     store = ws.WorkspaceStore(be)
@@ -127,7 +129,7 @@ def test_a_role_stores_and_reads_back_on_sqlite(tmp_path):
 
 
 def test_an_invalid_role_is_refused_before_it_reaches_the_database(tmp_path):
-    import cnapp_backend
+    from store import cnapp_backend
 
     be = cnapp_backend.backend_for(f"sqlite:///{tmp_path/'rbac2.db'}")
     store = ws.WorkspaceStore(be)
@@ -199,8 +201,7 @@ def _gate_of(route: str) -> str:
     """The role a route is gated on, read from the source."""
     import re
 
-    with open(os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "cnapp_api.py"), encoding="utf-8") as fh:
+    with open(module_path("cnapp_api.py"), encoding="utf-8") as fh:
         source = fh.read()
     index = source.index(f'"{route}"')
     window = source[index:index + 600]
@@ -239,8 +240,7 @@ def test_reading_is_auditor():
 def test_only_admin_can_grant_a_role():
     """The requirement the whole feature exists for: an admin creates other
     admins, and nobody below can."""
-    source = open(os.path.join(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))), "cnapp_api.py"), encoding="utf-8").read()
+    source = open(module_path("cnapp_api.py"), encoding="utf-8").read()
     index = source.index('@app.post("/workspaces/{ws_id}/members"')
     assert "ws_admin_gate" in source[index:index + 400]
 
@@ -248,8 +248,7 @@ def test_only_admin_can_grant_a_role():
 def test_the_roles_endpoint_offers_exactly_the_assignable_roles():
     """Served rather than hard-coded in the console, so a role added here
     cannot be missing from the picker used to grant it."""
-    source = open(os.path.join(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))), "cnapp_api.py"), encoding="utf-8").read()
+    source = open(module_path("cnapp_api.py"), encoding="utf-8").read()
     assert '@app.get("/roles")' in source
     assert "ASSIGNABLE_ROLES" in source
 

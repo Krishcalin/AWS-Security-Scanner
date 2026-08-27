@@ -9,8 +9,8 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import aws_live_scanner as A
-import aws_graph
+from engine import aws_live_scanner as A
+from engine import aws_graph
 from test_live_scanner import MockPaginator, make_scanner
 
 OWN = "123456789012"

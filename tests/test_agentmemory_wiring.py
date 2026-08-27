@@ -25,12 +25,12 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_perm_ledger as L
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_perm_ledger as L
+from engine.aws_live_scanner import AWSLiveScanner
 
 
 def _scanner():
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["DATA"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: MagicMock()

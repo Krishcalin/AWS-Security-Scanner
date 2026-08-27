@@ -11,8 +11,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
 
 import overwatch_vulndb as ovd
-import aws_ed25519
-from aws_sidescan import OSVFeed
+from engine import aws_ed25519
+from engine.aws_sidescan import OSVFeed
 
 
 def _osv(cid, eco, name, introduced="0", fixed="9.9", withdrawn=False):

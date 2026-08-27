@@ -21,11 +21,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_epistemics as E
-import aws_graph
-import aws_live_scanner as A
-import aws_toxicflow as T
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_epistemics as E
+from engine import aws_graph
+from engine import aws_live_scanner as A
+from engine import aws_toxicflow as T
+from engine.aws_live_scanner import AWSLiveScanner
 
 ROLE = "arn:aws:iam::123456789012:role/AgentRole"
 CROWN = "arn:aws:s3:::prod-pii"
@@ -34,7 +34,7 @@ PASSROLE = [{"effect": "Allow", "actions": {"iam:passrole"}, "resources": {"*"},
 
 
 def _scanner():
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["DATA"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: MagicMock()
@@ -224,7 +224,7 @@ def test_the_bucket_classifier_is_the_shared_one():
 def test_the_slice_added_no_new_iam_action():
     """Every input was already read. ListAgentKnowledgeBases is the one call that is new
     to the scanner, and SecurityAudit already grants it."""
-    import aws_perm_ledger as L
+    from engine import aws_perm_ledger as L
     need = {r.action for c in ("TFLOW-01", "TFLOW-02") for r in L.REQUIREMENTS[c]}
     assert need == {"bedrock:GetDataSource", "bedrock:GetAgent"}
     granted = [{"effect": "Allow", "actions": {"bedrock:listagentknowledgebases"},
@@ -234,7 +234,7 @@ def test_the_slice_added_no_new_iam_action():
 
 
 def test_the_checks_are_fully_mapped():
-    import aws_finding_detail as D
+    from engine import aws_finding_detail as D
     for cid in ("TFLOW-01", "TFLOW-02"):
         assert cid in A.CHECK_SEVERITY and cid in A.COMPLIANCE_MAP
         assert cid in A.REMEDIATION_MAP and cid in D.FINDING_DETAIL
@@ -242,7 +242,7 @@ def test_the_checks_are_fully_mapped():
 
 
 def test_the_conditional_detail_says_it_is_capability_not_occurrence():
-    import aws_finding_detail as D
+    from engine import aws_finding_detail as D
     risk = D.FINDING_DETAIL["TFLOW-02"]["risk"]
     assert "CONDITIONAL" in risk
     assert "capability, not occurrence" in risk

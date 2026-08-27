@@ -8,8 +8,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_graph_neptune as gn
-from aws_graph import SecurityGraph
+from engine import aws_graph_neptune as gn
+from engine.aws_graph import SecurityGraph
 
 
 def _sample_graph():

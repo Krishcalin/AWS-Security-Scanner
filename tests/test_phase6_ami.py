@@ -102,7 +102,7 @@ def test_ami03_unparseable_timestamp_is_info_not_crash():
 
 
 def test_maps_lockstep():
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     for cid in ("AMI-02", "AMI-03"):
         assert cid in A.CHECK_SEVERITY and cid in A.COMPLIANCE_MAP and cid in A.REMEDIATION_MAP
         assert "aws " in A.REMEDIATION_MAP[cid].lower()

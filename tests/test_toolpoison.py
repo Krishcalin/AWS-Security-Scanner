@@ -30,7 +30,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_toolpoison as P
+from engine import aws_toolpoison as P
 
 ZWSP = "​"
 RLO = "‮"
@@ -215,8 +215,8 @@ def test_the_module_makes_no_aws_calls():
 # ── the scanner surface ─────────────────────────────────────────────────────
 def _scanner(patterns=None):
     from unittest.mock import MagicMock, patch
-    from aws_live_scanner import AWSLiveScanner
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    from engine.aws_live_scanner import AWSLiveScanner
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False,
                            sections=["BEDROCK_AGENTS"])
         s.account = "123456789012"
@@ -280,7 +280,7 @@ def test_the_pattern_file_is_loaded_through_the_shared_config_seam():
     """_apply_phase6_config is the one place BOTH the org path and the single-account
     path pass through. Loading it anywhere else would give one of them no rules."""
     import inspect
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     src = inspect.getsource(A._apply_phase6_config)
     assert "aws_toolpoison.load_patterns" in src
     assert "tool_patterns" in src
@@ -292,8 +292,8 @@ def test_the_default_pattern_set_is_empty():
 
 
 def test_the_checks_are_fully_mapped():
-    import aws_finding_detail as D
-    import aws_live_scanner as A
+    from engine import aws_finding_detail as D
+    from engine import aws_live_scanner as A
     for cid in ("TPOIS-01", "TPOIS-02", "TPOIS-03"):
         assert cid in A.CHECK_SEVERITY and cid in A.COMPLIANCE_MAP
         assert cid in A.REMEDIATION_MAP and cid in D.FINDING_DETAIL
@@ -302,7 +302,7 @@ def test_the_checks_are_fully_mapped():
 def test_the_detail_states_the_no_authored_patterns_position():
     """If the write-up does not say why OverWatch ships no phrasings, the next person to
     read TPOIS-03 will assume the pattern set was simply forgotten."""
-    import aws_finding_detail as D
+    from engine import aws_finding_detail as D
     risk = D.FINDING_DETAIL["TPOIS-03"]["risk"]
     assert "deliberate product position" in risk
     assert "adversarially" in risk or "adversarial" in risk

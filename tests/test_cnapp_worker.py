@@ -9,10 +9,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aws_graph import SecurityGraph
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
-from cnapp_worker import drain_once, run_scan_job
+from engine.aws_graph import SecurityGraph
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
+from hub.cnapp_worker import drain_once, run_scan_job
 
 ACCT = "210987654321"
 HUB = "arn:aws:iam::555000111222:role/CnappHubRole"

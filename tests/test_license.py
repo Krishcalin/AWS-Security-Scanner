@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_license as lic
+from engine import aws_license as lic
 
 
 def test_null_licenses_are_unknown():

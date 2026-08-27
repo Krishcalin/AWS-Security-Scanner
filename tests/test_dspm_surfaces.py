@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_deepplane as D
+from engine import aws_deepplane as D
 
 
 def _stmt(actions, resources=("*",), effect="Allow", condition=None, not_resources=()):

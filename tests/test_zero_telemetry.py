@@ -23,6 +23,8 @@ import re
 
 import pytest
 
+from _layout import module_path
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -176,17 +178,17 @@ def test_no_hardcoded_foreign_egress_host():
 
 # ── D. the SSRF / TLS guards on the two egress seams stay tight ───────────────
 def test_connector_ssrf_guard_pinned():
-    import cnapp_connectors as cc
+    from hub import cnapp_connectors as cc
     assert cc._is_blocked_host("169.254.169.254")           # IMDS blocked
     assert cc._is_blocked_host("metadata.google.internal")  # cloud-metadata blocked
-    src = _src(os.path.join(ROOT, "cnapp_connectors.py"))
+    src = _src(module_path("cnapp_connectors.py"))
     # https-only + no cross-host redirect must remain in default_http_post's neighborhood
     assert 'scheme' in src and '"https"' in src
     assert "_NoCrossHost" in src
 
 
 def test_kube_seam_is_ca_pinned_and_readonly():
-    src = _src(os.path.join(ROOT, "aws_kube.py"))
+    src = _src(module_path("aws_kube.py"))
     assert "create_default_context(cadata=" in src          # TLS pinned to the cluster CA
     assert 'method="GET"' in src                            # read-only
 
@@ -199,7 +201,7 @@ def test_registry_modules_are_pure():
     test_network_primitives_are_allowlisted also enforces this; this pins the intent by name.)"""
     for mod in ("aws_registry_oci.py", "aws_registry_connectors.py"):
         assert mod not in EGRESS_ALLOWLIST                  # they are NOT egress files
-        for node in ast.walk(ast.parse(_src(os.path.join(ROOT, mod)), mod)):
+        for node in ast.walk(ast.parse(_src(module_path(mod)), mod)):
             for m in _imported_modules(node):
                 assert m not in _EGRESS_MODULES, f"{mod} imported the network primitive {m!r}"
 
@@ -209,7 +211,7 @@ def test_registry_egress_guard_pinned():
     per-call host allowlist (NO 'any https'), SSRF targets (IMDS / cloud-metadata / loopback)
     refused on a blob redirect, TLS verified, and NO hardcoded FOREIGN registry host (only the ECR
     .amazonaws.com default) — the registry host arrives from operator config + the auth challenge."""
-    import aws_layer_fetch as LF
+    from engine import aws_layer_fetch as LF
     # SSRF targets a blob redirect must never reach
     for h in ("169.254.169.254", "metadata.google.internal", "127.0.0.1", "localhost",
               "100.100.100.200", "::1"):
@@ -219,7 +221,7 @@ def test_registry_egress_guard_pinned():
     assert not LF._host_allowed("https://evil.example.com/x", {"ghcr.io"})
     assert LF._host_allowed("https://ghcr.io/v2/", {"ghcr.io"})
     assert not LF._host_allowed("http://ghcr.io/v2/", {"ghcr.io"})   # https-only
-    src = _src(os.path.join(ROOT, "aws_layer_fetch.py"))
+    src = _src(module_path("aws_layer_fetch.py"))
     assert "create_default_context()" in src                # TLS verified against the system store
     assert "_AllowlistRedirect" in src and "_BlobRedirect" in src
     # no hardcoded FOREIGN registry host literal in the egress file (only the AWS suffix constant)
@@ -385,7 +387,7 @@ def test_evidence_dicts_are_written_out_not_splatted():
 def test_normalized_detection_is_a_closed_set_of_fields():
     """Adding a content-bearing field to the ingest contract must be a conscious
     diff against this list, not an incidental one."""
-    fields = _annotated_fields(_src(os.path.join(ROOT, "aws_cdr.py")),
+    fields = _annotated_fields(_src(module_path("aws_cdr.py")),
                                "NormalizedDetection")
     assert fields == ["id", "source", "type", "title", "severity", "band",
                       "node_kind", "node_key", "resource_arn", "first_seen",
@@ -397,7 +399,7 @@ def test_normalized_detection_is_a_closed_set_of_fields():
 def test_enriched_finding_is_a_closed_set_of_fields():
     """The connector plane is where an ingest leak becomes a headline: it is the only
     surface that sends finding content to a third party the operator configured."""
-    fields = _annotated_fields(_src(os.path.join(ROOT, "cnapp_connectors.py")),
+    fields = _annotated_fields(_src(module_path("cnapp_connectors.py")),
                                "EnrichedFinding")
     assert fields == ["check_id", "section", "severity", "status", "compliance",
                       "remediation_cmd", "risk", "impact", "steps", "affected",
@@ -454,7 +456,7 @@ def test_the_poisoned_fixture_is_not_shipped():
 # What it does NOT prove, and what no test here could: that the client kept the data
 # inside the boundary. That is documented in docs/MCP.md and stated in the server's own
 # initialize instructions, and it is the reason the gate exists at all.
-_MCP = os.path.join(ROOT, "cnapp_mcp.py")
+_MCP = module_path("cnapp_mcp.py")
 
 
 def test_g1_the_mcp_server_is_fail_closed(monkeypatch, capsys):
@@ -465,7 +467,7 @@ def test_g1_the_mcp_server_is_fail_closed(monkeypatch, capsys):
     this feature with the acknowledgement exported would have main() start the server and
     block forever on stdin — and an earlier draft guarded that with an `or` clause which
     turned the whole assertion vacuous on exactly that machine."""
-    import cnapp_mcp
+    from hub import cnapp_mcp
     monkeypatch.delenv(cnapp_mcp.ACK_ENV, raising=False)
     assert cnapp_mcp.gate({}) == (False, False)
     assert cnapp_mcp.gate({cnapp_mcp.ACK_ENV: "1"}) == (True, False), (
@@ -488,7 +490,7 @@ def test_g2_the_mcp_server_never_imports_the_scanner():
 
 
 def test_g3_redaction_is_the_default_construction():
-    import cnapp_mcp
+    from hub import cnapp_mcp
     assert cnapp_mcp.Redactor().enabled is True, (
         "a redactor that defaults to off makes every call site the security control")
     r = cnapp_mcp.Redactor()

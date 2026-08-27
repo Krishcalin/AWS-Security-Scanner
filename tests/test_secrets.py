@@ -4,8 +4,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_secrets as S
-import aws_deepplane as D
+from engine import aws_secrets as S
+from engine import aws_deepplane as D
 
 
 def test_name_looks_secret():

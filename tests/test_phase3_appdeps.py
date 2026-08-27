@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_sidescan as ss
+from engine import aws_sidescan as ss
 
 
 # ── semver 2.0 comparator (npm/Go/crates.io) ─────────────────────────────────

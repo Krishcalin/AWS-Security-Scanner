@@ -114,7 +114,7 @@ def test_clb02_skipped_for_plaintext_only():
 
 
 def test_maps_lockstep():
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     for cid in ("CLB-01", "CLB-02"):
         assert cid in A.CHECK_SEVERITY and cid in A.COMPLIANCE_MAP and cid in A.REMEDIATION_MAP
         assert "aws " in A.REMEDIATION_MAP[cid].lower()

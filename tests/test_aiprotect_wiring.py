@@ -21,9 +21,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_aiprotect as P
-import aws_live_scanner as A
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_aiprotect as P
+from engine import aws_live_scanner as A
+from engine.aws_live_scanner import AWSLiveScanner
 
 PRINCIPAL = "arn:aws:iam::123456789012:role/AppRole"
 
@@ -47,7 +47,7 @@ def gd_finding(ftype, *, action=None, models=("anthropic.claude-3",), sev=2.0):
 
 
 def _scanner(reach=None):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["AI_THREAT"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: MagicMock()
@@ -67,7 +67,7 @@ def test_the_main_threat_query_cannot_see_these_findings():
     import inspect
     src = inspect.getsource(AWSLiveScanner._check_threat)
     assert '"severity": {"GreaterThanOrEqual": 4}' in src
-    import aws_deepplane as D
+    from engine import aws_deepplane as D
     band = D.map_guardduty_finding(gd_finding(
         "Impact:IAMUser/AnomalousModelInvocation", sev=2.0))["band"]
     assert band == "Low", "the premise moved: AI Protection findings are no longer Low"
@@ -173,7 +173,7 @@ def test_the_emitter_never_raises_on_malformed_findings():
 
 # ── a refused read is not a clean one ───────────────────────────────────────
 def test_a_refused_list_findings_is_recorded():
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["THREAT"])
         s.account = "123456789012"
     gd = MagicMock()
@@ -184,7 +184,7 @@ def test_a_refused_list_findings_is_recorded():
 
 
 def test_the_checks_are_fully_mapped():
-    import aws_finding_detail as D
+    from engine import aws_finding_detail as D
     for cid in ("AITHR-03", "AITHR-04"):
         assert cid in A.CHECK_SEVERITY and cid in A.COMPLIANCE_MAP
         assert cid in A.REMEDIATION_MAP and cid in D.FINDING_DETAIL
@@ -194,7 +194,7 @@ def test_the_checks_are_fully_mapped():
 def test_the_slice_needs_no_new_grant():
     """SecurityAudit already grants guardduty:Get*/List*, which the THREAT section has
     always relied on. If that changes, the slice's cost changes with it."""
-    import aws_perm_ledger as L
+    from engine import aws_perm_ledger as L
     need = {r.action for c in ("AITHR-03", "AITHR-04") for r in L.REQUIREMENTS[c]}
     assert need == {"guardduty:ListFindings", "guardduty:GetFindings"}
     granted = [{"effect": "Allow", "actions": {"guardduty:get*", "guardduty:list*"},

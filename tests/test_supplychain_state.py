@@ -8,8 +8,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_state
-import aws_state_dialect as dia
+from store import aws_state
+from store import aws_state_dialect as dia
 
 SUPPLY_TABLES = {"sbom_snapshots", "sbom_components", "sbom_snapshot_cves", "vex_statements"}
 

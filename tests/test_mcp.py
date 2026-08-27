@@ -28,7 +28,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cnapp_mcp as M
+from hub import cnapp_mcp as M
+
+from _layout import module_path
 
 ACCOUNT = "123456789012"
 BUCKET_ARN = f"arn:aws:s3:::prod-customer-pii"
@@ -385,8 +387,8 @@ def test_the_documented_scanner_flags_exist():
     # scanner builds its parser inline inside main(), and the first draft of this test
     # skipped itself when it could not find a build_arg_parser() to call -- a guard that
     # skips is decoration, which is how the wrong flags got documented in the first place.
-    src = (pathlib.Path(__file__).resolve().parent.parent
-           / "aws_live_scanner.py").read_text(encoding="utf-8")
+    src = pathlib.Path(
+        module_path("aws_live_scanner.py")).read_text(encoding="utf-8")
     known = set()
     for node in ast.walk(ast.parse(src)):
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)

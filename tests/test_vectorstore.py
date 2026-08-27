@@ -33,7 +33,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_vectorstore as V
+from engine import aws_vectorstore as V
 
 
 def netpol(name="np", public=False, resource_types=("collection",),

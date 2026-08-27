@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from collections import namedtuple
 
-from aws_state_dialect import hybrid_row_factory
+from store.aws_state_dialect import hybrid_row_factory
 
 Col = namedtuple("Col", "name")   # cur.description[i].name (what hybrid_row_factory reads)
 

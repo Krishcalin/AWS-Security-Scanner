@@ -18,10 +18,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_authn                                                    # noqa: E402
-import cnapp_authn                                                  # noqa: E402
-import cnapp_backend                                                # noqa: E402
-import cnapp_workspace                                              # noqa: E402
+from engine import aws_authn                                                    # noqa: E402
+from hub import cnapp_authn                                                  # noqa: E402
+from store import cnapp_backend                                                # noqa: E402
+from hub import cnapp_workspace                                              # noqa: E402
 
 GOOD = "correct-horse-battery"
 
@@ -179,7 +179,7 @@ def test_a_weak_bootstrap_password_creates_nothing():
 def _client():
     fastapi = pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
-    import cnapp_server
+    from hub import cnapp_server
     db = os.path.join(tempfile.mkdtemp(), "t.db")
     os.environ.update({"CNAPP_DB_URL": f"sqlite:///{db}",
                        "OVERWATCH_BOOTSTRAP_USER": "admin",

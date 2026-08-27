@@ -23,7 +23,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_evidence as EV
+from engine import aws_evidence as EV
 
 
 class R:
@@ -233,8 +233,8 @@ def test_the_module_makes_no_aws_calls():
 def test_it_works_against_the_shipped_crosswalk():
     """Not a fixture: the real file, so a change to the crosswalk that breaks the pack
     fails here rather than in a customer's audit."""
-    import compliance_crosswalk
-    import aws_live_scanner as A
+    from engine import compliance_crosswalk
+    from engine import aws_live_scanner as A
     # (crosswalk, frameworks, digest) -- the crosswalk comes FIRST. The signature is
     # Tuple[Dict, Dict, str], which is ambiguous, and the first authoring of this line
     # had it backwards; the test failed against the real file rather than passing
@@ -275,8 +275,8 @@ def test_an_absent_catalog_size_says_unknown_rather_than_implying_full_coverage(
 
 def test_the_real_pack_reports_the_true_fraction():
     """Against the shipped crosswalk and framework catalog, not a fixture."""
-    import compliance_crosswalk
-    import aws_live_scanner as A
+    from engine import compliance_crosswalk
+    from engine import aws_live_scanner as A
     xw, frameworks, _digest = compliance_crosswalk.get_crosswalk()
     meta = list(frameworks.values()) if isinstance(frameworks, dict) else frameworks
     pack = EV.build_pack(xw, A.COMPLIANCE_MAP, [], framework_meta=meta)

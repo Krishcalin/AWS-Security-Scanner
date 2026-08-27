@@ -22,8 +22,8 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aws_graph import SecurityGraph
-from aws_live_scanner import (
+from engine.aws_graph import SecurityGraph
+from engine.aws_live_scanner import (
     AWSLiveScanner, Result, VERSION,
     parse_trust_policy, compliance_scorecard, COMPLIANCE_FRAMEWORKS,
     COMPLIANCE_MAP, CHECK_SEVERITY,
@@ -34,7 +34,7 @@ ACCT = "123456789012"
 
 
 def make_scanner(sections=None, account=ACCT):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         sc = AWSLiveScanner(region="us-east-1", sections=sections or ["IAMPRIVESC"])
     sc.account = account
     return sc
@@ -365,7 +365,7 @@ class TestMultiAccount(unittest.TestCase):
             "AccessKeyId": "AKIA", "SecretAccessKey": "s", "SessionToken": "t"}}
         base.client.return_value = sts
         fake_boto3 = MagicMock()
-        with patch("aws_live_scanner.boto3", fake_boto3, create=True):
+        with patch("engine.aws_live_scanner.boto3", fake_boto3, create=True):
             assume_role_session("444", "MyRole", external_id="xid",
                                 region="eu-west-1", base_session=base)
         # role name resolved to full ARN, ExternalId passed
@@ -414,7 +414,7 @@ class TestRegionIterator(unittest.TestCase):
         sc._all_regions = ["us-east-1", "eu-west-1"]
         seen = []
         sc._check_ec2 = lambda: seen.append(sc.region)
-        with patch("aws_live_scanner.HAS_BOTO3", True), patch("builtins.print"):
+        with patch("engine.aws_live_scanner.HAS_BOTO3", True), patch("builtins.print"):
             sc.run()
         self.assertEqual(seen, ["us-east-1", "eu-west-1"])
         self.assertEqual(sc.region, "us-east-1")   # base region restored

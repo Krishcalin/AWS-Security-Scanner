@@ -29,7 +29,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cnapp_connectors as C  # noqa: E402
+from hub import cnapp_connectors as C  # noqa: E402
 
 
 # ── the catalogue ───────────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ def test_every_baseline_glob_matches_a_real_check():
     """A glob that matches nothing fails SILENTLY, which is the whole problem
     this rule set exists to solve."""
     import fnmatch
-    import aws_live_scanner as als
+    from engine import aws_live_scanner as als
     known = set(als.CHECK_SEVERITY)
     for rule in C.BASELINE_RULES:
         for glob in rule["spec"]["check_globs"]:
@@ -165,11 +165,11 @@ def test_a_low_severity_finding_does_not_trip_the_critical_vuln_rule():
 # ── seeding, end to end ─────────────────────────────────────────────────────
 
 def _svc(tmp_path):
-    import aws_state
-    import cnapp_backend
-    from cnapp_registry import AccountRegistry
-    from cnapp_service import InMemoryResultStore, PlatformService
-    from cnapp_workspace import WorkspaceStore
+    from store import aws_state
+    from store import cnapp_backend
+    from hub.cnapp_registry import AccountRegistry
+    from hub.cnapp_service import InMemoryResultStore, PlatformService
+    from hub.cnapp_workspace import WorkspaceStore
     reg = AccountRegistry.open(str(tmp_path / "t.db"))
     store = C.ConnectorStore(reg._be)
     svc = PlatformService(
@@ -223,7 +223,7 @@ def test_an_existing_database_is_migrated_to_accept_sdp(tmp_path):
     created before ServiceDesk Plus keeps the five-type CHECK however it is
     stamped -- and the symptom is a connector that cannot be created."""
     import sqlite3
-    import aws_state_dialect
+    from store import aws_state_dialect
     path = str(tmp_path / "old.db")
     old = sqlite3.connect(path)
     old.executescript(
@@ -241,7 +241,7 @@ def test_an_existing_database_is_migrated_to_accept_sdp(tmp_path):
     assert aws_state_dialect.sqlite_needs_connector_type_upgrade(old) is True
     old.close()
 
-    import cnapp_backend
+    from store import cnapp_backend
     be = cnapp_backend.backend_for("sqlite:///" + path, check_same_thread=False)
     row = be.query_one("SELECT sql FROM sqlite_master WHERE name='connectors'")
     assert "'sdp'" in dict(row)["sql"], "the rebuild widened the CHECK"
@@ -253,7 +253,7 @@ def test_an_existing_database_is_migrated_to_accept_sdp(tmp_path):
 def test_the_rebuild_does_not_cascade_away_existing_rules(tmp_path):
     """connector_rules cascades on a connectors delete. A rebuild that drops the
     parent table with foreign keys ON silently deletes every rule in the hub."""
-    import cnapp_backend
+    from store import cnapp_backend
     path = str(tmp_path / "r.db")
     be = cnapp_backend.backend_for("sqlite:///" + path, check_same_thread=False)
     store = C.ConnectorStore(be)
@@ -326,7 +326,7 @@ def test_postgres_also_widens_the_connector_type_check():
     the connector cannot be created at all -- a fix that works only on the
     development engine is not a fix.
     """
-    import aws_state_dialect
+    from store import aws_state_dialect
     joined = " ".join(aws_state_dialect.POSTGRES_ALTERS)
     assert "connectors_type_check" in joined
     assert "'sdp'" in joined
@@ -335,7 +335,7 @@ def test_postgres_also_widens_the_connector_type_check():
 def test_the_postgres_connector_upgrade_is_idempotent():
     """migrate() runs on every open; a DROP without IF EXISTS fails the second
     time and takes the whole startup with it."""
-    import aws_state_dialect
+    from store import aws_state_dialect
     stmts = [s for s in aws_state_dialect.POSTGRES_ALTERS
              if "connectors_type_check" in s]
     assert len(stmts) == 2
@@ -347,8 +347,8 @@ def test_both_engines_admit_exactly_the_same_connector_types():
     """Drift between the two CHECKs means a connector that works in development
     and is rejected in production, or the reverse. Pin them to each other and to
     the type list the engine itself dispatches on."""
-    import aws_state
-    import aws_state_dialect
+    from store import aws_state
+    from store import aws_state_dialect
     pg = _types_in(" ".join(
         s for s in aws_state_dialect.POSTGRES_ALTERS if "connectors" in s))
     lite = _types_in(" ".join(aws_state_dialect.SQLITE_CONNECTOR_TYPE_REBUILD))

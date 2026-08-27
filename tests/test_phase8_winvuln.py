@@ -7,7 +7,7 @@ from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_winvuln as W
+from engine import aws_winvuln as W
 
 TODAY = date(2026, 7, 21)
 
@@ -185,8 +185,8 @@ def test_assess_missing_but_undetailed_is_undetermined():
 # ══════════════════════════════════════════════════════════════════════════════
 from unittest.mock import MagicMock, patch          # noqa: E402
 from test_live_scanner import make_scanner          # noqa: E402
-from aws_graph import SecurityGraph                 # noqa: E402
-from aws_live_scanner import SECTIONS               # noqa: E402
+from engine.aws_graph import SecurityGraph                 # noqa: E402
+from engine.aws_live_scanner import SECTIONS               # noqa: E402
 
 ACCT = "123456789012"
 

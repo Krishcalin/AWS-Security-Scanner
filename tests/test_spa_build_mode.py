@@ -90,7 +90,7 @@ def test_index_html_is_never_cached_and_hashed_assets_are(tmp_path):
     """
     from fastapi.testclient import TestClient
 
-    import cnapp_api
+    from hub import cnapp_api
 
     static = tmp_path / "dist"
     (static / "assets").mkdir(parents=True)

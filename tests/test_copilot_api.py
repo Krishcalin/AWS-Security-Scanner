@@ -7,9 +7,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cnapp_api
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
+from hub import cnapp_api
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
 
 ACCT = "123456789012"
 PAYLOAD = {

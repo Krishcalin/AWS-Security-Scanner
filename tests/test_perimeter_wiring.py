@@ -22,9 +22,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_live_scanner as A
-import aws_perimeter as P
-import aws_perm_ledger as L
+from engine import aws_live_scanner as A
+from engine import aws_perimeter as P
+from engine import aws_perm_ledger as L
 
 
 def doc(key, value="o-abc"):
@@ -73,7 +73,7 @@ def _org(scp_keys=(), rcp_keys=(), deny_list=False, deny_describe=False,
 
 def _run(**kw):
     org, ec2 = _org(**kw)
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = A.AWSLiveScanner(region="us-east-1", verbose=False, sections=["IAM"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: org if svc == "organizations" else ec2
@@ -219,13 +219,13 @@ def test_the_data_access_function_now_reaches_optimal_through_the_perimeter():
     bucket policy, that external grant. CISA's Optimal asks for access governed by
     enterprise-wide rules rather than resource by resource, which is what a data
     perimeter is: the organization-wide floor under every individual policy."""
-    import aws_ztmm as Z
+    from engine import aws_ztmm as Z
     m = Z.ZTMM_MAPPING[("Data", "Data access")]
     assert set(m[Z.OPTIMAL]) == {"PERIM-01", "PERIM-02"}
 
 
 def test_the_network_segmentation_function_reaches_optimal_through_perim_03():
-    import aws_ztmm as Z
+    from engine import aws_ztmm as Z
     assert Z.ZTMM_MAPPING[("Networks", "Network segmentation")][Z.OPTIMAL] == ["PERIM-03"]
 
 
@@ -233,12 +233,12 @@ def test_an_advice_only_check_is_not_scored_as_a_control():
     """SEGREC-01 is an INFO recommendation, not a pass/fail control. A ZTMM function
     cannot be scored on advice -- it would count as unscored forever, or worse, as a
     gap the operator can never close."""
-    import aws_ztmm as Z
+    from engine import aws_ztmm as Z
     assert "SEGREC-01" not in repr(Z.ZTMM_MAPPING)
 
 
 def test_the_composed_data_access_function_scores_optimal_when_the_perimeter_passes():
-    import aws_ztmm as Z
+    from engine import aws_ztmm as Z
 
     class R:
         def __init__(self, c, st):
@@ -249,7 +249,7 @@ def test_the_composed_data_access_function_scores_optimal_when_the_perimeter_pas
 
 
 def test_a_missing_perimeter_holds_data_access_at_advanced():
-    import aws_ztmm as Z
+    from engine import aws_ztmm as Z
 
     class R:
         def __init__(self, c, st):
@@ -267,7 +267,7 @@ def test_a_bare_magicmock_client_terminates_rather_than_spinning():
     from _check_iam, EVERY pre-existing test that reaches the IAM section with mock
     clients hung. A continuation token is a string; anything else ends the walk."""
     import threading
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = A.AWSLiveScanner(region="us-east-1", verbose=False, sections=["IAM"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: MagicMock()
@@ -288,7 +288,7 @@ def test_a_non_string_continuation_token_ends_the_walk():
     org, ec2 = _org(**FULL)
     org.list_policies_for_target.side_effect = None
     org.list_policies_for_target.return_value = {"Policies": [], "NextToken": object()}
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = A.AWSLiveScanner(region="us-east-1", verbose=False, sections=["IAM"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: org if svc == "organizations" else ec2

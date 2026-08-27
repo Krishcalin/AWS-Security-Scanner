@@ -19,7 +19,7 @@ from dataclasses import asdict
 # Ensure project root is on sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aws_live_scanner import (
+from engine.aws_live_scanner import (
     AWSLiveScanner, Result, VERSION,
     compute_risk_score, score_to_grade,
     COMPLIANCE_MAP, REMEDIATION_MAP, CHECK_SEVERITY,
@@ -40,7 +40,7 @@ class MockClientError(Exception):
 def make_scanner(sections=None) -> AWSLiveScanner:
     """Create scanner with mocked boto3 — no real AWS calls.
     Overrides _client to return from _clients dict directly, bypassing boto3."""
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         scanner = AWSLiveScanner(region="us-east-1", verbose=False,
                                   sections=sections or ["IAM"])
         scanner.account = "123456789012"
@@ -294,7 +294,7 @@ class TestAddMethod(unittest.TestCase):
 # ─── Test: IAM checks ───────────────────────────────────────────────────────
 class TestIAMChecks(unittest.TestCase):
 
-    @patch("aws_live_scanner.ClientError", MockClientError, create=True)
+    @patch("engine.aws_live_scanner.ClientError", MockClientError, create=True)
     def test_root_mfa_disabled(self):
         scanner = make_scanner(["IAM"])
         iam = MagicMock()
@@ -323,7 +323,7 @@ class TestIAMChecks(unittest.TestCase):
         self.assertIn("IAM-01", check_ids)
         self.assertIn("IAM-02", check_ids)
 
-    @patch("aws_live_scanner.ClientError", MockClientError, create=True)
+    @patch("engine.aws_live_scanner.ClientError", MockClientError, create=True)
     def test_root_mfa_enabled(self):
         scanner = make_scanner(["IAM"])
         iam = MagicMock()
@@ -379,7 +379,7 @@ class TestS3Checks(unittest.TestCase):
 # ─── Test: Lambda checks ────────────────────────────────────────────────────
 class TestLambdaChecks(unittest.TestCase):
 
-    @patch("aws_live_scanner.ClientError", MockClientError, create=True)
+    @patch("engine.aws_live_scanner.ClientError", MockClientError, create=True)
     def test_deprecated_runtime_detected(self):
         scanner = make_scanner(["LAMBDA"])
         lmb = MagicMock()
@@ -397,7 +397,7 @@ class TestLambdaChecks(unittest.TestCase):
         check_ids = [r.check_id for r in fails]
         self.assertIn("LMB-04", check_ids)
 
-    @patch("aws_live_scanner.ClientError", MockClientError, create=True)
+    @patch("engine.aws_live_scanner.ClientError", MockClientError, create=True)
     def test_secret_in_env_var(self):
         scanner = make_scanner(["LAMBDA"])
         lmb = MagicMock()

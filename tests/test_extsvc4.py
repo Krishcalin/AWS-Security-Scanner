@@ -17,9 +17,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_checkdef as C
-import aws_extsvc4 as E
-import aws_live_scanner as A
+from engine import aws_checkdef as C
+from engine import aws_extsvc4 as E
+from engine import aws_live_scanner as A
 
 SECTIONS = {
     "_check_lakeformation": ("LF-01", "LF-02"),
@@ -38,7 +38,7 @@ class _Deny:
 
 
 def _scanner(client=None):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = A.AWSLiveScanner(region="us-east-1", verbose=False,
                              sections=["LAKEFORMATION"])
         s.account = "123456789012"
@@ -289,8 +289,8 @@ def test_each_section_is_registered_and_labelled(section):
 
 @pytest.mark.parametrize("cid", sorted(c for cs in SECTIONS.values() for c in cs))
 def test_every_batch4_check_came_from_one_declaration(cid):
-    import aws_finding_detail as D
-    import aws_perm_ledger as L
+    from engine import aws_finding_detail as D
+    from engine import aws_perm_ledger as L
     d = C.REGISTRY[cid]
     assert A.CHECK_SEVERITY[cid] == d.severity
     assert A.REMEDIATION_MAP[cid] == d.remediation

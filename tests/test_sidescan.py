@@ -13,8 +13,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_sidescan as ss
-from aws_graph import SecurityGraph
+from engine import aws_sidescan as ss
+from engine.aws_graph import SecurityGraph
 
 
 # ── dpkg version comparison ──────────────────────────────────────────────────
@@ -303,7 +303,7 @@ def test_shannon_entropy():
 
 # ── HAS_VULN edge shape (must feed aws_correlate unchanged) ───────────────────
 def test_emit_vuln_edges_shape_matches_inspector():
-    import aws_deepplane
+    from engine import aws_deepplane
     g = SecurityGraph()
     m = ss.EnrichedMatch(cve="CVE-2024-0009", osv_id="CVE-2024-0009", package="openssl",
                          installed_version="3.0.2-0ubuntu1.10", fixed_version="3.0.2-0ubuntu1.15",

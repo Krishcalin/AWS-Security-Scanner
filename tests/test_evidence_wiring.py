@@ -20,12 +20,12 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_evidence as EV
-import aws_live_scanner as A
+from engine import aws_evidence as EV
+from engine import aws_live_scanner as A
 
 
 def _scanner(results=()):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = A.AWSLiveScanner(region="us-east-1", verbose=False, sections=["DATA"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: MagicMock()
@@ -97,7 +97,7 @@ def test_the_pack_survives_a_scan_with_no_results():
 
 def test_a_missing_crosswalk_costs_the_pack_and_nothing_else():
     s = _scanner()
-    with patch("compliance_crosswalk.get_crosswalk", return_value=({}, {}, "")):
+    with patch("engine.compliance_crosswalk.get_crosswalk", return_value=({}, {}, "")):
         with tempfile.TemporaryDirectory() as d:
             s.save_ai_evidence_pack(d)      # must not raise
             assert os.listdir(d) == []

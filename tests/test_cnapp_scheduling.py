@@ -11,13 +11,13 @@ idempotency + coexistence with per-finding run_rules; and secret scrubbing. All 
 """
 import types
 
-import aws_state
-import cnapp_connectors as cc
-import cnapp_validate as v
-from aws_graph import SecurityGraph
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
-from cnapp_worker import scheduler_tick
+from store import aws_state
+from hub import cnapp_connectors as cc
+from hub import cnapp_validate as v
+from engine.aws_graph import SecurityGraph
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
+from hub.cnapp_worker import scheduler_tick
 
 
 # ── harness ─────────────────────────────────────────────────────────────────────

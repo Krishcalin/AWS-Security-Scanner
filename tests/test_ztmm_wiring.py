@@ -15,8 +15,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_live_scanner as A
-import aws_ztmm as Z
+from engine import aws_live_scanner as A
+from engine import aws_ztmm as Z
 
 
 class R:
@@ -25,7 +25,7 @@ class R:
 
 
 def _card(results=(), not_evaluated=None):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = A.AWSLiveScanner(region="us-east-1", verbose=False, sections=["DATA"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: MagicMock()

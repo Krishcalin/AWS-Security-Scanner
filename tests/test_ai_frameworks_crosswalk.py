@@ -160,7 +160,7 @@ def test_the_security_evaluation_subcategory_carries_the_vuln_controls():
 def test_the_shipped_file_still_validates():
     """The loader rejects unknown frameworks, unknown NIST controls, blank targets and
     bad confidence values. Adding three frameworks by hand is exactly when that matters."""
-    import compliance_crosswalk as cx
+    from engine import compliance_crosswalk as cx
     edges, frameworks, digest = cx.load_crosswalk()
     assert edges and frameworks and digest, (
         "the shipped file no longer loads through the production path")

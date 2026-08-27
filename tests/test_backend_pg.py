@@ -11,11 +11,11 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # for fake_psycopg
 
-import aws_state as S
-import aws_state_dialect as D
-import cnapp_backend as B
-from cnapp_registry import (ACCT_COLS, ACCT_UPDATE, AccountRegistry)
-from cnapp_validate import CheckResult, ConnectionHealth, ValidationResult, cadence
+from store import aws_state as S
+from store import aws_state_dialect as D
+from store import cnapp_backend as B
+from hub.cnapp_registry import (ACCT_COLS, ACCT_UPDATE, AccountRegistry)
+from hub.cnapp_validate import CheckResult, ConnectionHealth, ValidationResult, cadence
 from fake_psycopg import FakeConn
 
 ACCT = "210987654321"

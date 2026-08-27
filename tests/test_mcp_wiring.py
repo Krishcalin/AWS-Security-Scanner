@@ -30,16 +30,16 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_agentcore as G
-import aws_mcp as M
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_agentcore as G
+from engine import aws_mcp as M
+from engine.aws_live_scanner import AWSLiveScanner
 
 GW_ARN = "arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/tools-a1b2c3d4e5"
 SUMMARY = [{"gatewayId": "tools-a1b2c3d4e5", "name": "tools", "gatewayArn": GW_ARN}]
 
 
 def _scanner(client):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["AGENTCORE"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: client

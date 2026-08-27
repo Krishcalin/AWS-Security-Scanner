@@ -11,9 +11,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_cdr
-import aws_edr
-from aws_graph import SecurityGraph
+from engine import aws_cdr
+from engine import aws_edr
+from engine.aws_graph import SecurityGraph
 
 WEB = "arn:aws:ec2:us-east-1:111122223333:instance/i-web"
 QUIET = "arn:aws:ec2:us-east-1:111122223333:instance/i-quiet"
@@ -199,7 +199,7 @@ def test_runtime_detection_folds_into_incident_via_cdr():
 
 
 def test_correlate_is_untouched_by_edr_import():
-    import aws_correlate
+    from engine import aws_correlate
     assert "THREAT_ON" not in aws_correlate.E_PATH        # runtime alerts never become a hop
     assert "RUNTIME_ALERT" not in aws_correlate.E_PATH
 

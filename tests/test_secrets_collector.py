@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from test_live_scanner import make_scanner
-from aws_graph import SecurityGraph
+from engine.aws_graph import SecurityGraph
 
 ACCT = "123456789012"
 

@@ -94,6 +94,6 @@ def test_eks06_bare_mock_does_not_crash_eks_1_to_5():
 
 
 def test_maps_lockstep():
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     assert "EKS-06" in A.CHECK_SEVERITY and "EKS-06" in A.COMPLIANCE_MAP
     assert "EKS-06" in A.REMEDIATION_MAP and "aws " in A.REMEDIATION_MAP["EKS-06"].lower()

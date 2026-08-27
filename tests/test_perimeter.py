@@ -23,7 +23,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_perimeter as P
+from engine import aws_perimeter as P
 
 
 def pol(key, effect="Deny", op="StringNotEquals", value="o-abc123"):

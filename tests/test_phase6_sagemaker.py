@@ -124,7 +124,7 @@ def test_sm07_no_configs_info():
 
 
 def test_maps_lockstep():
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     for cid in ("SM-05", "SM-06", "SM-07"):
         assert cid in A.CHECK_SEVERITY and cid in A.COMPLIANCE_MAP and cid in A.REMEDIATION_MAP
         assert "aws " in A.REMEDIATION_MAP[cid].lower()

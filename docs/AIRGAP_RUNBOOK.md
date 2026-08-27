@@ -39,7 +39,7 @@ On the sealed side, run the scanner with the feed **and** the public key so a ta
 unsigned feed is **rejected fail-closed**:
 
 ```bash
-python aws_live_scanner.py ... --side-scan \
+python -m engine.aws_live_scanner ... --side-scan \
     --vuln-db /feeds/overwatch-vulndb.json \
     --vuln-db-pubkey overwatch-vulndb-key.pub
 ```

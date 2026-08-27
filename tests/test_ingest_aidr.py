@@ -28,7 +28,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_ingest_aidr as AI
+from engine import aws_ingest_aidr as AI
 
 
 def doc(*rows, schema=AI.SCHEMA):

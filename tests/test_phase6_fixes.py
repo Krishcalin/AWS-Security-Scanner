@@ -13,8 +13,8 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_live_scanner as A
-from aws_live_scanner import classify_resource_policy_stmt
+from engine import aws_live_scanner as A
+from engine.aws_live_scanner import classify_resource_policy_stmt
 from test_live_scanner import make_scanner, MockPaginator
 
 

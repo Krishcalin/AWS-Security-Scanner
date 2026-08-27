@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import aws_sidescan
+from engine import aws_sidescan
 from test_live_scanner import make_scanner, MockPaginator
 
 _URI = "1.dkr.ecr.us-east-1.amazonaws.com/app"
@@ -135,7 +135,7 @@ def test_registry_only_image_stays_off_attack_path():
     # carries HAS_VULN but can NEVER enter an attack path: nothing routes INTO it via an
     # E_PATH edge, and there is no internet source. So aws_correlate stays byte-frozen and a
     # registry KEV never becomes a false CRITICAL — it ranks shift-left.
-    import aws_correlate
+    from engine import aws_correlate
     ecr = _ecr({"findings": []})
     s = _scanner(ecr, images_on=True, kev={"CVE-2024-2"})       # even a KEV image
     s._check_ecr()

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from test_live_scanner import make_scanner
-from aws_graph import SecurityGraph
+from engine.aws_graph import SecurityGraph
 
 ACCT = "123456789012"
 LB_ARN = f"arn:aws:elasticloadbalancing:us-east-1:{ACCT}:loadbalancer/app/app-lb/50dc"

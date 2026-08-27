@@ -19,10 +19,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_perm_ledger as L
+from engine import aws_perm_ledger as L
 from perm_ledger_baseline import BASELINE
-import cnapp_service
-from aws_live_scanner import AWSLiveScanner
+from hub import cnapp_service
+from engine.aws_live_scanner import AWSLiveScanner
 
 ROLE_NAME = "CnappScannerRole"
 ROLE_ARN = f"arn:aws:iam::123456789012:role/{ROLE_NAME}"
@@ -44,7 +44,7 @@ GRANTED = {
 
 
 def _scanner(*, caller_arn=ASSUMED, principals=None, sts_raises=False):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["DATA"])
         s.account = "123456789012"
 

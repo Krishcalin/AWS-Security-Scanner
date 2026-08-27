@@ -24,7 +24,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_agentmemory as M
+from engine import aws_agentmemory as M
 
 
 def agent(days=None, types=("SESSION_SUMMARY",)):

@@ -27,11 +27,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_kra  # noqa: E402
-import aws_ownership as O  # noqa: E402
-import aws_riskscore as R  # noqa: E402
-import aws_scorecard as SC  # noqa: E402
-import aws_sla as S  # noqa: E402
+from engine import aws_kra  # noqa: E402
+from engine import aws_ownership as O  # noqa: E402
+from engine import aws_riskscore as R  # noqa: E402
+from engine import aws_scorecard as SC  # noqa: E402
+from engine import aws_sla as S  # noqa: E402
 
 DAY = S.DAY
 T0 = 1_700_000_000

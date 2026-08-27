@@ -9,9 +9,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_correlate
-import aws_wql
-from aws_graph import SecurityGraph
+from engine import aws_correlate
+from engine import aws_wql
+from engine.aws_graph import SecurityGraph
 
 EC2 = "arn:aws:ec2:us-east-1:1:instance/i-1"
 ROLE = "arn:aws:iam::1:role/AppRole"
@@ -182,10 +182,10 @@ def test_reaches_admin_equals_forward_reachability():
 
 
 # ── service run_wql + POST /graph/query route ─────────────────────────────────
-import aws_state
-import cnapp_connectors as cc
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
+from store import aws_state
+from hub import cnapp_connectors as cc
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
 
 ACCT = "111122223333"
 
@@ -230,7 +230,7 @@ def test_service_run_wql_overdeep_query_is_valueerror_not_recursionerror():
 
 # API
 try:
-    import cnapp_api
+    from hub import cnapp_api
     _HAVE_FASTAPI = cnapp_api._HAVE_FASTAPI
 except Exception:
     _HAVE_FASTAPI = False

@@ -21,12 +21,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_edr
-import aws_state
-import cnapp_connectors as cc
-from aws_graph import SecurityGraph
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
+from engine import aws_edr
+from store import aws_state
+from hub import cnapp_connectors as cc
+from engine.aws_graph import SecurityGraph
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
 
 SAMPLE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                           "frontend", "public", "sample")

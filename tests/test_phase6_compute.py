@@ -205,7 +205,7 @@ def test_asg01_no_groups_info():
 
 
 def test_maps_lockstep():
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     for cid in ("SSM-01", "SSM-02", "LT-01", "ASG-01"):
         assert cid in A.CHECK_SEVERITY and cid in A.COMPLIANCE_MAP and cid in A.REMEDIATION_MAP
         assert "aws " in A.REMEDIATION_MAP[cid].lower()

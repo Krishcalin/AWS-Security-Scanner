@@ -98,7 +98,18 @@ def covered_signing_names() -> set:
     Resolved through the models rather than compared as client strings, because a client
     name and an IAM prefix are not the same thing often enough to matter."""
     clients = set()
-    for fn in glob.glob(os.path.join(ROOT, "*.py")):
+    # The scanner's modules live in engine/, hub/ and store/ -- glob(ROOT, "*.py")
+    # does not recurse, so before the split this read every module and after it
+    # read none, reporting the whole of AWS as an uncovered gap.
+    sources = []
+    for layer in ("engine", "hub", "store"):
+        sources += glob.glob(os.path.join(ROOT, layer, "*.py"))
+    if not sources:
+        raise SystemExit(
+            "coverage_gap found no source modules under engine/, hub/ or store/ -- "
+            "refusing to report every service as a gap on the strength of an empty "
+            "scan.")
+    for fn in sources:
         try:
             src = io.open(fn, encoding="utf-8").read()
         except Exception:

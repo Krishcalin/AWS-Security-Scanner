@@ -30,8 +30,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_state
-from aws_live_scanner import AWSLiveScanner
+from store import aws_state
+from engine.aws_live_scanner import AWSLiveScanner
 
 ACCT = "123456789012"
 ARN = "arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/tools-a1b2c3d4e5"
@@ -48,7 +48,7 @@ def store():
 
 
 def _scanner(surfaces):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["AGENTCORE"])
         s.account = ACCT
     s._client = lambda svc, region=None: MagicMock()

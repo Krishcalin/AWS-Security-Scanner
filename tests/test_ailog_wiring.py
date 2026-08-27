@@ -32,15 +32,15 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_ailog as AL
-import aws_perm_ledger as L
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_ailog as AL
+from engine import aws_perm_ledger as L
+from engine.aws_live_scanner import AWSLiveScanner
 
 ACCT = "123456789012"
 
 
 def _scanner(clients):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["AI_LOGGING"])
         s.account = ACCT
     s._client = lambda svc, region=None: clients.get(svc, MagicMock())
@@ -287,6 +287,6 @@ def test_the_event_selector_action_is_now_in_the_ledger():
 
 
 def test_every_ailog_check_is_in_the_ledger():
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     ail = {c for c in A.CHECK_SEVERITY if c.startswith("AILOG-")}
     assert ail <= set(L.REQUIREMENTS), ail - set(L.REQUIREMENTS)

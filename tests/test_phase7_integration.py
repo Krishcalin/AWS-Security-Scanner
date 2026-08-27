@@ -9,10 +9,10 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_correlate as C
-from aws_deepplane import is_exploitable
-from aws_graph import SecurityGraph
-from aws_live_scanner import AWSLiveScanner, _run_remediation
+from engine import aws_correlate as C
+from engine.aws_deepplane import is_exploitable
+from engine.aws_graph import SecurityGraph
+from engine.aws_live_scanner import AWSLiveScanner, _run_remediation
 
 ACCT = "111122223333"
 ADMIN = f"capability:admin:{ACCT}"

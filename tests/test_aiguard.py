@@ -27,7 +27,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_aiguard as G
+from engine import aws_aiguard as G
 
 
 # ── fixtures shaped from the API reference ──────────────────────────────────

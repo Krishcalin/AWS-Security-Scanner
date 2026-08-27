@@ -18,13 +18,13 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aws_live_scanner import AWSLiveScanner, compute_risk_score
+from engine.aws_live_scanner import AWSLiveScanner, compute_risk_score
 
 ALL_REGIONS = ["us-east-1", "us-west-2", "eu-west-1", "ap-southeast-1", "eu-central-1"]
 
 
 def _scanner(sections, *, all_regions=False, regions=None):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=sections,
                            all_regions=all_regions)
         s.account = "123456789012"

@@ -23,13 +23,15 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_live_scanner as A
+from engine import aws_live_scanner as A
+
+from _layout import module_path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _scanner(client):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = A.AWSLiveScanner(region="us-east-1", verbose=False, sections=["IAM"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: client
@@ -41,7 +43,7 @@ def test_the_shipped_poll_values_are_what_ships():
     """Pinned because conftest zeroes them. A scan that stops waiting would read an
     asynchronous report before it is ready, on exactly the fresh accounts where the
     report takes longest."""
-    src = io.open(os.path.join(ROOT, "aws_live_scanner.py"), encoding="utf-8").read()
+    src = io.open(module_path("aws_live_scanner.py"), encoding="utf-8").read()
     assert re.search(r"^CRED_REPORT_ATTEMPTS = 10\b", src, re.M)
     assert re.search(r"^CRED_REPORT_POLL_SECONDS = 2\b", src, re.M)
     assert re.search(r"^CRED_REPORT_RETRY_SECONDS = 5\b", src, re.M)
@@ -50,7 +52,7 @@ def test_the_shipped_poll_values_are_what_ships():
 def test_the_shipped_budget_stays_bounded():
     """~18s of polling plus a 5s retry. Bounded on purpose: a never-COMPLETE state must
     not be able to stall a whole scan."""
-    src = io.open(os.path.join(ROOT, "aws_live_scanner.py"), encoding="utf-8").read()
+    src = io.open(module_path("aws_live_scanner.py"), encoding="utf-8").read()
     attempts = int(re.search(r"^CRED_REPORT_ATTEMPTS = (\d+)\b", src, re.M).group(1))
     poll = int(re.search(r"^CRED_REPORT_POLL_SECONDS = (\d+)\b", src, re.M).group(1))
     retry = int(re.search(r"^CRED_REPORT_RETRY_SECONDS = (\d+)\b", src, re.M).group(1))
@@ -68,9 +70,9 @@ def test_a_non_string_state_stops_the_poll_immediately():
     Without this short-circuit the method burns the entire retry budget on every mocked
     client that reaches it."""
     c = MagicMock()
-    with patch("aws_live_scanner.CRED_REPORT_ATTEMPTS", 10), \
-         patch("aws_live_scanner.CRED_REPORT_POLL_SECONDS", 2), \
-         patch("aws_live_scanner.CRED_REPORT_RETRY_SECONDS", 0):
+    with patch("engine.aws_live_scanner.CRED_REPORT_ATTEMPTS", 10), \
+         patch("engine.aws_live_scanner.CRED_REPORT_POLL_SECONDS", 2), \
+         patch("engine.aws_live_scanner.CRED_REPORT_RETRY_SECONDS", 0):
         s = _scanner(c)
         start = time.monotonic()
         s._get_credential_report()
@@ -84,9 +86,9 @@ def test_an_absent_state_still_polls_because_empty_string_is_a_string():
     is correct for a report that is genuinely still generating."""
     c = MagicMock()
     c.generate_credential_report.return_value = {}
-    with patch("aws_live_scanner.CRED_REPORT_ATTEMPTS", 4), \
-         patch("aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0), \
-         patch("aws_live_scanner.CRED_REPORT_RETRY_SECONDS", 0):
+    with patch("engine.aws_live_scanner.CRED_REPORT_ATTEMPTS", 4), \
+         patch("engine.aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0), \
+         patch("engine.aws_live_scanner.CRED_REPORT_RETRY_SECONDS", 0):
         _scanner(c)._get_credential_report()
     assert c.generate_credential_report.call_count == 4
 
@@ -95,8 +97,8 @@ def test_a_complete_state_stops_polling_at_once():
     c = MagicMock()
     c.generate_credential_report.return_value = {"State": "COMPLETE"}
     c.get_credential_report.return_value = {"Content": b"dXNlcgpyb290Cg=="}
-    with patch("aws_live_scanner.CRED_REPORT_ATTEMPTS", 10), \
-         patch("aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0):
+    with patch("engine.aws_live_scanner.CRED_REPORT_ATTEMPTS", 10), \
+         patch("engine.aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0):
         s = _scanner(c)
         s._get_credential_report()
     assert c.generate_credential_report.call_count == 1
@@ -108,7 +110,7 @@ def test_an_unavailable_report_is_recorded_as_unevaluated_not_as_empty():
     rather than issuing a false all-clear."""
     c = MagicMock()
     c.generate_credential_report.side_effect = Exception("AccessDenied")
-    with patch("aws_live_scanner.CRED_REPORT_RETRY_SECONDS", 0):
+    with patch("engine.aws_live_scanner.CRED_REPORT_RETRY_SECONDS", 0):
         s = _scanner(c)
         s._get_credential_report()
     assert s._cred_report_ok is False
@@ -118,7 +120,7 @@ def test_a_successful_report_is_marked_ok():
     c = MagicMock()
     c.generate_credential_report.return_value = {"State": "COMPLETE"}
     c.get_credential_report.return_value = {"Content": b"dXNlcixhcm4Kcm9vdCxhcm46YXdzCg=="}
-    with patch("aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0):
+    with patch("engine.aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0):
         s = _scanner(c)
         rows = s._get_credential_report()
     assert s._cred_report_ok is True and rows
@@ -128,7 +130,7 @@ def test_the_report_is_cached_and_not_regenerated():
     c = MagicMock()
     c.generate_credential_report.return_value = {"State": "COMPLETE"}
     c.get_credential_report.return_value = {"Content": b"dXNlcixhcm4Kcm9vdCxhcm46YXdzCg=="}
-    with patch("aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0):
+    with patch("engine.aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0):
         s = _scanner(c)
         s._get_credential_report()
         s._get_credential_report()
@@ -139,7 +141,7 @@ def test_the_report_is_cached_and_not_regenerated():
 def test_the_scanner_has_no_unparameterised_sleeps_left():
     """Any new fixed sleep would reintroduce the same tax. Both remaining calls take a
     module constant the suite can zero."""
-    src = io.open(os.path.join(ROOT, "aws_live_scanner.py"), encoding="utf-8").read()
+    src = io.open(module_path("aws_live_scanner.py"), encoding="utf-8").read()
     sleeps = re.findall(r"time\.sleep\(([^)]*)\)", src)
     assert sleeps, "expected the credential-report sleeps to still exist"
     for arg in sleeps:

@@ -163,7 +163,7 @@ def test_aur04_attr_read_error_warns_not_silent():
 
 # ── map lockstep ──────────────────────────────────────────────────────────────
 def test_new_ids_in_all_three_maps():
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     for cid in ("RDS-12", "AUR-01", "AUR-02", "AUR-03", "AUR-04", "AUR-05"):
         assert cid in A.CHECK_SEVERITY, cid
         assert cid in A.COMPLIANCE_MAP, cid

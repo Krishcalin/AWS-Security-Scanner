@@ -48,11 +48,11 @@ security report into a chat window. The gate exists to keep it an act.
 
 ```bash
 # 1. Produce a report
-python aws_live_scanner.py --json reports/scan.json
+python -m engine.aws_live_scanner --json reports/scan.json
 
 # 2. Acknowledge the client boundary, then run the server
 export OVERWATCH_MCP_ACK_CLIENT_EGRESS=1
-python cnapp_mcp.py --report reports/scan.json
+python -m hub.cnapp_mcp --report reports/scan.json
 ```
 
 Without the acknowledgement the server prints its reasoning to stderr and exits `2`.

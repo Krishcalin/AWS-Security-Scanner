@@ -28,7 +28,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_nitro as N
+from engine import aws_nitro as N
 
 
 def itype(name="m5.large", encrypts=True, hypervisor="nitro",

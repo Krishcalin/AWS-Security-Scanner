@@ -22,9 +22,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_aiguard as G
-import aws_live_scanner as A
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_aiguard as G
+from engine import aws_live_scanner as A
+from engine.aws_live_scanner import AWSLiveScanner
 
 ARN = "arn:aws:bedrock:us-east-1:123456789012:guardrail/abc123:1"
 ROLE = "arn:aws:iam::123456789012:role/AppRole"
@@ -38,7 +38,7 @@ def cfilter(t, *, i="HIGH", ia="BLOCK", oa=None):
 
 
 def _scanner():
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["BEDROCK"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: MagicMock()
@@ -149,7 +149,7 @@ def test_a_refusal_records_every_check_the_action_gated():
     Asserted against the ledger rather than a literal list so that a fifth check needing
     bedrock:GetGuardrail is covered the day it is added, instead of silently reporting
     itself as evaluated."""
-    import aws_perm_ledger as L
+    from engine import aws_perm_ledger as L
     expected = {cid for cid, reqs in L.REQUIREMENTS.items()
                 if any(r.action.lower() == "bedrock:getguardrail" for r in reqs)}
     assert len(expected) >= 3, "the ledger no longer records what this action gates"
@@ -265,7 +265,7 @@ def test_grading_is_emitted_from_the_regional_bedrock_section():
 
 
 def test_the_checks_are_fully_mapped():
-    import aws_finding_detail as D
+    from engine import aws_finding_detail as D
     for cid in ("AIGRD-01", "AIGRD-02", "AIGRD-03", "AIGRD-04"):
         assert cid in A.CHECK_SEVERITY, cid
         assert cid in A.COMPLIANCE_MAP, cid

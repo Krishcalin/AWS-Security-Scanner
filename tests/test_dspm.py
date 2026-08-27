@@ -10,12 +10,12 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_dspm
-import aws_state
-import cnapp_connectors as cc
-from aws_graph import SecurityGraph
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
+from engine import aws_dspm
+from store import aws_state
+from hub import cnapp_connectors as cc
+from engine.aws_graph import SecurityGraph
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
 
 ACCT = "111122223333"
 PII = "arn:aws:s3:::customers"
@@ -47,7 +47,7 @@ def test_classify_ignores_stray_bool_sensitivity():
 def test_boolean_pii_phi_tag_keeps_the_data_type():
     # a `phi = true` / `pii = yes` boolean tag must keep the TYPE (from the key), not "flagged" —
     # else DSPM drops the data type and fires a spurious classification gap.
-    import aws_deepplane
+    from engine import aws_deepplane
     assert aws_deepplane.is_crown_jewel_by_tags([{"Key": "phi", "Value": "true"}])["sensitivity"] == "phi"
     assert aws_deepplane.is_crown_jewel_by_tags([{"Key": "PII", "Value": "yes"}])["sensitivity"] == "pii"
     # a generic crown-jewel boolean stays "flagged" (no specific type implied)
@@ -158,7 +158,7 @@ def test_dspm_gap_finding_display_only():
 
 
 def test_dspm_props_inert_to_frozen_correlate():
-    import aws_correlate
+    from engine import aws_correlate
     # aws_correlate reads only crown_jewel / public / name off a data node — never data_types/tier
     src = open(aws_correlate.__file__, encoding="utf-8").read()
     for prop in ("data_types", "sensitivity_tier", "classifier"):

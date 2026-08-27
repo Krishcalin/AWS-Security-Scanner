@@ -34,6 +34,8 @@ import sys
 
 import pytest
 
+from _layout import iter_modules, module_path
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -62,15 +64,11 @@ def _modules():
     would be reached by something as ordinary as moving these modules into a
     subdirectory: os.listdir does not recurse.
     """
-    found = [(name, _src(os.path.join(ROOT, name)))
-             for name in sorted(os.listdir(ROOT))
-             if name.endswith(".py") and (name.startswith("aws_")
-                                          or name.startswith("cnapp_"))]
+    found = iter_modules()
     assert len(found) >= _MIN_MODULES, (
-        "only %d aws_/cnapp_ modules found in %s -- the walk is broken, so every "
-        "check built on it would pass without inspecting anything. If the modules "
-        "moved, point ROOT at their new home; os.listdir does not recurse."
-        % (len(found), ROOT))
+        "only %d aws_/cnapp_ modules found across the layers -- the walk is "
+        "broken, so every check built on it would pass without inspecting "
+        "anything." % len(found))
     return found
 
 
@@ -191,7 +189,7 @@ def test_d11_every_mutation_is_justified_in_writing():
 def test_d11_the_side_scan_still_refuses_to_delete_what_it_did_not_create():
     """The guard that makes the narrow rule true. Without is_owned(), 'we only
     delete our own' is a comment rather than a control."""
-    src = _src(os.path.join(ROOT, "aws_sidescan_ebs.py"))
+    src = _src(module_path("aws_sidescan_ebs.py"))
     assert "def is_owned" in src, "the provenance guard is gone"
     assert "cnapp:sidescan" in src, "scanner-created resources are no longer tagged"
 
@@ -199,7 +197,7 @@ def test_d11_the_side_scan_still_refuses_to_delete_what_it_did_not_create():
 def test_d11_the_remediation_engine_still_only_generates():
     """aws_remediate produces Terraform/CFN/CLI text. The moment it executes any of
     it, 'OverWatch cannot alter your estate' stops being true."""
-    src = _src(os.path.join(ROOT, "aws_remediate.py"))
+    src = _src(module_path("aws_remediate.py"))
     assert "import boto3" not in src, "the remediation engine must not reach AWS"
     assert "subprocess" not in src, "the remediation engine must not shell out"
 
@@ -252,7 +250,7 @@ def test_d12_the_egress_allowlist_is_exactly_three_files():
 def test_d12_the_connector_plane_can_already_carry_a_new_siem_renderer():
     """The evidence that D12 needs no widening: a renderer registry and a template
     override already exist inside the allowlisted file."""
-    src = _src(os.path.join(ROOT, "cnapp_connectors.py"))
+    src = _src(module_path("cnapp_connectors.py"))
     assert "RENDERERS" in src, "no renderer registry to extend"
     assert "splunk" in src, "no existing SIEM renderer to model CEF on"
 

@@ -26,7 +26,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_sagemaker as SM
+from engine import aws_sagemaker as SM
 
 
 def job_def(isolation=None, encryption=None, instances=1):

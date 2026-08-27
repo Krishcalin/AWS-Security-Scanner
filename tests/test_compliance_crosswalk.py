@@ -13,8 +13,8 @@ import types
 
 import pytest
 
-import aws_live_scanner as als
-import compliance_crosswalk as cx
+from engine import aws_live_scanner as als
+from engine import compliance_crosswalk as cx
 
 
 # ── fixtures ───────────────────────────────────────────────────────────────────
@@ -136,8 +136,11 @@ def test_data_file_universe_is_enforced_in_production_path():
 def test_shipped_file_declares_the_actual_38_universe():
     import json
     import os
-    path = os.path.join(os.path.dirname(cx.__file__), "compliance", "crosswalk.json")
-    data = json.load(open(path, encoding="utf-8"))
+    # Read the module's OWN resolved path rather than recomputing it here.
+    # Deriving it a second time is what let the module and the test disagree
+    # when compliance_crosswalk moved into engine/ and the anchor needed an
+    # extra dirname.
+    data = json.load(open(cx._DEFAULT_PATH, encoding="utf-8"))
     assert set(data.get("nist_universe", [])) == set(_universe()), \
         "the data file's declared nist_universe must match COMPLIANCE_MAP's NIST axis"
 
@@ -223,8 +226,8 @@ def test_compliance_payload_has_three_keys_and_native_matches():
 
 # ── service ──────────────────────────────────────────────────────────────────────
 def _svc():
-    from cnapp_registry import AccountRegistry
-    from cnapp_service import InMemoryResultStore, PlatformService
+    from hub.cnapp_registry import AccountRegistry
+    from hub.cnapp_service import InMemoryResultStore, PlatformService
     results = InMemoryResultStore()
     results.put("123456789012", {"compliance_scorecard": als.compliance_scorecard(
         [_R("FAIL", "S3-01"), _R("FAIL", "IAM-02"), _R("PASS", "S3-03")])})
@@ -261,8 +264,8 @@ def test_service_account_compliance_missing_account_is_none():
 
 
 def test_org_compliance_carries_derived_confidence_and_provenance():
-    from cnapp_registry import AccountRegistry
-    from cnapp_service import InMemoryResultStore, PlatformService
+    from hub.cnapp_registry import AccountRegistry
+    from hub.cnapp_service import InMemoryResultStore, PlatformService
     reg = AccountRegistry.open(":memory:")
     results = InMemoryResultStore()
     for aid in ("111111111111", "222222222222"):

@@ -10,8 +10,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_policy
-from aws_graph import SecurityGraph
+from engine import aws_policy
+from engine.aws_graph import SecurityGraph
 
 CATALOG = [
     {"check_id": "S3-01", "section": "S3", "severity": "HIGH", "status": "FAIL",

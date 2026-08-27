@@ -8,14 +8,14 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_live_scanner as als
-import cnapp_api
+from engine import aws_live_scanner as als
+from hub import cnapp_api
 
 pytestmark = pytest.mark.skipif(not cnapp_api._HAVE_FASTAPI,
                                 reason="fastapi not installed (deploy-time dep)")
 
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
 
 ACCT = "123456789012"
 

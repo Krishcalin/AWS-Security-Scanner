@@ -26,7 +26,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_shadowai as SA
+from engine import aws_shadowai as SA
 
 ML_ROLE = "arn:aws:iam::123456789012:role/MLPlatform"
 APP_ROLE = "arn:aws:iam::123456789012:role/PaymentsApp"

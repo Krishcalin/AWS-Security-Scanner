@@ -90,7 +90,7 @@ def test_findings_use_check_ids_from_the_products_own_catalogue(rows):
     """A demo built on invented check ids shows screens no real scan can
     reproduce, and the first person to open a remediation write-up finds
     nothing there."""
-    import aws_finding_detail as detail
+    from engine import aws_finding_detail as detail
 
     known = set(detail.FINDING_DETAIL)
     used = {row[4] for row in rows["findings"]}
@@ -101,7 +101,7 @@ def test_finding_severities_match_the_catalogue(rows):
     """Not chosen at random. A check whose real severity is MEDIUM must not
     appear as CRITICAL, or the demo teaches the wrong severity for a real
     check id."""
-    import aws_live_scanner as scanner
+    from engine import aws_live_scanner as scanner
 
     for row in rows["findings"]:
         check_id, severity = row[4], row[8]
@@ -364,7 +364,7 @@ def test_every_path_edge_is_a_real_graph_edge(rows):
 def test_every_path_hop_kind_is_one_the_correlator_traverses(rows):
     """A demo that traverses an edge kind the real engine treats as an
     annotation would teach a viewer a path shape that cannot occur."""
-    import aws_correlate
+    from engine import aws_correlate
     for _a, payload_json, _s, _t in rows["scan_results"]:
         for path in json.loads(payload_json)["attack_paths"]:
             for edge in path["edges"]:
@@ -403,7 +403,7 @@ def test_purge_covers_every_child_of_accounts_and_workspaces():
     Derived from the DDL rather than restated, so a table added later fails
     here instead of on somebody's machine mid-demo.
     """
-    import aws_state_dialect
+    from store import aws_state_dialect
 
     covered = {t for t, _ in seed.ACCOUNT_CHILDREN} | set(seed.WORKSPACE_CHILDREN)
     ddl = "\n".join(aws_state_dialect.POSTGRES_DDL)
@@ -498,7 +498,7 @@ def test_compliance_is_built_by_the_products_own_scorecard(rows):
     """Not reproduced from its output. The control universe has to come from
     COMPLIANCE_MAP exactly as a real scan's does, or the demo shows totals no
     scan can produce."""
-    import aws_live_scanner as scanner
+    from engine import aws_live_scanner as scanner
 
     universe = {f: set() for f in scanner.COMPLIANCE_FRAMEWORKS}
     for tags in scanner.COMPLIANCE_MAP.values():
@@ -516,7 +516,7 @@ def test_a_failed_control_traces_to_a_failing_check(rows):
     """A control is failed BECAUSE a check that references it failed. A
     scorecard that moves independently of the findings is a number nobody can
     justify when asked."""
-    import aws_live_scanner as scanner
+    from engine import aws_live_scanner as scanner
 
     for payload in _payloads(rows):
         tagged = {}
@@ -558,8 +558,8 @@ def test_identity_can_find_principals_and_their_edges(rows):
 def test_data_security_has_classified_crown_jewels(rows):
     """`aws_dspm.compute_inventory` selects crowns on the `crown_jewel` prop
     and counts CAN_READ_DATA edges into each."""
-    import aws_dspm
-    import aws_graph
+    from engine import aws_dspm
+    from engine import aws_graph
 
     for account_id, payload_json, _s, _t in rows["scan_results"]:
         graph = aws_graph.SecurityGraph.from_dict(

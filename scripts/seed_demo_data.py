@@ -148,9 +148,9 @@ def _catalogue() -> List[Tuple[str, str]]:
     screens that no real scan can reproduce, and the first person to click
     through to a remediation write-up finds nothing there.
     """
-    import aws_live_scanner as scanner
+    from engine import aws_live_scanner as scanner
 
-    import aws_finding_detail as detail
+    from engine import aws_finding_detail as detail
     out = []
     for check_id in sorted(detail.FINDING_DETAIL):
         severity = scanner.CHECK_SEVERITY.get(check_id)
@@ -236,7 +236,7 @@ def build(rng: random.Random, now: int = None) -> Dict[str, List[tuple]]:
 def _account_history(rng, rows, catalogue, profile, account_id, regions,
                      now, weight) -> None:
     """Scans over time, and the findings whose lifecycle they explain."""
-    import aws_live_scanner as scanner
+    from engine import aws_live_scanner as scanner
 
     def count(span):
         low, high = span
@@ -578,8 +578,8 @@ def _finding_catalog(findings):
     resource.
     """
     try:
-        import aws_finding_detail as detail
-        import aws_live_scanner as scanner
+        from engine import aws_finding_detail as detail
+        from engine import aws_live_scanner as scanner
         remediation = getattr(scanner, "REMEDIATION_MAP", {})
         compliance_map = getattr(scanner, "COMPLIANCE_MAP", {})
     except Exception:                                         # noqa: BLE001
@@ -911,7 +911,7 @@ def _compliance(check_ids):
     COMPLIANCE_MAP exactly as a real scan's does, and a control is failed
     because a seeded check that references it failed.
     """
-    import aws_live_scanner as scanner
+    from engine import aws_live_scanner as scanner
 
     results = []
     for check_id in check_ids:
@@ -999,7 +999,7 @@ def _resource_for(rng, check_id: str, account_id: str, region: str) -> str:
 
 def _message_for(check_id: str, resource: str) -> str:
     try:
-        import aws_finding_detail as detail
+        from engine import aws_finding_detail as detail
         entry = detail.FINDING_DETAIL.get(check_id) or {}
         risk = str(entry.get("risk") or "").strip()
         if risk:

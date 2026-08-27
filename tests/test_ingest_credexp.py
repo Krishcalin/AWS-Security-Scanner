@@ -24,8 +24,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_epistemics  # noqa: E402
-import aws_ingest_credexp as ce  # noqa: E402
+from engine import aws_epistemics  # noqa: E402
+from engine import aws_ingest_credexp as ce  # noqa: E402
+
+from _layout import module_path
 
 PW = "hunter2-correct-horse"
 
@@ -259,8 +261,7 @@ def test_the_module_imports_no_egress_primitive():
     the customer's people to a third party as a side effect of a scan. That decision
     belongs to the operator, outside the product."""
     import ast
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "aws_ingest_credexp.py")
+    path = module_path("aws_ingest_credexp.py")
     tree = ast.parse(open(path, encoding="utf-8").read())
     banned = {"urllib.request", "http.client", "requests", "httpx", "socket",
               "aiohttp", "urllib3", "subprocess"}

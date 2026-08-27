@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_live_scanner as A
+from engine import aws_live_scanner as A
 
 NOW = 1_000_000_000
 

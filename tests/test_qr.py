@@ -21,8 +21,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_qr                                                       # noqa: E402
-import aws_totp                                                     # noqa: E402
+from engine import aws_qr                                                       # noqa: E402
+from engine import aws_totp                                                     # noqa: E402
 
 #: ISO/IEC 18004 worked example — "01234567" at version 1, EC level M. Both the data
 #: codewords and the resulting EC codewords are published in the standard.

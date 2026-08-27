@@ -38,7 +38,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cnapp_service as S  # noqa: E402
+from hub import cnapp_service as S  # noqa: E402
+
+from _layout import module_path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -60,7 +62,7 @@ CAPPED_FILES = ("cnapp_service.py", "cnapp_api.py")
 
 
 def _slices(path):
-    src = io.open(os.path.join(ROOT, path), encoding="utf-8").read()
+    src = io.open(module_path(path), encoding="utf-8").read()
     tree = ast.parse(src)
     owner = {}
     for fn in ast.walk(tree):
@@ -164,7 +166,7 @@ def test_each_converted_field_emits_its_declaration(prefix):
 def test_the_account_payload_declares_its_path_caps():
     """The site the module docstring quotes: the cap that sat three lines above
     a comment about denominators."""
-    src = io.open(os.path.join(ROOT, "cnapp_service.py"), encoding="utf-8").read()
+    src = io.open(module_path("cnapp_service.py"), encoding="utf-8").read()
     assert 'capped(p.get("attack_paths"), 10, "attack_paths")' in src
     assert 'capped(p.get("choke_points"), 10, "choke_points")' in src
     assert '"attack_paths": p.get("attack_paths", [])[:10]' not in src

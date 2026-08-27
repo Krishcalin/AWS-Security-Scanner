@@ -6,13 +6,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_ingest
-import aws_registry_sbom as R
-import aws_state
-import cnapp_connectors as cc
-from aws_graph import SecurityGraph
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
+from engine import aws_ingest
+from engine import aws_registry_sbom as R
+from store import aws_state
+from hub import cnapp_connectors as cc
+from engine.aws_graph import SecurityGraph
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
 
 ACCT = "111122223333"
 RURI = f"{ACCT}.dkr.ecr.us-east-1.amazonaws.com/app"
@@ -90,8 +90,8 @@ def test_registry_sbom_reingest_is_idempotent():
 def test_snapshot_cve_set_is_replaced_not_accumulated():
     # a re-sweep of the SAME snapshot against a newer feed (a fixed CVE) must REPLACE the CVE
     # set, not accumulate stale rows.
-    import aws_state
-    from cnapp_registry import AccountRegistry
+    from store import aws_state
+    from hub.cnapp_registry import AccountRegistry
     reg = AccountRegistry.open(":memory:")
     st = aws_state.StateStore(reg._be)
     with reg._be.transaction():

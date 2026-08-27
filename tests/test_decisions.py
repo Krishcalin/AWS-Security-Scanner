@@ -29,6 +29,8 @@ import sys
 
 import pytest
 
+from _layout import module_path
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -147,7 +149,7 @@ def test_d4_every_permission_we_request_is_read_shaped():
     """The other half of the same promise. A ledger entry for a mutating action would be
     the first step across the line, and it would arrive in a policy document rather than
     in code."""
-    import aws_perm_ledger as L
+    from engine import aws_perm_ledger as L
     verbs = ("Get", "List", "Describe", "BatchGet", "Simulate", "Lookup", "Search")
     bad = sorted({r.action for reqs in L.REQUIREMENTS.values() for r in reqs
                   if ":" in r.action
@@ -227,7 +229,7 @@ def test_d7_the_ai_detection_story_stands_alone():
     """The reason D7 costs nothing: the detections it might have depended on derive from
     CloudTrail, which every account already has."""
     import ast as _ast
-    src = _src(ROOT / "aws_airules.py")
+    src = _src(module_path("aws_airules.py"))
     imported = set()
     for node in _ast.walk(_ast.parse(src)):
         if isinstance(node, _ast.Import):
@@ -259,8 +261,8 @@ def test_d3_added_no_api_call_and_no_permission():
     """The decision was approved on the basis that the material is already read. If a
     future edit adds a dedicated fetch or an IAM action for the CBOM, the justification
     for the slice no longer holds and this is where that surfaces."""
-    import aws_perm_ledger as L
+    from engine import aws_perm_ledger as L
     acts = {r.action for reqs in L.REQUIREMENTS.values() for r in reqs}
     assert not any("cbom" in a.lower() for a in acts)
-    src = _src(ROOT / "aws_cbom.py")
+    src = _src(module_path("aws_cbom.py"))
     assert "boto3" not in src.replace("no boto3", "")

@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_unused as un
+from engine import aws_unused as un
 
 DAY = 86400
 NOW = 1_000 * DAY

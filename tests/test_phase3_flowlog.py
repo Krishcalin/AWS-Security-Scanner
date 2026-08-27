@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_flowlog as F
+from engine import aws_flowlog as F
 
 
 # ── flow-log readability gate ────────────────────────────────────────────────
@@ -206,16 +206,16 @@ def test_default_flow_read_timeout_stops_query():
 
 # ── scanner integration: _check_flowlog (FLOW-00..03 + graph overlay, fail-open) ──
 from unittest.mock import MagicMock, patch     # noqa: E402
-import aws_graph                                # noqa: E402
-import aws_correlate                            # noqa: E402
-from aws_live_scanner import AWSLiveScanner     # noqa: E402
+from engine import aws_graph                                # noqa: E402
+from engine import aws_correlate                            # noqa: E402
+from engine.aws_live_scanner import AWSLiveScanner     # noqa: E402
 
 _DEFAULT_FL = [{"LogDestinationType": "cloud-watch-logs", "DeliverLogsStatus": "SUCCESS",
                 "LogGroupName": "fl-lg", "TrafficType": "ALL", "LogFormat": ""}]
 
 
 def _scanner(fls=None, flow_read=None, flow_logs=True):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         sc = AWSLiveScanner(sections=["EXPOSURE"])
     sc.flow_logs = flow_logs
     ec2 = MagicMock()

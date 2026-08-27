@@ -5,10 +5,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_state
-import aws_state_dialect as dia
-import cnapp_backend
-from cnapp_registry import AccountRegistry
+from store import aws_state
+from store import aws_state_dialect as dia
+from store import cnapp_backend
+from hub.cnapp_registry import AccountRegistry
 
 NEW_TABLES = {"workspaces", "workspace_members", "workspace_accounts",
               "platform_admins", "usage_events"}

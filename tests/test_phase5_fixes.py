@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_engine_eol as eol
-from aws_graph import SecurityGraph
+from engine import aws_engine_eol as eol
+from engine.aws_graph import SecurityGraph
 from test_live_scanner import make_scanner, MockPaginator
 
 
@@ -112,7 +112,9 @@ def test_eol_edges_flushed_without_vuln_section():
 
 def test_epilogue_flush_is_in_run_source():
     # guard that the epilogue flush actually exists in run() (not only exercised via helper)
-    import inspect, aws_live_scanner
+    import inspect
+
+    from engine import aws_live_scanner
     src = inspect.getsource(aws_live_scanner.AWSLiveScanner.run)
     assert "_replay_eol_edges" in src and "_eol_graph_payloads" in src
 
