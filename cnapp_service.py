@@ -802,6 +802,8 @@ class PlatformService:
         What IS real: attribution and its coverage, open counts, the SLA closure
         rate with its D4 exception pairing, and the excepted segregation.
         """
+        import aws_factors
+        import aws_ownership
         import aws_scorecard
         if self.applications is None or self.state is None:
             raise ValueError("scorecards need the application registry and a state store")
@@ -824,8 +826,44 @@ class PlatformService:
                 windows.setdefault(w["finding_key"], []).append(
                     (w.get("created_epoch") or 0, w.get("expires_epoch")))
 
+        # Live risk factors, per application. Everything absent stays absent:
+        # aws_factors returns an excluded factor with a reason rather than a value
+        # that flatters, and aws_riskscore then redistributes its weight or refuses
+        # the composite outright.
+        acct_ids = [a["account_id"] for a in self.registry.list_accounts(
+            onboarding_status="active", workspace_id=self._scoped_ws(workspace_id))]
+        # `paths=[]` and `paths=None` mean DIFFERENT things to aws_factors: an
+        # empty list is "the graph was built and found nothing", None is "no graph
+        # exists". Passing [] for an account that was never scanned would score
+        # exposure a measured 0.0 -- a false zero, and exactly the conflation this
+        # layer exists to prevent. So the list stays None until a scan result with
+        # a graph is actually seen.
+        paths: Optional[List[dict]] = None
+        vulns: Optional[List[dict]] = None
+        trend: List[dict] = []
+        for acct in acct_ids:
+            p = self.results.get_latest(acct)
+            if p is not None and p.get("graph") is not None:
+                paths = (paths or []) + list(p.get("attack_paths") or [])
+            trend.extend(self.state.trend(acct))
+            got = self.state.list_ingested_vulns(acct)
+            if got:
+                vulns = (vulns or []) + got
+
+        buckets, _cov = aws_ownership.attribute_findings(rows, apps)
+        factors_by_app, gates_by_app = {}, {}
+        for a in apps:
+            owned = [f for f, _ in buckets.get(a.app_id, [])]
+            fv, gate = aws_factors.build(
+                owned, criticality=a.criticality, paths=paths, vulns=vulns,
+                trend=sorted(trend, key=lambda r: r.get("ts_epoch") or 0))
+            factors_by_app[a.app_id] = fv
+            gates_by_app[a.app_id] = gate
+
         pack = aws_scorecard.build(rows, apps, now_epoch=now,
                                    exception_windows=windows, excepted_keys=waived,
+                                   factors_by_app=factors_by_app,
+                                   gates_by_app=gates_by_app,
                                    period=period)
         return pack.to_dict()
 

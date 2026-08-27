@@ -146,11 +146,13 @@ def test_findings_no_application_claims_get_an_unowned_row():
 # ── what it honestly cannot say yet ────────────────────────────────────────
 
 def test_the_pack_withholds_what_it_cannot_measure():
-    """Three absent inputs, three withheld figures, each with a reason.
+    """Live factors are wired now, so the REASON changed and the answer did not.
 
-    If a later commit wires live risk factors, grades turn on and this test should
-    be updated deliberately. What must never happen is a grade appearing because a
-    missing factor was defaulted to zero.
+    An account with findings and a declared criticality but no graph, no ingested
+    vulnerabilities and no posture history has 47% of the model measured -- below
+    the 50% floor -- so the composite is refused rather than published. Updated
+    deliberately when factors were wired, which is what the previous version of
+    this test asked for.
     """
     svc = _svc()
     c = _seed(svc, [{"k": "a", "sev": "HIGH"}])
@@ -159,13 +161,31 @@ def test_the_pack_withholds_what_it_cannot_measure():
             if s["name"] == "Payments"][0]
 
     assert card["grade"] is None and card["posture"] is None
-    assert "published model" in card["grade_withheld"]
+    assert "not a composite" in card["grade_withheld"]
+    assert "47%" in card["grade_withheld"], "findings + criticality only"
 
     assert card["rank"] is None
     assert "by size, not by security" in card["rank_withheld"]
 
     assert card["trend"] is None
     assert any("first scorecard" in c_ for c_ in card["caveats"])
+
+
+def test_an_unscanned_account_does_not_score_exposure_as_a_measured_zero():
+    """The false zero this wiring nearly shipped.
+
+    aws_factors reads `paths=[]` as "the graph was built and found nothing" and
+    `paths=None` as "no graph exists". Passing [] for an account that was never
+    scanned scored exposure a measured 0.0, which pushed weight coverage over the
+    floor and produced a grade of B built on a fact nobody established.
+    """
+    svc = _svc()
+    c = _seed(svc, [{"k": "a", "sev": "HIGH"}])
+    _app(c)
+    card = [s for s in c.get("/scorecards", headers=_hdr()).json()["scorecards"]
+            if s["name"] == "Payments"][0]
+    assert card["grade"] is None, (
+        "no scan result means no graph means exposure is unmeasured, not zero")
 
 
 # ── OW2-SC-008: a live waiver segregates AND pauses ────────────────────────

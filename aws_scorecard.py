@@ -292,6 +292,7 @@ def build(
     assets_by_app: Optional[Mapping[str, int]] = None,
     previous_posture: Optional[Mapping[str, float]] = None,
     factors_by_app: Optional[Mapping[str, Sequence[aws_riskscore.FactorValue]]] = None,
+    gates_by_app: Optional[Mapping[str, aws_riskscore.ExposureGate]] = None,
     exposure_by_app: Optional[Mapping[str, Tuple[int, int]]] = None,
     mfa_by_app: Optional[Mapping[str, Tuple[int, int, int]]] = None,
     model: Optional[aws_riskscore.RiskModel] = None,
@@ -310,6 +311,7 @@ def build(
     assets_by_app = assets_by_app or {}
     previous_posture = previous_posture or {}
     factors_by_app = factors_by_app or {}
+    gates_by_app = gates_by_app or {}
     exposure_by_app = exposure_by_app or {}
     mfa_by_app = mfa_by_app or {}
     model = model or aws_riskscore.RiskModel()
@@ -326,6 +328,7 @@ def build(
                           excepted=excepted, assets=assets_by_app.get(bucket_id),
                           previous=previous_posture.get(bucket_id),
                           factors=factors_by_app.get(bucket_id),
+                          gate=gates_by_app.get(bucket_id),
                           exposure=exposure_by_app.get(bucket_id),
                           mfa=mfa_by_app.get(bucket_id), model=model))
 
@@ -337,7 +340,8 @@ def build(
 
 
 def _one(bucket_id, app, owned, *, now_epoch, sla_policy, exception_windows,
-         excepted, assets, previous, factors, exposure, mfa, model) -> Scorecard:
+         excepted, assets, previous, factors, exposure, mfa, model,
+         gate=None) -> Scorecard:
     live = [f for f in owned if _key(f) not in excepted]
     n_excepted = len(owned) - len(live)
 
@@ -350,7 +354,7 @@ def _one(bucket_id, app, owned, *, now_epoch, sla_policy, exception_windows,
     withheld = ""
     if factors:
         scored = aws_riskscore.score(factors, model, scope="application",
-                                     scope_id=bucket_id)
+                                     scope_id=bucket_id, exposure_gate=gate)
         if scored.refused:
             withheld = scored.refusal_reason
         else:
