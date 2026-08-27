@@ -141,6 +141,7 @@ FLOORS = {
     "test_credential_report_timing.py": 10,
     "test_custom_controls.py": 24,
     "test_decisions.py": 15,
+    "test_decisions_d11_d13.py": 15,
     "test_declared_truncation.py": 12,
     "test_deepplane.py": 44,
     "test_dspm.py": 12,

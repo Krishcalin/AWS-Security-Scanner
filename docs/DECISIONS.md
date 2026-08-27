@@ -28,21 +28,21 @@ without a guard drifts; that is the whole lesson of this codebase's Phase 0.
 | **D4** | Do we cross read-only for AI red teaming? | **Out of scope** | `tests/test_decisions.py` |
 | **D6** | The MCP client boundary | **Taken** — ship it enforced | Section G, `tests/test_mcp.py` |
 | **D7** | The Guardrail sibling dependency | **Decoupled** | `tests/test_decisions.py` |
-| **D11** | Does auto-fix end the read-only guarantee? | **Open** — CISO | the absence of a remediation role |
-| **D12** | Widen the egress allowlist for SIEM forwarding? | **Open** — CISO | Section A, `tests/test_zero_telemetry.py` |
-| **D13** | Build the inbound connectors vendor-neutral? | **Open** — architecture board | *(recommendation only)* |
+| **D11** | Does auto-fix end the read-only guarantee? | **Taken** — governance built, execution withheld | `tests/test_decisions_d11_d13.py` |
+| **D12** | Widen the egress allowlist for SIEM forwarding? | **No** — no widening is needed | `tests/test_decisions_d11_d13.py` |
+| **D13** | Build the inbound connectors vendor-neutral? | **Taken** — yes, per the shipped precedent | `tests/test_decisions_d11_d13.py` |
 
 None of these decisions left the product in a broken or dishonest state while they were
 open. D2 and D4 were questions about whether to *add* something, and the answer to each
 preserves what the product already does. D3 was the one where adding was the right
 answer, and it was built rather than deferred.
 
-**D11–D13 arrived with the Phase II SRS (`OW2-SRS-001 v0.1`) and are still open.** The
-same property holds: the product is not in a dishonest state while they are. Each is a
-question about whether to *add* a capability, and in each case not-yet-added is the
-conservative answer — the read-only guarantee holds, no new egress path exists, and no
-connector has been built against an unverified vendor contract. They are recorded here
-so they are answered deliberately rather than by a commit.
+**D11–D13 arrived with the Phase II SRS (`OW2-SRS-001 v0.1`) and are now answered.**
+Two of the three turned out not to need the decision they appeared to need: D12
+dissolved once the existing connector plane was read properly, and D13 was an
+architecture choice with two shipped precedents rather than a risk to accept. Only D11
+was a genuine judgement call, and answering it forced a correction to how this product
+describes itself — see below.
 
 ---
 
@@ -412,70 +412,101 @@ sibling product.
 
 ---
 
-## D11 · Does auto-fix end the read-only guarantee? — **OPEN**
+## D11 · Does auto-fix end the read-only guarantee? — **TAKEN**
+
+**Governance is built. Execution is withheld.**
 
 **The ask.** `OW2-AR-010` through `OW2-AR-015` specify a controlled auto-fix catalogue:
 approved actions only, blast-radius assessment, rollback, a separately credentialed
-remediation role, and a global kill switch. `CON-04` anticipates the split and requires
-the role be separate, auditable and disableable.
+remediation role, and a global kill switch. `CON-04` requires that role be separate,
+auditable and disableable.
 
-**Why it is a decision and not a sprint.** OverWatch is read-only of configuration by
-construction. `aws_remediate.py` generates Terraform, CloudFormation and CLI and
-explicitly never applies any of it. The SRS is responsible about auto-fix and it is
-buildable — but it changes what the product *is*, from a system that cannot damage the
-estate to one that can, and **that guarantee is binary**. Once a remediation role exists,
-"OverWatch cannot alter production" stops being true, and the assurance argument for
-every other module changes with it.
+### What this decision corrected about the product's own description
 
-**The recommendation, not the answer.** Build the governance in II-B and withhold the
-execution: the catalogue, the change-record linkage, the before/after capture, the
-rollback path and the kill switch — with the executing role **absent from the
-deployment**. That delivers everything `AR-010`–`AR-014` specify about *control*, and
-leaves the grant of write access as its own explicit, dated approval rather than a side
+Answering it required checking what "read-only" actually means here, and the blanket
+version is **false**. `aws_sidescan_ebs.py` calls `create_snapshot`, `detach_volume` and
+`delete_snapshot`; `aws_graph_neptune_loader.py` writes to the operator's own S3 and
+starts a Neptune loader job. A first draft of the guard asserted "OverWatch calls no
+mutating AWS API" — it failed immediately, and it was right to.
+
+The rule the product actually keeps is narrower and sharper:
+
+> **OverWatch mutates only resources it created. It never mutates a customer's.**
+
+The side-scan tags everything it creates `cnapp:sidescan=<scan_id>` and its teardown is
+provenance-guarded by `is_owned()`, so a customer's snapshot is never deleted. That guard
+is what makes the narrow rule true rather than aspirational.
+
+**Auto-fix would be the first time OverWatch mutates a customer resource.** That is the
+line, and it is a cleaner line than "read-only" ever was.
+
+### The decision
+
+Build everything `AR-010`–`AR-014` specify about **control** — the approved catalogue,
+change-record linkage, before/after capture, the rollback path, the kill switch — and
+ship with the **executing IAM role absent from the deployment**.
+
+A role that exists "but is disabled" is a different decision that nobody made. Absent
+means absent: `test_d11_no_deploy_artifact_grants_a_remediation_role` checks the shipped
+CloudFormation for it.
+
+This delivers the governance the SRS asks for in II-B, and leaves the grant of write
+access to a customer resource as its own explicit, dated approval rather than a side
 effect of a sprint.
 
-**What holds the line meanwhile.** No remediation role exists, and no module calls a
-mutating AWS API.
+**What enforces it.** `tests/test_decisions_d11_d13.py` freezes the mutation surface —
+three modules, each with a written reason — and fails when a fourth appears. It also
+asserts the side-scan's provenance guard still exists, and that `aws_remediate` still
+imports neither `boto3` nor `subprocess`: it generates Terraform, CloudFormation and CLI
+and applies none of it.
 
 ---
 
-## D12 · Widen the egress allowlist for SIEM forwarding? — **OPEN**
+## D12 · Widen the egress allowlist for SIEM forwarding? — **NO, NO WIDENING NEEDED**
 
 **The ask.** `OW2-CC-030/031` require findings and platform audit events forwarded to the
 enterprise SIEM within five minutes, as JSON over an HTTPS event API and/or CEF/syslog.
 
-**Why it is a decision.** `tests/test_zero_telemetry.py` enumerates every file permitted
-to open an outbound connection and fails the build when a new one appears. A CEF/syslog
-transport needs a path that is not currently on that list.
+**Why this looked like a decision.** `tests/test_zero_telemetry.py` enumerates the files
+permitted to open an outbound connection and fails the build when a new one appears. A
+CEF/syslog transport sounded like it needed a fourth.
 
-**This is not a genuine conflict.** The rule exists to prevent *vendor* telemetry, not
-operator-directed integration, and the connector plane already forwards findings to
-Splunk HEC under operator control — satisfying `CON-01` and `OW2-DR-003` as written. What
-is required is that the allowlist be widened **deliberately**, in a commit whose message
-says so.
+**It does not.** `cnapp_connectors.py` is *already* in `EGRESS_ALLOWLIST`, and already
+ships a signed, SSRF-guarded `webhook` transport, a Splunk HEC renderer, a `RENDERERS`
+registry and a message-template override. **CEF/syslog is a renderer inside a file that
+is already allowlisted.** The allowlist stays at three.
 
-**The recommendation.** Approve. The cost of the tripwire is exactly this friction, and
-the friction is the feature: the next outbound call added without a reason will also stop
-the build.
+This is the same conclusion the registry work reached, recorded in that file's own
+comment: *"the allowlist does NOT grow: all registry egress stays in this one file."*
+
+**What enforces it.** The allowlist was a plain set that nothing pinned — a fourth entry
+could be added in the same commit as the code it excused, and every test would still
+pass. `test_d12_the_egress_allowlist_is_exactly_three_files` closes that: growing it is
+now a decision that has to be written down here first.
 
 ---
 
-## D13 · Build the inbound connectors vendor-neutral? — **OPEN**
+## D13 · Build the inbound connectors vendor-neutral? — **TAKEN, YES**
 
 **The ask.** `OW2-CC-020` (ManageEngine ServiceDesk Plus), `OW2-CC-040` (the PAM
 platform) and `OW2-PA-002` (IBM Instana) all require inbound integrations.
 
-**Why it is a decision.** All three depend on service accounts that do not yet exist
-(`AD-01`), and PAM is worse than that: Appendix D item 1 records that the product's API
-scope is still unconfirmed, and the vendor is unnamed in the document. **Building against
-an unverified contract produces a connector that compiles and does not work.**
+**Why it is barely a decision.** All three depend on service accounts that do not yet
+exist (`AD-01`), and PAM is worse: Appendix D item 1 records that the product's API scope
+is unconfirmed and the vendor is unnamed. Building against an unverified contract
+produces a connector that compiles and does not work.
 
-**The recommendation.** Build each against a vendor-neutral normalised record, with the
-vendor's field names in an alias map rather than in the logic. This is the call
-`aws_ingest_aidr.py` and `aws_ingest_credexp.py` already made when their upstream
-contracts could not be verified, and both shipped and tested without one. It keeps
-`AD-01` off the critical path for the II-A gate — a service account arriving late then
-costs an alias map, not a rewrite.
+**The decision.** Each is built against a vendor-neutral normalised record, with the
+vendor's field names in an **alias map** rather than in the logic.
 
-**What holds the line meanwhile.** No connector has been built against an unverified
-vendor contract.
+This is not a new principle. `aws_ingest_aidr.py` and `aws_ingest_credexp.py` both made
+exactly this call when their upstream contracts could not be verified, and both shipped,
+tested, without one. A principle with a precedent gets followed; one without gets
+re-argued.
+
+It keeps `AD-01` off the critical path for the II-A gate — a service account arriving
+late then costs an alias map, not a rewrite.
+
+**What enforces it.** The precedents are pinned: neither ingest hardcodes a vendor
+endpoint, and neither performs its own egress. A future connector that does either has
+left the pattern, and the tests say so.
