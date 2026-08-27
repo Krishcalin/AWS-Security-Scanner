@@ -11,11 +11,11 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"/>
   <img src="https://img.shields.io/badge/license-GPL--3.0-orange?style=flat-square" alt="GPL-3.0 License"/>
-  <img src="https://img.shields.io/badge/OverWatch-CNAPP%20v2.38.0-38bdf8?style=flat-square" alt="OverWatch CNAPP v2.38.0"/>
+  <img src="https://img.shields.io/badge/OverWatch-CNAPP%20v2.39.0-38bdf8?style=flat-square" alt="OverWatch CNAPP v2.39.0"/>
   <img src="https://img.shields.io/badge/pillars-CSPM%20%7C%20CIEM%20%7C%20CWPP%20%7C%20DSPM%20%7C%20AI--SPM%20%7C%20CDR-6366f1?style=flat-square" alt="CNAPP pillars"/>
   <img src="https://img.shields.io/badge/compliance-CIS%20%7C%20PCI--DSS%20%7C%20HIPAA%20%7C%20SOC2%20%7C%20NIST-purple?style=flat-square" alt="5 Compliance Frameworks"/>
   <img src="https://img.shields.io/badge/checks-296%20severity--mapped-red?style=flat-square" alt="296 severity-mapped checks"/>
-  <img src="https://img.shields.io/badge/tests-5285%20passing-brightgreen?style=flat-square" alt="5285 Tests"/>
+  <img src="https://img.shields.io/badge/tests-5458%20passing-brightgreen?style=flat-square" alt="5458 Tests"/>
 </p>
 
 ---
@@ -283,8 +283,9 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 - **CI/CD gating** -- `--fail-on CRITICAL|HIGH|MEDIUM|LOW` for pipeline pass/fail control
 - **Scan diff** -- `--baseline prev.json` surfaces only what's *new* or *resolved* since a previous run (superseded by `--state` DB-backed lifecycle when both are given)
 - **Evidence collection** -- CSV/JSON artefact files saved per check
+- **Application scorecards (v2.39.0)** -- FR-2 end to end: an application registry, findings attributed to an accountable owner, and a per-application scorecard that states its own coverage, segregates excepted findings rather than hiding them, refuses a peer rank it cannot normalise, and renders every withheld figure with the reason in place of the number
 - **Governance layer (v2.38.0)** -- ownership attribution, SLA/MTTR, a corrected composite Cloud Risk Score, KRA metrics that report `NOT_ESTABLISHED` rather than a target they did not establish, a CI/CD guardrail gate with a *declared* failure mode, and forecasts that refuse to exist before their evidence does. Built from a review of the Phase II SRS; the six specification defects it fixed are recorded in `CHANGELOG.md` and in four ratifiable documents under `docs/`
-- **5285 backend tests** -- full test suite with mock boto3, no AWS credentials needed (incl. the hosted CNAPP platform and the coverage-close batches — WQL/Controls · policy-as-code · EDR/malware/DSPM ingest · non-AWS OCI registry — alongside exposure, deep-plane, attack-path-scoring, Phase-5 effective-permissions/state/CIEM, Phase-6 side-scan version-comparator/OSV-matching/EBS-block-plane/backend-export, Phase-7 remediation/code-to-cloud false-positive/false-negative catalogs, and the detailed finding write-ups / `finding_catalog` rendering; a regression test backs every defect the adversarial-verification passes found)
+- **5458 backend tests** -- full test suite with mock boto3, no AWS credentials needed (incl. the hosted CNAPP platform and the coverage-close batches — WQL/Controls · policy-as-code · EDR/malware/DSPM ingest · non-AWS OCI registry — alongside exposure, deep-plane, attack-path-scoring, Phase-5 effective-permissions/state/CIEM, Phase-6 side-scan version-comparator/OSV-matching/EBS-block-plane/backend-export, Phase-7 remediation/code-to-cloud false-positive/false-negative catalogs, and the detailed finding write-ups / `finding_catalog` rendering; a regression test backs every defect the adversarial-verification passes found)
 
 ### Prerequisites (Live Scanner)
 
@@ -922,7 +923,7 @@ cd frontend && npm install && npm run dev     # http://localhost:5173  (sample d
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC Security Scanner (CloudFormation + Terraform, no credentials)
-├── aws_live_scanner.py      # Live Audit Scanner v2.38.0 (44 sections, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, least-priv, AI-SPM, CDR, forensics, copilot, vuln-ingest, supply-chain, registry)
+├── aws_live_scanner.py      # Live Audit Scanner v2.39.0 (44 sections, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, least-priv, AI-SPM, CDR, forensics, copilot, vuln-ingest, supply-chain, registry)
 ├── aws_remediate.py         # Remediation engine — prioritized plan + remediation-as-code + exports, pure (read-only)
 ├── aws_codetocloud.py       # Code-to-cloud — IaC index + tiered T1–T5 matcher (TF/CFN → finding source), pure
 ├── aws_graph_neptune_loader.py # Neptune live loader — bulk-load/openCypher runners (mock-tested), pure builders

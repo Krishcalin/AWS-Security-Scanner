@@ -98,7 +98,7 @@ def _gaad_iam(users=None, roles=None, groups=None, policies=None):
 class TestDataStructures(unittest.TestCase):
 
     def test_version(self):
-        self.assertEqual(VERSION, "2.38.0")
+        self.assertEqual(VERSION, "2.39.0")
 
     def test_sections_count(self):
         # 45: +AI_THREAT (Phase 1 slice 1.3 — LLMjacking + AI control tampering).

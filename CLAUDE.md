@@ -12,7 +12,7 @@ remediation, and code-to-cloud mapping. It ships as the live scanner + its
 gold `#f5b53d`, critical red `#ff3b5c`. Python module names stay `aws_*`/`cnapp_*` —
 no code rename.) The repo also includes a separate pre-deploy IaC static scanner.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **OverWatch — Live CNAPP** (`aws_live_scanner.py` v2.38.0) -- live AWS account audit via boto3 (**296 severity-mapped checks across 44 sections**, **222 actionable checks each with a full risk/impact/step-by-step remediation write-up**, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure + L7 reachability engine**, **deep-plane ingestion + flagship attack paths**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing + least-privilege policy generation**, **agentless side-scan CWPP** (Linux OS-pkg + language-dep + container-image + Lambda + managed-engine-EOL + Windows-via-SSM), **agentless KSPM/KIEM** (CIS-EKS + K8s RBAC + IRSA cross-plane) + **Fargate task fusion** + **VPC Flow-Log micro-segmentation**, **tag-based DSPM** (12 datastore kinds) + **AWS-resident secrets posture**, **AI-SPM** (AI execution-role blast radius fused into the graph), **CDR-lite streaming detection ingest → reachability-ranked incidents** + **cloud-forensics timeline**, a **grounded-RAG copilot** (answers only from the scan's own corpus), **external-vuln ingest** (SARIF/CycloneDX/SPDX → reachability re-rank), **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**, **hosted multi-account onboarding + live Postgres backend**, **multi-tenancy / workspaces + workspace-scoped RBAC + usage metering (MSSP)**, **air-gapped / zero-telemetry packaging + a Terraform onboarding module + an AWS Marketplace listing**, **an interactive product tour + shareable URL deep links** in the web console, **supply-chain ingest** — SBOM snapshot/diff + license policy + standalone OpenVEX/CSAF-VEX + a shell-only CI/CD image-scan GitHub Action + a below-admin `ingest` RBAC tier), **agentless ECR registry enumeration + opt-in layer-pull** (Tier-A native scan findings across all tagged images + Tier-B own-SBOM CVEs behind a two-key `CnappImageLayerPull` grant, converging on one ECRImage node, persisting as diffable snapshots; the hardened `aws_layer_fetch` egress seam), **non-AWS OCI registry connectors** (GHCR / Docker Hub / Harbor / ACR — one Docker Registry v2 Bearer-dance adapter reusing the SAME allowlisted egress file under a per-call host allowlist + SSRF-guarded blob redirect; secret-ref-only creds; display-only results; `aws_registry_oci.py` + `aws_registry_connectors.py`), plus **hub hardening** — a pooled psycopg3 Postgres backend (real concurrency) + **workspace-scoped connectors** (MSSP tenant isolation: a `connector_workspace` binding, a `connector_gate`, and delivery-path scoping). The full 8-phase vuln/misconfig detection roadmap (`docs/OVERWATCH_VULN_ROADMAP.md`) is COMPLETE; per-release history is in `CHANGELOG.md`. (Note: `aws_live_scanner.VERSION` tracks the whole platform, incl. hosted-backend + packaging releases; the scanner engine itself is unchanged by the multi-tenancy / packaging slices. **Zero-telemetry** — every egress is AWS or an operator-opt-in seam, enforced by `tests/test_zero_telemetry.py`; see `NETWORK.md` + `docs/AIRGAP_RUNBOOK.md`. Offline packaging = pinned `requirements*.txt` + a `--no-index` `Dockerfile` + `scripts/build_offline_bundle.sh`; the fail-closed ASGI launcher is `cnapp_server.py`. Onboarding via CFN **or** the parity-tested `deploy/terraform/scanner-role/`; distributed as a self-hosted Marketplace container (`deploy/marketplace/`) priced on accounts-under-management.)
+- **OverWatch — Live CNAPP** (`aws_live_scanner.py` v2.39.0) -- live AWS account audit via boto3 (**296 severity-mapped checks across 44 sections**, **222 actionable checks each with a full risk/impact/step-by-step remediation write-up**, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure + L7 reachability engine**, **deep-plane ingestion + flagship attack paths**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing + least-privilege policy generation**, **agentless side-scan CWPP** (Linux OS-pkg + language-dep + container-image + Lambda + managed-engine-EOL + Windows-via-SSM), **agentless KSPM/KIEM** (CIS-EKS + K8s RBAC + IRSA cross-plane) + **Fargate task fusion** + **VPC Flow-Log micro-segmentation**, **tag-based DSPM** (12 datastore kinds) + **AWS-resident secrets posture**, **AI-SPM** (AI execution-role blast radius fused into the graph), **CDR-lite streaming detection ingest → reachability-ranked incidents** + **cloud-forensics timeline**, a **grounded-RAG copilot** (answers only from the scan's own corpus), **external-vuln ingest** (SARIF/CycloneDX/SPDX → reachability re-rank), **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**, **hosted multi-account onboarding + live Postgres backend**, **multi-tenancy / workspaces + workspace-scoped RBAC + usage metering (MSSP)**, **air-gapped / zero-telemetry packaging + a Terraform onboarding module + an AWS Marketplace listing**, **an interactive product tour + shareable URL deep links** in the web console, **supply-chain ingest** — SBOM snapshot/diff + license policy + standalone OpenVEX/CSAF-VEX + a shell-only CI/CD image-scan GitHub Action + a below-admin `ingest` RBAC tier), **agentless ECR registry enumeration + opt-in layer-pull** (Tier-A native scan findings across all tagged images + Tier-B own-SBOM CVEs behind a two-key `CnappImageLayerPull` grant, converging on one ECRImage node, persisting as diffable snapshots; the hardened `aws_layer_fetch` egress seam), **non-AWS OCI registry connectors** (GHCR / Docker Hub / Harbor / ACR — one Docker Registry v2 Bearer-dance adapter reusing the SAME allowlisted egress file under a per-call host allowlist + SSRF-guarded blob redirect; secret-ref-only creds; display-only results; `aws_registry_oci.py` + `aws_registry_connectors.py`), plus **hub hardening** — a pooled psycopg3 Postgres backend (real concurrency) + **workspace-scoped connectors** (MSSP tenant isolation: a `connector_workspace` binding, a `connector_gate`, and delivery-path scoping). The full 8-phase vuln/misconfig detection roadmap (`docs/OVERWATCH_VULN_ROADMAP.md`) is COMPLETE; per-release history is in `CHANGELOG.md`. (Note: `aws_live_scanner.VERSION` tracks the whole platform, incl. hosted-backend + packaging releases; the scanner engine itself is unchanged by the multi-tenancy / packaging slices. **Zero-telemetry** — every egress is AWS or an operator-opt-in seam, enforced by `tests/test_zero_telemetry.py`; see `NETWORK.md` + `docs/AIRGAP_RUNBOOK.md`. Offline packaging = pinned `requirements*.txt` + a `--no-index` `Dockerfile` + `scripts/build_offline_bundle.sh`; the fail-closed ASGI launcher is `cnapp_server.py`. Onboarding via CFN **or** the parity-tested `deploy/terraform/scanner-role/`; distributed as a self-hosted Marketplace container (`deploy/marketplace/`) priced on accounts-under-management.)
 - **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
 - **Exposure Oracle** (`aws_exposure.py`) -- pure, dependency-free internet-reachability core (SG ∩ stateless NACL ∩ IGW route ∩ public-IP)
 - **Deep-Plane Core** (`aws_deepplane.py`) -- pure Inspector/Macie/GuardDuty/Access-Analyzer parsers + the CAN_READ_DATA object-probe matcher
@@ -85,16 +85,42 @@ D11–D13: auto-fix ending the read-only guarantee, widening the zero-telemetry
 allowlist for SIEM forwarding, and building the inbound connectors vendor-neutral.
 
 
+### Slice 2 (v2.39.0) — FR-2 end to end
+
+`registry → attribution → SLA → KRA → risk model → scorecard → API → console`.
+
+| Piece | Module | What it refuses to do |
+|---|---|---|
+| Registry | `cnapp_application.py` | store a selector that could never match, without saying so |
+| Attribution | `aws_ownership.py` | guess an owner when two applications contest a resource |
+| Clocks | `aws_sla.py` | report a closure rate without the approvals that produced it |
+| Metrics | `aws_kra.py` | assert a target the data cannot establish |
+| Factors | `aws_factors.py` | score an unmeasured factor as zero |
+| Scorecard | `aws_scorecard.py` | rank without a denominator, or grade without the model |
+| Console | `routes/Scorecards.tsx` | render a withheld figure as an em-dash |
+
+That last one matters more than it looks: a dash reads as "zero" or "nothing to
+see". Every withheld figure shows its **reason** in place of the number.
+
+**Still un-wired, deliberately:** `aws_trend` (needs trend materialisation),
+`aws_guardrail` (needs a policy-evaluation engine and a pipeline entry point),
+`aws_ingest_credexp` (needs an `iam:ListAccessKeys` inventory before its highest-
+value join can run). Each withholds rather than assumes in the meantime.
+
+
 ## Repository Structure
 
 ```
 AWS-Security-Scanner/
 ├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.38.0 (boto3, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem+least-priv, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, AI-SPM, CDR, forensics, copilot, vuln-ingest, supply-chain, ecr-registry)
+├── aws_live_scanner.py      # Live audit scanner v2.39.0 (boto3, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem+least-priv, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, AI-SPM, CDR, forensics, copilot, vuln-ingest, supply-chain, ecr-registry)
 ├── aws_registry_sbom.py     # Registry side-scan — select/pull/scan images → own SBOM + CVEs; scan_pulled_layers shared by ECR + non-AWS OCI (Slice-5 Tier B), pure
 ├── aws_layer_fetch.py       # The hardened registry egress seam — ECR layer-blob GET (HTTPS + *.amazonaws.com) + non-AWS OCI registry_request/registry_blob_get (per-call host allowlist, SSRF-guarded redirect); the SOLE registry egress file, allowlisted
 ├── aws_registry_oci.py      # Non-AWS OCI registry pull adapter — Docker Registry v2 Bearer dance + manifest + tag enum + layer pull (GHCR/DockerHub/Harbor/ACR), fail-closed on partial rootfs, pure (injected http seams)
 ├── aws_registry_connectors.py # Registry-connector config (CNAPP_REGISTRIES) — secret-ref → creds, host-qualify + host-consistency guard, enumerate→pull→side-scan orchestrator, secret mask, pure
+├── aws_factors.py           # Live inputs for the composite score + the ExposureGate producer; every saturation point published, unmeasured never zero, pure
+├── aws_scorecard.py         # FR-2 per-application scorecards: coverage stated, rank refused without a denominator, exceptions segregated, pure
+├── cnapp_application.py     # The application registry (schema v17) -- workspace-scoped CRUD; validation on WRITE via the aws_ownership dataclass; warnings ride with the object
 ├── aws_ownership.py         # Application entity + 3-tier attribution (pin > tag > account); AMBIGUOUS never guessed, coverage travels with the buckets, pure
 ├── aws_sla.py               # SLA clocks / MTTR / pre-breach warning / closure rate; no now(), reports its own exception-assisted share, pure
 ├── aws_riskscore.py         # Composite Cloud Risk Score (Appendix B corrected) + posture-score coverage qualifier (grade withheld <90%), pure
@@ -201,7 +227,7 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python aws_offline_scanner.py <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.38.0)
+## Live Audit Scanner (`aws_live_scanner.py` v2.39.0)
 
 - **Type**: Live AWS account audit via boto3 (a full CNAPP)
 - **Lines**: ~12,300
@@ -929,7 +955,7 @@ python aws_live_scanner.py [--region REGION] [--json FILE] [--html FILE] \
 ## Tests
 
 ```bash
-python -m pytest tests/ -v         # 5285 tests, no AWS credentials needed
+python -m pytest tests/ -v         # 5458 tests, no AWS credentials needed
 ```
 
 Tests use `unittest.mock` to simulate boto3 responses. Coverage includes:

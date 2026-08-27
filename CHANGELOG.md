@@ -6,6 +6,164 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.39.0] — 2026-08-27
+
+Slice 2 of the Phase II build, end to end: **registry → attribution → SLA → KRA →
+risk model → scorecard → API → console.** FR-2 goes from a specification section to
+something an application owner can be sent.
+
+The release also closes the gap 2.39.0 exists to close. Of the seven modules
+2.38.0 added, **four had zero non-test consumers** — six specification defects
+fixed correctly, in libraries the product never reached. Five modules are wired
+here; three remain deliberately parked and are named below rather than left to be
+discovered.
+
+### Added
+
+- **Application registry** (`cnapp_application.py`, schema **v17**,
+  `GET/POST/PUT/DELETE /applications`, `/applications` console route). AD-02 is
+  filed in the SRS as an *assumption*; it is the load-bearing floor under FR-2,
+  FR-6, `OW2-CC-012` filtering and every by-owner KRA, and nothing satisfied it.
+  - **Validation runs on write, and `aws_ownership.Application` IS the rule set** —
+    `validate()` constructs one, so the registry and the attributor cannot disagree
+    about what is valid. A rule added to either is enforced by both.
+  - **Fatal rejects, warning does not.** A mis-scoped application does not fail
+    loudly: it saves, renders a scorecard, reports zero findings, and is
+    indistinguishable from one that is genuinely clean. So `warnings_for()`
+    surfaces no-owner / no-selectors / unclassified at save time and the API
+    returns them **with the object** — but it warns rather than refuses, because
+    somebody mid-onboarding may legitimately not know the owner yet, and refusing
+    would push the registry into a spreadsheet where nothing validates it at all.
+  - Input shapes that fail silently are rejected loudly instead: a comma-joined
+    string where a list belongs, an 11-digit account id, a bare `"App=pay"`
+    selector.
+
+- **Scorecard assembly** (`aws_scorecard.py`, `GET /scorecards`, `/scorecards`
+  console route) — `OW2-SC-002` through `OW2-SC-008`. The artefact that needs
+  `aws_ownership`, `aws_sla`, `aws_kra` and `aws_riskscore` at once, which is why
+  it is where four of them get wired.
+  - A scorecard is **the most dangerous artefact this product produces**: every
+    other output is read by someone who can go and check, and a scorecard is read
+    by an owner who cannot. It is also a *filter*, and a filter deletes what it
+    does not match while looking complete.
+  - **The pack states its own coverage**, and unowned findings get their own row —
+    no owner, no grade, sorted last, so it can never head a graded table even when
+    it holds the most criticals.
+  - **The closure rate never travels alone.** `sla_line()` renders the rate, the
+    exception-assisted count and the deferred breaches together or not at all.
+  - **Rank is refused without a denominator** (`OW2-SC-004`). Ranking on raw counts
+    would be a league table ordered by size wearing the costume of a security
+    measurement. A partially rankable portfolio reports `peers` as the number
+    *actually* compared, so "3rd of 4" never silently means "3rd of the 4 we could
+    measure, out of 11".
+  - **Excepted findings are segregated, never merged** (`OW2-SC-008`). An exception
+    is a decision to accept a risk, not evidence the risk went away; merging them
+    would let an owner improve a grade by asking rather than by fixing.
+
+- **Live risk factors** (`aws_factors.py`) — the five `FactorValue` inputs
+  `aws_riskscore` has consumed since 2.38.0 and nothing produced, plus the
+  **`ExposureGate` verdict that had no producer**. D2's rule — no quantity of
+  tooling buys down a live exposure — had been enforced-by-*withholding* rather
+  than enforced-by-*deciding* since it shipped.
+  - The gate needs no new analysis: `AttackPath` already carries `conditioned`,
+    `kev`, `direct_public_crown` and `terminal_kind`, so the four-gate exposure
+    oracle stays the authority on reachability rather than getting a second,
+    worse opinion.
+  - **Every saturation point is published** via `saturation_points()`, and labelled
+    a judgement rather than a derived truth. A factor normalised to [0, 1] has to
+    decide what counts as 1.0, and that decision moves every score built on it
+    while looking like arithmetic.
+  - Four refusals, each with a plausible wrong answer that flatters: no
+    vulnerability data is **not** exploitability 0.0 (that would reward never
+    running a scanner); no graph is **not** exposure 0.0; `unclassified`
+    criticality is **not** the bottom of the scale (that would reward declining to
+    classify anything); one posture observation is **not** a flat trend.
+
+- **`aws_state.findings_for_period()`** — open findings plus those resolved inside
+  the period. `open_findings()` alone reports **0% closure for a team that closed
+  everything**: wrong in the pessimistic direction rather than the flattering one,
+  which makes it no more acceptable — a scorecard that understates an owner's work
+  gets ignored, and an ignored scorecard measures nothing.
+
+### Changed
+
+- **No silent caps, anywhere.** Prompted by reading Qualys TotalCloud, whose docs
+  publish their 10,000-record limit. Checking whether we did the same found our own
+  principle written three lines below a cap that broke it:
+
+  ```python
+  "attack_paths": p.get("attack_paths", [])[:10],
+  # What this scan did NOT establish, travelling with the number it did.
+  # A grade rendered without it is a grade whose denominator is unknown.
+  "coverage": p.get("coverage"),
+  ```
+
+  Ten attack paths could be ten of ten or ten of four hundred, and that payload
+  carried no total at all.
+  - `cnapp_service.capped()` emits `<field>`, `<field>_total` and
+    `<field>_truncated` across eleven sites. `_total` is emitted even where a
+    sibling count already carries it: a list that describes itself cannot be
+    rendered without its denominator, whereas one relying on a neighbouring field
+    can be, and eventually is.
+  - **The console had the same defect and the AST ratchet could not see it** —
+    including two caps inside the *exported HTML report*, which leaves the building
+    and is read as complete by someone who cannot go and check. That table now
+    captions "showing 25 of 214".
+  - Both layers carry their own ratchet, so a new undeclared cap fails the build
+    until its author either declares it or writes down why nothing is dropped.
+
+- **The attack-path marker on a findings row now opens the path.** It already
+  existed and was **inert** — inside the row's `onClick`, so clicking it opened the
+  finding detail and never the graph. `pathLinks()` keeps a *count* alongside the
+  destination, because a marker linking to one path while the finding drives five
+  would imply the other four do not exist.
+
+- `aws_policy.policy_finding` and its TypeScript twin both declare the `affected`
+  cap. The cross-language parity test caught the one-sided change, which is what it
+  is for.
+
+### Fixed
+
+- **D11–D13 answered and, for the first time, enforced.** Two of the three did not
+  need the decision they appeared to need.
+  - **D11 — auto-fix: governance built, execution withheld.** Answering it forced a
+    correction to how this product describes itself. The blanket "read-only" claim
+    is **false**: `aws_sidescan_ebs` calls `create_snapshot` / `detach_volume` /
+    `delete_snapshot`. The rule actually kept is narrower and sharper —
+    **OverWatch mutates only resources it created, never a customer's** — held true
+    by `is_owned()` and the `cnapp:sidescan=<scan_id>` tag. Auto-fix would be the
+    first time it touches a *customer* resource, which is a cleaner line than
+    "read-only" ever was. A frozen `MUTATION_SURFACE` of three modules, each with a
+    written reason, fails the build on a fourth.
+  - **D12 — no widening needed.** `cnapp_connectors.py` is already allowlisted and
+    already ships a signed SSRF-guarded webhook transport, a Splunk HEC renderer
+    and a template override, so CEF/syslog is a renderer inside an allowlisted
+    file. The guard that should have existed did not: `EGRESS_ALLOWLIST` was a plain
+    set nothing pinned, so a fourth entry could be added in the same commit as the
+    code excusing it. Now pinned.
+  - **D13 — vendor-neutral, yes.** Not a new principle: `aws_ingest_aidr` and
+    `aws_ingest_credexp` both made this call when their upstream contracts could not
+    be verified. A principle with a precedent gets followed; one without gets
+    re-argued.
+
+### Notes
+
+- **A false zero this release nearly shipped.** `aws_factors` reads `paths=[]` as
+  "the graph was built and found nothing" and `paths=None` as "no graph exists".
+  The first service wiring passed `[]` for every account including unscanned ones,
+  so exposure scored a measured 0.0, weight coverage crossed the 50% floor, and an
+  application with one HIGH finding and **no scan result at all graded B**. The
+  grade was arithmetically correct and rested on a fact nobody established. An
+  existing test caught it; a regression now pins it.
+- **Still un-wired, deliberately:** `aws_trend`, `aws_guardrail`,
+  `aws_ingest_credexp`. Each waits on something that does not exist yet — trend
+  materialisation, a policy-evaluation engine, and an IAM access-key inventory
+  respectively — and each *withholds* rather than assumes in the meantime.
+- Console sample mode returns an **empty** registry with a note rather than
+  fabricated applications. A demo that invents owners and grades teaches the reader
+  that the numbers are decor.
+- Suite: **5,458 passing**, up from 5,285.
+
 ## [2.38.0] — 2026-08-26
 
 The **OverWatch Phase II SRS** (`OW2-SRS-001 v0.1`) arrived for review. Reading it
