@@ -16,15 +16,15 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_graph
-import aws_live_scanner
-from aws_live_scanner import AWSLiveScanner, compute_risk_score
+from engine import aws_graph
+from engine import aws_live_scanner
+from engine.aws_live_scanner import AWSLiveScanner, compute_risk_score
 
 ROLE = "arn:aws:iam::123456789012:role/AIExecutionRole"
 
 
 def _scanner(sections=None) -> AWSLiveScanner:
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False,
                            sections=sections or ["DATA"])
         s.account = "123456789012"

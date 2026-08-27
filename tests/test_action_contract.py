@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_ingest
+from engine import aws_ingest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ACTION = os.path.join(ROOT, ".github", "actions", "overwatch-image-scan")

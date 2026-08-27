@@ -23,7 +23,7 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aws_live_scanner import (  # noqa: E402
+from engine.aws_live_scanner import (  # noqa: E402
     AWSLiveScanner, HAS_BOTO3, evaluate_privesc_scoped, VERSION,
 )
 

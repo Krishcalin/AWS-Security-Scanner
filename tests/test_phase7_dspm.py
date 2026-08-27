@@ -8,8 +8,8 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from test_live_scanner import make_scanner
-from aws_graph import SecurityGraph
-import aws_deepplane as D
+from engine.aws_graph import SecurityGraph
+from engine import aws_deepplane as D
 
 ACCT = "123456789012"
 
@@ -448,7 +448,7 @@ def test_dspm03_own_account_policy_no_finding():
 
 
 def test_opensearchdomain_in_crown_kinds():
-    import aws_correlate
+    from engine import aws_correlate
     assert "OpenSearchDomain" in aws_correlate.CROWN_DATASTORE_KINDS
 
 

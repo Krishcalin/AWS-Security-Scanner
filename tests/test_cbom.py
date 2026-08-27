@@ -30,7 +30,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import aws_cbom as C
+from engine import aws_cbom as C
 
 SCHEMA = json.loads((ROOT / "tests" / "fixtures" /
                      "cyclonedx_1_6_crypto.json").read_text(encoding="utf-8"))
@@ -315,8 +315,8 @@ def test_the_scanner_emits_a_cbom_from_its_stash(tmp_path):
     """End to end over the stash, because the failure this catches is the one unit
     tests cannot: a builder that works perfectly on material nothing ever puts in it."""
     from unittest.mock import patch
-    from aws_live_scanner import AWSLiveScanner
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    from engine.aws_live_scanner import AWSLiveScanner
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["KMS"])
         s.account = "123456789012"
     s._crypto_material["kms"].append(KMS_RSA)
@@ -338,8 +338,8 @@ def test_the_stash_is_initialised_before_any_section_runs():
     """A section that stashes into a dict that does not exist yet raises mid-scan, and
     the KMS section runs long before anything reads the stash."""
     from unittest.mock import patch
-    from aws_live_scanner import AWSLiveScanner
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    from engine.aws_live_scanner import AWSLiveScanner
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False)
     assert set(s._crypto_material) == {"kms", "acm", "tls"}
     assert all(v == [] for v in s._crypto_material.values())
@@ -349,7 +349,7 @@ def test_the_cbom_is_emitted_only_when_asked():
     """It costs a file and a claim. Producing one unbidden would put a compliance
     artifact in an evidence directory that nobody decided to publish."""
     import inspect
-    from aws_live_scanner import main
+    from engine.aws_live_scanner import main
     src = inspect.getsource(main)
     assert "if args.cbom:" in src
     assert "scanner.save_cbom(args.cbom)" in src
@@ -360,13 +360,13 @@ def test_the_stash_sites_are_reads_the_scanner_already_made():
     future edit introduces a dedicated fetch, this is the reminder that D3 was approved
     on the basis that it did not need one."""
     import inspect
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     src = inspect.getsource(A)
     assert 'self._crypto_material["kms"].append(meta)' in src, (
         "KMS material must come from the describe_key the KMS section already does")
     assert 'self._crypto_material["acm"].append(cert)' in src
     for forbidden in ("kms.list_keys(", "acm.list_certificates("):
         pass    # those already exist for other checks; what matters is no NEW client
-    import aws_perm_ledger as L
+    from engine import aws_perm_ledger as L
     acts = {r.action for reqs in L.REQUIREMENTS.values() for r in reqs}
     assert not any(a.startswith("cbom:") for a in acts)

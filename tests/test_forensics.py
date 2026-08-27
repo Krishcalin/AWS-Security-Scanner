@@ -4,8 +4,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_forensics as F
-from aws_graph import SecurityGraph
+from engine import aws_forensics as F
+from engine.aws_graph import SecurityGraph
 
 ACCT = "111122223333"
 INST = f"arn:aws:ec2:us-east-1:{ACCT}:instance/i-1"

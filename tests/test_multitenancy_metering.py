@@ -7,11 +7,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_state
-from cnapp_metering import MeteringStore
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
-from cnapp_workspace import WorkspaceStore
+from store import aws_state
+from hub.cnapp_metering import MeteringStore
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
+from hub.cnapp_workspace import WorkspaceStore
 
 
 def _svc(clock=lambda: 1_700_000_000):          # 2023-11
@@ -88,10 +88,10 @@ def test_reconcile_rederives_active_idempotently():
 
 # ── route surface (fastapi) ───────────────────────────────────────────────────
 def test_usage_routes():
-    import cnapp_api
+    from hub import cnapp_api
     if not cnapp_api._HAVE_FASTAPI:
         pytest.skip("fastapi not installed")
-    from cnapp_api import Principal
+    from hub.cnapp_api import Principal
     TestClient = pytest.importorskip("fastapi.testclient").TestClient
     svc, ws, m = _svc()
     svc.init_onboarding("111122223333", workspace_id="ws-a")

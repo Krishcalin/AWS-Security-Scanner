@@ -7,9 +7,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from test_live_scanner import make_scanner
-from aws_graph import SecurityGraph
-import aws_correlate
-import aws_live_scanner as A
+from engine.aws_graph import SecurityGraph
+from engine import aws_correlate
+from engine import aws_live_scanner as A
 
 ACCT = "123456789012"
 AI_ROLE = f"arn:aws:iam::{ACCT}:role/ai-exec"
@@ -144,7 +144,7 @@ def test_correlate_has_no_ai_special_casing():
 
 # ── B1 metadata lockstep: every AISPM FAIL-able id in all 3 maps + finding_detail ──
 def test_aispm_maps_lockstep():
-    import aws_finding_detail as D
+    from engine import aws_finding_detail as D
     allowed = {"CIS", "PCI-DSS", "HIPAA", "SOC2", "NIST"}
     for cid in ("AISPM-01", "AISPM-02", "AISPM-03", "AIPATH-01"):
         assert cid in A.CHECK_SEVERITY

@@ -33,8 +33,8 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import aws_checkdef as C
-import aws_perm_ledger as L
+from engine import aws_checkdef as C
+from engine import aws_perm_ledger as L
 import perm_ledger_baseline as B
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

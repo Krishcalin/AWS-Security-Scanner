@@ -31,7 +31,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_riskscore as R  # noqa: E402
+from engine import aws_riskscore as R  # noqa: E402
 
 
 def fv(key, value, basis="test"):

@@ -11,11 +11,11 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_correlate as C
-import aws_deepplane
-import aws_sidescan as ss
-from aws_graph import SecurityGraph
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_correlate as C
+from engine import aws_deepplane
+from engine import aws_sidescan as ss
+from engine.aws_graph import SecurityGraph
+from engine.aws_live_scanner import AWSLiveScanner
 
 ACCT = "111122223333"
 ADMIN = f"capability:admin:{ACCT}"
@@ -194,7 +194,7 @@ class TestBackendMetaGating(unittest.TestCase):
     leak onto a plain --state / --list-waivers run (no --backend flag)."""
 
     def test_backend_meta_none_without_backend_flag(self):
-        from aws_live_scanner import _backend_meta_for
+        from engine.aws_live_scanner import _backend_meta_for
 
         class Args:
             backend = None
@@ -203,7 +203,7 @@ class TestBackendMetaGating(unittest.TestCase):
         assert _backend_meta_for(Args(), "sqlite", False, "err") is None
 
     def test_backend_meta_present_with_backend_flag(self):
-        from aws_live_scanner import _backend_meta_for
+        from engine.aws_live_scanner import _backend_meta_for
 
         class Args:
             backend = "postgresql://h/db"
@@ -230,7 +230,7 @@ class TestBackendMetaGating(unittest.TestCase):
 class TestNeptuneExportWiring(unittest.TestCase):
 
     def test_export_graph_neptune_writes_files(self):
-        from aws_live_scanner import _export_graph_neptune
+        from engine.aws_live_scanner import _export_graph_neptune
 
         class Args:
             graph_neptune_csv = None

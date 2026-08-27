@@ -29,8 +29,8 @@ from __future__ import annotations
 
 import os
 
-import cnapp_server
-from cnapp_api import Principal
+from hub import cnapp_server
+from hub.cnapp_api import Principal
 
 #: The one principal every local request authenticates as. `is_superadmin` makes
 #: `Principal.role_in()` return "admin" for any workspace, so the console behaves
@@ -54,6 +54,6 @@ def create_app():
             "deploy/local/local_server.py is a DEVELOPMENT launcher with "
             "unauthenticated superadmin access. It refuses to start unless "
             "OVERWATCH_LOCAL_DEV=1 is set. Production uses "
-            "cnapp_server:create_app_from_env with a real IdP-backed "
+            "hub.cnapp_server:create_app_from_env with a real IdP-backed "
             "current_principal.")
     return cnapp_server.create_app_from_env(current_principal=_local_principal)

@@ -13,10 +13,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_state
-import cnapp_connectors as cc
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
+from store import aws_state
+from hub import cnapp_connectors as cc
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
 
 _MANIFEST = "application/vnd.oci.image.manifest.v1+json"
 _GZIP_LAYER = "application/vnd.docker.image.rootfs.diff.tar.gzip"
@@ -123,7 +123,7 @@ def test_images_empty_before_scan():
 
 # ── API routes ────────────────────────────────────────────────────────────────
 try:
-    import cnapp_api
+    from hub import cnapp_api
     _HAVE_FASTAPI = cnapp_api._HAVE_FASTAPI
 except Exception:
     _HAVE_FASTAPI = False

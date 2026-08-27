@@ -16,10 +16,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_live_scanner as A
-import aws_nitro as N
-import aws_perm_ledger as L
-import aws_ztmm as Z
+from engine import aws_live_scanner as A
+from engine import aws_nitro as N
+from engine import aws_perm_ledger as L
+from engine import aws_ztmm as Z
 
 
 def _ec2(instances, types, types_denied=False):
@@ -34,7 +34,7 @@ def _ec2(instances, types, types_denied=False):
 
 
 def _scanner(client):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = A.AWSLiveScanner(region="us-east-1", verbose=False, sections=["EC2"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: client

@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import aws_live_scanner as A
-import aws_graph
+from engine import aws_live_scanner as A
+from engine import aws_graph
 from test_live_scanner import make_scanner
 
 OWN = "123456789012"
@@ -149,7 +149,7 @@ def test_access_entries_denied_info():
 # ═══════════════════════════════════════════════════════════════════════════════
 # B3 — clobber-safe K8s graph lane (KubeAdminCapability, replay, idempotency)
 # ═══════════════════════════════════════════════════════════════════════════════
-import aws_correlate as C                                                     # noqa: E402
+from engine import aws_correlate as C                                                     # noqa: E402
 
 PRINCIPAL = f"arn:aws:iam::{OWN}:role/eks-admins"
 K8S_ADMIN = f"capability:k8s-admin:{CLUSTER_ARN}"
@@ -312,7 +312,7 @@ def test_pod_and_irsa_graph_stashed():
 # ═══════════════════════════════════════════════════════════════════════════════
 # B5 — IRSA cross-plane: KIEM-04 finding + enumerate_paths discovers the ranked path
 # ═══════════════════════════════════════════════════════════════════════════════
-import aws_deepplane as D                                                     # noqa: E402
+from engine import aws_deepplane as D                                                     # noqa: E402
 
 POD = f"k8s:pod:{CLUSTER_ARN}:prod:api-0"
 IMG = f"{OWN}.dkr.ecr.us-east-1.amazonaws.com/api@sha256:beef"
@@ -462,7 +462,7 @@ def test_pod_behind_alb_ip_target_gets_internet_path():
 # ═══════════════════════════════════════════════════════════════════════════════
 # Adversarial-verify regressions (10 confirmed findings)
 # ═══════════════════════════════════════════════════════════════════════════════
-import aws_kube as K                                                          # noqa: E402
+from engine import aws_kube as K                                                          # noqa: E402
 
 
 # #1 [HIGH] — `User system:anonymous` cluster-admin must be caught (KSPM-01), not slip past

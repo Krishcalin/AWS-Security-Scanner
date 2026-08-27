@@ -9,9 +9,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aws_graph import SecurityGraph
-from aws_sidescan import EnrichedMatch
-from aws_ingest import compute_reachability_verdicts, diff_reachability
+from engine.aws_graph import SecurityGraph
+from engine.aws_sidescan import EnrichedMatch
+from engine.aws_ingest import compute_reachability_verdicts, diff_reachability
 
 ACCT = "111122223333"
 INST = f"arn:aws:ec2:us-east-1:{ACCT}:instance/i-1"
@@ -59,7 +59,7 @@ def _owned(node=INST, kind="EC2Instance", match=None, suppressed=False):
 def test_ingested_kev_creates_new_critical_data_path():
     g0 = _base_graph(with_data=True, with_admin=False)
     # sanity: the stored graph has NO end-to-end path (data terminal gated, no vuln)
-    from aws_ingest import SecurityGraph as _SG  # same class
+    from engine.aws_ingest import SecurityGraph as _SG  # same class
     verdicts, _ = compute_reachability_verdicts(g0.to_dict(), [_owned()])
     v = verdicts[(INST, "CVE-2021-44228")]
     assert v["on_attack_path"] is True                     # the re-run found it

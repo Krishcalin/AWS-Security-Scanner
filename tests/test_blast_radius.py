@@ -9,11 +9,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_state
-import cnapp_connectors as cc
-from aws_graph import SecurityGraph
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
+from store import aws_state
+from hub import cnapp_connectors as cc
+from engine.aws_graph import SecurityGraph
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
 
 ACCT = "111122223333"
 EC2 = f"arn:aws:ec2:us-east-1:{ACCT}:instance/i-1"
@@ -109,7 +109,7 @@ def test_max_hops_clamped():
 # ── API route ─────────────────────────────────────────────────────────────────
 _HAVE_FASTAPI = None
 try:
-    import cnapp_api
+    from hub import cnapp_api
     _HAVE_FASTAPI = cnapp_api._HAVE_FASTAPI
 except Exception:
     _HAVE_FASTAPI = False

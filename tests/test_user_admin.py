@@ -17,14 +17,14 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_state
-import cnapp_api
-import cnapp_authn
-import cnapp_authn_api
-import cnapp_backend
-import cnapp_registry
-import cnapp_service
-import cnapp_workspace
+from store import aws_state
+from hub import cnapp_api
+from hub import cnapp_authn
+from hub import cnapp_authn_api
+from store import cnapp_backend
+from hub import cnapp_registry
+from hub import cnapp_service
+from hub import cnapp_workspace
 
 ROOT_USER, ROOT_PASSWORD = "root@example", "CorrectHorseBattery9"
 
@@ -253,7 +253,7 @@ def test_the_listing_shows_who_has_no_role_here(hub):
 def test_a_generated_password_satisfies_the_policy():
     """It is fed straight into create_user, which enforces the policy — a
     generator that produced a rejected password would fail at creation."""
-    import aws_authn
+    from engine import aws_authn
 
     for _ in range(20):
         aws_authn.check_password_policy(cnapp_authn.issue_initial_password())

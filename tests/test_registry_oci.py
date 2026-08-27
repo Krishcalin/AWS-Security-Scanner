@@ -15,8 +15,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_registry_oci as OCI
-from aws_sidescan_image import ImageFetchUnavailable
+from engine import aws_registry_oci as OCI
+from engine.aws_sidescan_image import ImageFetchUnavailable
 
 _GZIP_LAYER = "application/vnd.docker.image.rootfs.diff.tar.gzip"
 _OCI_LAYER = "application/vnd.oci.image.layer.v1.tar+gzip"

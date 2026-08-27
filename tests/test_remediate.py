@@ -10,10 +10,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_correlate as C
-import aws_remediate as R
-from aws_deepplane import is_exploitable
-from aws_graph import SecurityGraph
+from engine import aws_correlate as C
+from engine import aws_remediate as R
+from engine.aws_deepplane import is_exploitable
+from engine.aws_graph import SecurityGraph
 
 ACCT = "111122223333"
 ADMIN = f"capability:admin:{ACCT}"

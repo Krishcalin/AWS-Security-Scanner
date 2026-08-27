@@ -21,7 +21,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_aiprotect as P
+from engine import aws_aiprotect as P
 
 ANOMALOUS = "Impact:IAMUser/AnomalousModelInvocation"
 HARVEST = "Impact:IAMUser/CostHarvesting"

@@ -8,16 +8,16 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cnapp_api
-import cnapp_connectors as cc
+from hub import cnapp_api
+from hub import cnapp_connectors as cc
 
 pytestmark = pytest.mark.skipif(not cnapp_api._HAVE_FASTAPI,
                                 reason="fastapi not installed (deploy-time dep)")
 
-import aws_state
-from aws_graph import SecurityGraph
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
+from store import aws_state
+from engine.aws_graph import SecurityGraph
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
 
 ACCT = "111122223333"
 INST = f"arn:aws:ec2:us-east-1:{ACCT}:instance/i-1"

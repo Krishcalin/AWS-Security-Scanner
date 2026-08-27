@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_ed25519 as ed
+from engine import aws_ed25519 as ed
 
 # KAT: the well-known Ed25519 test seed 000102…1f maps to this public key (documented in the
 # NaCl/ref10 test suite and reproducible from RFC 8032). A wrong curve constant fails this.

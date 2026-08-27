@@ -21,7 +21,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_sla as S  # noqa: E402
+from engine import aws_sla as S  # noqa: E402
 
 DAY = S.DAY
 T0 = 1_700_000_000

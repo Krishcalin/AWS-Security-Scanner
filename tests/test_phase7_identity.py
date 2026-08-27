@@ -9,7 +9,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from test_live_scanner import make_scanner
-from aws_graph import SecurityGraph
+from engine.aws_graph import SecurityGraph
 
 ACCT = "123456789012"
 
@@ -132,8 +132,8 @@ def test_dedup_guard_runs_once():
 
 
 def test_fusion_path_is_discoverable_and_critical():
-    import aws_correlate as C
-    from aws_deepplane import is_exploitable
+    from engine import aws_correlate as C
+    from engine.aws_deepplane import is_exploitable
     s, g, admin = _fusion_scanner([_row("frank", f"arn:aws:iam::{ACCT}:user/frank",
                                         rotated_days=200)])
     arn = _admin_user(g, admin, "frank")

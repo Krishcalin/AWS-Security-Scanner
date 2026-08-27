@@ -6,14 +6,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_state
-import cnapp_connectors as cc
-from aws_graph import SecurityGraph
-from aws_sidescan import EnrichedMatch
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
-import aws_ingest as ing
-from aws_ingest import (parse_document, parse_purl, _image_repo_tag,
+from store import aws_state
+from hub import cnapp_connectors as cc
+from engine.aws_graph import SecurityGraph
+from engine.aws_sidescan import EnrichedMatch
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
+from engine import aws_ingest as ing
+from engine.aws_ingest import (parse_document, parse_purl, _image_repo_tag,
                         compute_reachability_verdicts, diff_reachability)
 
 ACCT = "111122223333"

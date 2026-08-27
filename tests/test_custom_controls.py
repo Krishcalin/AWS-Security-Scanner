@@ -35,9 +35,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_controls  # noqa: E402
-import cnapp_backend  # noqa: E402
-import cnapp_customcontrol as cc  # noqa: E402
+from engine import aws_controls  # noqa: E402
+from store import cnapp_backend  # noqa: E402
+from hub import cnapp_customcontrol as cc  # noqa: E402
 
 GOOD_QUERY = {"kind": "S3Bucket",
               "where": {"pred": "prop", "field": "public", "op": "eq", "value": True}}
@@ -94,7 +94,7 @@ def test_an_unknown_severity_is_rejected_rather_than_defaulted():
 
 def test_the_query_is_stored_PARSED_so_it_cannot_read_back_as_something_else():
     c = cc.validate(body())
-    import aws_wql
+    from engine import aws_wql
     assert c["query"] == aws_wql.parse(GOOD_QUERY)
 
 

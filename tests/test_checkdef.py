@@ -20,7 +20,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_checkdef as C
+from engine import aws_checkdef as C
 
 RISK = ("A sufficiently long risk narrative, because the detail page is what a reviewer "
         "reads when deciding whether a finding is real, and one sentence has never been "
@@ -213,7 +213,7 @@ def test_a_requirements_merge_also_refuses_a_collision():
 def test_the_registry_starts_empty_of_the_legacy_literals():
     """This is an ADDITIVE path. Migrating 399 hand-authored entries to prove a point
     would be a large risky diff with no behavioural benefit."""
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     legacy_only = set(A.CHECK_SEVERITY) - set(C.REGISTRY)
     assert len(legacy_only) > 300
 

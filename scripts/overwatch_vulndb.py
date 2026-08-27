@@ -33,7 +33,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import aws_ed25519  # noqa: E402  (vendored, pure-stdlib)
+from engine import aws_ed25519  # noqa: E402  (vendored, pure-stdlib)
 
 FORMAT_VERSION = 1
 

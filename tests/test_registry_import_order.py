@@ -38,7 +38,7 @@ PROBE = """
 import json, sys
 sys.path.insert(0, {root!r})
 import {module} as consumer
-import aws_checkdef as C
+from engine import aws_checkdef as C
 maps = {maps!r}
 missing = {{}}
 for name in maps:

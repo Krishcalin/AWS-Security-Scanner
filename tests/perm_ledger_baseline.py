@@ -564,7 +564,7 @@ def _fixtures():
 
 def compute() -> dict:
     """Evaluate the ledger against each fixture and return the pinned facts."""
-    import aws_perm_ledger as L
+    from engine import aws_perm_ledger as L
 
     out = {}
     for name, role in _fixtures().items():

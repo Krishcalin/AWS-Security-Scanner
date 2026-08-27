@@ -8,9 +8,9 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_finding_detail as D
+from engine import aws_finding_detail as D
 from test_live_scanner import make_scanner
-import aws_live_scanner as A
+from engine import aws_live_scanner as A
 
 
 # ── module coverage + shape ───────────────────────────────────────────────────

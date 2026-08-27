@@ -10,9 +10,9 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import aws_live_scanner as A
-import aws_correlate
-import aws_graph
+from engine import aws_live_scanner as A
+from engine import aws_correlate
+from engine import aws_graph
 from test_live_scanner import MockPaginator, make_scanner
 
 OWN = "123456789012"
@@ -151,8 +151,8 @@ def test_denied_list_tasks_degrades_to_info():
 # B2 — EXPOSURE wiring: ip-target -> FargateTask, ATTACK-01/02, reachable boost
 # ═══════════════════════════════════════════════════════════════════════════════
 from unittest.mock import patch                                             # noqa: E402
-import aws_deepplane as D                                                   # noqa: E402
-import aws_correlate as C                                                   # noqa: E402
+from engine import aws_deepplane as D                                                   # noqa: E402
+from engine import aws_correlate as C                                                   # noqa: E402
 
 ADMIN = f"capability:admin:{OWN}"
 CROWN = "arn:aws:s3:::crown-data"

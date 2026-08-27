@@ -12,10 +12,10 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
-import aws_sidescan as ss
-import aws_sidescan_lambda as lam
-import aws_sidescan_image as img
-import aws_graph
+from engine import aws_sidescan as ss
+from engine import aws_sidescan_lambda as lam
+from engine import aws_sidescan_image as img
+from engine import aws_graph
 
 
 def _zip(files):

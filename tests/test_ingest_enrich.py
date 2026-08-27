@@ -12,11 +12,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_ingest as ing
-from aws_ingest import (IngestedFinding, build_cve_index, enrich_finding,
+from engine import aws_ingest as ing
+from engine.aws_ingest import (IngestedFinding, build_cve_index, enrich_finding,
                         vex_suppressed, resolve_owner, emit_ingested_edges)
-from aws_sidescan import Package, enrich_match
-from aws_graph import SecurityGraph
+from engine.aws_sidescan import Package, enrich_match
+from engine.aws_graph import SecurityGraph
 
 
 # ── bundle fixtures ──────────────────────────────────────────────────────────

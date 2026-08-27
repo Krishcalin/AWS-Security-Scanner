@@ -18,9 +18,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_checkdef as C
-import aws_extsvc2 as E
-import aws_live_scanner as A
+from engine import aws_checkdef as C
+from engine import aws_extsvc2 as E
+from engine import aws_live_scanner as A
 
 SECTIONS = {
     "_check_networkfirewall": ("NFW-01", "NFW-02", "NFW-03"),
@@ -40,7 +40,7 @@ class _Deny:
 
 
 def _scanner(client=None):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = A.AWSLiveScanner(region="us-east-1", verbose=False, sections=["GLUE"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: client if client is not None else MagicMock()
@@ -305,8 +305,8 @@ def test_each_section_is_registered_and_labelled(section):
 def test_every_batch2_check_came_from_one_declaration(cid):
     """The refactor, stated as a test: one CheckDef, five projections. Nothing here
     was hand-written into a map literal."""
-    import aws_finding_detail as D
-    import aws_perm_ledger as L
+    from engine import aws_finding_detail as D
+    from engine import aws_perm_ledger as L
     assert cid in C.REGISTRY
     d = C.REGISTRY[cid]
     assert A.CHECK_SEVERITY[cid] == d.severity

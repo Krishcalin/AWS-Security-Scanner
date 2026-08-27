@@ -26,10 +26,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_epistemics
-import aws_graph
-import aws_live_scanner as A
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_epistemics
+from engine import aws_graph
+from engine import aws_live_scanner as A
+from engine.aws_live_scanner import AWSLiveScanner
 
 ROLE = "arn:aws:iam::123456789012:role/AIExecutionRole"
 NB = "arn:aws:sagemaker:us-east-1:123456789012:notebook-instance/nb"
@@ -52,7 +52,7 @@ def _run(*, exposed=True):
 
     A Bedrock agent is ``network_checkable=False`` and can never satisfy the gate, so a
     fixture built on one would assert nothing about AIPATH-01 at all."""
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["DATA"])
         s.account = "123456789012"
     s._client = lambda service, region=None: MagicMock()
@@ -117,7 +117,7 @@ def test_the_message_asserts_no_ingress(claim):
 def test_the_detail_page_asserts_no_ingress(claim):
     """The detail page is longer than the finding and was where the overclaim was most
     explicit, so it needs the same guard rather than inheriting trust from the message."""
-    import aws_finding_detail as D
+    from engine import aws_finding_detail as D
     entry = D.FINDING_DETAIL["AIPATH-01"]
     text = " ".join([entry["risk"], entry["impact"], *entry["steps"]]).lower()
     # The detail is allowed — and expected — to NAME the thing it disclaims.

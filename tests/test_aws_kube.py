@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_kube as K
+from engine import aws_kube as K
 
 
 # ── access-policy tiers (partition-agnostic, last ARN segment) ───────────────

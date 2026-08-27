@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import aws_live_scanner as A
+from engine import aws_live_scanner as A
 from test_live_scanner import MockClientError, MockPaginator, make_scanner
 
 OWN = "123456789012"       # make_scanner sets scanner.account to this
@@ -195,7 +195,7 @@ def test_sec_05_map_complete():
 
 
 # ── IAMPE-23 — federated OIDC/SAML wildcard trust ────────────────────────────
-import aws_graph
+from engine import aws_graph
 
 
 def _role(name, trust):

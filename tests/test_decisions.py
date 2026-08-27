@@ -147,7 +147,7 @@ def test_d4_every_permission_we_request_is_read_shaped():
     """The other half of the same promise. A ledger entry for a mutating action would be
     the first step across the line, and it would arrive in a policy document rather than
     in code."""
-    import aws_perm_ledger as L
+    from engine import aws_perm_ledger as L
     verbs = ("Get", "List", "Describe", "BatchGet", "Simulate", "Lookup", "Search")
     bad = sorted({r.action for reqs in L.REQUIREMENTS.values() for r in reqs
                   if ":" in r.action
@@ -259,7 +259,7 @@ def test_d3_added_no_api_call_and_no_permission():
     """The decision was approved on the basis that the material is already read. If a
     future edit adds a dedicated fetch or an IAM action for the CBOM, the justification
     for the slice no longer holds and this is where that surfaces."""
-    import aws_perm_ledger as L
+    from engine import aws_perm_ledger as L
     acts = {r.action for reqs in L.REQUIREMENTS.values() for r in reqs}
     assert not any("cbom" in a.lower() for a in acts)
     src = _src(ROOT / "aws_cbom.py")

@@ -12,8 +12,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_sidescan_fs as fsx
-from aws_sidescan_ebs import SideScanUnavailable
+from engine import aws_sidescan_fs as fsx
+from engine.aws_sidescan_ebs import SideScanUnavailable
 
 SECTOR = fsx.SECTOR
 G_LINUX = bytes.fromhex("af3dc60f838472478e793d69d8477de4")   # Linux filesystem
@@ -150,7 +150,7 @@ def test_dissect_extractor_unknown_reports_reason():
 
 def test_dissect_extractor_accepts_sparseimage_as_file():
     # the real seam feeds a SparseImage (has .as_file()); the extractor must adapt it.
-    from aws_sidescan_ebs import SparseImage
+    from engine.aws_sidescan_ebs import SparseImage
     buf = bytearray(0x1000)
     _ext_magic(buf, 0)
     img = SparseImage(1)

@@ -29,8 +29,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_factors as F  # noqa: E402
-import aws_riskscore as R  # noqa: E402
+from engine import aws_factors as F  # noqa: E402
+from engine import aws_riskscore as R  # noqa: E402
 
 
 def path(**kw):

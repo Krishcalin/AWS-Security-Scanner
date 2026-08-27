@@ -33,8 +33,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_ed25519  # noqa: E402
-import aws_evidence_bundle as eb  # noqa: E402
+from engine import aws_ed25519  # noqa: E402
+from engine import aws_evidence_bundle as eb  # noqa: E402
 
 SEED = bytes(range(32))
 OTHER_SEED = bytes(range(32, 64))

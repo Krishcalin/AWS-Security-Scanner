@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from cnapp_validate import (ConnectionHealth, cadence, validate_connection,
+from hub.cnapp_validate import (ConnectionHealth, cadence, validate_connection,
                             _error_code, DEFAULT_CANARY)
 
 ACCT = "210987654321"

@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-import cnapp_connectors as cc
+from hub import cnapp_connectors as cc
 
 
 # ── fixtures ───────────────────────────────────────────────────────────────────
@@ -73,13 +73,13 @@ def test_migration_v3_creates_connector_tables_idempotently():
         "SELECT name FROM sqlite_master WHERE type='table' "
         "AND name IN ('connectors','connector_rules','notification_log') ORDER BY name")]
     assert names == ["connector_rules", "connectors", "notification_log"]
-    import aws_state
+    from store import aws_state
     assert store._be.raw.execute("PRAGMA user_version").fetchone()[0] == aws_state.SCHEMA_VERSION
     store._be.migrate()          # replay is a no-op (IF NOT EXISTS)
 
 
 def test_migration_leaves_existing_tables_intact():
-    import aws_state
+    from store import aws_state
     s = aws_state.StateStore.open(":memory:")
     # v3 store still has the v1/v2 finding + account tables
     names = {r[0] for r in s._be.query_all(

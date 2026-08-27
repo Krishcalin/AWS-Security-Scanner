@@ -24,12 +24,12 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_ingest_aidr as AI
-import aws_live_scanner as A
+from engine import aws_ingest_aidr as AI
+from engine import aws_live_scanner as A
 
 
 def _scanner():
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = A.AWSLiveScanner(region="us-east-1", verbose=False, sections=["DATA"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: MagicMock()
@@ -162,5 +162,5 @@ def test_the_ingest_module_is_policed_by_the_tripwire():
 
 def test_the_slice_needs_no_iam_action():
     """The input is a file the operator supplies from their own detector."""
-    import aws_perm_ledger as L
+    from engine import aws_perm_ledger as L
     assert "AIDR-01" not in L.REQUIREMENTS

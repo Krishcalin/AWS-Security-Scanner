@@ -13,8 +13,8 @@ import types
 
 import pytest
 
-import aws_live_scanner as als
-import compliance_crosswalk as cx
+from engine import aws_live_scanner as als
+from engine import compliance_crosswalk as cx
 
 
 # ── fixtures ───────────────────────────────────────────────────────────────────
@@ -223,8 +223,8 @@ def test_compliance_payload_has_three_keys_and_native_matches():
 
 # ── service ──────────────────────────────────────────────────────────────────────
 def _svc():
-    from cnapp_registry import AccountRegistry
-    from cnapp_service import InMemoryResultStore, PlatformService
+    from hub.cnapp_registry import AccountRegistry
+    from hub.cnapp_service import InMemoryResultStore, PlatformService
     results = InMemoryResultStore()
     results.put("123456789012", {"compliance_scorecard": als.compliance_scorecard(
         [_R("FAIL", "S3-01"), _R("FAIL", "IAM-02"), _R("PASS", "S3-03")])})
@@ -261,8 +261,8 @@ def test_service_account_compliance_missing_account_is_none():
 
 
 def test_org_compliance_carries_derived_confidence_and_provenance():
-    from cnapp_registry import AccountRegistry
-    from cnapp_service import InMemoryResultStore, PlatformService
+    from hub.cnapp_registry import AccountRegistry
+    from hub.cnapp_service import InMemoryResultStore, PlatformService
     reg = AccountRegistry.open(":memory:")
     results = InMemoryResultStore()
     for aid in ("111111111111", "222222222222"):

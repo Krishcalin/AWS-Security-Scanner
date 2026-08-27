@@ -19,7 +19,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_airules as R
+from engine import aws_airules as R
 
 T0 = datetime(2026, 8, 25, 12, 0, 0, tzinfo=timezone.utc)
 KEY = "AKIAEXAMPLESTOLEN01"

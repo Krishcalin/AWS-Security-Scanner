@@ -176,7 +176,7 @@ def test_no_hardcoded_foreign_egress_host():
 
 # ── D. the SSRF / TLS guards on the two egress seams stay tight ───────────────
 def test_connector_ssrf_guard_pinned():
-    import cnapp_connectors as cc
+    from hub import cnapp_connectors as cc
     assert cc._is_blocked_host("169.254.169.254")           # IMDS blocked
     assert cc._is_blocked_host("metadata.google.internal")  # cloud-metadata blocked
     src = _src(os.path.join(ROOT, "cnapp_connectors.py"))
@@ -209,7 +209,7 @@ def test_registry_egress_guard_pinned():
     per-call host allowlist (NO 'any https'), SSRF targets (IMDS / cloud-metadata / loopback)
     refused on a blob redirect, TLS verified, and NO hardcoded FOREIGN registry host (only the ECR
     .amazonaws.com default) — the registry host arrives from operator config + the auth challenge."""
-    import aws_layer_fetch as LF
+    from engine import aws_layer_fetch as LF
     # SSRF targets a blob redirect must never reach
     for h in ("169.254.169.254", "metadata.google.internal", "127.0.0.1", "localhost",
               "100.100.100.200", "::1"):
@@ -465,7 +465,7 @@ def test_g1_the_mcp_server_is_fail_closed(monkeypatch, capsys):
     this feature with the acknowledgement exported would have main() start the server and
     block forever on stdin — and an earlier draft guarded that with an `or` clause which
     turned the whole assertion vacuous on exactly that machine."""
-    import cnapp_mcp
+    from hub import cnapp_mcp
     monkeypatch.delenv(cnapp_mcp.ACK_ENV, raising=False)
     assert cnapp_mcp.gate({}) == (False, False)
     assert cnapp_mcp.gate({cnapp_mcp.ACK_ENV: "1"}) == (True, False), (
@@ -488,7 +488,7 @@ def test_g2_the_mcp_server_never_imports_the_scanner():
 
 
 def test_g3_redaction_is_the_default_construction():
-    import cnapp_mcp
+    from hub import cnapp_mcp
     assert cnapp_mcp.Redactor().enabled is True, (
         "a redactor that defaults to off makes every call site the security control")
     r = cnapp_mcp.Redactor()

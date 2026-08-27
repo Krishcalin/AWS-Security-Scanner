@@ -225,8 +225,8 @@ def test_ai_fixtures_carry_the_real_framework_tags_and_remediation():
     """Derived from COMPLIANCE_MAP / REMEDIATION_MAP / FINDING_DETAIL, not written by
     hand -- a hand-written fixture drifts from the product and demos something the
     scanner does not actually emit."""
-    import aws_finding_detail
-    from aws_live_scanner import COMPLIANCE_MAP, REMEDIATION_MAP
+    from engine import aws_finding_detail
+    from engine.aws_live_scanner import COMPLIANCE_MAP, REMEDIATION_MAP
     for f in _fixture_findings():
         if not f["check_id"].startswith(AI_PREFIXES):
             continue

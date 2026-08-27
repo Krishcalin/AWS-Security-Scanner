@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import aws_live_scanner as A
+from engine import aws_live_scanner as A
 from test_live_scanner import MockClientError, MockPaginator, make_scanner
 
 
@@ -112,7 +112,7 @@ _ROOT_IDLE = {"user": "<root_account>", "password_last_used": "N/A",
               "access_key_1_last_used_date": "N/A", "access_key_2_last_used_date": "N/A"}
 
 
-@patch("aws_live_scanner.ClientError", MockClientError, create=True)
+@patch("engine.aws_live_scanner.ClientError", MockClientError, create=True)
 def test_iam_07_root_recent_use_fails():
     s = _iam_scanner()
     s._cred_report = [{"user": "<root_account>", "password_last_used": _ago(3),
@@ -121,7 +121,7 @@ def test_iam_07_root_recent_use_fails():
     assert any(r.check_id == "IAM-07" and r.status == "FAIL" for r in s.results)
 
 
-@patch("aws_live_scanner.ClientError", MockClientError, create=True)
+@patch("engine.aws_live_scanner.ClientError", MockClientError, create=True)
 def test_iam_07_root_idle_passes():
     s = _iam_scanner()
     s._cred_report = [{"user": "<root_account>", "password_last_used": _ago(200),
@@ -132,7 +132,7 @@ def test_iam_07_root_idle_passes():
     assert not any(r.check_id == "IAM-07" and r.status == "FAIL" for r in s.results)
 
 
-@patch("aws_live_scanner.ClientError", MockClientError, create=True)
+@patch("engine.aws_live_scanner.ClientError", MockClientError, create=True)
 def test_iam_08_unused_key_and_password_fail():
     s = _iam_scanner()
     s._cred_report = [_ROOT_IDLE,
@@ -147,7 +147,7 @@ def test_iam_08_unused_key_and_password_fail():
     assert any("alice" in x for x in res) and "carol" in res
 
 
-@patch("aws_live_scanner.ClientError", MockClientError, create=True)
+@patch("engine.aws_live_scanner.ClientError", MockClientError, create=True)
 def test_iam_08_active_credentials_not_flagged():
     s = _iam_scanner()
     s._cred_report = [_ROOT_IDLE,
@@ -717,7 +717,7 @@ def test_log_06_map_entries_complete():
 
 
 # ── CVSS v3 vector-string base-score fix (aws_sidescan._cvss_base) ────────────
-import aws_sidescan as SS
+from engine import aws_sidescan as SS
 
 
 def test_cvss3_base_from_vector_known_scores():
@@ -766,7 +766,7 @@ def test_scan_text_secrets_preview_only():
 # ══════════════════════════════════════════════════════════════════════════════
 # Regressions for the adversarial-verify fixes (17 confirmed defects)
 # ══════════════════════════════════════════════════════════════════════════════
-import aws_graph
+from engine import aws_graph
 from datetime import datetime as _dt, timezone as _tz
 
 
@@ -874,13 +874,13 @@ def test_iam_07_unavailable_report_warns():
     s = _iam_scanner()
     s._cred_report = []          # empty AND not ok -> report could not be evaluated
     s._cred_report_ok = False
-    with patch("aws_live_scanner.ClientError", MockClientError, create=True):
+    with patch("engine.aws_live_scanner.ClientError", MockClientError, create=True):
         s._check_iam()
     assert any(r.check_id == "IAM-07" and r.status == "WARN" for r in s.results)
 
 
 # IAM-08 — a freshly set, never-used password on an old user is NOT a 45d-unused finding
-@patch("aws_live_scanner.ClientError", MockClientError, create=True)
+@patch("engine.aws_live_scanner.ClientError", MockClientError, create=True)
 def test_iam_08_recent_unused_password_not_flagged():
     s = _iam_scanner()
     s._cred_report = [_ROOT_IDLE,
@@ -965,7 +965,7 @@ def test_iam_04_unavailable_report_warns_not_false_pass():
     s = _iam_scanner()
     s._cred_report = []
     s._cred_report_ok = False
-    with patch("aws_live_scanner.ClientError", MockClientError, create=True):
+    with patch("engine.aws_live_scanner.ClientError", MockClientError, create=True):
         s._check_iam()
     assert not any(r.check_id == "IAM-04" and r.status == "PASS" for r in s.results)
     assert any(r.check_id == "IAM-04" and r.status == "WARN" for r in s.results)

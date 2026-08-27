@@ -12,7 +12,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aws_exposure import (
+from engine.aws_exposure import (
     classify_public_ip, is_public_cidr, sg_public_ports,
     find_effective_route_table, has_igw_default_route,
     find_governing_nacl, nacl_allowed_subranges, nacl_range_fully_allowed,
@@ -279,7 +279,7 @@ class TestSensitivePorts(unittest.TestCase):
 
 # ─── collector integration (mocked EC2) + first attack path ──────────────────
 from unittest.mock import MagicMock, patch
-from aws_live_scanner import AWSLiveScanner
+from engine.aws_live_scanner import AWSLiveScanner
 
 ACCT = "123456789012"
 
@@ -334,7 +334,7 @@ def _role(name, actions, profiles, condition=None):
 class TestExposureCollector(unittest.TestCase):
 
     def _run(self, enis, sgs, reservations, principals):
-        with patch("aws_live_scanner.HAS_BOTO3", True):
+        with patch("engine.aws_live_scanner.HAS_BOTO3", True):
             sc = AWSLiveScanner(sections=["EXPOSURE"])
         sc.account = ACCT
         sc._client = lambda service, region=None: _mock_ec2(enis, RTBS, NACLS, sgs, reservations)
@@ -413,7 +413,7 @@ class TestExposureCollector(unittest.TestCase):
                             for e in sc.graph.edges("IN_SG")))
 
     def test_microseg_seg05_chain_edges_are_config_only_and_off_path(self):
-        import aws_correlate
+        from engine import aws_correlate
         app_ing = perm(proto="-1", cidr=None, sgref="sg-world")   # sg-app references sg-world
         enis = [_eni("eni-a", "i-a", "sg-app"), _eni("eni-w", "i-w", "sg-world")]
         sgs = [_sg("sg-app", [app_ing]), _sg("sg-world", [perm("tcp", 3389, 3389)])]
@@ -464,7 +464,7 @@ class TestExposureCollector(unittest.TestCase):
 
 
 # ─── Layer A: static SG micro-segmentation (SEG-01..06) — pure, boto3-free ────
-from aws_exposure import (  # noqa: E402
+from engine.aws_exposure import (  # noqa: E402
     microseg_findings, SEG01_SENSITIVE_PORTS, _VPC01_RISKY_PORTS,
 )
 

@@ -12,7 +12,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aws_deepplane import (
+from engine.aws_deepplane import (
     parse_inspector_finding, finding_kev, is_exploitable, vuln_finding_id,
     is_crown_jewel, role_can_read_bucket, map_guardduty_finding, severity_band,
     classify_external_access, EPSS_HIGH,
@@ -244,8 +244,8 @@ class TestExternalAccess(unittest.TestCase):
 
 # ─── collector integration (mocked services) + flagship ATTACK-02 ────────────
 from unittest.mock import MagicMock, patch
-from aws_live_scanner import AWSLiveScanner
-from aws_graph import SecurityGraph
+from engine.aws_live_scanner import AWSLiveScanner
+from engine.aws_graph import SecurityGraph
 
 ACCT = "123456789012"
 
@@ -259,7 +259,7 @@ class _P:
 
 
 def _scanner(clients):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         sc = AWSLiveScanner(region="us-east-1", sections=["VULN"])
     sc.account = ACCT
     sc._client = lambda service, region=None: clients.get(service, MagicMock())

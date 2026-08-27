@@ -23,8 +23,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_epistemics  # noqa: E402
-import aws_nhi  # noqa: E402
+from engine import aws_epistemics  # noqa: E402
+from engine import aws_nhi  # noqa: E402
 
 
 def trust(*statements):

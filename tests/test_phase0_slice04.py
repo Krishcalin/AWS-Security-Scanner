@@ -21,11 +21,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_effperm
-import aws_epistemics
-import aws_graph
-import aws_live_scanner
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_effperm
+from engine import aws_epistemics
+from engine import aws_graph
+from engine import aws_live_scanner
+from engine.aws_live_scanner import AWSLiveScanner
 
 ROLE = "arn:aws:iam::123456789012:role/AIExecutionRole"
 
@@ -35,7 +35,7 @@ PASSROLE_ALLOW = [{"effect": "Allow", "actions": {"iam:passrole"}, "resources": 
 
 
 def _scanner() -> AWSLiveScanner:
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["DATA"])
         s.account = "123456789012"
     s._client = lambda service, region=None: MagicMock()
@@ -154,7 +154,7 @@ def test_admin_star_on_star_is_not_cleared_by_capping_one_route():
 def test_the_raw_signal_is_preserved_for_callers_without_a_ceiling():
     """role_privesc_capable is still the honest answer when no ceiling is known, and
     its wording must not drift — other checks quote it."""
-    import aws_aispm
+    from engine import aws_aispm
     assert aws_aispm.role_privesc_capable(PASSROLE_ALLOW) == \
         "grants iam:passrole on an unscoped (*) resource"
     admin = [{"effect": "Allow", "actions": {"*"}, "resources": {"*"},
@@ -167,7 +167,7 @@ def test_the_raw_signal_is_preserved_for_callers_without_a_ceiling():
 def test_a_scoped_passrole_is_still_not_flagged():
     """The pre-existing conservative stance: a PassRole scoped to one role ARN is
     not an escalation primitive and never was."""
-    import aws_aispm
+    from engine import aws_aispm
     scoped = [{"effect": "Allow", "actions": {"iam:passrole"},
                "resources": {"arn:aws:iam::123456789012:role/AppRole"},
                "not_resources": set(), "condition": None}]

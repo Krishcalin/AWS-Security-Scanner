@@ -10,14 +10,14 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cnapp_api
-import cnapp_connectors as cc
+from hub import cnapp_api
+from hub import cnapp_connectors as cc
 
 pytestmark = pytest.mark.skipif(not cnapp_api._HAVE_FASTAPI,
                                 reason="fastapi not installed (deploy-time dep)")
 
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
 
 ACCT = "123456789012"
 SECRET = "SUPER-SECRET-TOKEN-999"

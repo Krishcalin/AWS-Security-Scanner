@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cnapp_onboarding as OB
+from hub import cnapp_onboarding as OB
 
 ACCT = "112233445566"
 HUB = "arn:aws:iam::555000111222:role/CnappHubRole"

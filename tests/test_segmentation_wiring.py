@@ -19,10 +19,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_correlate
-import aws_graph
-import aws_live_scanner as A
-import aws_segmentation as S
+from engine import aws_correlate
+from engine import aws_graph
+from engine import aws_live_scanner as A
+from engine import aws_segmentation as S
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -34,7 +34,7 @@ class Path:
 
 
 def _scanner():
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = A.AWSLiveScanner(region="us-east-1", verbose=False, sections=["CORRELATE"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: MagicMock()

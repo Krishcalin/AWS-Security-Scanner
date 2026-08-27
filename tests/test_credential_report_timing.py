@@ -23,13 +23,13 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_live_scanner as A
+from engine import aws_live_scanner as A
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _scanner(client):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = A.AWSLiveScanner(region="us-east-1", verbose=False, sections=["IAM"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: client
@@ -68,9 +68,9 @@ def test_a_non_string_state_stops_the_poll_immediately():
     Without this short-circuit the method burns the entire retry budget on every mocked
     client that reaches it."""
     c = MagicMock()
-    with patch("aws_live_scanner.CRED_REPORT_ATTEMPTS", 10), \
-         patch("aws_live_scanner.CRED_REPORT_POLL_SECONDS", 2), \
-         patch("aws_live_scanner.CRED_REPORT_RETRY_SECONDS", 0):
+    with patch("engine.aws_live_scanner.CRED_REPORT_ATTEMPTS", 10), \
+         patch("engine.aws_live_scanner.CRED_REPORT_POLL_SECONDS", 2), \
+         patch("engine.aws_live_scanner.CRED_REPORT_RETRY_SECONDS", 0):
         s = _scanner(c)
         start = time.monotonic()
         s._get_credential_report()
@@ -84,9 +84,9 @@ def test_an_absent_state_still_polls_because_empty_string_is_a_string():
     is correct for a report that is genuinely still generating."""
     c = MagicMock()
     c.generate_credential_report.return_value = {}
-    with patch("aws_live_scanner.CRED_REPORT_ATTEMPTS", 4), \
-         patch("aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0), \
-         patch("aws_live_scanner.CRED_REPORT_RETRY_SECONDS", 0):
+    with patch("engine.aws_live_scanner.CRED_REPORT_ATTEMPTS", 4), \
+         patch("engine.aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0), \
+         patch("engine.aws_live_scanner.CRED_REPORT_RETRY_SECONDS", 0):
         _scanner(c)._get_credential_report()
     assert c.generate_credential_report.call_count == 4
 
@@ -95,8 +95,8 @@ def test_a_complete_state_stops_polling_at_once():
     c = MagicMock()
     c.generate_credential_report.return_value = {"State": "COMPLETE"}
     c.get_credential_report.return_value = {"Content": b"dXNlcgpyb290Cg=="}
-    with patch("aws_live_scanner.CRED_REPORT_ATTEMPTS", 10), \
-         patch("aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0):
+    with patch("engine.aws_live_scanner.CRED_REPORT_ATTEMPTS", 10), \
+         patch("engine.aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0):
         s = _scanner(c)
         s._get_credential_report()
     assert c.generate_credential_report.call_count == 1
@@ -108,7 +108,7 @@ def test_an_unavailable_report_is_recorded_as_unevaluated_not_as_empty():
     rather than issuing a false all-clear."""
     c = MagicMock()
     c.generate_credential_report.side_effect = Exception("AccessDenied")
-    with patch("aws_live_scanner.CRED_REPORT_RETRY_SECONDS", 0):
+    with patch("engine.aws_live_scanner.CRED_REPORT_RETRY_SECONDS", 0):
         s = _scanner(c)
         s._get_credential_report()
     assert s._cred_report_ok is False
@@ -118,7 +118,7 @@ def test_a_successful_report_is_marked_ok():
     c = MagicMock()
     c.generate_credential_report.return_value = {"State": "COMPLETE"}
     c.get_credential_report.return_value = {"Content": b"dXNlcixhcm4Kcm9vdCxhcm46YXdzCg=="}
-    with patch("aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0):
+    with patch("engine.aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0):
         s = _scanner(c)
         rows = s._get_credential_report()
     assert s._cred_report_ok is True and rows
@@ -128,7 +128,7 @@ def test_the_report_is_cached_and_not_regenerated():
     c = MagicMock()
     c.generate_credential_report.return_value = {"State": "COMPLETE"}
     c.get_credential_report.return_value = {"Content": b"dXNlcixhcm4Kcm9vdCxhcm46YXdzCg=="}
-    with patch("aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0):
+    with patch("engine.aws_live_scanner.CRED_REPORT_POLL_SECONDS", 0):
         s = _scanner(c)
         s._get_credential_report()
         s._get_credential_report()

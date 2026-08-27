@@ -26,15 +26,15 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_perm_ledger as L
-import aws_vectorstore as V
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_perm_ledger as L
+from engine import aws_vectorstore as V
+from engine.aws_live_scanner import AWSLiveScanner
 
 ACCT = "123456789012"
 
 
 def _scanner(client):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["VECTORSTORE"])
         s.account = ACCT
     s._client = lambda svc, region=None: client
@@ -284,6 +284,6 @@ def test_the_ledger_never_asks_for_the_data_plane():
 
 
 def test_every_vector_check_is_in_the_ledger():
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     vec = {c for c in A.CHECK_SEVERITY if c.startswith("VEC-")}
     assert vec <= set(L.REQUIREMENTS), vec - set(L.REQUIREMENTS)

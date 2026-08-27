@@ -6,9 +6,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cnapp_marketplace_metering as mm
-from cnapp_metering import MeteringStore
-from cnapp_registry import AccountRegistry
+from hub import cnapp_marketplace_metering as mm
+from hub.cnapp_metering import MeteringStore
+from hub.cnapp_registry import AccountRegistry
 
 
 class _FakeMP:

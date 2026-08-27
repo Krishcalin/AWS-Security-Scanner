@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-import cnapp_server
+from hub import cnapp_server
 
 
 # ── B3: the launcher ──────────────────────────────────────────────────────────
@@ -21,7 +21,7 @@ def test_build_service_wires_multitenant_metered(monkeypatch):
 
 
 def test_app_is_fail_closed_by_default(monkeypatch):
-    import cnapp_api
+    from hub import cnapp_api
     if not cnapp_api._HAVE_FASTAPI:
         pytest.skip("fastapi not installed")
     monkeypatch.setenv("CNAPP_DB_URL", ":memory:")

@@ -31,9 +31,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_live_scanner as A
-import aws_modelartifact as MA
-import aws_perm_ledger as L
+from engine import aws_live_scanner as A
+from engine import aws_modelartifact as MA
+from engine import aws_perm_ledger as L
 
 ACCT = "123456789012"
 
@@ -44,7 +44,7 @@ class _Evil:
 
 
 def _scanner(*, scan=False, s3=None):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = A.AWSLiveScanner(region="us-east-1", verbose=False, sections=["SAGEMAKER"])
         s.account = ACCT
     s._client = lambda svc, region=None: (s3 or MagicMock())

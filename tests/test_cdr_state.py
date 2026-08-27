@@ -7,9 +7,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_state
-import aws_state_dialect as dia
-from aws_state import StateStore
+from store import aws_state
+from store import aws_state_dialect as dia
+from store.aws_state import StateStore
 
 ACCT = "111122223333"
 

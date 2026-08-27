@@ -7,8 +7,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_ingest as ing
-from aws_ingest import parse_document, parse_purl
+from engine import aws_ingest as ing
+from engine.aws_ingest import parse_document, parse_purl
 
 
 # ── purl -> Package (inverse of _purl / _lang_purl) ──────────────────────────

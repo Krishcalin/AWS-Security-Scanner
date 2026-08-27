@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aws_live_scanner import AWSLiveScanner
+from engine.aws_live_scanner import AWSLiveScanner
 
 
 class _GAADPaginator:
@@ -243,7 +243,7 @@ class TestFullAdminCappedFallThrough(unittest.TestCase):
         return AWSLiveScanner._policy_to_statements(doc)
 
     def test_boundary_capped_admin_still_reports_granular(self):
-        from aws_live_scanner import evaluate_privesc_scoped
+        from engine.aws_live_scanner import evaluate_privesc_scoped
         ident = self._stmts({"Statement": [{"Effect": "Allow", "Action": "*", "Resource": "*"}]})
         boundary = self._stmts({"Statement": [{"Effect": "Allow", "Action": "iam:*", "Resource": "*"}]})
         findings = evaluate_privesc_scoped(ident, boundary=boundary)
@@ -253,7 +253,7 @@ class TestFullAdminCappedFallThrough(unittest.TestCase):
         assert any(i.startswith("IAMPE-") for i in ids)
 
     def test_deny_notaction_capped_admin_still_reports_granular(self):
-        from aws_live_scanner import evaluate_privesc_scoped
+        from engine.aws_live_scanner import evaluate_privesc_scoped
         ident = self._stmts({"Statement": [
             {"Effect": "Allow", "Action": "*", "Resource": "*"},
             {"Effect": "Deny", "NotAction": "iam:*", "Resource": "*"}]})
@@ -263,12 +263,12 @@ class TestFullAdminCappedFallThrough(unittest.TestCase):
         assert "IAMPE-19" not in ids
 
     def test_uncapped_admin_is_single_sentinel(self):
-        from aws_live_scanner import evaluate_privesc_scoped
+        from engine.aws_live_scanner import evaluate_privesc_scoped
         ident = self._stmts({"Statement": [{"Effect": "Allow", "Action": "*", "Resource": "*"}]})
         assert [f["id"] for f in evaluate_privesc_scoped(ident)] == ["IAMPE-19"]
 
     def test_genuine_deny_star_is_empty(self):
-        from aws_live_scanner import evaluate_privesc_scoped
+        from engine.aws_live_scanner import evaluate_privesc_scoped
         ident = self._stmts({"Statement": [
             {"Effect": "Allow", "Action": "*", "Resource": "*"},
             {"Effect": "Deny", "Action": "*", "Resource": "*"}]})
@@ -301,13 +301,13 @@ class TestParseExpires(unittest.TestCase):
     silently become a permanent suppression."""
 
     def test_relative_and_iso_parse(self):
-        from aws_live_scanner import _parse_expires
+        from engine.aws_live_scanner import _parse_expires
         assert _parse_expires("30d", 1_000_000) == 1_000_000 + 30 * 86400
         assert _parse_expires("12h", 0) == 12 * 3600
         assert _parse_expires(None, 0) is None            # omit = permanent (deliberate)
 
     def test_malformed_raises(self):
-        from aws_live_scanner import _parse_expires
+        from engine.aws_live_scanner import _parse_expires
         with self.assertRaises(ValueError):
             _parse_expires("30days", 0)
         with self.assertRaises(ValueError):
@@ -319,7 +319,7 @@ class TestCiemWiring(unittest.TestCase):
     produces right-sizing findings + a non-mutating path down-rank."""
 
     def test_run_ciem_emits_finding_and_downranks(self):
-        from aws_live_scanner import _run_ciem
+        from engine.aws_live_scanner import _run_ciem
 
         class Args:
             ciem = True

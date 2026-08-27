@@ -28,7 +28,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cnapp_mcp as M
+from hub import cnapp_mcp as M
 
 ACCOUNT = "123456789012"
 BUCKET_ARN = f"arn:aws:s3:::prod-customer-pii"

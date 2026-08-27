@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_layer_fetch as LF
+from engine import aws_layer_fetch as LF
 
 
 class _Resp:

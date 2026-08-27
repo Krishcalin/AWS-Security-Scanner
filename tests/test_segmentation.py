@@ -26,8 +26,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_correlate
-import aws_segmentation as S
+from engine import aws_correlate
+from engine import aws_segmentation as S
 
 
 class Path:

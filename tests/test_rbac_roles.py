@@ -20,10 +20,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_state
-import aws_state_dialect
-import cnapp_api
-import cnapp_workspace as ws
+from store import aws_state
+from store import aws_state_dialect
+from hub import cnapp_api
+from hub import cnapp_workspace as ws
 
 
 # ── the ordering is the authorisation model ─────────────────────────────────
@@ -115,7 +115,7 @@ def test_the_legacy_name_is_still_permitted_by_the_ddl():
 def test_a_role_stores_and_reads_back_on_sqlite(tmp_path):
     """Exercises the STORE, not the rank table. Every previous RBAC test built
     a Principal in memory, which is why the constraint bug survived."""
-    import cnapp_backend
+    from store import cnapp_backend
 
     be = cnapp_backend.backend_for(f"sqlite:///{tmp_path/'rbac.db'}")
     store = ws.WorkspaceStore(be)
@@ -127,7 +127,7 @@ def test_a_role_stores_and_reads_back_on_sqlite(tmp_path):
 
 
 def test_an_invalid_role_is_refused_before_it_reaches_the_database(tmp_path):
-    import cnapp_backend
+    from store import cnapp_backend
 
     be = cnapp_backend.backend_for(f"sqlite:///{tmp_path/'rbac2.db'}")
     store = ws.WorkspaceStore(be)

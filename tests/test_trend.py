@@ -31,7 +31,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_trend as T  # noqa: E402
+from engine import aws_trend as T  # noqa: E402
 
 DAY = T.DAY
 T0 = 1_700_000_000

@@ -9,8 +9,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aws_graph import SecurityGraph
-import aws_graph_neptune as gn
+from engine.aws_graph import SecurityGraph
+from engine import aws_graph_neptune as gn
 
 
 def _rich_graph():

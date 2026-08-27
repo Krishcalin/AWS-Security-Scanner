@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_registry_connectors as RC
+from hub import aws_registry_connectors as RC
 
 
 def _reader(mapping):

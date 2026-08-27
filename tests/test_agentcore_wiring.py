@@ -20,10 +20,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_agentcore as G
-import aws_aispm
-import aws_live_scanner as A
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_agentcore as G
+from engine import aws_aispm
+from engine import aws_live_scanner as A
+from engine.aws_live_scanner import AWSLiveScanner
 
 ROLE = "arn:aws:iam::123456789012:role/AgentRuntimeRole"
 RT_ARN = ("arn:aws:bedrock-agentcore:us-east-1:123456789012:"
@@ -64,7 +64,7 @@ def _ac(*, estate=None, detail=None, list_denied=False, get_denied=False):
 
 
 def _scanner(ac):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["AGENTCORE"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: (ac if svc == "bedrock-agentcore-control"
@@ -104,7 +104,7 @@ def test_the_bedrock_agents_label_no_longer_claims_agentcore():
 
 
 def test_the_checks_are_fully_mapped():
-    import aws_finding_detail as D
+    from engine import aws_finding_detail as D
     for cid in ("AGC-01", "AGC-02", "AGC-03", "AGC-04"):
         assert cid in A.CHECK_SEVERITY, cid
         assert cid in A.COMPLIANCE_MAP, cid
@@ -138,7 +138,7 @@ def test_an_empty_region_says_so_once():
 
 def test_a_missing_client_is_recorded_not_treated_as_empty():
     """An SDK without the service and an account without agents are different facts."""
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["AGENTCORE"])
         s.account = "123456789012"
 

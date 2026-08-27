@@ -7,8 +7,8 @@ from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_engine_eol as eol
-from aws_sidescan import EnrichedMatch
+from engine import aws_engine_eol as eol
+from engine.aws_sidescan import EnrichedMatch
 
 FUTURE = date(2026, 7, 20)     # after every catalogued EOL date
 PAST = date(2020, 1, 1)        # before every catalogued EOL date

@@ -144,7 +144,7 @@ def test_rss01_empty_workgroups_info():
 
 
 def test_maps_lockstep():
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     for cid in ("RS-06", "RS-07", "RSS-01", "RSS-02", "RSS-03", "RSS-04"):
         assert cid in A.CHECK_SEVERITY and cid in A.COMPLIANCE_MAP and cid in A.REMEDIATION_MAP
         assert "aws " in A.REMEDIATION_MAP[cid].lower()

@@ -8,7 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_offline_scanner as sc
+from engine import aws_offline_scanner as sc
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SCANNER = os.path.join(_ROOT, "aws_offline_scanner.py")

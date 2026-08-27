@@ -23,7 +23,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_agentcore as A
+from engine import aws_agentcore as A
 
 ROLE = "arn:aws:iam::123456789012:role/AgentRuntimeRole"
 WID = "arn:aws:bedrock-agentcore:us-east-1:123456789012:workload-identity/wi-1"

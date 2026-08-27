@@ -42,8 +42,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_ed25519          # noqa: E402  (vendored, pure-stdlib)
-import aws_evidence_bundle as eb   # noqa: E402
+from engine import aws_ed25519          # noqa: E402  (vendored, pure-stdlib)
+from engine import aws_evidence_bundle as eb   # noqa: E402
 
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 if os.environ.get("NO_COLOR") or not sys.stdout.isatty():

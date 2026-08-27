@@ -13,9 +13,9 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aws_graph import SecurityGraph
-from aws_deepplane import is_exploitable
-import aws_correlate as C
+from engine.aws_graph import SecurityGraph
+from engine.aws_deepplane import is_exploitable
+from engine import aws_correlate as C
 
 ACCT = "123456789012"
 ADMIN = f"capability:admin:{ACCT}"
@@ -298,13 +298,13 @@ class TestEdgeCases(unittest.TestCase):
 
 # ─── integration: the CORRELATE section over a wired scanner graph ───────────
 from unittest.mock import patch
-from aws_live_scanner import AWSLiveScanner
+from engine.aws_live_scanner import AWSLiveScanner
 
 
 class TestCorrelateSection(unittest.TestCase):
 
     def _scanner_with_graph(self, g):
-        with patch("aws_live_scanner.HAS_BOTO3", True):
+        with patch("engine.aws_live_scanner.HAS_BOTO3", True):
             sc = AWSLiveScanner(region="us-east-1", sections=["CORRELATE"])
         sc.account = ACCT
         sc._iam_principals = []

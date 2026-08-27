@@ -33,8 +33,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_live_scanner as als  # noqa: E402
-import aws_riskscore as R  # noqa: E402
+from engine import aws_live_scanner as als  # noqa: E402
+from engine import aws_riskscore as R  # noqa: E402
 
 R_ = als.Result
 
@@ -225,7 +225,7 @@ def test_qualify_is_pure_and_reproducible():
 # ── the wiring ───────────────────────────────────────────────────────────────
 
 def test_the_scanner_exposes_its_own_coverage_manifest():
-    import aws_perm_ledger
+    from engine import aws_perm_ledger
 
     class FakeScan:
         results = denied()
@@ -239,8 +239,8 @@ def test_the_scanner_exposes_its_own_coverage_manifest():
 
 
 def test_serialize_scanner_carries_posture_coverage():
-    import aws_perm_ledger
-    import cnapp_service
+    from engine import aws_perm_ledger
+    from hub import cnapp_service
 
     class FakeScan:
         account, region = "111111111111", "us-east-1"

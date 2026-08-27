@@ -33,9 +33,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_ownership  # noqa: E402
-import cnapp_application as ca  # noqa: E402
-import cnapp_backend  # noqa: E402
+from engine import aws_ownership  # noqa: E402
+from hub import cnapp_application as ca  # noqa: E402
+from store import cnapp_backend  # noqa: E402
 
 WS, OTHER = "ws-1", "ws-2"
 
@@ -282,8 +282,8 @@ def test_unreadable_stored_json_degrades_that_list_not_the_registry(store):
 # ── schema ──────────────────────────────────────────────────────────────────
 
 def test_the_applications_table_exists_in_both_dialects():
-    import aws_state
-    import aws_state_dialect
+    from store import aws_state
+    from store import aws_state_dialect
     assert "CREATE TABLE IF NOT EXISTS applications(" in aws_state._DDL
     assert any("applications(" in d for d in aws_state_dialect.POSTGRES_DDL)
     assert aws_state.SCHEMA_VERSION >= 17

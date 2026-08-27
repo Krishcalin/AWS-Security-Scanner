@@ -4,8 +4,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_aispm as AI
-from aws_graph import SecurityGraph
+from engine import aws_aispm as AI
+from engine.aws_graph import SecurityGraph
 
 
 def _stmt(actions, resources, effect="Allow", condition=None):

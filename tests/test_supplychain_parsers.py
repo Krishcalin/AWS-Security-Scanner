@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_ingest as ing
+from engine import aws_ingest as ing
 
 CDX = {
     "bomFormat": "CycloneDX", "specVersion": "1.5",
@@ -102,7 +102,7 @@ def test_cdx_license_and_join_parenthesizes_compound_arms():
          "licenses": [{"expression": "MIT OR Apache-2.0"}, {"license": {"id": "GPL-3.0-only"}}]}]}
     raw = ing.parse_cyclonedx(doc).components[0].license_raw
     assert raw == "(MIT OR Apache-2.0) AND GPL-3.0-only"
-    import aws_license as lic
+    from engine import aws_license as lic
     assert lic.normalize_spdx(raw) == ("GPL-3.0-only", "strong_copyleft")   # not silently permissive
 
 

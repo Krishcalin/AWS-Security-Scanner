@@ -8,15 +8,15 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cnapp_api
-from cnapp_api import Principal, DEFAULT_WORKSPACE
+from hub import cnapp_api
+from hub.cnapp_api import Principal, DEFAULT_WORKSPACE
 
 pytestmark = pytest.mark.skipif(not cnapp_api._HAVE_FASTAPI, reason="fastapi not installed")
 
-import aws_state
-import cnapp_connectors as cc
-from cnapp_registry import AccountRegistry
-from cnapp_service import InMemoryResultStore, PlatformService
+from store import aws_state
+from hub import cnapp_connectors as cc
+from hub.cnapp_registry import AccountRegistry
+from hub.cnapp_service import InMemoryResultStore, PlatformService
 
 ACCT = "111122223333"
 

@@ -8,8 +8,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_state
-import aws_state_dialect as d
+from store import aws_state
+from store import aws_state_dialect as d
 
 
 # ── URL parsing ───────────────────────────────────────────────────────────────
@@ -131,7 +131,7 @@ def test_migrate_requires_psycopg():
 
 def test_build_upsert_empty_update_cols_is_do_nothing():
     """An empty update list must render DO NOTHING, never 'DO UPDATE SET ' (invalid)."""
-    import aws_state_dialect as D
+    from store import aws_state_dialect as D
     sql = D.build_upsert("accounts", ["account_id", "alias"], ["account_id"], [], ph="?")
     assert "DO NOTHING" in sql and "DO UPDATE SET" not in sql
     # reset_cols with empty update still renders a valid DO UPDATE SET

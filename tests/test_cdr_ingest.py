@@ -7,8 +7,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_cdr as C
-from aws_graph import SecurityGraph
+from engine import aws_cdr as C
+from engine.aws_graph import SecurityGraph
 
 ACCT = "111122223333"
 INST = f"arn:aws:ec2:us-east-1:{ACCT}:instance/i-1"

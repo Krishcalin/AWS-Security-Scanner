@@ -24,7 +24,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_ztmm as Z
+from engine import aws_ztmm as Z
 
 
 class R:
@@ -216,7 +216,7 @@ def test_the_mapping_names_only_real_checks():
     exactly where invented identifiers appear -- and an id that does not exist maps to
     nothing, scores nothing, and reads as an honest UNSCORED rather than as the bug it
     is. Same class as the pickle table naming builtins.open in slice 4.6."""
-    import aws_live_scanner as A
+    from engine import aws_live_scanner as A
     ids = {c for stages in Z.ZTMM_MAPPING.values()
            for lst in stages.values() for c in lst}
     missing = sorted(i for i in ids if i not in A.CHECK_SEVERITY)

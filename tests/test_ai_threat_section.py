@@ -23,9 +23,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_graph
-import aws_live_scanner as A
-from aws_live_scanner import AWSLiveScanner
+from engine import aws_graph
+from engine import aws_live_scanner as A
+from engine.aws_live_scanner import AWSLiveScanner
 
 T0 = datetime(2026, 8, 25, 12, 0, 0, tzinfo=timezone.utc)
 ROLE = "arn:aws:iam::123456789012:role/SageMakerExecutionRole"
@@ -42,7 +42,7 @@ def _ct_row(name, *, at=T0, agent="axios/1.6.0", region="us-east-1", error=None)
 
 
 def _scanner(*, rows=None, ct_raises=False):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = AWSLiveScanner(region="us-east-1", verbose=False, sections=["AI_THREAT"])
         s.account = "123456789012"
 
@@ -74,7 +74,7 @@ def test_it_runs_after_data_and_before_correlate():
 
 
 def test_its_checks_are_fully_mapped():
-    import aws_finding_detail as D
+    from engine import aws_finding_detail as D
     for cid in ("AITHR-01", "AITHR-02"):
         assert cid in A.CHECK_SEVERITY
         assert cid in A.COMPLIANCE_MAP

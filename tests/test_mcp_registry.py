@@ -28,9 +28,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_checkdef as C
-import aws_live_scanner as A
-import aws_mcp as M
+from engine import aws_checkdef as C
+from engine import aws_live_scanner as A
+from engine import aws_mcp as M
 
 
 def target(**kw):
@@ -38,7 +38,7 @@ def target(**kw):
 
 
 def _scanner(client=None):
-    with patch("aws_live_scanner.HAS_BOTO3", True):
+    with patch("engine.aws_live_scanner.HAS_BOTO3", True):
         s = A.AWSLiveScanner(region="us-east-1", verbose=False, sections=["AGENTCORE"])
         s.account = "123456789012"
     s._client = lambda svc, region=None: client if client is not None else MagicMock()
@@ -150,7 +150,7 @@ def test_an_absent_status_is_unknown_not_unapproved():
 def test_the_finding_does_not_claim_the_component_is_in_use():
     """The registry records approval state, not consumption. Claiming an unapproved
     record is live would be an inference the data does not support."""
-    import aws_finding_detail as D
+    from engine import aws_finding_detail as D
     risk = D.FINDING_DETAIL["MCP-06"]["risk"].lower()
     assert "not establish" in risk and "consumption" in risk
 
@@ -213,8 +213,8 @@ def test_the_emitter_terminates_against_a_bare_magicmock():
 
 # ── wiring ──────────────────────────────────────────────────────────────────
 def test_mcp06_came_from_one_declaration():
-    import aws_finding_detail as D
-    import aws_perm_ledger as L
+    from engine import aws_finding_detail as D
+    from engine import aws_perm_ledger as L
     d = C.REGISTRY["MCP-06"]
     assert A.CHECK_SEVERITY["MCP-06"] == d.severity
     assert A.REMEDIATION_MAP["MCP-06"] == d.remediation

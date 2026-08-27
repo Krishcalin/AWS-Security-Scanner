@@ -21,7 +21,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_copilot
+from engine import aws_copilot
 
 AI_QUESTIONS = [
     "which AI models are exposed?",
@@ -51,7 +51,7 @@ def _finding(check_id, section, risk, **kw):
 
 @pytest.fixture()
 def ai_corpus():
-    import aws_finding_detail
+    from engine import aws_finding_detail
     findings = []
     for cid in ("BDR-01", "BDR-02", "AGT-02", "AISPM-01"):
         d = aws_finding_detail.FINDING_DETAIL[cid]

@@ -20,11 +20,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import aws_controls
-import aws_dspm
-import aws_policy
-import aws_wql
-from aws_graph import SecurityGraph
+from engine import aws_controls
+from engine import aws_dspm
+from engine import aws_policy
+from engine import aws_wql
+from engine.aws_graph import SecurityGraph
 
 PARITY_ACCOUNT = "111122223333"
 
