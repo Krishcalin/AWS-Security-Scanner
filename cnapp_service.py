@@ -149,6 +149,33 @@ class BackendResultStore:
         return out
 
 
+
+# -- declared truncation -----------------------------------------------------
+def capped(items, limit: int, prefix: str) -> dict:
+    """Render a list under a cap AND declare the cap.
+
+    A truncated list that does not say it is truncated reads as complete, which
+    is the same defect this product refuses everywhere else: a number whose
+    denominator quietly shrank. Ten attack paths could be ten of ten or ten of
+    four hundred, and nothing in the list itself tells them apart.
+
+    Emits three fields rather than one:
+
+        <prefix>            the items actually rendered
+        <prefix>_total      how many there were before the cap
+        <prefix>_truncated  whether anything was dropped
+
+    ``_total`` is emitted even where a sibling count already carries the same
+    number. The duplication is deliberate: a list that describes itself cannot
+    be rendered without its denominator, whereas one that relies on a
+    neighbouring field can be, and eventually is.
+    """
+    items = list(items or ())
+    return {prefix: items[:limit],
+            prefix + "_total": len(items),
+            prefix + "_truncated": len(items) > limit}
+
+
 # ── serialization: mirror save_json's field expressions, return a dict ────────
 def serialize_scanner(sc) -> dict:
     """Project a run AWSLiveScanner into a JSON-able dict, mirroring
@@ -711,8 +738,8 @@ class PlatformService:
             "summary": p.get("summary", {}), "severity_counts": sev,
             "compliance_scorecard": p.get("compliance_scorecard", {}),
             "graph": p.get("graph"),
-            "attack_paths": p.get("attack_paths", [])[:10],
-            "choke_points": p.get("choke_points", [])[:10],
+            **capped(p.get("attack_paths"), 10, "attack_paths"),
+            **capped(p.get("choke_points"), 10, "choke_points"),
             # What this scan did NOT establish, travelling with the number it did.
             # A grade rendered without it is a grade whose denominator is unknown.
             "coverage": p.get("coverage"),
@@ -1338,7 +1365,7 @@ class PlatformService:
                  "ok": sum(1 for im in cached["images"] if im["ok"]),
                  "critical": sum(im["critical"] for im in cached["images"]),
                  "high": sum(im["high"] for im in cached["images"]),
-                 "notes": cached["notes"][:20]}
+                 **capped(cached["notes"], 20, "notes")}
                 if cached else None)
             out.append(row)
         return out
@@ -1529,7 +1556,8 @@ class PlatformService:
         return {"accepted": len(raw), "normalized": len(detections),
                 "mapped": sum(1 for v in verdicts.values()
                               if v["mapping_status"] == "resolved"),
-                "incident_count": len(incidents), "incidents": incidents[:20],
+                "incident_count": len(incidents),
+                **capped(incidents, 20, "incidents"),
                 "notes": notes, "top": state.list_cdr_detections(account_id, limit=10)}
 
     def ingest_malware(self, account_id: str, *, source: str, events) -> dict:
@@ -1644,8 +1672,8 @@ class PlatformService:
                     "steps": [f"Open /accounts/{account_id}/incidents (malware rows, ranked by reachability).",
                               "Isolate the resource and snapshot it for forensics.",
                               "Remove the malware, rotate credentials, and re-scan to confirm."],
-                    "affected": [f"{r['source']}:{str(r.get('node_id') or '').split('/')[-1]}"
-                                 for r in rows][:200],
+                    **capped([f"{r['source']}:{str(r.get('node_id') or '').split('/')[-1]}"
+                              for r in rows], 200, "affected"),
                     "count": len(rows), "distinct": len(rows),
                 })
         if runtime:
@@ -1665,8 +1693,8 @@ class PlatformService:
                 "steps": [f"Open /accounts/{account_id}/incidents (runtime rows, ranked by reachability).",
                           "Contain the affected workload and rotate its credentials.",
                           "Re-scan to confirm the attack path is severed."],
-                "affected": [f"{r['source']}:{str(r.get('node_id') or '').split('/')[-1]}"
-                             for r in runtime][:200],
+                **capped([f"{r['source']}:{str(r.get('node_id') or '').split('/')[-1]}"
+                          for r in runtime], 200, "affected"),
                 "count": len(runtime), "distinct": len(runtime),
             })
         for check_id, band, rows, blurb in buckets:
@@ -1685,8 +1713,8 @@ class PlatformService:
                 "steps": [f"Open /accounts/{account_id}/incidents (ranked by reachability).",
                           "Contain the affected resource and rotate its credentials.",
                           "Re-scan to confirm the attack path is severed."],
-                "affected": [f"{r['source']}:{str(r.get('node_id') or '').split('/')[-1]}"
-                             for r in rows][:200],
+                **capped([f"{r['source']}:{str(r.get('node_id') or '').split('/')[-1]}"
+                          for r in rows], 200, "affected"),
                 "count": len(rows), "distinct": len(rows),
             })
         return out
@@ -1769,7 +1797,7 @@ class PlatformService:
             "steps": ["Open /accounts/" + account_id + "/runtime for the ranked coverage gaps.",
                       "Roll out the sensor to the exposed, crown-bound workloads first.",
                       "Re-push the sensor inventory to confirm coverage."],
-            "affected": [g["node_id"] for g in gaps][:500],
+            **capped([g["node_id"] for g in gaps], 500, "affected"),
             "count": len(gaps), "distinct": len(gaps), "account": account_id,
         }]
 
@@ -1855,7 +1883,7 @@ class PlatformService:
             "steps": ["Open /accounts/" + account_id + "/data for the classification gaps.",
                       "Enable Macie (or tag the store) on the exposed stores first.",
                       "Re-scan to confirm the data type is resolved."],
-            "affected": [g["node_id"] for g in gaps][:500],
+            **capped([g["node_id"] for g in gaps], 500, "affected"),
             "count": len(gaps), "distinct": len(gaps), "account": account_id,
         }]
 
@@ -2132,7 +2160,8 @@ class PlatformService:
                 "impact": "Reachable, exploitable vulnerability on an attack path to sensitive data.",
                 "steps": [f"Open /accounts/{account_id}/vulns (ranked by reachability).",
                           "Patch to fixed_version; re-scan to confirm the path is severed."],
-                "affected": [f"{r['cve']}@{str(r['node_id']).split('/')[-1]}" for r in rows][:200],
+                **capped([f"{r['cve']}@{str(r['node_id']).split('/')[-1]}"
+                          for r in rows], 200, "affected"),
                 "count": len(rows), "distinct": len(rows),
             })
         return out
@@ -2453,8 +2482,8 @@ def aggregate_overview(payloads: List[dict]) -> dict:
         "critical_attack_paths": n_critical,
         "crown_jewels_at_risk": len(crown_terminals),
         "accounts": sorted(accounts, key=lambda a: -(a["critical_paths"] or 0)),
-        "top_attack_paths": all_paths[:10],
-        "top_choke_points": all_chokes[:10],
+        **capped(all_paths, 10, "top_attack_paths"),
+        **capped(all_chokes, 10, "top_choke_points"),
     }
 
 
