@@ -39,10 +39,41 @@ from hub import cnapp_authn
 from fastapi import Body, Header, HTTPException, Request, Response
 
 from hub import cnapp_workspace
+import os
 import time
 from hub.cnapp_api import Principal
 
 SESSION_COOKIE = "overwatch_session"
+
+
+def _cookie_secure(request) -> bool:
+    """Whether the session cookie carries the Secure attribute.
+
+    ``auto`` (the default) is the original behaviour: Secure exactly when the
+    request arrived over TLS, so the local http://127.0.0.1 stack still works.
+
+    WHY ``auto`` IS NOT ENOUGH IN PRODUCTION. Behind a TLS-terminating proxy the
+    app sees the proxy's plain-http hop, so the scheme is "http" and the session
+    cookie ships WITHOUT Secure — readable on any downgraded request. Uvicorn does
+    honour X-Forwarded-Proto (proxy_headers defaults to True), but only from
+    ``forwarded_allow_ips``, which defaults to "127.0.0.1" — and a proxy running in
+    another container or as a load balancer is never 127.0.0.1. So the default
+    silently does the wrong thing for the standard production topology, and does it
+    without any error to notice.
+
+    ``always`` states the deployment's own truth rather than inferring it, and is
+    what a TLS-fronted install sets. ``never`` exists so that a deliberate
+    plain-http lab is a choice rather than an accident.
+
+    Setting FORWARDED_ALLOW_IPS to the proxy also makes ``auto`` correct; this
+    setting means the cookie no longer depends on getting that right.
+    """
+    mode = (os.environ.get("CNAPP_COOKIE_SECURE") or "auto").strip().lower()
+    if mode == "always":
+        return True
+    if mode == "never":
+        return False
+    return request.url.scheme == "https"
 
 
 def session_principal_dependency(store, workspaces):
@@ -262,9 +293,10 @@ def add_auth_routes(api, store, workspaces):
         response.set_cookie(
             SESSION_COOKIE, token,
             httponly=True, samesite="lax", path="/",
-            # Only when the request actually arrived over TLS — see the module
-            # docstring for why this is not unconditional.
-            secure=(request.url.scheme == "https"),
+            # See _cookie_secure: conditional by default so the local http stack
+            # works, and forceable because behind a TLS proxy "conditional" is
+            # silently wrong.
+            secure=_cookie_secure(request),
             max_age=cnapp_authn.SESSION_TTL_SECONDS,
         )
         user = store.get_user(str(body.get("username") or "")) or {}

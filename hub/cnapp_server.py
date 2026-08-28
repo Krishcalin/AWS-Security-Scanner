@@ -52,6 +52,21 @@ def _secret_unconfigured(*_a, **_k):
         "secretsmanager://|ssm:// refs, never plaintext)")
 
 
+def _secret_seams():
+    """``(secret_writer, secret_reader)`` for this deployment.
+
+    Configured => AWS Secrets Manager. Unconfigured => the pair above, which
+    raises with instructions. Resolved ONCE per build_service() call so a
+    misconfiguration surfaces at startup rather than on the first onboarding.
+    """
+    from hub import cnapp_secrets
+
+    seams = cnapp_secrets.build_from_env()
+    if seams is None:
+        return _secret_unconfigured, _secret_unconfigured
+    return seams
+
+
 def _load_projects():
     """Load read-only Project defs (LBI/MBI/HBI business-impact groupings) from CNAPP_PROJECTS
     — either a JSON list, or a path to a JSON file. Fail-SAFE: any error → no projects (the
@@ -145,8 +160,12 @@ def build_service():
         results=cnapp_service.BackendResultStore(be),
         hub_role_arn=os.environ.get("CNAPP_HUB_ROLE_ARN", ""),
         cfn_template_url=os.environ.get("CNAPP_CFN_TEMPLATE_URL", ""),
-        secret_writer=_secret_unconfigured,
-        secret_reader=_secret_unconfigured,
+        # AWS Secrets Manager when CNAPP_SECRETS_BACKEND says so, otherwise the
+        # fail-loud placeholders below. Unconfigured stays a REFUSAL rather than a
+        # fallback: a hub that quietly kept plaintext, or silently dropped the
+        # write, would be worse than one that will not onboard.
+        secret_writer=_secret_seams()[0],
+        secret_reader=_secret_seams()[1],
         state=aws_state.StateStore(be),
         workspaces=cnapp_workspace.WorkspaceStore(be),
         metering=cnapp_metering.MeteringStore(be),
@@ -178,6 +197,35 @@ def create_app_from_env(*, service=None, current_principal=None):
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "dist"))
     return cnapp_api.create_hosted_app(svc, static_dir=static_dir,
                                        current_principal=current_principal)
+
+
+def create_app(*, service=None):
+    """The image's entry point: pick the auth provider from ``CNAPP_AUTH_MODE``.
+
+        local  -> create_app_with_local_auth  (built-in users; self-hosted)
+        idp    -> create_app_from_env         (fail-closed until a principal is
+                                               injected by your own factory)
+
+    WHY THIS EXISTS. The image used to default to ``create_app_from_env``, whose
+    ``current_principal`` is None => EVERY ROUTE 403. That is safe, but it is
+    silent: a fresh deployment looks like a broken permissions setup rather than
+    an unconfigured one, and the only way to find out is to read the source. An
+    unset mode now stops the process with a message naming the choice.
+
+    Both factories above keep their exact previous behaviour; this only chooses.
+    """
+    mode = (os.environ.get("CNAPP_AUTH_MODE") or "").strip().lower()
+    if mode == "local":
+        return create_app_with_local_auth(service=service)
+    if mode == "idp":
+        return create_app_from_env(service=service)
+    raise SystemExit(
+        "CNAPP_AUTH_MODE is not set. Choose how this hub authenticates:\n"
+        "  CNAPP_AUTH_MODE=local  built-in users; bootstrap the first admin with\n"
+        "                         OVERWATCH_BOOTSTRAP_USER / _PASSWORD\n"
+        "  CNAPP_AUTH_MODE=idp    you inject current_principal from your own IdP\n"
+        "                         (uvicorn hub.cnapp_server:create_app_from_env)\n"
+        "Refusing to start rather than serve 403 on every route.")
 
 
 def create_app_with_local_auth(*, service=None):

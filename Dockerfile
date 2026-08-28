@@ -44,7 +44,20 @@ COPY frontend/dist/ ./frontend/dist/
 RUN useradd -r -u 10001 overwatch && mkdir -p /data && chown -R overwatch:overwatch /data /app
 USER overwatch
 EXPOSE 8080
-# factory entrypoint: no module-level app => no import-time disk side effect. Auth is
-# FAIL-CLOSED until a real current_principal is wired (see cnapp_server.py).
-CMD ["uvicorn", "hub.cnapp_server:create_app_from_env", "--factory", \
+# Factory entrypoint: no module-level app => no import-time disk side effect.
+#
+# create_app SELECTS the auth provider from CNAPP_AUTH_MODE (local | idp) and
+# REFUSES TO START when it is unset. This used to be create_app_from_env, whose
+# current_principal defaults to None => every route 403: correct, but
+# indistinguishable from a broken deployment, and discoverable only by reading
+# the source. Neither underlying factory changed.
+#
+# Required at run time:
+#   CNAPP_AUTH_MODE=local|idp
+#   CNAPP_DB_URL=postgresql://...        (defaults to a sqlite file under /data)
+#   CNAPP_SECRETS_BACKEND=aws-secrets-manager   without it, onboarding and every
+#                                        connector REFUSE (never plaintext)
+#   CNAPP_COOKIE_SECURE=always           when TLS terminates at a proxy, which the
+#                                        app cannot see -- see cnapp_authn_api
+CMD ["uvicorn", "hub.cnapp_server:create_app", "--factory", \
      "--host", "0.0.0.0", "--port", "8080"]

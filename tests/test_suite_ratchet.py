@@ -271,6 +271,7 @@ FLOORS = {
     "test_policy.py": 15,
     "test_policy_service.py": 12,
     "test_posture_coverage.py": 23,
+    "test_production_config.py": 18,
     "test_projects.py": 11,
     "test_qr.py": 9,
     "test_rbac_roles.py": 20,
