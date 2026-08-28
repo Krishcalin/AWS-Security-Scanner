@@ -220,7 +220,14 @@ def test_an_unset_auth_mode_stops_the_process_instead_of_serving_403():
 def test_the_image_entry_point_is_the_selecting_factory():
     """A Dockerfile CMD naming create_app_from_env is a 403 wall out of the box."""
     import io
-    with io.open("Dockerfile", encoding="utf-8") as fh:
+    import os
+
+    # Anchored on the repo root, not the CWD: a relative path here makes the test
+    # depend on where pytest was invoked from, which differs between a local run
+    # and a CI runner -- and fails as a confusing FileNotFoundError rather than as
+    # the assertion it is about.
+    from _layout import ROOT
+    with io.open(os.path.join(ROOT, "Dockerfile"), encoding="utf-8") as fh:
         dockerfile = fh.read()
     assert "hub.cnapp_server:create_app" in dockerfile
     assert "hub.cnapp_server:create_app_from_env" not in dockerfile

@@ -74,10 +74,32 @@ def test_the_path_climbs_out_of_its_package(filename, tail):
             f"is.")
 
 
+#: Targets that are BUILD OUTPUT rather than source. frontend/dist comes from
+#: `npm run build` and is gitignored, so it exists on a machine that has built
+#: the console and never on a fresh checkout. Asserting it is present made this
+#: guard pass locally and fail in CI -- exactly backwards for a check about
+#: paths pointing at real things.
+_BUILD_OUTPUT = {("frontend", "dist")}
+
+
 @pytest.mark.parametrize("tail", [c[1] for c in CASES])
 def test_the_target_actually_exists_at_the_repo_root(tail):
-    """The other half: the path is well-formed AND the thing is really there."""
+    """The other half: the path is well-formed AND the thing is really there.
+
+    For build output the ANCHOR is what this can honestly check on a clean
+    checkout -- that the parent exists, so the module climbed to the right place
+    -- and the leaf is checked only where it has actually been built.
+    """
+    parent = os.path.join(ROOT, *tail[:-1])
+    assert os.path.isdir(parent), (
+        f"{'/'.join(tail[:-1])}/ is missing from the repository root, so the "
+        f"module pointing at {'/'.join(tail)} is anchored somewhere wrong.")
+
     target = os.path.join(ROOT, *tail)
+    if tuple(tail) in _BUILD_OUTPUT and not os.path.exists(target):
+        pytest.skip(f"{'/'.join(tail)} is build output (npm run build) and is "
+                    f"not in the repository; the anchor above is what this can "
+                    f"check on a clean checkout")
     assert os.path.exists(target), (
         f"{'/'.join(tail)} is missing from the repository root. Either it moved "
         f"or the module pointing at it is now wrong.")
