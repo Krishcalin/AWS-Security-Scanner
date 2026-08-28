@@ -11,7 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"/>
   <img src="https://img.shields.io/badge/license-GPL--3.0-orange?style=flat-square" alt="GPL-3.0 License"/>
-  <img src="https://img.shields.io/badge/OverWatch-CNAPP%20v2.39.0-38bdf8?style=flat-square" alt="OverWatch CNAPP v2.39.0"/>
+  <img src="https://img.shields.io/badge/OverWatch-CNAPP%20v3.0.0-38bdf8?style=flat-square" alt="OverWatch CNAPP v3.0.0"/>
   <img src="https://img.shields.io/badge/pillars-CSPM%20%7C%20CIEM%20%7C%20CWPP%20%7C%20DSPM%20%7C%20AI--SPM%20%7C%20CDR-6366f1?style=flat-square" alt="CNAPP pillars"/>
   <img src="https://img.shields.io/badge/compliance-CIS%20%7C%20PCI--DSS%20%7C%20HIPAA%20%7C%20SOC2%20%7C%20NIST-purple?style=flat-square" alt="5 Compliance Frameworks"/>
   <img src="https://img.shields.io/badge/checks-296%20severity--mapped-red?style=flat-square" alt="296 severity-mapped checks"/>
@@ -922,39 +922,42 @@ cd frontend && npm install && npm run dev     # http://localhost:5173  (sample d
 
 ```
 AWS-Security-Scanner/
-├── aws_offline_scanner.py   # IaC Security Scanner (CloudFormation + Terraform, no credentials)
-├── aws_live_scanner.py      # Live Audit Scanner v2.39.0 (44 sections, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, least-priv, AI-SPM, CDR, forensics, copilot, vuln-ingest, supply-chain, registry)
-├── aws_remediate.py         # Remediation engine — prioritized plan + remediation-as-code + exports, pure (read-only)
-├── aws_codetocloud.py       # Code-to-cloud — IaC index + tiered T1–T5 matcher (TF/CFN → finding source), pure
-├── aws_graph_neptune_loader.py # Neptune live loader — bulk-load/openCypher runners (mock-tested), pure builders
-├── aws_exposure.py          # Internet-reachability oracle — 4-gate AND, pure/testable (stdlib)
-├── aws_deepplane.py         # Deep-plane parsers (Inspector/Macie/GuardDuty/AA) + CAN_READ_DATA (stdlib)
-├── aws_correlate.py         # Attack-path correlation engine — enumerate/score/rank/choke (stdlib)
-├── aws_graph.py             # SecurityGraph — nodes/edges, bounded traversal, graph.json (stdlib)
-├── aws_effperm.py           # Effective-permissions solver — identity∩boundary∩SCP, deny-wins (stdlib)
-├── aws_state.py             # Persistent state store — lifecycle/drift/MTTR/waivers (pure sqlite3)
-├── aws_unused.py            # CIEM unused-access/right-sizing — Access-Analyzer+SLAD, dormancy (stdlib)
-├── aws_sidescan.py          # Agentless CWPP core — inventory + dpkg/rpm/apk vercmp + OSV match + secrets → HAS_VULN (stdlib)
-├── aws_sidescan_ebs.py      # EBS Direct-API block plane — plan/delta/checksum/sparse/cleanup (stdlib; live I/O deferred)
-├── aws_state_dialect.py     # Postgres/SQLite dialect — DDL/upsert/parse_state_url/row-shim (stdlib)
-├── aws_graph_neptune.py     # Neptune export — Gremlin bulk-CSV + openCypher MERGE + round-trip (stdlib)
-├── aws_kube.py              # Agentless KSPM/KIEM — CIS-EKS + K8s RBAC via read-only K8s API, cross-plane pod→AWS-role (stdlib)
-├── aws_flowlog.py           # VPC Flow-Log overlay — observed-traffic SG scope-down/unused-port/reject-talker, opt-in (stdlib)
-├── aws_secrets.py           # AWS-resident secrets — SSM/Secrets-Manager posture classifiers (metadata only, pure)
-├── aws_leastpriv.py         # Least-privilege policy generation — GRANTED-minus-USED right-sizing from SLAD, pure
-├── aws_ingest.py            # External-vuln ingest — SARIF/CycloneDX/SPDX parsers → own onto graph → reachability re-rank, pure
-├── aws_copilot.py           # Grounded-RAG copilot — self-contained BM25 over the scan's own corpus, extractive/abstains, pure
-├── aws_aispm.py             # AI-SPM — AI execution-role blast-radius classifiers (privesc/reaches-crown/no-net-iso), pure
-├── aws_cdr.py               # CDR-lite — normalize GuardDuty/ASFF/CloudTrail detections → THREAT_ON → reachability-ranked incidents, pure
-├── aws_edr.py               # Runtime-sensor (EDR/CWPP) ingest — CrowdStrike/Falco/GuardDuty-Runtime/OCSF → detections + runtime_monitored coverage, pure
-├── aws_malware.py           # Malware-finding ingest — GuardDuty-Malware/ClamAV/YARA → THREAT_ON → MAL-01/02/03 incidents (malware∩DSPM), pure
-├── aws_dspm.py              # DSPM read-surface — normalize sensitivity → data_types/tier + crown-jewel data inventory + classification-gap, pure
-├── aws_forensics.py         # Cloud-forensics timeline — read-only CloudTrail events correlated with graph/findings/detections, pure
-├── aws_wql.py               # WQL — typed, bounded JSON query language compiled to the frozen aws_graph primitives (parse = security boundary), pure
-├── aws_controls.py          # Saved-query-as-Control — matched WQL result → display-only WARN finding, pure
-├── aws_policy.py            # Policy-as-code — pure typed DSL (compliance-as-code + graph clause) → POLICY-xx WARN, pure
+├── engine/            # the scanning engine — collection, checks, correlation, scoring
+│   ├── aws_offline_scanner.py      # IaC Security Scanner (CloudFormation + Terraform, no credentials)
+│   ├── aws_live_scanner.py         # Live Audit Scanner v3.0.0 (44 sections, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, least-priv, AI-SPM, CDR, forensics, copilot, vuln-ingest, supply-chain, registry)
+│   ├── aws_remediate.py            # Remediation engine — prioritized plan + remediation-as-code + exports, pure (read-only)
+│   ├── aws_codetocloud.py          # Code-to-cloud — IaC index + tiered T1–T5 matcher (TF/CFN → finding source), pure
+│   ├── aws_graph_neptune_loader.py # Neptune live loader — bulk-load/openCypher runners (mock-tested), pure builders
+│   ├── aws_exposure.py             # Internet-reachability oracle — 4-gate AND, pure/testable (stdlib)
+│   ├── aws_deepplane.py            # Deep-plane parsers (Inspector/Macie/GuardDuty/AA) + CAN_READ_DATA (stdlib)
+│   ├── aws_correlate.py            # Attack-path correlation engine — enumerate/score/rank/choke (stdlib)
+│   ├── aws_graph.py                # SecurityGraph — nodes/edges, bounded traversal, graph.json (stdlib)
+│   ├── aws_effperm.py              # Effective-permissions solver — identity∩boundary∩SCP, deny-wins (stdlib)
+│   ├── aws_unused.py               # CIEM unused-access/right-sizing — Access-Analyzer+SLAD, dormancy (stdlib)
+│   ├── aws_sidescan.py             # Agentless CWPP core — inventory + dpkg/rpm/apk vercmp + OSV match + secrets → HAS_VULN (stdlib)
+│   ├── aws_sidescan_ebs.py         # EBS Direct-API block plane — plan/delta/checksum/sparse/cleanup (stdlib; live I/O deferred)
+│   ├── aws_graph_neptune.py        # Neptune export — Gremlin bulk-CSV + openCypher MERGE + round-trip (stdlib)
+│   ├── aws_kube.py                 # Agentless KSPM/KIEM — CIS-EKS + K8s RBAC via read-only K8s API, cross-plane pod→AWS-role (stdlib)
+│   ├── aws_flowlog.py              # VPC Flow-Log overlay — observed-traffic SG scope-down/unused-port/reject-talker, opt-in (stdlib)
+│   ├── aws_secrets.py              # AWS-resident secrets — SSM/Secrets-Manager posture classifiers (metadata only, pure)
+│   ├── aws_leastpriv.py            # Least-privilege policy generation — GRANTED-minus-USED right-sizing from SLAD, pure
+│   ├── aws_ingest.py               # External-vuln ingest — SARIF/CycloneDX/SPDX parsers → own onto graph → reachability re-rank, pure
+│   ├── aws_copilot.py              # Grounded-RAG copilot — self-contained BM25 over the scan's own corpus, extractive/abstains, pure
+│   ├── aws_aispm.py                # AI-SPM — AI execution-role blast-radius classifiers (privesc/reaches-crown/no-net-iso), pure
+│   ├── aws_cdr.py                  # CDR-lite — normalize GuardDuty/ASFF/CloudTrail detections → THREAT_ON → reachability-ranked incidents, pure
+│   ├── aws_edr.py                  # Runtime-sensor (EDR/CWPP) ingest — CrowdStrike/Falco/GuardDuty-Runtime/OCSF → detections + runtime_monitored coverage, pure
+│   ├── aws_malware.py              # Malware-finding ingest — GuardDuty-Malware/ClamAV/YARA → THREAT_ON → MAL-01/02/03 incidents (malware∩DSPM), pure
+│   ├── aws_dspm.py                 # DSPM read-surface — normalize sensitivity → data_types/tier + crown-jewel data inventory + classification-gap, pure
+│   ├── aws_forensics.py            # Cloud-forensics timeline — read-only CloudTrail events correlated with graph/findings/detections, pure
+│   ├── aws_wql.py                  # WQL — typed, bounded JSON query language compiled to the frozen aws_graph primitives (parse = security boundary), pure
+│   ├── aws_controls.py             # Saved-query-as-Control — matched WQL result → display-only WARN finding, pure
+│   └── aws_policy.py               # Policy-as-code — pure typed DSL (compliance-as-code + graph clause) → POLICY-xx WARN, pure
+├── store/             # persistence — imported by both, imports neither
+│   ├── aws_state.py         # Persistent state store — lifecycle/drift/MTTR/waivers (pure sqlite3)
+│   └── aws_state_dialect.py # Postgres/SQLite dialect — DDL/upsert/parse_state_url/row-shim (stdlib)
 ├── ide/                     # VS Code reference stub (shift-left IaC diagnostics via the offline scanner) — spec + stub, unpublished
-├── cnapp_onboarding.py · cnapp_validate.py · cnapp_registry.py · cnapp_service.py · cnapp_worker.py · cnapp_api.py · cnapp_backend.py · cnapp_connectors.py  # Hosted platform backend
+│   ├── cnapp_onboarding.py · cnapp_validate.py · cnapp_registry.py · cnapp_service.py · cnapp_worker.py · cnapp_api.py · cnapp_connectors.py · cnapp_secrets.py  # Hosted platform backend
+│   └── (cnapp_backend.py lives in store/ with aws_state — the persistence trio is mutually recursive)
 ├── frontend/                # OverWatch web console — React 19 + Vite + TS + Tailwind SPA (Overview / Attack Paths / Findings / Cloud Accounts + onboarding wizard)
 ├── deploy/                  # CloudFormation scanner-role + Org StackSet + hub-role templates
 ├── tests/

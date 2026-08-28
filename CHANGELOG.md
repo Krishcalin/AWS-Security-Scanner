@@ -6,6 +6,123 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.0.0] — 2026-08-28
+
+**A major version because the import surface changed, not because the product
+did.** The 109 modules that sat flat in the repository root are now three
+packages with an enforced dependency rule, and the container will no longer start
+without being told how it authenticates. Both are breaking for anyone who
+automated against the old shape, so the number says so.
+
+The release also closes the three things that stood between this build and a
+first production load — none of which a green test suite could see, because all
+three were configuration.
+
+### Breaking
+
+- **Modules moved into `engine/` (89), `hub/` (17) and `store/` (3).** Imports
+  are now `from engine import aws_live_scanner`, and the CLIs run as
+  `python -m engine.aws_live_scanner` — a bare script path puts `engine/` on
+  `sys.path` instead of the repository root and fails. Everything inside the repo
+  is updated; anything outside it that imported these modules needs the new form.
+- **`CNAPP_AUTH_MODE` is required.** The image's entry point is now
+  `hub.cnapp_server:create_app`, which selects `local` or `idp` and **refuses to
+  start** when unset. It previously defaulted to `create_app_from_env`, whose
+  `current_principal` is `None` — every route 403. That was safe and
+  indistinguishable from a broken deployment.
+- **The uvicorn factory path is `hub.cnapp_server:...`**, not `cnapp_server:...`.
+
+### Added
+
+- **AWS Secrets Manager as the secret store** (`hub/cnapp_secrets.py`). Onboarding
+  ExternalIds and connector tokens are written there and only the
+  `secretsmanager://` reference is persisted. `build_service()` previously wired
+  these seams to a function that raises, so a real deployment could not onboard an
+  account or create a connector **at all**.
+  - **Ownership is checked before any overwrite.** Rotation re-uses a secret's
+    name, so the write path is create-or-update — and an update is a mutation.
+    Every secret is tagged `cnapp:owner=overwatch` at creation and an update
+    refuses without that tag, so a prefix collision with an operator's own secret
+    fails loudly instead of replacing their value. Same provenance guard
+    `aws_sidescan_ebs.is_owned()` applies to snapshots. A failed `DescribeSecret`
+    refuses rather than proceeds: a check that fails open is not a check.
+  - Unconfigured still **refuses** — no plaintext fallback, no silent no-op.
+- **`CNAPP_COOKIE_SECURE`** (`auto` | `always` | `never`). `auto` is the previous
+  behaviour and still the default.
+- **ServiceDesk Plus connector** (`OW2-CC-020`) — outbound ticket creation, with
+  the form-encoded `input_data` body and the logical-failure-inside-HTTP-200
+  response contract both handled and named in tests.
+- **Baseline alert rules ship enabled** (`OW2-AR-002`). Five rules seeded inside
+  the connector-create transaction. Two of the five do not map onto an available
+  action; each carries a stated `gap` that travels into the rule name, the console
+  and the delivery ledger rather than being quietly redefined as done.
+- **`tests/test_layering.py`** — the `hub → engine → store` rule enforced by AST.
+  Zero back-edges, checked rather than asserted in a diagram.
+- **The full suite runs in CI** (`.github/workflows/suite.yml`) on **ubuntu and
+  windows**. Previously one unrelated test file ran.
+- New guards: `tests/test_data_paths.py`, `tests/test_ci_integrations.py`,
+  `tests/test_production_config.py`.
+
+### Changed
+
+- Both Dockerfiles copy `engine/ hub/ store/` instead of `*.py`; `.dockerignore`,
+  compose, `local_server.py` and 24 documented invocations follow.
+- `requirements-dev.txt` pins `httpx2`; `python-hcl2` removed (below).
+
+### Fixed
+
+- **Three repo-root paths resolved from `__file__`** broke when their modules
+  moved one directory down. `compliance_crosswalk` failed loudly;
+  `aws_live_scanner`'s report logo failed **silently** inside an
+  `except Exception`; `cnapp_server`'s `frontend/dist` default failed **masked**
+  behind `CNAPP_STATIC_DIR`.
+- **`scripts/coverage_gap.py` globbed the root non-recursively** to decide which
+  AWS services the scanner covers. After the move it would have read no modules
+  and reported **the whole of AWS as an uncovered gap** — a confident wrong
+  answer. It now scans the three layers and refuses on an empty scan.
+- **Three root-walking guards could scan nothing and still report clean** —
+  including the D11 mutation-surface ratchet, the control behind "OverWatch
+  mutates only resources it created". Each now asserts a floor before it sweeps.
+- **`requirements-dev.txt` was uninstallable**: `python-hcl2==7.4.0` exists on no
+  platform (published versions jump 7.3.1 → 8.1.0), so
+  `pip install -r requirements-dev.txt` failed and installed **nothing**. Nothing
+  in the repo imports `hcl2`. Removed rather than re-pinned.
+- **`extractor-fs-validation.yml` was invalid YAML** — a `run:` one-liner
+  containing `": "`. GitHub parsed nothing, so the one workflow in the repo never
+  ran. Predates the package move.
+- **`test_correlate_frozen`'s pin was a Windows-only hash.** It hashed
+  working-tree bytes, which with `core.autocrlf=true` are CRLF on Windows and LF
+  elsewhere — the freeze would have failed on any Linux checkout. Newlines are
+  normalised before hashing; the file's content never changed.
+- **The Postgres `connectors` type CHECK** still listed five types, so an `sdp`
+  connector could not be created on the deployed engine. `CREATE TABLE IF NOT
+  EXISTS` leaves an existing table alone on both engines.
+- **A CHECK violation was reported as "connector name already in use"** —
+  `sqlite3.IntegrityError` covers UNIQUE and CHECK alike, sending an operator
+  hunting a collision that did not exist.
+- **Path-based integrations** repointed: the IaC gate action, the VS Code
+  extension default, and the offline-bundle `VERSION` probe, which was returning
+  empty and naming the release `overwatch-airgap-.tar.gz`.
+
+### Documentation
+
+- **`docs/ARCHITECTURE.md`** — the three layers, why `store/` exists (the
+  persistence trio is mutually recursive and belongs to neither side), and why
+  two modules sit in the package their imports demand rather than their prefix.
+- **`docs/PRODUCTION.md`** — the settings with no safe default, the exact IAM
+  actions for the hub's **own** task role, a pre-live checklist, and the gaps that
+  remain at this version.
+
+### Notes
+
+- The cross-account scanning role is **unchanged and still read-only**. The
+  Secrets Manager actions belong to the hub's own task role and are deliberately
+  absent from `aws_perm_ledger`.
+- Still open, named rather than left to be found: auto-fix execution withheld
+  (D11), `aws_trend` and `aws_guardrail` unwired, inbound ticket sync not built
+  (`OW2-CC-021`), `iam:ListAccessKeys` not collected.
+
+
 ## [2.39.0] — 2026-08-27
 
 Slice 2 of the Phase II build, end to end: **registry → attribution → SLA → KRA →

@@ -112,54 +112,58 @@ value join can run). Each withholds rather than assumes in the meantime.
 
 ```
 AWS-Security-Scanner/
-├── aws_offline_scanner.py   # IaC scanner v1.1.0 (static analysis, no credentials)
-├── aws_live_scanner.py      # Live audit scanner v2.39.0 (boto3, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem+least-priv, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, AI-SPM, CDR, forensics, copilot, vuln-ingest, supply-chain, ecr-registry)
-├── aws_registry_sbom.py     # Registry side-scan — select/pull/scan images → own SBOM + CVEs; scan_pulled_layers shared by ECR + non-AWS OCI (Slice-5 Tier B), pure
-├── aws_layer_fetch.py       # The hardened registry egress seam — ECR layer-blob GET (HTTPS + *.amazonaws.com) + non-AWS OCI registry_request/registry_blob_get (per-call host allowlist, SSRF-guarded redirect); the SOLE registry egress file, allowlisted
-├── aws_registry_oci.py      # Non-AWS OCI registry pull adapter — Docker Registry v2 Bearer dance + manifest + tag enum + layer pull (GHCR/DockerHub/Harbor/ACR), fail-closed on partial rootfs, pure (injected http seams)
-├── aws_registry_connectors.py # Registry-connector config (CNAPP_REGISTRIES) — secret-ref → creds, host-qualify + host-consistency guard, enumerate→pull→side-scan orchestrator, secret mask, pure
-├── aws_factors.py           # Live inputs for the composite score + the ExposureGate producer; every saturation point published, unmeasured never zero, pure
-├── aws_scorecard.py         # FR-2 per-application scorecards: coverage stated, rank refused without a denominator, exceptions segregated, pure
-├── cnapp_application.py     # The application registry (schema v17) -- workspace-scoped CRUD; validation on WRITE via the aws_ownership dataclass; warnings ride with the object
-├── aws_ownership.py         # Application entity + 3-tier attribution (pin > tag > account); AMBIGUOUS never guessed, coverage travels with the buckets, pure
-├── aws_sla.py               # SLA clocks / MTTR / pre-breach warning / closure rate; no now(), reports its own exception-assisted share, pure
-├── aws_riskscore.py         # Composite Cloud Risk Score (Appendix B corrected) + posture-score coverage qualifier (grade withheld <90%), pure
-├── aws_kra.py               # KRA metrics — partial population yields an INTERVAL; MET only when the worst end holds; NOT_ESTABLISHED is its own column, pure
-├── aws_guardrail.py         # CI/CD gate verdicts — unavailable gate follows its strictest configured mode; degraded allow / break-glass both exit 2, never a pass, pure
-├── aws_trend.py             # Time-series + sufficiency in USABLE periods; refuses to project below 3 points; accuracy tracking refuses on its own terms, pure
-├── aws_ingest_credexp.py    # Vendor-neutral breach-corpus ingest — allowlist-built records, salted digests, no network, a hit is never a compromise, pure
-├── aws_remediate.py         # Remediation engine — prioritized plan (reuses minimal_cut/ChokePoint) + remediation-as-code + exports, pure
-├── aws_codetocloud.py       # Code-to-cloud — IaC index (TF block extractor + CFN parse) + tiered T1–T5 matcher, pure
-├── aws_finding_detail.py    # Finding detail — risk/impact/step-by-step remediation for all 222 actionable checks, pure offline data (GENERATED)
-├── aws_engine_eol.py        # Managed-service EOL — honest EOL-* date signals for RDS/Aurora/ElastiCache/OpenSearch/Redshift, pure
-├── aws_winvuln.py           # Windows OS-vuln — SSM DescribeInstancePatches real MSRC CVEs + WINEOL-* lifecycle, pure
-├── aws_sidescan_lambda.py   # Lambda artifact side-scan — zip/layer merge → OSV pipeline (DictExtractor subclass), pure
-├── aws_sidescan_image.py    # Container-image side-scan — OCI/Docker layer overlay + ECR fetch → OSV pipeline, pure
-├── aws_graph_neptune_loader.py # Neptune live loader — S3 bulk-load + openCypher runners (mock-tested), pure builders
-├── aws_graph.py             # SecurityGraph — nodes/edges, bounded traversal, graph.json (stdlib)
-├── aws_exposure.py          # Internet-reachability oracle — 4-gate AND, pure/testable (stdlib)
-├── aws_deepplane.py         # Deep-plane parsers/classifiers (Inspector/Macie/GuardDuty/AA), pure (stdlib)
-├── aws_correlate.py         # Attack-path correlation engine — enumerate/score/rank/choke-points, pure (stdlib)
-├── aws_effperm.py           # Effective-permissions solver — identity∩boundary∩SCP, deny-wins, pure (stdlib)
-├── aws_state.py             # Persistent state store — lifecycle/drift/MTTR/waivers, pure sqlite3
-├── aws_unused.py            # CIEM unused-access/right-sizing — Access-Analyzer+SLAD, dormancy down-rank, pure
-├── aws_sidescan.py          # Agentless CWPP core — inventory parsers + dpkg/rpm/apk vercmp + OSV match + secrets + HAS_VULN edges, pure
-├── aws_sidescan_ebs.py      # EBS Direct-API block plane — plan/delta/checksum/sparse-reassembly/cleanup, pure (live I/O deferred)
-├── aws_sidescan_fs.py       # Userspace fs extractor — GPT/MBR partition reader + root-fs selection (pure); DissectExtractor seam, never-false-clean (ext4/xfs parse = Linux-CI follow-on)
-├── aws_ed25519.py           # Vendored pure-stdlib Ed25519 (RFC 8032) — signs/verifies the offline vuln-feed bundle, no new dep
-├── aws_state_dialect.py     # Postgres/SQLite dialect — DDL/upsert/parse_state_url/row-shim, pure
-├── aws_graph_neptune.py     # Neptune export — Gremlin bulk-CSV + openCypher MERGE + round-trip loader, pure
-├── aws_kube.py              # Agentless KSPM/KIEM — CIS-EKS + K8s RBAC via injected read-only K8s API, IRSA cross-plane, pure
-├── aws_flowlog.py           # VPC Flow-Log overlay — observed-traffic SG scope-down/unused-port/reject-talker (opt-in), pure
-├── aws_secrets.py           # AWS-resident secrets — SSM/Secrets-Manager posture classifiers (metadata only), pure
-├── aws_leastpriv.py         # Least-privilege generation — GRANTED-minus-USED right-sizing from SLAD (preserves Denies), pure
-├── aws_ingest.py            # External-vuln ingest — SARIF/CycloneDX/SPDX parsers → own onto graph → reachability re-rank, pure
-├── aws_copilot.py           # Grounded-RAG copilot — self-contained BM25 over the scan's own corpus, extractive/abstains, pure
-├── aws_aispm.py             # AI-SPM — AI execution-role blast-radius classifiers (privesc/reaches-crown/no-net-iso), pure
-├── aws_cdr.py               # CDR-lite — normalize GuardDuty/ASFF/CloudTrail detections → THREAT_ON → reachability-ranked incidents, pure
-├── aws_forensics.py         # Cloud-forensics timeline — read-only CloudTrail events correlated w/ graph/findings/detections, pure
-├── cnapp_connectors.py      # Connector framework — route findings to Jira/Slack/PagerDuty/Splunk/webhook (rules engine + delivery ledger), pure
-├── compliance_crosswalk.py  # Compliance breadth — NIST 800-53 → 30+ framework crosswalk loader (accuracy-gated), pure
+├── engine/            # the scanning engine — collection, checks, correlation, scoring
+│   ├── aws_offline_scanner.py      # IaC scanner v1.1.0 (static analysis, no credentials)
+│   ├── aws_live_scanner.py         # Live audit scanner v3.0.0 (boto3, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem+least-priv, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, AI-SPM, CDR, forensics, copilot, vuln-ingest, supply-chain, ecr-registry)
+│   ├── aws_registry_sbom.py        # Registry side-scan — select/pull/scan images → own SBOM + CVEs; scan_pulled_layers shared by ECR + non-AWS OCI (Slice-5 Tier B), pure
+│   ├── aws_layer_fetch.py          # The hardened registry egress seam — ECR layer-blob GET (HTTPS + *.amazonaws.com) + non-AWS OCI registry_request/registry_blob_get (per-call host allowlist, SSRF-guarded redirect); the SOLE registry egress file, allowlisted
+│   ├── aws_registry_oci.py         # Non-AWS OCI registry pull adapter — Docker Registry v2 Bearer dance + manifest + tag enum + layer pull (GHCR/DockerHub/Harbor/ACR), fail-closed on partial rootfs, pure (injected http seams)
+│   ├── aws_factors.py              # Live inputs for the composite score + the ExposureGate producer; every saturation point published, unmeasured never zero, pure
+│   ├── aws_scorecard.py            # FR-2 per-application scorecards: coverage stated, rank refused without a denominator, exceptions segregated, pure
+│   ├── aws_ownership.py            # Application entity + 3-tier attribution (pin > tag > account); AMBIGUOUS never guessed, coverage travels with the buckets, pure
+│   ├── aws_sla.py                  # SLA clocks / MTTR / pre-breach warning / closure rate; no now(), reports its own exception-assisted share, pure
+│   ├── aws_riskscore.py            # Composite Cloud Risk Score (Appendix B corrected) + posture-score coverage qualifier (grade withheld <90%), pure
+│   ├── aws_kra.py                  # KRA metrics — partial population yields an INTERVAL; MET only when the worst end holds; NOT_ESTABLISHED is its own column, pure
+│   ├── aws_guardrail.py            # CI/CD gate verdicts — unavailable gate follows its strictest configured mode; degraded allow / break-glass both exit 2, never a pass, pure
+│   ├── aws_trend.py                # Time-series + sufficiency in USABLE periods; refuses to project below 3 points; accuracy tracking refuses on its own terms, pure
+│   ├── aws_ingest_credexp.py       # Vendor-neutral breach-corpus ingest — allowlist-built records, salted digests, no network, a hit is never a compromise, pure
+│   ├── aws_remediate.py            # Remediation engine — prioritized plan (reuses minimal_cut/ChokePoint) + remediation-as-code + exports, pure
+│   ├── aws_codetocloud.py          # Code-to-cloud — IaC index (TF block extractor + CFN parse) + tiered T1–T5 matcher, pure
+│   ├── aws_finding_detail.py       # Finding detail — risk/impact/step-by-step remediation for all 222 actionable checks, pure offline data (GENERATED)
+│   ├── aws_engine_eol.py           # Managed-service EOL — honest EOL-* date signals for RDS/Aurora/ElastiCache/OpenSearch/Redshift, pure
+│   ├── aws_winvuln.py              # Windows OS-vuln — SSM DescribeInstancePatches real MSRC CVEs + WINEOL-* lifecycle, pure
+│   ├── aws_sidescan_lambda.py      # Lambda artifact side-scan — zip/layer merge → OSV pipeline (DictExtractor subclass), pure
+│   ├── aws_sidescan_image.py       # Container-image side-scan — OCI/Docker layer overlay + ECR fetch → OSV pipeline, pure
+│   ├── aws_graph_neptune_loader.py # Neptune live loader — S3 bulk-load + openCypher runners (mock-tested), pure builders
+│   ├── aws_graph.py                # SecurityGraph — nodes/edges, bounded traversal, graph.json (stdlib)
+│   ├── aws_exposure.py             # Internet-reachability oracle — 4-gate AND, pure/testable (stdlib)
+│   ├── aws_deepplane.py            # Deep-plane parsers/classifiers (Inspector/Macie/GuardDuty/AA), pure (stdlib)
+│   ├── aws_correlate.py            # Attack-path correlation engine — enumerate/score/rank/choke-points, pure (stdlib)
+│   ├── aws_effperm.py              # Effective-permissions solver — identity∩boundary∩SCP, deny-wins, pure (stdlib)
+│   ├── aws_unused.py               # CIEM unused-access/right-sizing — Access-Analyzer+SLAD, dormancy down-rank, pure
+│   ├── aws_sidescan.py             # Agentless CWPP core — inventory parsers + dpkg/rpm/apk vercmp + OSV match + secrets + HAS_VULN edges, pure
+│   ├── aws_sidescan_ebs.py         # EBS Direct-API block plane — plan/delta/checksum/sparse-reassembly/cleanup, pure (live I/O deferred)
+│   ├── aws_sidescan_fs.py          # Userspace fs extractor — GPT/MBR partition reader + root-fs selection (pure); DissectExtractor seam, never-false-clean (ext4/xfs parse = Linux-CI follow-on)
+│   ├── aws_ed25519.py              # Vendored pure-stdlib Ed25519 (RFC 8032) — signs/verifies the offline vuln-feed bundle, no new dep
+│   ├── aws_graph_neptune.py        # Neptune export — Gremlin bulk-CSV + openCypher MERGE + round-trip loader, pure
+│   ├── aws_kube.py                 # Agentless KSPM/KIEM — CIS-EKS + K8s RBAC via injected read-only K8s API, IRSA cross-plane, pure
+│   ├── aws_flowlog.py              # VPC Flow-Log overlay — observed-traffic SG scope-down/unused-port/reject-talker (opt-in), pure
+│   ├── aws_secrets.py              # AWS-resident secrets — SSM/Secrets-Manager posture classifiers (metadata only), pure
+│   ├── aws_leastpriv.py            # Least-privilege generation — GRANTED-minus-USED right-sizing from SLAD (preserves Denies), pure
+│   ├── aws_ingest.py               # External-vuln ingest — SARIF/CycloneDX/SPDX parsers → own onto graph → reachability re-rank, pure
+│   ├── aws_copilot.py              # Grounded-RAG copilot — self-contained BM25 over the scan's own corpus, extractive/abstains, pure
+│   ├── aws_aispm.py                # AI-SPM — AI execution-role blast-radius classifiers (privesc/reaches-crown/no-net-iso), pure
+│   ├── aws_cdr.py                  # CDR-lite — normalize GuardDuty/ASFF/CloudTrail detections → THREAT_ON → reachability-ranked incidents, pure
+│   ├── aws_forensics.py            # Cloud-forensics timeline — read-only CloudTrail events correlated w/ graph/findings/detections, pure
+│   └── compliance_crosswalk.py     # Compliance breadth — NIST 800-53 → 30+ framework crosswalk loader (accuracy-gated), pure
+├── hub/               # the hosted platform — API, auth, workspaces, connectors
+│   ├── aws_registry_connectors.py # Registry-connector config (CNAPP_REGISTRIES) — secret-ref → creds, host-qualify + host-consistency guard, enumerate→pull→side-scan orchestrator, secret mask, pure
+│   ├── cnapp_application.py       # The application registry (schema v17) -- workspace-scoped CRUD; validation on WRITE via the aws_ownership dataclass; warnings ride with the object
+│   ├── cnapp_connectors.py        # Connector framework — route findings to Jira/Slack/PagerDuty/Splunk/ServiceDesk Plus/webhook (rules engine + delivery ledger + AR-002 baseline rules), pure
+│   └── cnapp_secrets.py           # AWS Secrets Manager seam — only a secretsmanager:// ref is persisted; provenance-tagged, refuses to overwrite a secret it did not create
+├── store/             # persistence — imported by both, imports neither
+│   ├── aws_state.py         # Persistent state store — lifecycle/drift/MTTR/waivers, pure sqlite3
+│   └── aws_state_dialect.py # Postgres/SQLite dialect — DDL/upsert/parse_state_url/row-shim, pure
 ├── tests/
 │   ├── test_live_scanner.py # 69 unit tests (mock boto3)
 │   ├── test_cnapp_phase1.py # 32 unit tests (graph, chains, trust, org fan-out, compliance rollup)
@@ -227,7 +231,7 @@ Rule ID format: `AWS-{SERVICE}-{NNN}` (e.g. AWS-IAM-001, AWS-S3-001)
 python -m engine.aws_offline_scanner <target> [--severity SEV] [--json FILE] [--html FILE] [-v] [--version]
 ```
 
-## Live Audit Scanner (`aws_live_scanner.py` v2.39.0)
+## Live Audit Scanner (`engine/aws_live_scanner.py` v3.0.0)
 
 - **Type**: Live AWS account audit via boto3 (a full CNAPP)
 - **Lines**: ~12,300
