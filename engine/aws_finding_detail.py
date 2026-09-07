@@ -2346,6 +2346,18 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Prevent recurrence by attaching the code-signing config to all functions via IaC and monitoring for functions deployed without one.",
         ],
     },
+    "LMB-07": {
+        "risk": "The function's deployment package or one of its layers ships a third-party dependency with a known vulnerability. Lambda code is packaged at deploy time and then runs unchanged until it is redeployed, so a dependency that was current when the zip was built stays exactly as vulnerable for as long as the function exists — there is no host to patch and no base image to rebuild, and OS-level patching of the managed runtime does not touch anything under /var/task or /opt. Because the finding is derived from OverWatch's own inventory of the artifact rather than from a scanner inside the account, it covers functions Inspector is not enabled for and layers that no image scan ever sees.",
+        "impact": "An exploitable dependency executes with the function's execution-role permissions, so the blast radius is that role's blast radius: anything the role can read, write or assume is reachable from a single request that reaches the function.",
+        "steps": [
+            "Confirm which artifact carries the package — the function zip or a layer: aws lambda get-function --function-name <FUNC> --query \"{Code:Code.Location,Layers:Configuration.Layers[].Arn}\"",
+            "If it is in the function package, upgrade the dependency in the manifest (requirements.txt / package.json / pom.xml / go.mod), rebuild the zip, and deploy: aws lambda update-function-code --function-name <FUNC> --zip-file fileb://<ZIP>",
+            "If it is in a layer, publish a patched version and repoint the function: aws lambda publish-layer-version --layer-name <LAYER> --zip-file fileb://<ZIP> then aws lambda update-function-configuration --function-name <FUNC> --layers <NEW_LAYER_VERSION_ARN>",
+            "Repoint every other function on the old layer version, which the layer bump does not do for them: aws lambda list-functions --query \"Functions[?contains(Layers[].Arn, '<OLD_LAYER_VERSION_ARN>')].FunctionName\"",
+            "Verify the rebuilt artifact no longer reports the CVE by re-running the side-scan (--side-scan-lambda) against the function.",
+            "Prevent recurrence: enable AWS Inspector Lambda code and dependency scanning (aws inspector2 enable --resource-types LAMBDA LAMBDA_CODE) and fail the build on vulnerable dependencies in CI rather than discovering them in a deployed artifact.",
+        ],
+    },
     "LOG-01": {
         "risk": "CloudTrail is the authoritative record of every API call made in the account, and this check fails when no trail exists or a trail is single-region, has log-file validation disabled, or has stopped logging. Without a validated, multi-region, actively-logging trail, an attacker's actions (minting access keys, disabling security tooling, exfiltrating data) leave no reliable forensic record, and validation-off logs can be silently altered or deleted. Adversaries who land in an account routinely run StopLogging or DeleteTrail to blind defenders, and activity in any un-covered region goes completely unrecorded.",
         "impact": "No trustworthy audit trail means intrusions go undetected and are non-investigable, and the account fails CIS 3.1 / PCI-DSS 10.1 / HIPAA / SOC2 logging requirements.",

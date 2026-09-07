@@ -436,6 +436,7 @@ CHECK_SEVERITY = {
     "AGT-04": "HIGH", "AGT-05": "HIGH",
     "LMB-01": "HIGH", "LMB-02": "MEDIUM", "LMB-03": "HIGH",
     "LMB-04": "MEDIUM", "LMB-05": "MEDIUM", "LMB-06": "MEDIUM",
+    "LMB-07": "HIGH",
     "EKS-01": "HIGH", "EKS-02": "HIGH", "EKS-03": "MEDIUM",
     "EKS-04": "MEDIUM", "EKS-05": "MEDIUM",
     "ECS-01": "CRITICAL", "ECS-02": "HIGH", "ECS-03": "MEDIUM",
@@ -1146,6 +1147,7 @@ COMPLIANCE_MAP = {
     "AGW2-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SC-5"},
     "LMB-05": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "LMB-06": {"PCI-DSS": "6.3.2", "SOC2": "CC7.1", "NIST": "SI-7"},
+    "LMB-07": {"NIST": "RA-5", "PCI-DSS": "6.3.1", "SOC2": "CC7.1"},
 }
 
 # ─── Remediation commands: check_id → AWS CLI command ────────────────────────
@@ -1517,6 +1519,7 @@ REMEDIATION_MAP = {
     "CNT-05": "Add a lifecycle policy to expire untagged/old images: aws ecr put-lifecycle-policy --repository-name <REPO> --lifecycle-policy-text file://lifecycle.json",
     "CNT-06": "Configure registry image signing with an AWS Signer profile: aws ecr put-signing-configuration --signing-configuration 'rules=[{signingProfileArn=<SIGNER_PROFILE_ARN>,repositoryFilters=[{filter=*,filterType=WILDCARD}]}]'",
     "LMB-06": "Create an Enforce-mode code-signing config and attach it: aws lambda create-code-signing-config --allowed-publishers SigningProfileVersionArns=<SIGNER_PROFILE_ARN> --code-signing-policies UntrustedArtifactOnDeployment=Enforce ; aws lambda update-function-code-signing-config --function-name <FUNC> --code-signing-config-arn <CSC_ARN>",
+    "LMB-07": "Rebuild the function package on patched dependencies and redeploy: bump the vulnerable package in the function's manifest (requirements.txt / package.json / pom.xml / go.mod), rebuild the deployment zip, then aws lambda update-function-code --function-name <FUNC> --zip-file fileb://<ZIP>. If the dependency comes from a layer, publish a patched version (aws lambda publish-layer-version --layer-name <LAYER> --zip-file fileb://<ZIP>) and repoint the function with aws lambda update-function-configuration --function-name <FUNC> --layers <NEW_LAYER_ARN>.",
     "AMI-01": "Revoke public/cross-account AMI sharing (a public AMI exposes its full disk snapshot): aws ec2 modify-image-attribute --image-id <AMI_ID> --launch-permission '{\"Remove\":[{\"Group\":\"all\"}]}' ; audit remaining account-level shares.",
     "AMI-02": "Re-copy the AMI encrypted, then deregister the plaintext one: aws ec2 copy-image --source-image-id <AMI_ID> --source-region <REGION> --name <NAME>-enc --encrypted --kms-key-id <KMS_KEY> ; aws ec2 deregister-image --image-id <AMI_ID>",
     "AMI-03": "Deregister the stale/deprecated AMI after re-pointing launch templates/ASGs at a fresh patched build: aws ec2 deregister-image --image-id <AMI_ID>",
@@ -2412,6 +2415,11 @@ class AWSLiveScanner:
         self.side_scan_images_max = 1               # hard per-repo pull ceiling (expensive)
         self.ecr_image_max_bytes = 2 * 1024 ** 3    # per-image compressed size cap (2 GiB)
         self._layer_get = None                      # test/prod seam: (url)->bytes|None
+        # LMB-07 artifact side-scan. OFF by default for the same reason as
+        # --side-scan-images: it downloads deployment packages, so it is an
+        # egress decision the operator makes, not one a default scan makes.
+        self.side_scan_lambda = False               # --side-scan-lambda opt-in
+        self.side_scan_lambda_max = 20              # hard per-region function ceiling
         self.registry_sboms: List[Dict] = []        # pulled-image SBOMs -> hosted snapshot persist
         # ── Phase 3 Layer B: VPC Flow-Log observed-traffic overlay (--flow-logs) ──
         # Off by default: reading flow-log CONTENT needs an OPTIONAL, resource-scoped
@@ -6454,6 +6462,109 @@ class AWSLiveScanner:
         elif unsigned:
             self._add("INFO", "LMB-06", "LAMBDA", "lambda",
                       f"{unsigned}/{evaluated} Lambda functions have no code-signing config")
+
+        # LMB-07 — the artifact side-scan. Opt-in; the guard inside returns
+        # immediately on a default run, so this call costs nothing unasked.
+        self._side_scan_lambda_artifacts(lmb, funcs)
+
+    def _side_scan_lambda_artifacts(self, lmb, funcs) -> None:
+        """LMB-07 — agentless vulnerable-dependency detection inside a Lambda artefact.
+
+        OPT-IN (``--side-scan-lambda``), mirroring the ECR layer pull it is modelled on:
+        this downloads the function's deployment zip and every layer zip through the
+        same allowlisted egress seam, so it is an operator decision rather than
+        something a default scan does.
+
+        WHY THE CHECK IS WORTH HAVING. Lambda code is packaged at deploy time and then
+        runs unchanged. Patching the managed runtime never touches ``/var/task`` or
+        ``/opt``, so a dependency that was current when the zip was built stays exactly
+        as vulnerable until somebody redeploys — and nothing in the account reports
+        that unless Inspector Lambda scanning happens to be switched on.
+
+        THE MODULE THIS CALLS SHIPPED WITHOUT A CALLER. ``aws_sidescan_lambda``, its
+        tests, the ``LMB-07`` id named in ``emit_node_vuln_edges``' own docstring and
+        ``LambdaFunction`` in ``aws_correlate._EXPLOIT_KINDS`` were all in place, and
+        ``docs/OVERWATCH_VULN_ROADMAP.md`` ticked LMB-07 complete. Only the producer was
+        missing, so the check could never fire and the completeness claim was false.
+        Three of the four side-scan siblings were wired; this one was not.
+
+        FAIL-OPEN, NEVER A FALSE CLEAN. Every artefact that cannot be read becomes an
+        INFO naming the function and the reason, because an unreadable zip and a
+        function with no vulnerable dependencies must not render identically.
+        """
+        if not self.side_scan_lambda:
+            return
+        from engine import aws_layer_fetch
+        from engine import aws_sidescan_lambda
+
+        bundle = self._load_vuln_db()
+        feed = bundle[0] if bundle else None
+        epss = bundle[1] if bundle else {}
+        kev = bundle[2] if bundle else set()
+        exploits = bundle[3] if bundle else set()
+        http_get = self._layer_get or aws_layer_fetch.http_get
+
+        # Said once, like the registry path: without a feed this is an inventory, and
+        # "no findings" must not be read as "no vulnerable dependencies".
+        if feed is None and self.vuln_db_path is None:
+            self._add("INFO", "LMB-07", "LAMBDA", "lambda",
+                      "no --vuln-db supplied; Lambda dependency inventory only, "
+                      "CVE match skipped")
+
+        # A silent cap makes a partial scan look like a whole one.
+        if len(funcs) > self.side_scan_lambda_max:
+            self._add("INFO", "LMB-07", "LAMBDA", "lambda",
+                      f"artifact side-scan covered the first {self.side_scan_lambda_max} "
+                      f"of {len(funcs)} function(s) (--side-scan-lambda-max)")
+
+        g = self._ensure_graph()
+        for fn in funcs[:max(0, self.side_scan_lambda_max)]:
+            fname = fn["FunctionName"]
+            # The ARN, not the name: emit_node_vuln_edges keys the graph node on this,
+            # and the same function name exists in every region.
+            node_id = fn.get("FunctionArn") or fname
+            notes: List[str] = []
+            try:
+                fn_zip, layer_zips, pkg_type = aws_sidescan_lambda.fetch_lambda_artifact(
+                    lmb, fname, http_get=http_get, notes=notes)
+            except aws_sidescan_lambda.LambdaArtifactUnavailable as e:
+                self._add("INFO", "LMB-07", "LAMBDA", fname,
+                          f"Lambda artifact side-scan skipped for {fname}: {e}")
+                continue
+            if pkg_type == "Image":
+                # Container-packaged functions belong to the ECR path (CWPP-05/06).
+                # Scanning them here would report the same image twice under two ids.
+                continue
+            if fn_zip is None and not layer_zips:
+                self._add("INFO", "LMB-07", "LAMBDA", fname,
+                          f"Lambda artifact side-scan skipped for {fname}: "
+                          f"{'; '.join(notes) or 'no artifact bytes returned'}")
+                continue
+
+            ext = aws_sidescan_lambda.LambdaArtifactExtractor(
+                fn_zip, layer_zips, notes=notes)
+            # do_secrets=False deliberately: scan_secrets' roots do not include
+            # /var/task, so it would search the layer half only and present a partial
+            # result as a complete one. Secrets in Lambda configuration are LMB-03.
+            res = aws_sidescan.sidescan_filesystem(
+                ext, feed, epss, kev, exploits, do_secrets=False)
+            # The registry path's severity bar, so the same CVE is reported at the same
+            # level whichever artefact carries it.
+            sev_vulns = [m for m in res.vulns
+                         if m.kev or (m.severity or "").upper() in ("CRITICAL", "HIGH")]
+            aws_sidescan.emit_node_vuln_edges(
+                g, node_id, "LambdaFunction", sev_vulns,
+                scan_source="lambda-sidescan", function_name=fname)
+            for m in sev_vulns:
+                self._add("FAIL", "LMB-07", "LAMBDA", fname,
+                          f"Lambda dependency {m.severity} {m.cve} (EPSS {m.epss}, "
+                          f"exploit={m.exploit_available}, "
+                          f"kev={'YES' if m.kev else 'NO'}, "
+                          f"fix={'YES' if m.fixed_version else 'NO'}) in "
+                          f"{m.package} {m.installed_version} (agentless artifact scan)")
+            for note in notes:
+                self._add("INFO", "LMB-07", "LAMBDA", fname, f"{note} | {fname}")
+
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 18: AMAZON EKS
@@ -17544,6 +17655,8 @@ def _apply_phase6_config(sc, args) -> None:
     sc.side_scan_secrets = args.side_scan_secrets
     sc.side_scan_images = getattr(args, "side_scan_images", False)
     sc.side_scan_images_max = max(1, min(getattr(args, "side_scan_images_max", 1), 50))
+    sc.side_scan_lambda = getattr(args, "side_scan_lambda", False)
+    sc.side_scan_lambda_max = max(1, min(getattr(args, "side_scan_lambda_max", 20), 500))
     sc.ecr_scan_max_images = max(1, min(getattr(args, "ecr_scan_max_images", 20), 100))
     sc.vuln_db_path = args.vuln_db
     sc.vuln_db_pubkey = getattr(args, "vuln_db_pubkey", None)
@@ -17896,6 +18009,20 @@ examples:
         "--side-scan-images-max", dest="side_scan_images_max", type=int, default=1,
         help="Hard cap on images to layer-pull per repo for --side-scan-images (default 1; "
              "layer pull is expensive)",
+    )
+    parser.add_argument(
+        "--side-scan-lambda", dest="side_scan_lambda", action="store_true",
+        help="Agentless Lambda ARTIFACT side-scan (LMB-07): download each function's "
+             "deployment zip and its layers, inventory their dependencies, and add "
+             "LambdaFunction HAS_VULN edges — Inspector-independent. OFF by default; "
+             "the managed runtime's own patching never touches /var/task or /opt, so "
+             "these dependencies are only as current as the last deploy.",
+    )
+    parser.add_argument(
+        "--side-scan-lambda-max", dest="side_scan_lambda_max", type=int, default=20,
+        help="Hard cap on functions to artifact-scan per region for --side-scan-lambda "
+             "(default 20). A run that hits the cap says so rather than reporting a "
+             "partial scan as a whole one.",
     )
     parser.add_argument(
         "--ecr-scan-max-images", dest="ecr_scan_max_images", type=int, default=20,

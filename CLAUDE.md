@@ -42,9 +42,9 @@ no code rename.) The repo also includes a separate pre-deploy IaC static scanner
 - **SLA / MTTR** (`aws_sla.py`) -- pure remediation clocks, MTTR by band, pre-breach warning and closure rate; no `now()` anywhere (a published KRA must be recomputable), built on the coverage-gated resolve so it measures verified remediation rather than ticket closure. Reports the exception-assisted share of its own headline
 - **Cloud Risk Score** (`aws_riskscore.py`) -- pure composite (`OW2-CC-001..006`) with Appendix B's three defects corrected: weights normalised in the engine, risk/posture direction resolved, compensating controls credited against `findings` only and gated on live exposure. An unmeasured factor is excluded and its weight redistributed, never scored 0.0; below 50% weight coverage the composite is refused. Also qualifies the shipping posture score, withholding the letter grade below 90% check coverage
 - **KRA metrics** (`aws_kra.py`) -- pure metric layer where a partial population yields an INTERVAL, not a value, and a verdict is asserted only where the whole interval supports it (`NOT_MET` survives incomplete data; `MET` does not). `NOT_ESTABLISHED` occupies its own column; where the denominator itself is unreadable, no value is reported. Derives the `OW2-KM-002` metric dictionary from the declarations
-- **Guardrail gate decisions** (`aws_guardrail.py`) -- pure CI/CD verdict layer: an unavailable gate does what its strictest configured mode would have done, every permissive path is a degraded allow or an attributed break-glass override (both exit 2, never a pass), and a pipeline timeout is an incomplete evaluation rather than consent
-- **Trend & forecast sufficiency** (`aws_trend.py`) -- pure time-series with sufficiency counted in USABLE periods rather than elapsed time; below three usable periods no projected value is produced at all (the observed series still is). Accuracy tracking refuses on its own terms until enough predictions resolve
-- **Credential-exposure ingest** (`aws_ingest_credexp.py`) -- pure vendor-neutral breach-corpus normaliser joining leaked identities to cloud principals. No network calls, credential material never enters the product (allowlist-built records + salted digests), and a hit is recorded as an observation of a corpus, never as a compromise
+- **Guardrail gate decisions** (`aws_guardrail.py`) -- pure CI/CD verdict layer: an unavailable gate does what its strictest configured mode would have done, every permissive path is a degraded allow or an attributed break-glass override (both exit 2, never a pass), and a pipeline timeout is an incomplete evaluation rather than consent **[LIBRARY-ONLY — nothing calls this; see `tests/test_unreached_modules.py`]**
+- **Trend & forecast sufficiency** (`aws_trend.py`) -- pure time-series with sufficiency counted in USABLE periods rather than elapsed time; below three usable periods no projected value is produced at all (the observed series still is). Accuracy tracking refuses on its own terms until enough predictions resolve **[LIBRARY-ONLY — nothing calls this; see `tests/test_unreached_modules.py`]**
+- **Credential-exposure ingest** (`aws_ingest_credexp.py`) -- pure vendor-neutral breach-corpus normaliser joining leaked identities to cloud principals. No network calls, credential material never enters the product (allowlist-built records + salted digests), and a hit is recorded as an observation of a corpus, never as a compromise **[LIBRARY-ONLY — nothing calls this; see `tests/test_unreached_modules.py`]**
 
 ### Phase II governance layer (v2.38.0) — SRS review + the six defects
 
@@ -75,10 +75,27 @@ Proposed requirements for ratification: `OW2-KM-007`, `OW2-KM-001(f)/(g)`,
 `OW2-GR-008/009/010`, the FR-4a/FR-4b split, and amendments to Appendix B,
 `OW2-KM-004`, `OW2-GR-005` and the II-C gate.
 
-**Known un-wired.** These modules are libraries with no console surface yet:
-`ExposureGate` has no producer, the risk score is not connected to live factor
-inputs, and the trend series is not connected to scan history. All three are safe
-un-wired — each *withholds* rather than assumes — but un-wired is un-wired.
+**Known un-wired — enforced, not remembered.** Five modules are imported by nothing
+outside their own tests. They are tested, documented and safe (each *withholds*
+rather than assumes), but un-wired is un-wired, and a bullet in this file is how an
+un-wired module comes to be counted as working software:
+
+| Module | What is missing |
+|---|---|
+| `aws_guardrail.py` | no CI entry point; `ExposureGate` has no producer |
+| `aws_trend.py` | nothing routes to it — the console's trend is `aws_scorecard.Trend`, a prior-vs-current comparison, not this |
+| `aws_ingest_credexp.py` | no CLI flag, no API route, no console surface |
+| `cnapp_marketplace_metering.py` | no hub billing path calls it (`deploy/marketplace/` documents it as opt-in) |
+| `cnapp_worker.py` | the async scan-job path: imported only by tests, and with no `__main__` it cannot be run as a process either |
+
+`tests/test_unreached_modules.py` is the ratchet: a NEW module that nothing imports
+fails the build, and an entry here that gains a caller also fails, so the list
+cannot rot into fiction. To shrink it, wire the module or delete it with its tests
+— adding an entry is not progress. The risk score is no longer on this list
+(`aws_riskscore` has three importers), and `aws_sidescan_lambda` left it when its
+producer was written: `LMB-07` was ticked complete in the vuln roadmap while being
+registered in none of the four metadata maps and emitted by no code path, so the
+check could not fire.
 
 **Three decisions are open and are not engineering's to make** — see `docs/DECISIONS.md`
 D11–D13: auto-fix ending the read-only guarantee, widening the zero-telemetry
@@ -430,7 +447,9 @@ no boto3/psycopg/FastAPI in the pure path).
 - **`cnapp_worker.py`** — `run_scan_job`: re-checks the account is still active (TOCTOU),
   builds the assumed session, **fail-closed pre-validate**, runs the engine **trapping
   `sys.exit(2)`** (but NOT `KeyboardInterrupt`), persists results, stamps `last_scan_at`
-  only on success.
+  only on success. **[LIBRARY-ONLY — imported by nothing but its own tests, and with
+  no `__main__` it cannot be run as a process either, so the async scan path
+  described here is unreachable in both directions. See `tests/test_unreached_modules.py`.]**
 - **`cnapp_api.py`** — thin FastAPI routers; **workspace-scoped** RBAC that **fails closed**
   (default hook denies, never grants admin); guarded import so the backend runs without
   FastAPI. `OnboardReq.account_id` is pattern-constrained (422, not 500). `create_hosted_app`
