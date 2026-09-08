@@ -1,4 +1,4 @@
-"""The catalogue promises 458 checks. This is how many the suite proves.
+"""The catalogue promises 460 checks. This is how many the suite proves.
 
 WHY A RECORDING AND NOT A GREP. "Which checks can produce a finding" reads like a
 source question and is not one. A check id reaches `_add` as a literal, a bare
@@ -59,10 +59,16 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: those tests never reach `_add`, so no IAMPE finding had ever been constructed —
 #: tested logic and a proven finding are different claims.
 #:
+#: LMB-08/LMB-09 (Lambda function URLs) are the first checks added SINCE this file
+#: existed, and they arrived with driving tests rather than as two more entries in the
+#: never-observed list: the catalogue went 458 -> 460 and proven-failing went 303 ->
+#: 305, leaving the unobserved count flat. That is the shape a new check is supposed
+#: to have, and the ratchet is what makes it the path of least resistance.
+#:
 #: The honest invariants are the ends: unobserved can only fall, proven-failing can
 #: only rise. Lower/raise these when the doc is regenerated; never the other way.
 MAX_NEVER_OBSERVED = 70
-MIN_PROVEN_FAILING = 303
+MIN_PROVEN_FAILING = 305
 
 
 def doc_text() -> str:

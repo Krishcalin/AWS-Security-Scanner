@@ -14,8 +14,8 @@
   <img src="https://img.shields.io/badge/OverWatch-CNAPP%20v3.0.0-38bdf8?style=flat-square" alt="OverWatch CNAPP v3.0.0"/>
   <img src="https://img.shields.io/badge/pillars-CSPM%20%7C%20CIEM%20%7C%20CWPP%20%7C%20DSPM%20%7C%20AI--SPM%20%7C%20CDR-6366f1?style=flat-square" alt="CNAPP pillars"/>
   <img src="https://img.shields.io/badge/compliance-CIS%20%7C%20PCI--DSS%20%7C%20HIPAA%20%7C%20SOC2%20%7C%20NIST-purple?style=flat-square" alt="5 Compliance Frameworks"/>
-  <img src="https://img.shields.io/badge/checks-458%20severity--mapped-red?style=flat-square" alt="458 severity-mapped checks"/>
-  <img src="https://img.shields.io/badge/tests-5458%20passing-brightgreen?style=flat-square" alt="5458 Tests"/>
+  <img src="https://img.shields.io/badge/checks-460%20severity--mapped-red?style=flat-square" alt="460 severity-mapped checks"/>
+  <img src="https://img.shields.io/badge/tests-5745%20passing-brightgreen?style=flat-square" alt="5745 Tests"/>
 </p>
 
 ---
@@ -35,7 +35,7 @@
   - [Prerequisites (Live Scanner)](#prerequisites-live-scanner)
   - [Quick Start (Live Scanner)](#quick-start-live-scanner)
   - [CLI Reference (Live Scanner)](#cli-reference-live-scanner)
-  - [Security Checks Coverage (458 severity-mapped checks across 90 sections)](#security-checks-coverage-458-severity-mapped-checks-across-90-sections)
+  - [Security Checks Coverage (460 severity-mapped checks across 90 sections)](#security-checks-coverage-460-severity-mapped-checks-across-90-sections)
   - [Compliance Framework Mapping](#compliance-framework-mapping)
   - [Risk Scoring](#risk-scoring)
   - [CI/CD & AWS Security Hub Integration](#cicd--aws-security-hub-integration)
@@ -77,7 +77,7 @@ This repository contains **two complementary AWS security scanners**:
 
 | Scanner | File | Type | Input | Checks |
 |---------|------|------|-------|--------|
-| **OverWatch** (Live CNAPP) | `aws_live_scanner.py` | Live AWS API audit + security graph + attack-path CNAPP | Running AWS account (multi-account via AssumeRole) | 458 severity-mapped across 90 sections |
+| **OverWatch** (Live CNAPP) | `aws_live_scanner.py` | Live AWS API audit + security graph + attack-path CNAPP | Running AWS account (multi-account via AssumeRole) | 460 severity-mapped across 90 sections |
 | **IaC Security Scanner** | `aws_offline_scanner.py` | Static analysis | CloudFormation + Terraform files | 100+ (60+ TF regex + 42 CF structural) |
 
 Use **OverWatch** to audit a running AWS estate — CIS/compliance posture, effective-permissions CIEM, agentless
@@ -254,7 +254,7 @@ options:
 The live scanner connects to a running AWS account via **boto3**, performing **read-only** security checks aligned to multiple compliance frameworks. It produces colour-coded terminal output with PASS/FAIL/WARN verdicts, posture scoring, JSON/HTML reports, and saves evidence artefacts to a timestamped output directory.
 
 - **Read-only by design** -- never modifies AWS resources
-- **458 severity-mapped checks** across 90 audit sections (all 458 actionable, each with a detailed remediation write-up)
+- **460 severity-mapped checks** across 90 audit sections (all 460 actionable, each with a detailed remediation write-up)
 - **Effective internet-exposure engine** (CNAPP Phase 2) -- computes *true* reachability (`aws_exposure.py`): a workload is flagged internet-exposed only when a public IP/EIP/IPv6 **and** an active IGW route **and** open security-group ingress **and** a permissive stateless NACL (inbound + ephemeral return) all line up — killing the "SG allows 0.0.0.0/0" false positive. sg-references, NAT routes, private subnets and blocked-return NACLs are correctly *not* exposed
 - **First attack path** -- `ATTACK-01` chains it end-to-end: `Internet → exposed EC2 → instance-profile role → privilege escalation to admin` (CRITICAL)
 - **Network micro-segmentation** (Phase-3) -- **Layer A** (`SEG-01..06`, always-on, config-only, zero new grant) flags over-permissive security groups (world-open sensitive ports, wide ranges, unused SGs, SG-chains to a world-open group, unrestricted egress) as a distinct lens from the 4-gate reachability oracle — a config-level SG hole is caught even when the host is not currently reachable. **Layer B** (`FLOW-01..03`, opt-in `--flow-logs`) reads VPC Flow-Log *observed traffic* via CloudWatch Logs Insights to recommend evidence-based scope-downs ("only these /24s ever connected"), flag allowed-but-never-used ports, and surface top reject/recon talkers — annotating the graph's `EXPOSED_TO` edges with observed evidence (kept **out** of the traversable attack-path set so the low-FP reachability guarantee is preserved), and failing open to a `FLOW-00` note when the optional resource-scoped `logs:StartQuery` grant is absent
@@ -285,7 +285,7 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 - **Evidence collection** -- CSV/JSON artefact files saved per check
 - **Application scorecards (v2.39.0)** -- FR-2 end to end: an application registry, findings attributed to an accountable owner, and a per-application scorecard that states its own coverage, segregates excepted findings rather than hiding them, refuses a peer rank it cannot normalise, and renders every withheld figure with the reason in place of the number
 - **Governance layer (v2.38.0)** -- ownership attribution, SLA/MTTR, a corrected composite Cloud Risk Score, KRA metrics that report `NOT_ESTABLISHED` rather than a target they did not establish, a CI/CD guardrail gate with a *declared* failure mode, and forecasts that refuse to exist before their evidence does. Built from a review of the Phase II SRS; the six specification defects it fixed are recorded in `CHANGELOG.md` and in four ratifiable documents under `docs/`
-- **5458 backend tests** -- full test suite with mock boto3, no AWS credentials needed (incl. the hosted CNAPP platform and the coverage-close batches — WQL/Controls · policy-as-code · EDR/malware/DSPM ingest · non-AWS OCI registry — alongside exposure, deep-plane, attack-path-scoring, Phase-5 effective-permissions/state/CIEM, Phase-6 side-scan version-comparator/OSV-matching/EBS-block-plane/backend-export, Phase-7 remediation/code-to-cloud false-positive/false-negative catalogs, and the detailed finding write-ups / `finding_catalog` rendering; a regression test backs every defect the adversarial-verification passes found)
+- **5745 backend tests** -- full test suite with mock boto3, no AWS credentials needed (incl. the hosted CNAPP platform and the coverage-close batches — WQL/Controls · policy-as-code · EDR/malware/DSPM ingest · non-AWS OCI registry — alongside exposure, deep-plane, attack-path-scoring, Phase-5 effective-permissions/state/CIEM, Phase-6 side-scan version-comparator/OSV-matching/EBS-block-plane/backend-export, Phase-7 remediation/code-to-cloud false-positive/false-negative catalogs, and the detailed finding write-ups / `finding_catalog` rendering; a regression test backs every defect the adversarial-verification passes found)
 
 ### Prerequisites (Live Scanner)
 
@@ -297,7 +297,7 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 ### Quick Start (Live Scanner)
 
 ```bash
-# Run full audit (all 90 sections, 458 severity-mapped checks)
+# Run full audit (all 90 sections, 460 severity-mapped checks)
 python -m engine.aws_live_scanner
 
 # Target a specific region
@@ -381,7 +381,7 @@ options:
   --version             Show scanner version
 ```
 
-### Security Checks Coverage (458 severity-mapped checks across 90 sections)
+### Security Checks Coverage (460 severity-mapped checks across 90 sections)
 
 | Section | Check IDs | Description |
 |---------|-----------|-------------|
@@ -402,7 +402,7 @@ options:
 | **Route 53** | R53-01 to 05 | Query logging, DNSSEC, transfer lock, health checks, DNS firewall |
 | **Bedrock** | BDR-01 to 05 | Model logging, guardrails, KMS encryption, VPC endpoint, IAM least privilege |
 | **Bedrock Agents** | AGT-01 to 05 | Agent KMS encryption, execution role, KB security, Lambda security, guardrail attached |
-| **Lambda** | LMB-01 to 05 | Public access, VPC config, plaintext secrets in env vars, deprecated runtimes, concurrency |
+| **Lambda** | LMB-01 to 09 | Public access, VPC config, plaintext secrets in env vars, deprecated runtimes, concurrency, code-signing enforcement, vulnerable packaged dependencies, unauthenticated function URLs, wildcard function-URL CORS |
 | **EKS** | EKS-01 to 08 | Public API endpoint, control plane logging, secrets encryption, version, security groups, worker-node SSH, EKS-Fargate profile boundary, **authentication mode** |
 | **KSPM** | KSPM-00 to 07 | **Agentless CIS-EKS (K8s side)** — anonymous RBAC bindings, wildcard/cluster-admin RBAC, default-SA automount, Pod Security Admission, default-deny NetworkPolicy, privileged/host pods (fail-open when the K8s API is unreachable) |
 | **KIEM** | KIEM-01 to 04 | **K8s identity/entitlement** — over-broad AWS→K8s cluster-admin grants (EKS Access Entries), namespace-admin/secret-read, and **IRSA / Pod-Identity cross-plane** (ServiceAccount → AWS role → admin/crown) |

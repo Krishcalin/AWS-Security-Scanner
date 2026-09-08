@@ -43,7 +43,7 @@ DETAIL_MAP = aws_finding_detail.FINDING_DETAIL
 
 # Frameworks a compliance mapping may key on. A stray key here silently drops a
 # control from the crosswalk, which derives 34 further frameworks from the NIST spine.
-ALLOWED_FRAMEWORKS = {"CIS", "PCI-DSS", "HIPAA", "SOC2", "NIST"}
+ALLOWED_FRAMEWORKS = {"CIS", "CIS-COMPUTE", "PCI-DSS", "HIPAA", "SOC2", "NIST"}
 
 # ── the frozen backlog — now EMPTY, and it can only stay that way ───────────
 # Depth pass 2 filled the last of it. These stay as (empty) frozensets rather than

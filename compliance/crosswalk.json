@@ -107,6 +107,18 @@
    "sources": []
   },
   {
+   "id": "CIS-COMPUTE",
+   "name": "CIS AWS Compute Services Benchmark",
+   "version": "2.0.0",
+   "authority": "CIS",
+   "family": "cloud",
+   "native": true,
+   "near_identity": false,
+   "description": "Per-service hardening benchmark for EC2, ECS, Lambda, Lightsail, Batch, Elastic Beanstalk, Fargate, App Runner, EC2 Image Builder and ECR. A sibling of the Foundations Benchmark, not a superset: its control numbers are its own, so a citation must name the document (2.3 is an RDS control in Foundations and a tag-policy control here).",
+   "catalog_size": 0,
+   "sources": []
+  },
+  {
    "id": "CIS-AWS-FOUNDATIONS-3",
    "name": "CIS Amazon Web Services Foundations Benchmark",
    "version": "3.0.0",

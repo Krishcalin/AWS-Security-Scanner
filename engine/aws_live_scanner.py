@@ -454,6 +454,11 @@ CHECK_SEVERITY = {
     "LMB-01": "HIGH", "LMB-02": "MEDIUM", "LMB-03": "HIGH",
     "LMB-04": "MEDIUM", "LMB-05": "MEDIUM", "LMB-06": "MEDIUM",
     "LMB-07": "HIGH",
+    # Function URLs: an AuthType of NONE is an unauthenticated HTTPS endpoint on the
+    # open internet, which is HIGH for the same reason LMB-01 is. The CORS wildcard
+    # is MEDIUM on its own and materially worse with credentials — the finding says
+    # which, since severity is per check and cannot vary per finding.
+    "LMB-08": "HIGH", "LMB-09": "MEDIUM",
     "EKS-01": "HIGH", "EKS-02": "HIGH", "EKS-03": "MEDIUM",
     "EKS-04": "MEDIUM", "EKS-05": "MEDIUM",
     "ECS-01": "CRITICAL", "ECS-02": "HIGH", "ECS-03": "MEDIUM",
@@ -1165,6 +1170,12 @@ COMPLIANCE_MAP = {
     "LMB-05": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "LMB-06": {"PCI-DSS": "6.3.2", "SOC2": "CC7.1", "NIST": "SI-7"},
     "LMB-07": {"NIST": "RA-5", "PCI-DSS": "6.3.1", "SOC2": "CC7.1"},
+    # First checks tagged to the Compute Services Benchmark. Its numbering is its
+    # own, which is why the citation names the document (see framework_citation).
+    "LMB-08": {"CIS-COMPUTE": "12.16", "PCI-DSS": "7.2.1", "SOC2": "CC6.1",
+               "NIST": "AC-3"},
+    "LMB-09": {"CIS-COMPUTE": "12.15", "PCI-DSS": "6.2.4", "SOC2": "CC6.1",
+               "NIST": "SC-7"},
 }
 
 # ─── Remediation commands: check_id → AWS CLI command ────────────────────────
@@ -1536,6 +1547,8 @@ REMEDIATION_MAP = {
     "CNT-05": "Add a lifecycle policy to expire untagged/old images: aws ecr put-lifecycle-policy --repository-name <REPO> --lifecycle-policy-text file://lifecycle.json",
     "CNT-06": "Configure registry image signing with an AWS Signer profile: aws ecr put-signing-configuration --signing-configuration 'rules=[{signingProfileArn=<SIGNER_PROFILE_ARN>,repositoryFilters=[{filter=*,filterType=WILDCARD}]}]'",
     "LMB-06": "Create an Enforce-mode code-signing config and attach it: aws lambda create-code-signing-config --allowed-publishers SigningProfileVersionArns=<SIGNER_PROFILE_ARN> --code-signing-policies UntrustedArtifactOnDeployment=Enforce ; aws lambda update-function-code-signing-config --function-name <FUNC> --code-signing-config-arn <CSC_ARN>",
+    "LMB-08": "Require IAM auth on the function URL: aws lambda update-function-url-config --function-name <FUNC> --auth-type AWS_IAM ; then drop the public invoke grant the NONE endpoint needed: aws lambda remove-permission --function-name <FUNC> --statement-id <SID>. If the endpoint must stay anonymous, front it with API Gateway or CloudFront + WAF instead of exposing the function URL directly.",
+    "LMB-09": "Replace the wildcard origin with the exact origins that need it: aws lambda update-function-url-config --function-name <FUNC> --cors '{\"AllowOrigins\":[\"<ORIGIN>\"],\"AllowMethods\":[\"GET\",\"POST\"],\"AllowHeaders\":[\"Content-Type\",\"Authorization\"],\"AllowCredentials\":true}'  (<ORIGIN> is a full scheme-and-host origin, one entry per site that must call the endpoint)",
     "LMB-07": "Rebuild the function package on patched dependencies and redeploy: bump the vulnerable package in the function's manifest (requirements.txt / package.json / pom.xml / go.mod), rebuild the deployment zip, then aws lambda update-function-code --function-name <FUNC> --zip-file fileb://<ZIP>. If the dependency comes from a layer, publish a patched version (aws lambda publish-layer-version --layer-name <LAYER> --zip-file fileb://<ZIP>) and repoint the function with aws lambda update-function-configuration --function-name <FUNC> --layers <NEW_LAYER_ARN>.",
     "AMI-01": "Revoke public/cross-account AMI sharing (a public AMI exposes its full disk snapshot): aws ec2 modify-image-attribute --image-id <AMI_ID> --launch-permission '{\"Remove\":[{\"Group\":\"all\"}]}' ; audit remaining account-level shares.",
     "AMI-02": "Re-copy the AMI encrypted, then deregister the plaintext one: aws ec2 copy-image --source-image-id <AMI_ID> --source-region <REGION> --name <NAME>-enc --encrypted --kms-key-id <KMS_KEY> ; aws ec2 deregister-image --image-id <AMI_ID>",
@@ -6555,6 +6568,73 @@ class AWSLiveScanner:
         elif unsigned:
             self._add("INFO", "LMB-06", "LAMBDA", "lambda",
                       f"{unsigned}/{evaluated} Lambda functions have no code-signing config")
+
+        # LMB-08 / LMB-09 — Lambda function URLs. One extra API call per function
+        # answers both: AuthType (is the endpoint anonymous?) and Cors (can any site
+        # read its responses?). A function with no URL is not a finding, so the
+        # ResourceNotFoundException path is silent rather than a PASS — most
+        # functions have no URL and a per-function PASS would bury the ones that do.
+        self._log("LMB-08/LMB-09: Lambda function URLs — auth type and CORS origins")
+        urls_seen = 0
+        undetermined = 0
+        for fn in funcs:
+            fname = fn["FunctionName"]
+            try:
+                cfg = lmb.get_function_url_config(FunctionName=fname)
+            except Exception as e:
+                # Read the error code off the exception rather than catching the
+                # botocore type by name: `ClientError` is only bound when boto3
+                # imported, so `except ClientError` would raise NameError here on
+                # the COMMON path — most functions have no URL and answer with
+                # ResourceNotFoundException.
+                resp = getattr(e, "response", None)
+                code = ""
+                if isinstance(resp, dict):
+                    code = str((resp.get("Error") or {}).get("Code") or "")
+                if code != "ResourceNotFoundException":
+                    undetermined += 1
+                continue
+            if not isinstance(cfg, dict):
+                undetermined += 1
+                continue
+            urls_seen += 1
+
+            auth = str(cfg.get("AuthType") or "").strip()
+            if auth == "AWS_IAM":
+                self._add("PASS", "LMB-08", "LAMBDA", fname,
+                          f"Function URL on '{fname}' requires AWS_IAM authentication")
+            elif auth:
+                self._add("FAIL", "LMB-08", "LAMBDA", fname,
+                          f"Function URL on '{fname}' has AuthType={auth} — an "
+                          f"internet-reachable HTTPS endpoint that requires no AWS "
+                          f"authentication")
+            else:
+                undetermined += 1
+
+            cors = cfg.get("Cors")
+            if isinstance(cors, dict):
+                origins = [str(o) for o in (cors.get("AllowOrigins") or [])]
+                if "*" in origins:
+                    creds = bool(cors.get("AllowCredentials"))
+                    self._add("FAIL", "LMB-09", "LAMBDA", fname,
+                              f"Function URL on '{fname}' allows CORS origin '*'"
+                              + (" WITH AllowCredentials=true — any site can make "
+                                 "credentialed cross-origin calls and read the "
+                                 "response" if creds else
+                                 " — any site can read this endpoint's responses"))
+                elif origins:
+                    self._add("PASS", "LMB-09", "LAMBDA", fname,
+                              f"Function URL CORS on '{fname}' is scoped to "
+                              f"{len(origins)} explicit origin(s)")
+
+        if undetermined:
+            # Never a silent clean: a denied read is not the same as a safe config.
+            self._add("WARN", "LMB-08", "LAMBDA", "lambda",
+                      f"Function-URL configuration undetermined for {undetermined} "
+                      f"function(s) (read denied or malformed) — not assessed, not clean")
+        elif not urls_seen:
+            self._add("INFO", "LMB-08", "LAMBDA", "lambda",
+                      f"No Lambda function URLs configured across {len(funcs)} function(s)")
 
         # LMB-07 — the artifact side-scan. Opt-in; the guard inside returns
         # immediately on a default run, so this call costs nothing unasked.

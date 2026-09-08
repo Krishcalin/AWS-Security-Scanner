@@ -199,6 +199,7 @@ FLOORS = {
     "test_ingest_snapshot.py": 6,
     "test_ingest_state.py": 8,
     "test_kra.py": 33,
+    "test_lambda_function_url.py": 18,
     "test_lambda_sidescan_wiring.py": 14,
     "test_layer_fetch.py": 14,
     "test_layering.py": 4,

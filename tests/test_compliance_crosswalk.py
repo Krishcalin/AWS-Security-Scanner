@@ -59,7 +59,10 @@ def test_load_shipped_file_is_valid():
     assert digest.startswith("cw-")
     natives = [k for k, v in fw.items() if v["native"]]
     derived = [k for k, v in fw.items() if not v["native"]]
-    assert set(natives) == {"CIS", "PCI-DSS", "HIPAA", "SOC2", "NIST"}
+    # CIS-COMPUTE is a SIXTH native, not a synonym for CIS: the Compute Services
+    # Benchmark numbers its controls independently of Foundations, so a citation has
+    # to name the document (2.3 is RDS in Foundations and a tag policy here).
+    assert set(natives) == {"CIS", "CIS-COMPUTE", "PCI-DSS", "HIPAA", "SOC2", "NIST"}
     assert len(derived) >= 30                       # the breadth goal
     # every mapped NIST control is one of the 38 the product actually tags
     assert set(xw.keys()) <= set(_universe())

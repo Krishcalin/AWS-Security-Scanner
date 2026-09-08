@@ -46,7 +46,7 @@ _CONF_RANK = {"low": 0, "medium": 1, "high": 2}
 #: this loader, which is a pure function over ANY document: fixtures and customer
 #: overlays legitimately declare only some natives, so an equality check here would
 #: reject them. Adding a sixth native framework means editing both places.
-_NATIVE_IDS = frozenset({"CIS", "PCI-DSS", "HIPAA", "SOC2", "NIST"})
+_NATIVE_IDS = frozenset({"CIS", "CIS-COMPUTE", "PCI-DSS", "HIPAA", "SOC2", "NIST"})
 
 # compliance/ sits at the REPO ROOT and this module lives in engine/, so the
 # anchor climbs out of the package first. Before the engine/hub/store split it
