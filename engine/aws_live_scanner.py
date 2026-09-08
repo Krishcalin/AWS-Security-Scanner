@@ -1918,6 +1918,38 @@ def classify_resource_policy_stmt(stmt: Dict, own_account: str) -> Optional[Dict
 
 _ECR_HOST_RE = re.compile(r"^(\d{12})\.dkr\.ecr(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$")
 
+#: Sentence boundary used to take the first sentence of a catalogued risk write-up as
+#: a check's one-line summary. Deliberately conservative: it splits only on a period,
+#: question or exclamation mark FOLLOWED BY WHITESPACE, so "PubliclyAccessible=true."
+#: mid-sentence abbreviations and "0.0.0.0/0" do not split the line.
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+
+
+def _asff_impact_suffix(check_id: str) -> str:
+    """The catalogued business impact, appended to an ASFF Description.
+
+    Security Hub shows Description under the finding, and the per-resource message
+    alone says what was found without saying why it matters. Empty string when the
+    check has no catalogued impact, so the Description is unchanged rather than
+    carrying a dangling separator."""
+    d = aws_finding_detail.get_detail(check_id) or {}
+    impact = str(d.get("impact") or "").strip()
+    return (" | Impact: " + impact) if impact else ""
+
+
+def _asff_steps_text(check_id: str) -> str:
+    """Numbered remediation steps as one line, the FALLBACK for an ASFF finding whose
+    check has no one-line CLI in REMEDIATION_MAP.
+
+    Without it Security Hub receives a finding with no Remediation block at all, even
+    though the catalogue holds full steps for every registered check -- the operator
+    is told what is wrong and nothing about how to fix it."""
+    steps = aws_finding_detail.steps_for(check_id)
+    if not steps:
+        return ""
+    return " ".join("%d) %s" % (i, str(s).strip())
+                    for i, s in enumerate(steps, 1) if str(s).strip())
+
 
 def parse_ecr_image_ref(ref: str) -> Optional[Dict]:
     """Parse a container image reference into {account, region, repo, tag, digest}
@@ -16892,6 +16924,63 @@ class AWSLiveScanner:
             return IAM_PRIVESC_FULL_ADMIN["name"]
         return check_id
 
+    @staticmethod
+    def _fit(text: str, cap: int) -> str:
+        """Trim to `cap` characters on a word boundary. ASFF caps Title at 256 and
+        Description at 1024; a hard slice would cut mid-word."""
+        text = " ".join((text or "").split())
+        if len(text) <= cap:
+            return text
+        cut = text.rfind(" ", 0, cap - 3)
+        return (text[:cut] if cut > cap // 2 else text[:cap - 3]).rstrip(" ,;:-") + "..."
+
+    @staticmethod
+    def _detail_summary(check_id: str) -> str:
+        """A one-line summary of what a check asserts, DERIVED from the catalogued
+        risk write-up rather than authored here.
+
+        `aws_finding_detail` carries risk/impact/steps prose for every registered
+        check, and its first sentence is already a summary of the condition. Taking
+        it verbatim keeps the exports and the HTML report saying the same thing about
+        the same check; writing a fresh title here would let the two drift, and would
+        describe the check by something other than what it asserts.
+        """
+        d = aws_finding_detail.get_detail(check_id) or {}
+        risk = str(d.get("risk") or "").strip()
+        if not risk:
+            return ""
+        first = _SENTENCE_END.split(risk, 1)[0].strip()
+        return first
+
+    @classmethod
+    def _rule_help(cls, check_id: str) -> tuple:
+        """(plain, markdown) help for a SARIF rule, from the same catalogue the HTML
+        report renders. Returns ("", "") when a check has no write-up, so the caller
+        omits the field rather than emitting an empty one."""
+        d = aws_finding_detail.get_detail(check_id) or {}
+        risk = str(d.get("risk") or "").strip()
+        impact = str(d.get("impact") or "").strip()
+        steps = [str(s).strip() for s in (d.get("steps") or []) if str(s).strip()]
+        if not (risk or impact or steps):
+            return "", ""
+
+        plain = []
+        md = []
+        if risk:
+            plain.append(risk)
+            md.append(risk)
+        if impact:
+            plain.append("Impact: " + impact)
+            md.append("**Impact:** " + impact)
+        if steps:
+            plain.append("Remediation: "
+                         + " ".join("%d) %s" % (i, s)
+                                    for i, s in enumerate(steps, 1)))
+            md.append("**Remediation**\n"
+                      + "\n".join("%d. %s" % (i, s)
+                                  for i, s in enumerate(steps, 1)))
+        return "\n\n".join(plain), "\n\n".join(md)
+
     def save_sarif(self, path: str):
         """Write a SARIF 2.1.0 report (FAIL + WARN findings) for GitHub code
         scanning and other SARIF consumers."""
@@ -16905,11 +16994,24 @@ class AWSLiveScanner:
             rule_index[r.check_id] = len(rules)
             tags = ["security", r.section.lower()]
             tags += [f"{fw}:{ctrl}" for fw, ctrl in (r.compliance or {}).items()]
+            # A SARIF rule describes the CHECK, not one resource. shortDescription
+            # and fullDescription therefore come from the catalogued write-up; using
+            # r.message here would describe whichever resource happened to be the
+            # first finding of this check in this run.
+            summary = self._detail_summary(r.check_id) or self._rule_title(r.check_id)
+            detail = aws_finding_detail.get_detail(r.check_id) or {}
+            full = str(detail.get("risk") or "").strip() or r.message
+            help_text, help_md = self._rule_help(r.check_id)
             rules.append({
                 "id": r.check_id,
                 "name": self._rule_title(r.check_id).replace(" ", ""),
-                "shortDescription": {"text": f"{r.check_id}: {self._rule_title(r.check_id)}"},
-                "fullDescription": {"text": r.message},
+                # GitHub code scanning renders shortDescription as the alert title,
+                # so it is trimmed harder than the ASFF Title cap of 256; the full
+                # sentence survives in fullDescription and help immediately below.
+                "shortDescription": {"text": self._fit(f"{r.check_id}: {summary}", 200)},
+                "fullDescription": {"text": full},
+                **({"help": {"text": help_text, "markdown": help_md}}
+                   if help_text else {}),
                 "helpUri": "https://github.com/Krishcalin/AWS-Security-Scanner",
                 "defaultConfiguration": {
                     "level": SARIF_LEVEL.get(r.severity, "warning")},
@@ -16995,8 +17097,15 @@ class AWSLiveScanner:
                 "CreatedAt": now,
                 "UpdatedAt": now,
                 "Severity": {"Label": ASFF_SEVERITY.get(r.severity, "INFORMATIONAL")},
-                "Title": f"{r.check_id}: {self._rule_title(r.check_id)}"[:256],
-                "Description": r.message[:1024],
+                # Title names the condition, not the check id twice. Description
+                # keeps the per-resource message first (it is what makes one finding
+                # different from the next) and appends the catalogued impact.
+                "Title": self._fit(
+                    f"{r.check_id}: "
+                    f"{self._detail_summary(r.check_id) or self._rule_title(r.check_id)}",
+                    256),
+                "Description": self._fit(
+                    r.message + _asff_impact_suffix(r.check_id), 1024),
                 "Resources": [{
                     "Type": "Other",
                     "Id": r.resource or f"{self.account}",
@@ -17007,9 +17116,9 @@ class AWSLiveScanner:
                     **({"RelatedRequirements": related} if related else {}),
                 },
                 **({"Remediation": {"Recommendation": {
-                    "Text": _rem[:512],
+                    "Text": self._fit(_rem or _asff_steps_text(r.check_id), 512),
                     "Url": "https://github.com/Krishcalin/AWS-Security-Scanner",
-                }}} if _rem else {}),
+                }}} if (_rem or _asff_steps_text(r.check_id)) else {}),
                 "ProductFields": {"Section": r.section, "CheckId": r.check_id},
                 "RecordState": "ACTIVE",
             })
