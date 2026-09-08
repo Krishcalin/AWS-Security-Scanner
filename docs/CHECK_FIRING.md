@@ -17,7 +17,7 @@ carries neither - so a check that never fails never renders what the catalogue
 advertises for it.
 
 
-**458 registered checks.** 289 are proven to FAIL in the suite; 85 run but have never been driven to a failure; 84 were never observed at all.
+**458 registered checks.** 303 are proven to FAIL in the suite; 85 run but have never been driven to a failure; 70 were never observed at all.
 
 
 ## Never observed
@@ -48,20 +48,6 @@ No test makes these emit anything. Each is registered in all four metadata maps 
 - `GRF-01` (declared MEDIUM)
 - `HSM-01` (declared MEDIUM)
 - `HSM-02` (declared HIGH)
-- `IAMPE-01` (declared CRITICAL)
-- `IAMPE-02` (declared HIGH)
-- `IAMPE-04` (declared CRITICAL)
-- `IAMPE-05` (declared HIGH)
-- `IAMPE-07` (declared HIGH)
-- `IAMPE-08` (declared HIGH)
-- `IAMPE-10` (declared HIGH)
-- `IAMPE-11` (declared HIGH)
-- `IAMPE-12` (declared HIGH)
-- `IAMPE-13` (declared HIGH)
-- `IAMPE-14` (declared HIGH)
-- `IAMPE-16` (declared HIGH)
-- `IAMPE-18` (declared MEDIUM)
-- `IAMPE-20` (declared MEDIUM)
 - `IMI-01` (declared MEDIUM)
 - `KIEM-02` (declared MEDIUM)
 - `KSPM-02` (declared HIGH)

@@ -54,12 +54,15 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: the middle — and tripped the ceiling it had just improved. Tranche 2 then moved
 #: 5 more from the middle to proven-failing, including both CRITICALs (RDS-02, RDS-06).
 #: Tranche 3 took the whole LOGGING section, which no test had ever called, straight
-#: from never-observed to proven-failing — the only tranche so far to move both ends.
+#: from never-observed to proven-failing. Tranche 4 did the same for the 14 IAM
+#: privesc rules: their matcher was already well unit-tested as a pure function, but
+#: those tests never reach `_add`, so no IAMPE finding had ever been constructed —
+#: tested logic and a proven finding are different claims.
 #:
 #: The honest invariants are the ends: unobserved can only fall, proven-failing can
 #: only rise. Lower/raise these when the doc is regenerated; never the other way.
-MAX_NEVER_OBSERVED = 84
-MIN_PROVEN_FAILING = 289
+MAX_NEVER_OBSERVED = 70
+MIN_PROVEN_FAILING = 303
 
 
 def doc_text() -> str:
