@@ -826,26 +826,51 @@ class AWSIaCScanner:
         self._sast_scan(text, TF_SAST_RULES, filepath)
 
     def _sast_scan(self, text, rules, filepath):
-        compiled = [(rule, re.compile(rule["pattern"], re.MULTILINE | re.DOTALL)) for rule in rules]
+        """Match every rule against the WHOLE file, not one line at a time.
+
+        THE DEFECT THIS FIXES. The patterns are compiled with ``re.MULTILINE |
+        re.DOTALL`` -- flags that only mean anything across newlines -- and were then
+        searched with ``rx.search(line)`` inside a per-line loop, where a pattern can
+        never see a second line. 17 of the 59 Terraform rules span a block by
+        construction (``[^}]*`` between two attributes, or a negative lookahead for a
+        key the resource must lack), and 16 of them could not fire under ANY input:
+        registered, severity-mapped, CWE-tagged, remediation written, and dead. In a
+        pre-deploy CI gate that is the worst shape a rule can have, because the build
+        goes green and the finding was never possible.
+
+        It surfaced while writing fixtures to reach them: eight of the 27 uncovered
+        rules started firing and the rest would not, and the ones that would not were
+        exactly the ones whose pattern needs a second line.
+
+        LINE NUMBERS COME FROM THE MATCH OFFSET, counted on the original text rather
+        than a `splitlines()` index, so \r\n files report the same line a human sees.
+        A match is attributed to the line it STARTS on, and a match starting inside a
+        comment is still skipped -- the per-line loop's one real feature.
+
+        PER-OCCURRENCE FINDINGS ARE PRESERVED. ``finditer`` yields one match per
+        occurrence, which for a single-line pattern is exactly what the old loop
+        produced, so the 40 rules that already worked report identically.
+        """
         lines = text.splitlines()
-        for lineno, line in enumerate(lines, 1):
-            stripped = line.lstrip()
-            if stripped.startswith(("#", "//")):
-                continue
-            for rule, rx in compiled:
-                if rx.search(line):
-                    self._add(Finding(
-                        rule_id=rule["id"],
-                        name=rule["name"],
-                        category=rule["category"],
-                        severity=rule["severity"],
-                        file_path=str(filepath),
-                        line_num=lineno,
-                        line_content=line.rstrip(),
-                        description=rule["description"],
-                        recommendation=rule["recommendation"],
-                        cwe=rule.get("cwe"),
-                    ))
+        for rule in rules:
+            rx = re.compile(rule["pattern"], re.MULTILINE | re.DOTALL)
+            for m in rx.finditer(text):
+                lineno = text.count("\n", 0, m.start()) + 1
+                line = lines[lineno - 1] if 0 < lineno <= len(lines) else ""
+                if line.lstrip().startswith(("#", "//")):
+                    continue
+                self._add(Finding(
+                    rule_id=rule["id"],
+                    name=rule["name"],
+                    category=rule["category"],
+                    severity=rule["severity"],
+                    file_path=str(filepath),
+                    line_num=lineno,
+                    line_content=line.rstrip(),
+                    description=rule["description"],
+                    recommendation=rule["recommendation"],
+                    cwe=rule.get("cwe"),
+                ))
 
     # ----------------------------------------------------------
     # CloudFormation structural scanning

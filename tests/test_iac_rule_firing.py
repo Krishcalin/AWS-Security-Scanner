@@ -50,21 +50,14 @@ from engine import aws_offline_scanner as sc  # noqa: E402
 TF_FIXTURE = os.path.join(SAMPLES, "vulnerable_network.tf")
 CF_FIXTURE = os.path.join(SAMPLES, "vulnerable_cloudformation.yaml")
 
-#: Floor, not a target. Raise it when a fixture reaches further; never lower it.
-MINIMUM_RULES_FIRED = 121
+#: Floor, not a target. Every rule fires, so this is now also the total —
+#: a new rule arrives unfired and drops below it.
+MINIMUM_RULES_FIRED = 148
 
-#: The remaining Terraform rules no fixture reaches. This list can only shrink.
-#: They are regex rules in the `_sast_scan` table, so closing one means adding the
-#: matching block to vulnerable_network.tf.
-UNFIRED_TERRAFORM = {
-    "AWS-APIGW-TF-001", "AWS-BR-TF-001", "AWS-CW-TF-001", "AWS-CW-TF-002",
-    "AWS-CW-TF-003", "AWS-DDB-TF-001", "AWS-EB-TF-001", "AWS-EB-TF-002",
-    "AWS-EBS-TF-001", "AWS-ECS-TF-002", "AWS-GD-TF-001", "AWS-IAM-TF-001",
-    "AWS-IAM-TF-002", "AWS-IAM-TF-003", "AWS-IAM-TF-004", "AWS-LAM-TF-001",
-    "AWS-OS-TF-002", "AWS-RS-TF-001", "AWS-RS-TF-002", "AWS-S3-TF-001",
-    "AWS-SFN-TF-001", "AWS-SFN-TF-002", "AWS-SG-TF-002", "AWS-SG-TF-003",
-    "AWS-SM-TF-002", "AWS-VPC-TF-001", "AWS-WAF-TF-001",
-}
+#: EMPTY, and it stays that way. Every Terraform rule now fires against
+#: vulnerable_network.tf. An entry appearing here again means a rule stopped
+#: firing — fix the fixture or the rule, do not re-populate this.
+UNFIRED_TERRAFORM: set = set()
 
 RULE_RE = re.compile(r'"(AWS-[A-Z0-9]+(?:-TF)?-[0-9]{3})"')
 
@@ -111,7 +104,7 @@ def test_the_floor_is_not_stale(fired):
     """A floor left far below the real number stops being a ratchet. Raise it when a
     fixture reaches further, in the same commit."""
     covered = len(fired & all_rules())
-    assert covered - MINIMUM_RULES_FIRED <= 3, (
+    assert covered - MINIMUM_RULES_FIRED <= 0, (
         "%d rules fire but the floor is only %d; raise it" % (covered,
                                                               MINIMUM_RULES_FIRED))
 
@@ -174,3 +167,109 @@ def test_the_sample_findings_file_matches_a_live_scan():
     assert committed == scan(TF_FIXTURE), (
         "the committed sample no longer matches what the scanner produces; "
         "regenerate it or explain the difference")
+
+
+# ── the scanner fix that made 148/148 possible ─────────────────────────────
+
+def test_a_block_spanning_rule_can_match_at_all():
+    r"""THE DEFECT THIS PINS. `_sast_scan` compiled every pattern with
+    `re.MULTILINE | re.DOTALL` — flags that only mean anything across newlines — and
+    then searched `rx.search(line)` inside a per-line loop, where a pattern can never
+    see a second line. 16 of the 59 Terraform rules were dead by construction:
+    registered, severity-mapped, CWE-tagged, remediation written, and unable to fire
+    under any input. In a pre-deploy CI gate that is the worst shape a rule can have,
+    because the build goes green and the finding was never possible.
+
+    AWS-SG-TF-002 is the clearest case: `from_port\s*=\s*3389[^}]*cidr_blocks` needs
+    the port and the CIDR list, which in real Terraform are on different lines."""
+    fired = scan(TF_FIXTURE)
+    assert "AWS-SG-TF-002" in fired, (
+        "a block-spanning rule still cannot match; _sast_scan is searching per line")
+
+
+def test_a_multi_line_match_is_attributed_to_the_line_it_starts_on():
+    """A finding whose line number points at the end of a block, or at line 1, sends
+    a reader to the wrong place in their own file."""
+    s = sc.AWSIaCScanner()
+    s.scan_path(TF_FIXTURE)
+    text = io.open(TF_FIXTURE, encoding="utf-8", errors="replace").read()
+    lines = text.splitlines()
+    for f in s.findings:
+        assert 1 <= f.line_num <= len(lines), (
+            "%s reported line %s of a %d-line file" % (f.rule_id, f.line_num,
+                                                       len(lines)))
+        # Finding.__init__ strips line_content, so the comparison is stripped too.
+        assert f.line_content == lines[f.line_num - 1].strip(), (
+            "%s: line_content does not match the line it names" % f.rule_id)
+
+
+def test_the_reported_line_is_the_one_the_match_starts_on(tmp_path):
+    """INDEPENDENT of the implementation's own lookup. The first version of this
+    compared `line_content` against `lines[line_num - 1]` \u2014 both derived from the
+    same index, so an off-by-one moved them together and the assertion held. Two
+    mutations (+1, and always-1) survived it. Here the file layout is ours, so the
+    expected line number is known before the scanner runs."""
+    p = tmp_path / "padded.tf"
+    p.write_text("\n".join([
+        "variable \"a\" { default = 1 }",      # 1
+        "",                                      # 2
+        "variable \"b\" { default = 2 }",      # 3
+        "",                                      # 4
+        "acl = \"public-read-write\"",         # 5  <- the only match
+    ]) + "\n", encoding="utf-8")
+
+    s = sc.AWSIaCScanner()
+    s.scan_path(str(p))
+    hits = [f for f in s.findings if f.rule_id == "AWS-S3-TF-001"]
+    assert [f.line_num for f in hits] == [5]
+
+
+def test_a_block_spanning_match_reports_its_opening_line(tmp_path):
+    """A multi-line match must point at where the problem STARTS, not at the closing
+    brace or line 1. AWS-SG-TF-002 spans from_port to cidr_blocks."""
+    p = tmp_path / "sg.tf"
+    p.write_text("\n".join([
+        "resource \"aws_security_group\" \"x\" {",   # 1
+        "  ingress {",                                  # 2
+        "    from_port   = 3389",                       # 3  <- match starts
+        "    to_port     = 3389",                       # 4
+        "    protocol    = \"tcp\"",                  # 5
+        "    cidr_blocks = [\"0.0.0.0/0\"]",          # 6
+        "  }",                                          # 7
+        "}",                                            # 8
+    ]) + "\n", encoding="utf-8")
+
+    s = sc.AWSIaCScanner()
+    s.scan_path(str(p))
+    hits = [f for f in s.findings if f.rule_id == "AWS-SG-TF-002"]
+    assert hits, "the block-spanning rule did not fire"
+    assert [f.line_num for f in hits] == [3]
+
+
+def test_a_pattern_matching_inside_a_comment_is_still_skipped(tmp_path):
+    """The per-line loop's one real feature, kept: a rule must not fire on a line
+    that is commented out. Losing this while fixing the multi-line bug would turn
+    every documented example in a customer's Terraform into a finding."""
+    p = tmp_path / "commented.tf"
+    p.write_text('# acl = "public-read-write"\n', encoding="utf-8")
+    assert scan(str(p)) == set()
+
+
+def test_a_live_line_next_to_a_comment_still_fires(tmp_path):
+    """The negative control: skipping comments must not skip the file."""
+    p = tmp_path / "mixed.tf"
+    p.write_text('# a note\nacl = "public-read-write"\n', encoding="utf-8")
+    assert "AWS-S3-TF-001" in scan(str(p))
+
+
+def test_each_occurrence_is_reported_separately(tmp_path):
+    """`finditer` yields one match per occurrence, which is what the old per-line
+    loop produced for single-line patterns — so the 40 rules that already worked
+    report identically, and a file with three public buckets still says three."""
+    p = tmp_path / "three.tf"
+    p.write_text('acl = "public-read-write"\n' * 3, encoding="utf-8")
+    s = sc.AWSIaCScanner()
+    s.scan_path(str(p))
+    hits = [f for f in s.findings if f.rule_id == "AWS-S3-TF-001"]
+    assert len(hits) == 3
+    assert [f.line_num for f in hits] == [1, 2, 3]
