@@ -176,6 +176,7 @@ FLOORS = {
     "test_finding_detail.py": 14,
     "test_forensics.py": 6,
     "test_forensics_api.py": 4,
+    "test_framework_citation.py": 11,
     "test_frontend_contract.py": 7,
     "test_graph_from_dict.py": 9,
     "test_graph_neptune.py": 14,

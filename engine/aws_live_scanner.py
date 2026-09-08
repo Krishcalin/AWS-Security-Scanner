@@ -1925,6 +1925,20 @@ _ECR_HOST_RE = re.compile(r"^(\d{12})\.dkr\.ecr(?:-fips)?\.([a-z0-9-]+)\.amazona
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 
+def _framework_citation(framework_id: str, control: str) -> str:
+    """Qualify a compliance citation with the framework's name and edition.
+
+    Thin wrapper so the exports do not each carry registry knowledge, and so a
+    missing/corrupt reference file degrades to today's unqualified string rather
+    than raising inside an export. `compliance_crosswalk` is imported lazily here
+    for the same reason every other reference to it in this module is."""
+    try:
+        from engine import compliance_crosswalk as _cc
+        return _cc.framework_citation(framework_id, control)
+    except Exception:
+        return "%s %s" % (framework_id, control)
+
+
 def _asff_impact_suffix(check_id: str) -> str:
     """The catalogued business impact, appended to an ASFF Description.
 
@@ -17002,6 +17016,16 @@ class AWSLiveScanner:
             detail = aws_finding_detail.get_detail(r.check_id) or {}
             full = str(detail.get("risk") or "").strip() or r.message
             help_text, help_md = self._rule_help(r.check_id)
+            # The `tags` above stay machine-stable ("CIS:2.3.2") because they are
+            # what consumers filter on, and framework ids are already distinct per
+            # document. A person reading the rule still needs to know WHICH CIS
+            # benchmark and edition "2.3.2" indexes, so the qualified citations go
+            # in the help text beside the write-up.
+            cites = [_framework_citation(fw, ctrl)
+                     for fw, ctrl in sorted((r.compliance or {}).items())]
+            if cites and help_text:
+                help_text += "\n\nCompliance: " + "; ".join(cites)
+                help_md += "\n\n**Compliance:** " + "; ".join(cites)
             rules.append({
                 "id": r.check_id,
                 "name": self._rule_title(r.check_id).replace(" ", ""),
@@ -17085,7 +17109,13 @@ class AWSLiveScanner:
         for r in self.results:
             if r.status not in ("FAIL", "WARN"):
                 continue
-            related = [f"{fw} {ctrl}" for fw, ctrl in (r.compliance or {}).items()]
+            # Name the document, not just the number. "CIS 2.3.2" is unresolvable
+            # without knowing which CIS benchmark and edition indexes it; Security
+            # Hub's own RelatedRequirements convention is "Name vVersion/control".
+            # Degrades to the bare "CIS 2.3.2" if the framework registry is
+            # unreadable, so a missing reference file cannot break the export.
+            related = [_framework_citation(fw, ctrl)
+                       for fw, ctrl in (r.compliance or {}).items()]
             _rem = self._remediation_for(r)
             findings.append({
                 "SchemaVersion": "2018-10-08",

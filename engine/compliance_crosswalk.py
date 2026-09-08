@@ -39,6 +39,13 @@ from typing import Callable, Dict, Optional, Tuple
 
 _CONFIDENCE = ("high", "medium", "low")
 _CONF_RANK = {"low": 0, "medium": 1, "high": 2}
+#: The code's declaration of which frameworks are hand-tagged per check. The data
+#: file carries the same fact as each framework's ``native`` flag, and the edge rule
+#: below enforces THAT copy. The two are held in agreement by
+#: ``tests/test_framework_citation.py``, checked against the real registry — not in
+#: this loader, which is a pure function over ANY document: fixtures and customer
+#: overlays legitimately declare only some natives, so an equality check here would
+#: reject them. Adding a sixth native framework means editing both places.
 _NATIVE_IDS = frozenset({"CIS", "PCI-DSS", "HIPAA", "SOC2", "NIST"})
 
 # compliance/ sits at the REPO ROOT and this module lives in engine/, so the
@@ -158,6 +165,52 @@ def load_crosswalk(path: Optional[str] = None, *, overlay: Optional[dict] = None
 
     return crosswalk, frameworks, _canonical_digest(raw.get("frameworks", []),
                                                      raw.get("crosswalk", {}))
+
+
+def framework_citation(framework_id: str, control: str,
+                       frameworks: Optional[Dict[str, dict]] = None) -> str:
+    """A compliance citation that names the DOCUMENT, not just the number.
+
+    WHY THIS EXISTS. A finding carries ``{"CIS": "2.3.2"}`` and the exports render it
+    as ``CIS 2.3.2``. That number only means something once you know which CIS
+    document and which edition it indexes: "2.3" is an RDS control in the AWS
+    Foundations Benchmark and "Ensure Tag Policies are Enabled" in the AWS Compute
+    Services Benchmark. The registry has carried the name and version all along
+    (``CIS`` -> "CIS AWS Foundations Benchmark" v3.0); only the exports never asked.
+    An auditor reading a Security Hub finding cannot look up an unqualified number.
+
+    The rendered form is ``Name vVersion/control`` — AWS Security Hub's own
+    convention for RelatedRequirements, so this follows the platform rather than
+    inventing a format.
+
+    FAILS OPEN, DELIBERATELY. This module promises that a missing or corrupt
+    reference file leaves the native pipeline unaffected. An unknown id or an
+    unreadable registry therefore degrades to ``"<id> <control>"`` — byte-identical
+    to what the exports emit today — rather than raising or emitting a half-formed
+    citation.
+    """
+    fid = str(framework_id or "").strip()
+    ctrl = str(control or "").strip()
+    if not fid or not ctrl:
+        return (fid or ctrl)
+    if frameworks is None:
+        try:
+            _cw, frameworks, _digest = get_crosswalk()
+        except Exception:
+            frameworks = {}
+    meta = (frameworks or {}).get(fid) or {}
+    name = str(meta.get("name") or "").strip()
+    if not name:
+        return "%s %s" % (fid, ctrl)
+    # Real registry values make a naive "name + ' v' + version" read badly: NIST's
+    # name already ends "Rev 5" and its version IS "Rev 5", which renders the
+    # nonsense "NIST SP 800-53 Rev 5 vRev 5". Suppress a version the name already
+    # carries, and only prefix "v" for a numeric edition.
+    version = str(meta.get("version") or "").strip()
+    if not version or version.lower() in name.lower():
+        return "%s/%s" % (name, ctrl)
+    edition = ("v" + version) if version[:1].isdigit() else version
+    return "%s %s/%s" % (name, edition, ctrl)
 
 
 def _read_json_file(path: str) -> object:

@@ -1179,7 +1179,11 @@ class TestAsffOutput(unittest.TestCase):
             self.assertEqual(f0["AwsAccountId"], "123456789012")
             self.assertEqual(f0["Severity"]["Label"], "CRITICAL")
             self.assertEqual(f0["Compliance"]["Status"], "FAILED")
-            self.assertIn("CIS 1.5", f0["Compliance"]["RelatedRequirements"])
+            # Citations name the document and edition, not just the number: an
+            # unqualified "CIS 1.5" cannot be looked up, because 1.5 indexes a
+            # different control in each CIS benchmark.
+            self.assertIn("CIS AWS Foundations Benchmark v3.0/1.5",
+                          f0["Compliance"]["RelatedRequirements"])
             self.assertTrue(f0["Remediation"]["Recommendation"]["Text"])
         finally:
             os.unlink(path)
