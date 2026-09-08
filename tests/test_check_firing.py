@@ -24,10 +24,16 @@ THE THREE STATES, and the distinction that carries the value:
     path anywhere. Nothing in the build said so until this file existed.
 
 WHAT THIS FILE DOES NOT CLAIM. "Never observed in the suite" is not "cannot fire". It
-is a TEST-COVERAGE fact, and most of the 103 are checks nobody has written a driving
-test for rather than checks that are broken. The value is that the number is now
-visible and can only go down, and that a genuinely unreachable check can no longer
-hide among them.
+is a TEST-COVERAGE fact: most are checks nobody has written a driving test for rather
+than checks that are broken. The value is that the number is visible and can only go
+down, and that a genuinely unreachable check can no longer hide among them.
+
+The first tranche bore that out. `tests/test_unproven_checks_tranche1.py` drove 14
+never-observed checks across four sections; seven reached FAIL on a genuinely bad
+configuration, and seven could not — a topic with no CMK is exactly what SNS-01
+describes and it emits WARN, so its declared MEDIUM is reachable only by making the
+AWS call throw. None of the fourteen was broken. The dead ones are rarer than the
+untested ones, which is why the count needs measuring rather than guessing.
 """
 from __future__ import annotations
 
@@ -40,11 +46,17 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 
-#: The ratchet. Lower these when coverage improves and the doc is regenerated; never
-#: raise them. A new check arrives unproven, so adding one without a driving test
-#: pushes `never_observed` past the ceiling and fails the build — which is the point.
-MAX_NEVER_OBSERVED = 103
-MAX_RUNS_BUT_NEVER_FAILS = 82
+#: THE TWO ENDS RATCHET; THE MIDDLE IS A RESIDUAL. An earlier version of this file
+#: also capped "runs but never fails", and that was wrong: driving a check from
+#: "never observed" into that bucket is PROGRESS, and a ceiling on it scores progress
+#: as regression. The first tranche of driven checks (tests/test_unproven_checks_
+#: tranche1.py) moved 15 checks out of never-observed — 7 to proven-failing and 8 to
+#: the middle — and tripped the ceiling it had just improved.
+#:
+#: The honest invariants are the ends: unobserved can only fall, proven-failing can
+#: only rise. Lower/raise these when the doc is regenerated; never the other way.
+MAX_NEVER_OBSERVED = 88
+MIN_PROVEN_FAILING = 280
 
 
 def doc_text() -> str:
@@ -99,26 +111,27 @@ def test_unproven_checks_can_only_decrease():
                                                               MAX_NEVER_OBSERVED))
 
 
-def test_never_failing_checks_can_only_decrease():
-    """Same ratchet on the softer category: a check that runs but has never been
-    driven to a FAIL has never rendered its declared severity or its remediation."""
-    _r, _f, soft, _u = headline(doc_text())
-    assert soft <= MAX_RUNS_BUT_NEVER_FAILS, (
-        "%d checks run but never fail, ceiling is %d." % (soft,
-                                                          MAX_RUNS_BUT_NEVER_FAILS))
+def test_proven_failing_checks_can_only_increase():
+    """The other end of the ratchet, and the one that measures real progress: a check
+    is only proven when some test drives it to a FAIL, because `_add` reads severity,
+    compliance and remediation from the catalogue for no other status."""
+    _r, failing, _s, _u = headline(doc_text())
+    assert failing >= MIN_PROVEN_FAILING, (
+        "%d checks are proven to fail, the floor is %d. A check stopped failing, or "
+        "a driving test was deleted." % (failing, MIN_PROVEN_FAILING))
 
 
-def test_the_ceilings_are_not_stale():
-    """The half that keeps the ratchet honest. A ceiling left far above the real
-    number stops being a ratchet and becomes decoration, so it must be tightened when
-    the gap opens up."""
-    _r, _f, soft, unseen = headline(doc_text())
+def test_the_bounds_are_not_stale():
+    """The half that keeps the ratchet honest. A bound left far from the real number
+    stops being a ratchet and becomes decoration, so it is tightened in the same
+    commit that moves the number."""
+    _r, failing, _s, unseen = headline(doc_text())
     assert MAX_NEVER_OBSERVED - unseen <= 5, (
         "the never-observed ceiling (%d) is well above the actual (%d); lower it"
         % (MAX_NEVER_OBSERVED, unseen))
-    assert MAX_RUNS_BUT_NEVER_FAILS - soft <= 5, (
-        "the never-fails ceiling (%d) is well above the actual (%d); lower it"
-        % (MAX_RUNS_BUT_NEVER_FAILS, soft))
+    assert failing - MIN_PROVEN_FAILING <= 5, (
+        "the proven-failing floor (%d) is well below the actual (%d); raise it"
+        % (MIN_PROVEN_FAILING, failing))
 
 
 def test_threat_02_is_still_listed_as_never_observed():

@@ -17,7 +17,7 @@ carries neither - so a check that never fails never renders what the catalogue
 advertises for it.
 
 
-**458 registered checks.** 273 are proven to FAIL in the suite; 82 run but have never been driven to a failure; 103 were never observed at all.
+**458 registered checks.** 280 are proven to FAIL in the suite; 90 run but have never been driven to a failure; 88 were never observed at all.
 
 
 ## Never observed
@@ -45,9 +45,6 @@ No test makes these emit anything. Each is registered in all four metadata maps 
 - `EXTACCESS-02` (declared MEDIUM)
 - `FARGATE-02` (declared HIGH)
 - `FMS-01` (declared MEDIUM)
-- `GLC-01` (declared CRITICAL)
-- `GLC-02` (declared MEDIUM)
-- `GLC-03` (declared LOW)
 - `GRF-01` (declared MEDIUM)
 - `HSM-01` (declared MEDIUM)
 - `HSM-02` (declared HIGH)
@@ -90,11 +87,6 @@ No test makes these emit anything. Each is registered in all four metadata maps 
 - `NHI-05` (declared HIGH)
 - `NWM-01` (declared MEDIUM)
 - `PCA-01` (declared HIGH)
-- `R53-01` (declared MEDIUM)
-- `R53-02` (declared MEDIUM)
-- `R53-03` (declared HIGH)
-- `R53-04` (declared LOW)
-- `R53-05` (declared MEDIUM)
 - `S3T-01` (declared HIGH)
 - `S3T-02` (declared MEDIUM)
 - `SEC-01` (declared HIGH)
@@ -113,14 +105,7 @@ No test makes these emit anything. Each is registered in all four metadata maps 
 - `SM-24` (declared MEDIUM)
 - `SM-26` (declared MEDIUM)
 - `SM-27` (declared LOW)
-- `SNS-01` (declared MEDIUM)
-- `SNS-02` (declared HIGH)
-- `SNS-03` (declared HIGH)
 - `SNS-04` (declared MEDIUM)
-- `SQS-01` (declared HIGH)
-- `SQS-02` (declared CRITICAL)
-- `SQS-03` (declared MEDIUM)
-- `SQS-04` (declared LOW)
 - `SSO-01` (declared HIGH)
 - `THREAT-02` (declared MEDIUM)
 - `VPC-03` (declared MEDIUM)
@@ -177,6 +162,8 @@ These emit only WARN/INFO/PASS in the suite. Where the declared severity is abov
 | `FLOW-01` | LOW | WARN |
 | `FLOW-02` | LOW | WARN |
 | `FW-02` | MEDIUM | PASS |
+| `GLC-02` | MEDIUM | WARN |
+| `GLC-03` | LOW | WARN |
 | `IAM-04` | HIGH | PASS/WARN |
 | `IAM-05` | MEDIUM | PASS |
 | `IAM-06` | HIGH | PASS |
@@ -191,6 +178,9 @@ These emit only WARN/INFO/PASS in the suite. Where the declared severity is abov
 | `OSR-03` | MEDIUM | PASS |
 | `OSR-04` | HIGH | PASS |
 | `OSR-05` | HIGH | PASS |
+| `R53-02` | MEDIUM | WARN |
+| `R53-03` | HIGH | WARN |
+| `R53-04` | LOW | WARN |
 | `RDS-02` | CRITICAL | PASS |
 | `RDS-05` | LOW | WARN |
 | `RDS-06` | CRITICAL | PASS |
@@ -210,6 +200,9 @@ These emit only WARN/INFO/PASS in the suite. Where the declared severity is abov
 | `SHAI-03` | MEDIUM | PASS/WARN |
 | `SM-22` | MEDIUM | PASS |
 | `SM-25` | MEDIUM | PASS |
+| `SNS-01` | MEDIUM | WARN |
+| `SQS-03` | MEDIUM | WARN |
+| `SQS-04` | LOW | PASS |
 | `THREAT-01` | HIGH | INFO |
 | `VPC-04` | MEDIUM | PASS/WARN |
 | `VPC-06` | MEDIUM | INFO/PASS/WARN |
@@ -238,6 +231,7 @@ A finding whose id the catalogue does not know renders with the default severity
 - `CWPP-04` (INFO/WARN)
 - `FLOW-00` (INFO)
 - `FLOW-03` (INFO)
+- `GLC-00` (INFO)
 - `IAM-03` (PASS)
 - `IAMPE-00` (PASS)
 - `KMS-01` (PASS)
@@ -253,3 +247,4 @@ A finding whose id the catalogue does not know renders with the default severity
 - `SHAI-00` (INFO)
 - `SM-00` (INFO)
 - `VEC-00` (INFO)
+- `ZZZ-99` (WARN)
