@@ -1,0 +1,517 @@
+AWSTemplateFormatVersion: '2010-09-09'
+# =============================================================================
+# DELIBERATELY VULNERABLE CLOUDFORMATION TEMPLATE -- FOR SCANNER TESTING ONLY
+#
+# Every resource below is misconfigured on purpose so that the IaC scanner's
+# CloudFormation half has something to detect. It is the CFN counterpart of
+# tests/samples/vulnerable_network.tf, which covers the Terraform half.
+#
+# DO NOT DEPLOY THIS TO A REAL AWS ACCOUNT. It exists to prove that the 89
+# CloudFormation rules in engine/aws_offline_scanner.py can fire at all -- until
+# this file was written, no fixture in the repository reached a single one of
+# them, so the larger half of the scanner had never been exercised.
+# =============================================================================
+Description: Intentionally insecure template used only as a scanner test fixture.
+
+Resources:
+
+  # ── IAM ────────────────────────────────────────────────────────────────────
+  WideOpenRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+
+  AdminInlinePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: admin-everything
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: '*'
+            Resource: '*'
+      Roles:
+        - !Ref WideOpenRole
+
+  AdminManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: 's3:*'
+            Resource: '*'
+
+  HumanUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: break-glass
+      LoginProfile:
+        Password: NotARealPassword123!
+      Policies:
+        - PolicyName: inline-admin
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: '*'
+                Resource: '*'
+
+  # ── S3 ─────────────────────────────────────────────────────────────────────
+  PublicBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: deliberately-public-bucket
+      AccessControl: PublicReadWrite
+
+  # ── Networking ─────────────────────────────────────────────────────────────
+  OpenSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: everything from everywhere
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: '-1'
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+
+  BareVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: false
+      EnableDnsSupport: false
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref BareVpc
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+
+  RejectOnlyFlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceId: !Ref BareVpc
+      ResourceType: VPC
+      TrafficType: ACCEPT
+
+  # ── Compute ────────────────────────────────────────────────────────────────
+  ExposedInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-00000000000000000
+      InstanceType: t3.micro
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: true
+          SubnetId: !Ref PublicSubnet
+
+  UnencryptedVolume:
+    Type: AWS::EC2::Volume
+    Properties:
+      AvailabilityZone: eu-west-1a
+      Size: 20
+      Encrypted: false
+
+  LeakyLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: leaky
+      Runtime: python3.7
+      Handler: index.handler
+      Role: !GetAtt WideOpenRole.Arn
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {}
+      Environment:
+        Variables:
+          DB_PASSWORD: hunter2
+          API_SECRET: sk-not-a-real-key
+
+  # ── Data stores ────────────────────────────────────────────────────────────
+  PublicDatabase:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceClass: db.t3.micro
+      Engine: postgres
+      MasterUsername: admin
+      MasterUserPassword: NotARealPassword123!
+      AllocatedStorage: '20'
+      PubliclyAccessible: true
+      StorageEncrypted: false
+      BackupRetentionPeriod: 0
+      DeletionProtection: false
+      MultiAZ: false
+
+  UnencryptedCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      Engine: aurora-postgresql
+      MasterUsername: admin
+      MasterUserPassword: NotARealPassword123!
+      StorageEncrypted: false
+      BackupRetentionPeriod: 0
+      DeletionProtection: false
+
+  PlainTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: plain
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+
+  OpenCache:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupDescription: no encryption anywhere
+      Engine: redis
+      CacheNodeType: cache.t3.micro
+      NumCacheClusters: 2
+      TransitEncryptionEnabled: false
+      AtRestEncryptionEnabled: false
+
+  PublicSearch:
+    Type: AWS::OpenSearchService::Domain
+    Properties:
+      DomainName: public-search
+      EncryptionAtRestOptions:
+        Enabled: false
+      NodeToNodeEncryptionOptions:
+        Enabled: false
+      DomainEndpointOptions:
+        EnforceHTTPS: false
+
+  PublicWarehouse:
+    Type: AWS::Redshift::Cluster
+    Properties:
+      ClusterType: single-node
+      DBName: warehouse
+      MasterUsername: admin
+      MasterUserPassword: NotARealPassword123!
+      NodeType: dc2.large
+      PubliclyAccessible: true
+      Encrypted: false
+
+  # ── Messaging ──────────────────────────────────────────────────────────────
+  PlainQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: plain-queue
+
+  PlainTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: plain-topic
+
+  # ── Edge / delivery ────────────────────────────────────────────────────────
+  InsecureDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultCacheBehavior:
+          TargetOriginId: origin1
+          ViewerProtocolPolicy: allow-all
+          ForwardedValues:
+            QueryString: false
+        Origins:
+          - Id: origin1
+            DomainName: example.com.s3.amazonaws.com
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+          MinimumProtocolVersion: TLSv1
+
+  PlainListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Protocol: HTTP
+      Port: 80
+      LoadBalancerArn: arn:aws:elasticloadbalancing:eu-west-1:111122223333:loadbalancer/app/x/y
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: arn:aws:elasticloadbalancing:eu-west-1:111122223333:targetgroup/x/y
+
+  UnloggedStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      StageName: prod
+      RestApiId: abc123
+      DeploymentId: dep123
+      TracingEnabled: false
+      CacheClusterEnabled: true
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          CachingEnabled: true
+          CacheDataEncrypted: false
+
+  # ── Containers ─────────────────────────────────────────────────────────────
+  PublicCluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: public-cluster
+      RoleArn: !GetAtt WideOpenRole.Arn
+      ResourcesVpcConfig:
+        EndpointPublicAccess: true
+        PublicAccessCidrs:
+          - 0.0.0.0/0
+        SubnetIds:
+          - !Ref PublicSubnet
+
+  PrivilegedTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: privileged
+      NetworkMode: host
+      ContainerDefinitions:
+        - Name: app
+          Image: nginx:latest
+          Privileged: true
+          Environment:
+            - Name: DB_PASSWORD
+              Value: hunter2
+
+  MutableRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: mutable
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: false
+
+  # ── Identity / secrets / keys ──────────────────────────────────────────────
+  WeakUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: weak
+      MfaConfiguration: 'OFF'
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 6
+          RequireNumbers: false
+          RequireSymbols: false
+          RequireUppercase: false
+
+  NoRotationKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: never rotated
+      EnableKeyRotation: false
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: 'kms:*'
+            Resource: '*'
+
+  StaleSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: never-rotated
+      SecretString: '{"password":"hunter2"}'
+
+  # ── Logging / detection ────────────────────────────────────────────────────
+  WeakTrail:
+    Type: AWS::CloudTrail::Trail
+    Properties:
+      S3BucketName: !Ref PublicBucket
+      IsLogging: false
+      IsMultiRegionTrail: false
+      EnableLogFileValidation: false
+
+  NoRetentionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/no-retention
+
+  ActionlessAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: nobody-is-told
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 1
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Period: 300
+      Statistic: Sum
+      Threshold: 1
+      ActionsEnabled: false
+
+  SleepyDetector:
+    Type: AWS::GuardDuty::Detector
+    Properties:
+      Enable: false
+      FindingPublishingFrequency: SIX_HOURS
+
+  PartialRecorder:
+    Type: AWS::Config::ConfigurationRecorder
+    Properties:
+      RoleARN: !GetAtt WideOpenRole.Arn
+      RecordingGroup:
+        AllSupported: false
+        IncludeGlobalResourceTypes: false
+
+  CountOnlyWebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: count-only
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: false
+        CloudWatchMetricsEnabled: false
+        MetricName: countonly
+      Rules: []
+
+  # ── Platform / ML ──────────────────────────────────────────────────────────
+  PlainEnvironment:
+    Type: AWS::ElasticBeanstalk::Environment
+    Properties:
+      ApplicationName: legacy-app
+      OptionSettings:
+        - Namespace: aws:elb:listener
+          OptionName: ListenerProtocol
+          Value: HTTP
+        - Namespace: aws:elasticbeanstalk:managedactions
+          OptionName: ManagedActionsEnabled
+          Value: 'false'
+        - Namespace: aws:elasticbeanstalk:healthreporting:system
+          OptionName: SystemType
+          Value: basic
+
+  OpenNotebook:
+    Type: AWS::SageMaker::NotebookInstance
+    Properties:
+      InstanceType: ml.t3.medium
+      RoleArn: !GetAtt WideOpenRole.Arn
+      DirectInternetAccess: Enabled
+      RootAccess: Enabled
+
+  OpenStudioDomain:
+    Type: AWS::SageMaker::Domain
+    Properties:
+      DomainName: open-studio
+      AuthMode: IAM
+      AppNetworkAccessType: PublicInternetOnly
+      VpcId: !Ref BareVpc
+      SubnetIds:
+        - !Ref PublicSubnet
+      DefaultUserSettings:
+        ExecutionRole: !GetAtt WideOpenRole.Arn
+
+  UnguardedAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: unguarded
+      AgentResourceRoleArn: !GetAtt WideOpenRole.Arn
+      FoundationModel: anthropic.claude-v2
+
+  UntracedStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: untraced
+      RoleArn: !GetAtt WideOpenRole.Arn
+      DefinitionString: '{"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}'
+      TracingConfiguration:
+        Enabled: false
+
+  # ── paired resources ───────────────────────────────────────────────────────
+  # Each of these exists because its rule is mutually exclusive with one that
+  # already fires above: the handler takes an if/elif, or checks the opposite
+  # branch. One resource cannot trip both, so the fixture carries both shapes.
+
+  # AWS-IAM-004: wildcard ACTION with a specific resource. (AdminInlinePolicy
+  # above has a wildcard resource too, which routes it to AWS-IAM-003 instead.)
+  WildcardActionPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: any-action-one-bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: '*'
+            Resource: arn:aws:s3:::one-specific-bucket/*
+      Roles:
+        - !Ref WideOpenRole
+
+  # AWS-GD-002: an ENABLED detector with S3 protection off. SleepyDetector above
+  # is disabled, which the handler reports as AWS-GD-001 and nothing else.
+  EnabledDetectorNoS3:
+    Type: AWS::GuardDuty::Detector
+    Properties:
+      Enable: true
+      FindingPublishingFrequency: FIFTEEN_MINUTES
+
+  # AWS-EBS-002: encrypted, but with the AWS-managed key rather than a CMK.
+  # UnencryptedVolume above is not encrypted at all, which is AWS-EBS-001.
+  ManagedKeyVolume:
+    Type: AWS::EC2::Volume
+    Properties:
+      AvailabilityZone: eu-west-1a
+      Size: 20
+      Encrypted: true
+
+  # AWS-ELB-002: a deprecated TLS policy. PlainListener above is plain HTTP and
+  # carries no SslPolicy at all.
+  WeakTlsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Protocol: HTTPS
+      Port: 443
+      SslPolicy: ELBSecurityPolicy-TLS-1-0-2015-04
+      LoadBalancerArn: arn:aws:elasticloadbalancing:eu-west-1:111122223333:loadbalancer/app/x/y
+      Certificates:
+        - CertificateArn: arn:aws:acm:eu-west-1:111122223333:certificate/abc
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: arn:aws:elasticloadbalancing:eu-west-1:111122223333:targetgroup/x/y
+
+  # AWS-APIGW-002: no MethodSettings at all. UnloggedStage above has them.
+  NoMethodSettingsStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      StageName: v2
+      ApiId: def456
+      TracingEnabled: false
+
+  # AWS-SAGE-005: no ExecutionRole in DefaultUserSettings. OpenStudioDomain has one.
+  RolelessStudioDomain:
+    Type: AWS::SageMaker::Domain
+    Properties:
+      DomainName: roleless-studio
+      AuthMode: IAM
+      AppNetworkAccessType: VpcOnly
+      VpcId: !Ref BareVpc
+      SubnetIds:
+        - !Ref PublicSubnet
+      DefaultUserSettings: {}
