@@ -53,11 +53,13 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: tranche1.py) moved 15 checks out of never-observed — 7 to proven-failing and 8 to
 #: the middle — and tripped the ceiling it had just improved. Tranche 2 then moved
 #: 5 more from the middle to proven-failing, including both CRITICALs (RDS-02, RDS-06).
+#: Tranche 3 took the whole LOGGING section, which no test had ever called, straight
+#: from never-observed to proven-failing — the only tranche so far to move both ends.
 #:
 #: The honest invariants are the ends: unobserved can only fall, proven-failing can
 #: only rise. Lower/raise these when the doc is regenerated; never the other way.
-MAX_NEVER_OBSERVED = 88
-MIN_PROVEN_FAILING = 285
+MAX_NEVER_OBSERVED = 84
+MIN_PROVEN_FAILING = 289
 
 
 def doc_text() -> str:

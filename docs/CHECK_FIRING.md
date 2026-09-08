@@ -17,7 +17,7 @@ carries neither - so a check that never fails never renders what the catalogue
 advertises for it.
 
 
-**458 registered checks.** 285 are proven to FAIL in the suite; 85 run but have never been driven to a failure; 88 were never observed at all.
+**458 registered checks.** 289 are proven to FAIL in the suite; 85 run but have never been driven to a failure; 84 were never observed at all.
 
 
 ## Never observed
@@ -68,10 +68,6 @@ No test makes these emit anything. Each is registered in all four metadata maps 
 - `KSPM-04` (declared MEDIUM)
 - `LATT-02` (declared MEDIUM)
 - `LMB-01` (declared HIGH)
-- `LOG-01` (declared CRITICAL)
-- `LOG-03` (declared HIGH)
-- `LOG-04` (declared CRITICAL)
-- `LOG-05` (declared MEDIUM)
 - `LSAIL-01` (declared HIGH)
 - `LSAIL-02` (declared HIGH)
 - `MART-03` (declared MEDIUM)
