@@ -323,6 +323,7 @@ FLOORS = {
     "test_toxicflow_wiring.py": 17,
     "test_trend.py": 35,
     "test_unproven_checks_tranche1.py": 7,
+    "test_unproven_checks_tranche2.py": 2,
     "test_unreached_modules.py": 5,
     "test_unused.py": 21,
     "test_user_admin.py": 19,

@@ -51,12 +51,13 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: "never observed" into that bucket is PROGRESS, and a ceiling on it scores progress
 #: as regression. The first tranche of driven checks (tests/test_unproven_checks_
 #: tranche1.py) moved 15 checks out of never-observed — 7 to proven-failing and 8 to
-#: the middle — and tripped the ceiling it had just improved.
+#: the middle — and tripped the ceiling it had just improved. Tranche 2 then moved
+#: 5 more from the middle to proven-failing, including both CRITICALs (RDS-02, RDS-06).
 #:
 #: The honest invariants are the ends: unobserved can only fall, proven-failing can
 #: only rise. Lower/raise these when the doc is regenerated; never the other way.
 MAX_NEVER_OBSERVED = 88
-MIN_PROVEN_FAILING = 280
+MIN_PROVEN_FAILING = 285
 
 
 def doc_text() -> str:
