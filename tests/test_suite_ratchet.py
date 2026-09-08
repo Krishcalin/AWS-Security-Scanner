@@ -115,6 +115,7 @@ FLOORS = {
     "test_cdr_api.py": 10,
     "test_cdr_ingest.py": 21,
     "test_cdr_state.py": 8,
+    "test_check_firing.py": 8,
     "test_check_maps_lockstep.py": 10,
     "test_checkdef.py": 23,
     "test_ci_integrations.py": 7,
