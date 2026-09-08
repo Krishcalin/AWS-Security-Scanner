@@ -2619,6 +2619,32 @@ class AWSLiveScanner:
             status, check_id, section, resource, message,
             severity, compliance, remediation,
         ))
+
+    def _remediation_for(self, r) -> str:
+        """The remediation a finding carries, resolved ONE way for every export.
+
+        `_add` fills `Result.remediation` from REMEDIATION_MAP only when the status is
+        FAIL, so a WARN finding reaches the exports with an empty string. The four
+        output paths then disagreed about the same finding: `_build_finding_catalog`
+        looked the text up by check id and showed it (HTML cards), `save_json` and
+        `save_sarif` emitted nothing, and `save_asff` substituted the literal "Review
+        and apply least privilege" — so the export that feeds a customer's own
+        Security Hub carried invented generic advice while the HTML report beside it
+        carried the real, specific fix.
+
+        RESOLVED BY CHECK ID, LIKE THE CATALOGUE, because the catalogue is the one that
+        was right: the remediation is a property of the CHECK, not of how severely a
+        particular observation happened to land. 82 checks in this catalogue only ever
+        emit WARN, so under the old rule their written remediation could never be
+        shown by three of the four exports.
+
+        STATUS STILL GATES IT. PASS and INFO get nothing: there is no fix to offer for
+        a control that is in place, and the two exports that carry every status would
+        otherwise attach remediation to good news.
+        """
+        if r.status not in ("FAIL", "WARN"):
+            return ""
+        return REMEDIATION_MAP.get(r.check_id, "")
         if self.verbose or status in ("FAIL", "WARN"):
             col = STATUS_COLOR.get(status, RESET)
             res = f" | {resource}" if resource else ""
@@ -16799,7 +16825,7 @@ class AWSLiveScanner:
                     "message":         r.message,
                     "severity":        r.severity,
                     "compliance":      r.compliance,
-                    "remediation_cmd": r.remediation_cmd,
+                    "remediation_cmd": self._remediation_for(r),
                 }
                 for r in self.results
             ],
@@ -16922,7 +16948,7 @@ class AWSLiveScanner:
                     "severity": r.severity,
                     "section": r.section,
                     "compliance": r.compliance,
-                    "remediation": r.remediation_cmd,
+                    "remediation": self._remediation_for(r),
                 },
             })
 
@@ -16958,6 +16984,7 @@ class AWSLiveScanner:
             if r.status not in ("FAIL", "WARN"):
                 continue
             related = [f"{fw} {ctrl}" for fw, ctrl in (r.compliance or {}).items()]
+            _rem = self._remediation_for(r)
             findings.append({
                 "SchemaVersion": "2018-10-08",
                 "Id": f"{self.region}/{r.check_id}/{r.resource or 'account'}",
@@ -16979,10 +17006,10 @@ class AWSLiveScanner:
                     "Status": ASFF_COMPLIANCE_STATUS.get(r.status, "NOT_AVAILABLE"),
                     **({"RelatedRequirements": related} if related else {}),
                 },
-                "Remediation": {"Recommendation": {
-                    "Text": (r.remediation_cmd or "Review and apply least privilege")[:512],
+                **({"Remediation": {"Recommendation": {
+                    "Text": _rem[:512],
                     "Url": "https://github.com/Krishcalin/AWS-Security-Scanner",
-                }},
+                }}} if _rem else {}),
                 "ProductFields": {"Section": r.section, "CheckId": r.check_id},
                 "RecordState": "ACTIVE",
             })
