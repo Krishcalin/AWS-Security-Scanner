@@ -1,4 +1,4 @@
-# OverWatch — local two-container stack (app + Postgres) for Docker Desktop.
+# OverWatch — local stack (app + worker + Postgres) for Docker Desktop.
 #
 #     docker compose -f deploy/local/docker-compose.yml up --build
 #     open http://127.0.0.1:8080
@@ -55,6 +55,31 @@ services:
       OVERWATCH_BOOTSTRAP_PASSWORD: overwatch-local-admin
     ports:
       - "127.0.0.1:8080:8080"           # host-only; see header
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # THE PROCESS THAT ACTUALLY RUNS THE SCANS. `POST /scans` and
+  # `POST /scans/schedule-tick` only ENQUEUE — trigger_scan's docstring says so
+  # outright ("The worker drains the queue; this never blocks on a scan"). Without
+  # this service the stack accepts scan requests, records them `queued`, and runs
+  # none, which reads on screen as a scan that is taking a very long time.
+  #
+  # Same image and same CNAPP_DB_URL as `app`, so the two cannot disagree about the
+  # database or the schema they migrate to. It needs no port: nothing calls it.
+  worker:
+    build:
+      context: ../..
+      dockerfile: deploy/local/Dockerfile
+    container_name: overwatch-worker
+    command: ["python", "-m", "hub.cnapp_worker", "--interval", "60"]
+    environment:
+      CNAPP_DB_URL: postgresql://overwatch:overwatch-local-only@db:5432/overwatch
+      # The spoke role assumed per account. A local stack with no onboarded account
+      # simply finds nothing due and logs a zero tick; it never invents work.
+      CNAPP_SCANNER_ROLE_NAME: CnappScannerRole
+      AWS_REGION: us-east-1
     depends_on:
       db:
         condition: service_healthy

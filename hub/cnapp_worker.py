@@ -71,6 +71,19 @@ def run_scan_job(svc, job: dict, *, spec: ScanSpec = None) -> dict:
         status = acct.get("onboarding_status") if acct else "missing"
         return fail(f"account no longer active (status={status}) — skipping scan")
 
+    # 0b. OUR CONFIGURATION IS NOT THE CUSTOMER'S FAULT. `session_factory` is
+    #     Optional and defaults to None, and hub/cnapp_server.py build_service()
+    #     did not set it — so the call below raised TypeError, the handler treated
+    #     it as an assume-role failure, and `deny=True` set the account to 'denied'.
+    #     'denied' means "we asked AWS and were refused", and it also drops the
+    #     account out of `trigger_scan`'s ACTIVE set: one misconfigured worker run
+    #     permanently stopped scanning every account it touched. A hub that cannot
+    #     build a session has learned nothing about the customer's trust policy, so
+    #     the job fails and the onboarding status is left exactly as it was.
+    if not callable(getattr(svc, "session_factory", None)):
+        return fail("hub misconfigured: no session_factory is wired, so no role "
+                    "can be assumed; the account's onboarding status is unchanged")
+
     # 1. build the assumed-role session
     try:
         session = svc.session_factory(account_id)
@@ -211,3 +224,108 @@ def make_session_factory(registry, secret_reader, *, role_name: str = "CnappScan
         return als.assume_role_session(account_id, role_arn, external_id=external_id,
                                        region=region)
     return factory
+
+
+# ── the process ─────────────────────────────────────────────────────────────
+def run_forever(svc, *, spec: ScanSpec = None, interval: int = 300,
+                limit: int = 100, ticks: Optional[int] = None,
+                sleep=None, log=print) -> dict:
+    """Tick, sleep, repeat. ``ticks`` bounds the loop so a test can drive it, and
+    ``sleep`` is injected for the same reason — an unbounded loop with a real
+    ``time.sleep`` is not testable, and an untested worker loop is how this module
+    came to have no caller at all.
+
+    A tick that raises does NOT kill the worker: the whole point of this process is
+    to outlive individual failures, and ``run_scan_job`` already converts expected
+    AWS/engine failures into FAILED jobs. Anything that escapes it is unexpected, so
+    it is reported and the loop continues to the next tick.
+    """
+    import time
+
+    sleep = sleep or time.sleep
+    totals = {"ticks": 0, "enqueued": 0, "ran": 0, "errors": 0}
+    n = 0
+    while ticks is None or n < ticks:
+        n += 1
+        try:
+            out = scheduler_tick(svc, spec=spec, limit=limit)
+            totals["enqueued"] += len(out["enqueued"])
+            totals["ran"] += len(out["ran"])
+            log("tick %d: enqueued %d, ran %d"
+                % (n, len(out["enqueued"]), len(out["ran"])))
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as e:                        # noqa: BLE001
+            totals["errors"] += 1
+            log("tick %d FAILED: %s: %s" % (n, type(e).__name__, e))
+        totals["ticks"] = n
+        if ticks is None or n < ticks:
+            sleep(interval)
+    return totals
+
+
+def main(argv=None) -> int:
+    """``python -m hub.cnapp_worker`` — drain the hosted scan queue.
+
+    WHY THIS EXISTS. ``POST /scans`` and ``POST /scans/schedule-tick`` both only
+    ENQUEUE: ``trigger_scan``'s docstring says outright "(The worker drains the
+    queue; this never blocks on a scan.)". Nothing drained it. A hosted deployment
+    accepted scan requests, recorded them ``queued``, and never ran one — and with
+    no ``__main__`` this module could not be started either, so the documented async
+    scan path was unreachable from both ends.
+
+    The service comes from ``cnapp_server.build_service()``, the same construction
+    the API uses, so the worker and the API cannot disagree about the database, the
+    secret store, or which role is assumed.
+    """
+    import argparse
+
+    from hub import cnapp_server
+
+    p = argparse.ArgumentParser(
+        prog="python -m hub.cnapp_worker",
+        description="Drain the hosted OverWatch scan-job queue.")
+    p.add_argument("--interval", type=int, default=0, metavar="SECONDS",
+                   help="Run continuously, sleeping this long between ticks. "
+                        "Default 0 = one tick and exit, for a cron/CronJob.")
+    p.add_argument("--limit", type=int, default=100,
+                   help="Maximum jobs to run per tick (default 100).")
+    p.add_argument("--drain-only", action="store_true",
+                   help="Drain jobs already queued without enqueueing accounts whose "
+                        "cadence is due. Use when something else owns scheduling.")
+    args = p.parse_args(argv)
+
+    try:
+        svc = cnapp_server.build_service()
+    except Exception as e:                            # noqa: BLE001
+        # A worker that cannot build its service has scanned nothing. Say so and
+        # exit non-zero rather than looking like a clean run with no due accounts.
+        print("worker could not start: %s: %s" % (type(e).__name__, e))
+        return 1
+
+    if args.interval > 0:
+        totals = run_forever(svc, interval=args.interval, limit=args.limit)
+        print("stopped after %(ticks)d tick(s): enqueued %(enqueued)d, "
+              "ran %(ran)d, %(errors)d failed tick(s)" % totals)
+        return 0
+
+    if args.drain_only:
+        ran = drain_once(svc, limit=args.limit)
+        enqueued = []
+    else:
+        out = scheduler_tick(svc, limit=args.limit)
+        enqueued, ran = out["enqueued"], out["ran"]
+
+    # Per-status counts, because "ran 12" hides twelve failures.
+    by_status = {}
+    for job in ran:
+        by_status[job.get("status", "?")] = by_status.get(job.get("status", "?"), 0) + 1
+    print("enqueued %d, ran %d%s" % (
+        len(enqueued), len(ran),
+        (" (" + ", ".join("%s %d" % kv for kv in sorted(by_status.items())) + ")")
+        if by_status else ""))
+    return 0
+
+
+if __name__ == "__main__":                            # pragma: no cover
+    raise SystemExit(main())

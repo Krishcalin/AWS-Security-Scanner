@@ -75,7 +75,7 @@ Proposed requirements for ratification: `OW2-KM-007`, `OW2-KM-001(f)/(g)`,
 `OW2-GR-008/009/010`, the FR-4a/FR-4b split, and amendments to Appendix B,
 `OW2-KM-004`, `OW2-GR-005` and the II-C gate.
 
-**Known un-wired — enforced, not remembered.** Five modules are imported by nothing
+**Known un-wired — enforced, not remembered.** Four modules are imported by nothing
 outside their own tests. They are tested, documented and safe (each *withholds*
 rather than assumes), but un-wired is un-wired, and a bullet in this file is how an
 un-wired module comes to be counted as working software:
@@ -86,16 +86,17 @@ un-wired module comes to be counted as working software:
 | `aws_trend.py` | nothing routes to it — the console's trend is `aws_scorecard.Trend`, a prior-vs-current comparison, not this |
 | `aws_ingest_credexp.py` | no CLI flag, no API route, no console surface |
 | `cnapp_marketplace_metering.py` | no hub billing path calls it (`deploy/marketplace/` documents it as opt-in) |
-| `cnapp_worker.py` | the async scan-job path: imported only by tests, and with no `__main__` it cannot be run as a process either |
 
 `tests/test_unreached_modules.py` is the ratchet: a NEW module that nothing imports
 fails the build, and an entry here that gains a caller also fails, so the list
 cannot rot into fiction. To shrink it, wire the module or delete it with its tests
 — adding an entry is not progress. The risk score is no longer on this list
-(`aws_riskscore` has three importers), and `aws_sidescan_lambda` left it when its
-producer was written: `LMB-07` was ticked complete in the vuln roadmap while being
-registered in none of the four metadata maps and emitted by no code path, so the
-check could not fire.
+(`aws_riskscore` has three importers). Two modules have left the list: `aws_sidescan_lambda`
+when its producer was written (`LMB-07` was ticked complete in the vuln roadmap while
+registered in none of the four metadata maps and emitted by no code path, so the check
+could not fire), and `cnapp_worker` when it gained `python -m hub.cnapp_worker` and a
+caller in `build_service` — which also had to stop an unwired `session_factory` marking
+a customer's account `denied`.
 
 **Three decisions are open and are not engineering's to make** — see `docs/DECISIONS.md`
 D11–D13: auto-fix ending the read-only guarantee, widening the zero-telemetry
@@ -447,9 +448,11 @@ no boto3/psycopg/FastAPI in the pure path).
 - **`cnapp_worker.py`** — `run_scan_job`: re-checks the account is still active (TOCTOU),
   builds the assumed session, **fail-closed pre-validate**, runs the engine **trapping
   `sys.exit(2)`** (but NOT `KeyboardInterrupt`), persists results, stamps `last_scan_at`
-  only on success. **[LIBRARY-ONLY — imported by nothing but its own tests, and with
-  no `__main__` it cannot be run as a process either, so the async scan path
-  described here is unreachable in both directions. See `tests/test_unreached_modules.py`.]**
+  only on success. Run it with **`python -m hub.cnapp_worker`** (one tick for a
+  cron/CronJob, or `--interval N` to loop; `--drain-only` where something else owns
+  scheduling). `POST /scans` and `POST /scans/schedule-tick` only ENQUEUE — this is
+  the process that drains, and without it a hosted deployment records every scan
+  request as `queued` and runs none.
 - **`cnapp_api.py`** — thin FastAPI routers; **workspace-scoped** RBAC that **fails closed**
   (default hook denies, never grants admin); guarded import so the backend runs without
   FastAPI. `OnboardReq.account_id` is pattern-constrained (422, not 500). `create_hosted_app`

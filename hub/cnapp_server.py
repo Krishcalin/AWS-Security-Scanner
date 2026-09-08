@@ -30,6 +30,10 @@ Environment:
                          optional, disabled-by-default. Shape: [{connector_id,type,host?,auth?,
                          username?,secret_ref?,images?,repositories?}]. Fail-safe (bad → none); a
                          secret is a secretsmanager://|ssm:// REF, never plaintext.
+  CNAPP_SCANNER_ROLE_NAME  spoke role the worker assumes per account (default
+                         ``CnappScannerRole``); must match the onboarding template.
+  AWS_REGION             region for the AssumeRole call the scan executor makes
+                         (falls back to ``AWS_DEFAULT_REGION``, then ``us-east-1``).
   OVERWATCH_AIRGAP       "1" documents the sealed posture — no behavioural branch (all
                          optional seams already default off); the runbook enforces it.
 
@@ -145,6 +149,7 @@ def build_service():
     from hub import cnapp_metering
     from hub import cnapp_registry
     from hub import cnapp_service
+    from hub import cnapp_worker
     from hub import cnapp_workspace
 
     db_url = os.environ.get("CNAPP_DB_URL", "sqlite:///data/overwatch.db")
@@ -152,6 +157,9 @@ def build_service():
     # reentrant lock serializes every access (mirrors AccountRegistry.open).
     be = cnapp_backend.backend_for(db_url, check_same_thread=False)   # connect + migrate + seed
     reg = cnapp_registry.AccountRegistry(be)
+    # Resolved ONCE, which is what _secret_seams' docstring already promised: it was
+    # called twice below, so build_from_env ran twice per build.
+    secret_writer, secret_reader = _secret_seams()
     svc = cnapp_service.PlatformService(
         registry=reg,
         # Persisted, so a hub restart no longer blanks every screen that renders a
@@ -164,8 +172,19 @@ def build_service():
         # fail-loud placeholders below. Unconfigured stays a REFUSAL rather than a
         # fallback: a hub that quietly kept plaintext, or silently dropped the
         # write, would be worse than one that will not onboard.
-        secret_writer=_secret_seams()[0],
-        secret_reader=_secret_seams()[1],
+        secret_writer=secret_writer,
+        secret_reader=secret_reader,
+        # THE SEAM THE SCAN EXECUTOR RUNS ON. `session_factory` is Optional and
+        # defaulted to None here, so every queued job died on `'NoneType' object is
+        # not callable` — and, until the guard in cnapp_worker.run_scan_job, took
+        # the customer's account to 'denied' with it. cnapp_worker.make_session_factory
+        # says in its own docstring that it is "imported by the API wiring"; this is
+        # that wiring, and nothing imported it before.
+        session_factory=cnapp_worker.make_session_factory(
+            reg, secret_reader,
+            role_name=os.environ.get("CNAPP_SCANNER_ROLE_NAME", "CnappScannerRole"),
+            region=(os.environ.get("AWS_REGION")
+                    or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1")),
         state=aws_state.StateStore(be),
         workspaces=cnapp_workspace.WorkspaceStore(be),
         metering=cnapp_metering.MeteringStore(be),

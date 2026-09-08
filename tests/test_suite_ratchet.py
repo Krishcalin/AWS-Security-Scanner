@@ -129,6 +129,7 @@ FLOORS = {
     "test_cnapp_service.py": 11,
     "test_cnapp_validate.py": 12,
     "test_cnapp_worker.py": 8,
+    "test_cnapp_worker_wiring.py": 12,
     "test_codetocloud.py": 18,
     "test_compliance_api.py": 4,
     "test_compliance_crosswalk.py": 24,

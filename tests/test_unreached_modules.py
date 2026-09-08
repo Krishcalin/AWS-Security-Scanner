@@ -48,6 +48,9 @@ ENTRY_POINTS = {
     "aws_offline_scanner": "the pre-deploy IaC static scanner — its own CLI, "
                            "referenced by deploy/ and .github/",
     "cnapp_mcp": "the MCP server, run as a process",
+    "cnapp_worker": "the hosted scan-queue drainer \u2014 `python -m hub.cnapp_worker`, "
+                    "run by a cron/CronJob; also imported by cnapp_server.build_service "
+                    "for its session factory",
 }
 
 #: The debt. Each of these is real, tested, documented code that nothing calls.
@@ -68,11 +71,6 @@ UNREACHED = {
     "cnapp_marketplace_metering":
         "marketplace usage metering. deploy/marketplace/ documents it as OPT-IN "
         "optional code; no hub billing path calls it.",
-    "cnapp_worker":
-        "the hosted platform's async scan-job execution and scheduler "
-        "(run_scan_job / drain_once / scheduler_tick). Imported only by tests, and "
-        "with no __main__ it cannot be run as a process either — so the documented "
-        "async scan path is unreachable in both directions.",
 }
 
 
@@ -152,9 +150,10 @@ def test_no_module_is_unreached_without_being_declared(reached):
 def test_no_declared_orphan_has_quietly_gained_a_caller(reached):
     """The other half of the ratchet, and the half that keeps the list honest. A
     waiver list nobody prunes stops describing the codebase and starts describing
-    its history. `aws_sidescan_lambda` belonged here until its producer was written;
-    it is absent now because it has five callers, and that is what shrinking looks
-    like."""
+    its history. `aws_sidescan_lambda` belonged here until its producer was written,
+    and `cnapp_worker` until it gained an entry point and a caller in
+    `cnapp_server.build_service`. Both are absent now, and that is what shrinking
+    looks like."""
     fixed = sorted(m for m in UNREACHED if m in reached)
     assert not fixed, (
         "%s now has callers and should be removed from UNREACHED: %s"
