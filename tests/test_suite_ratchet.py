@@ -296,6 +296,7 @@ FLOORS = {
     "test_sdk_pin.py": 7,
     "test_secrets.py": 9,
     "test_secrets_collector.py": 7,
+    "test_section_reachability.py": 12,
     "test_seed_demo_data.py": 48,
     "test_segmentation.py": 28,
     "test_segmentation_wiring.py": 14,

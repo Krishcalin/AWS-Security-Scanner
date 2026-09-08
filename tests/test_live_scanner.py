@@ -132,7 +132,22 @@ class TestDataStructures(unittest.TestCase):
         # MULTIPARTYAPPROVAL, WICKR, MEDIAPACKAGE -- batch 7, chosen against
         # the ranking. CloudFormation's checks are STACK-*, because CFN-* is
         # already CloudFront.
-        self.assertEqual(len(SECTIONS), 86)
+        # 90: +SIDESCAN, AI_LOGGING, SHADOW_AI, VECTORSTORE -- and unlike every
+        # batch above, this one added NO new coverage. All four already had a check
+        # method, a dispatch-table entry and a SECTION_LABELS entry, and were absent
+        # from SECTIONS -- which is the DEFAULT run list, so no scan ran them. The
+        # three AI sections stranded 14 checks (VEC-*, SHAI-*, AILOG-*) behind a
+        # section name documented nowhere; SIDESCAN made `--side-scan` a flag nothing
+        # acted on, because `_check_side_scan` reads `self.side_scan` and nothing
+        # called `_check_side_scan`.
+        #
+        # SCAN COST, since that is what this pin exists to make deliberate: the three
+        # AI sections now make API calls on every default scan (AOSS + S3 Vectors,
+        # Bedrock logging config, and a CloudTrail sweep for Bedrock management
+        # events). SIDESCAN adds none -- its guard returns before any client is
+        # built unless --side-scan is set, which is what makes dispatching it always
+        # the safe fix rather than a new default behaviour.
+        self.assertEqual(len(SECTIONS), 90)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

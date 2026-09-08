@@ -239,8 +239,25 @@ SECTIONS = [
     "ELASTICACHE", "OPENSEARCH", "DYNAMODB", "STEPFUNCTIONS",
     "APIGATEWAY", "ELB", "EBS", "REDSHIFT", "EFS", "ACM",
     "SAGEMAKER", "COGNITO", "APIGATEWAYV2", "IAMPRIVESC", "EXPOSURE",
-    "COGNITO_IDENTITY", "WINVULN",
+    "COGNITO_IDENTITY",
+    # SIDESCAN beside WINVULN because they are the same kind of thing: both read a
+    # workload and emit HAS_VULN edges, so both must precede CORRELATE. It was in
+    # the dispatch table and NOT here, which made `--side-scan` a flag nothing
+    # could act on — `_check_side_scan` reads `self.side_scan`, but the section was
+    # never in the plan, so the method was never called. Dispatching it always is
+    # free: its first statement returns unless the flag is set, exactly like the
+    # ECR registry and Lambda artifact paths.
+    "SIDESCAN", "WINVULN",
     "VULN", "THREAT", "DATA", "AI_THREAT",
+    # THE AI-POSTURE SECTIONS. Each already had a check method, a dispatch-table
+    # entry and a SECTION_LABELS entry, and was missing from THIS list — which is
+    # the DEFAULT run list (`_req = [...] if sections else list(SECTIONS)`). So a
+    # default scan ran none of them, and their 14 checks (VEC-*, SHAI-*, AILOG-*)
+    # could only fire if somebody passed a section name that appears nowhere in
+    # CLAUDE.md or README. Their wiring tests passed throughout, because each
+    # constructs the scanner as `sections=["SHADOW_AI"]` — proving the section
+    # works when asked for, never that anything asks for it.
+    "AI_LOGGING", "SHADOW_AI", "VECTORSTORE",
     # Batch 1 of the 426-service coverage gap analysis. Each is its own top-level
     # section: a defect in a nested one takes out every test of its host.
     "IOT", "EMR", "CODEBUILD", "DOCDB", "IMAGEBUILDER", "TRANSFER",
@@ -2351,8 +2368,12 @@ class AWSLiveScanner:
     # AI_THREAT is global because its quota-dodging rule needs to see EVERY region
     # at once — one key invoking across three regions in an hour is the signal, and
     # a per-region pass can never observe it. It sweeps regions internally instead.
+    # SHADOW_AI is global for AI_THREAT's reason: `_check_undeclared_ai_creators`
+    # sweeps `_ai_scan_regions()` itself, so a per-region pass would repeat the
+    # whole CloudTrail sweep once per region. AI_LOGGING and VECTORSTORE hold no
+    # internal sweep and are regional, so --all-regions visits them properly.
     GLOBAL_SECTIONS = {"IAM", "S3", "ROUTE53", "CLOUDFRONT", "IAMPRIVESC", "CORRELATE",
-                       "CLOUDWATCH", "AI_THREAT"}
+                       "CLOUDWATCH", "AI_THREAT", "SHADOW_AI"}
 
     def __init__(
         self,
