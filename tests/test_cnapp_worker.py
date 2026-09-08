@@ -102,15 +102,41 @@ def test_prevalidate_wrong_account_denies_before_scan():
     assert reg.get_account(ACCT)["onboarding_status"] == "denied"
 
 
-def test_assume_role_failure_denies():
-    def boom(aid):
-        raise RuntimeError("AccessDenied assuming role")
-    svc, reg = _svc(session_factory=boom)
+def _client_error(code):
+    """A botocore-shaped ClientError. The worker reads the code out of
+    `response["Error"]["Code"]`, so a RuntimeError whose MESSAGE happens to contain
+    "AccessDenied" is not a refusal — which is exactly what this test used to
+    assert, and is why a network blip could deny an account."""
+    e = RuntimeError("%s: not authorized to perform sts:AssumeRole" % code)
+    e.response = {"Error": {"Code": code, "Message": "denied"}}
+    return e
+
+
+def test_assume_role_refusal_denies():
+    def refused(aid):
+        raise _client_error("AccessDenied")
+    svc, reg = _svc(session_factory=refused)
     _active(reg, ACCT)
     jid = svc.trigger_scan([ACCT])[0]
     term = run_scan_job(svc, reg.get_scan_job(jid))
     assert term["status"] == "error" and "assume role" in term["error"]
     assert reg.get_account(ACCT)["onboarding_status"] == "denied"
+
+
+def test_a_transient_assume_role_failure_does_not_deny():
+    """THE DEFECT THIS REPLACES. Every exception out of session_factory used to set
+    the account to 'denied', and a denied account leaves trigger_scan's ACTIVE set
+    permanently — so one throttle or DNS blip silently stopped scanning an estate
+    until somebody re-onboarded it."""
+    def throttled(aid):
+        raise _client_error("ThrottlingException")
+    svc, reg = _svc(session_factory=throttled)
+    _active(reg, ACCT)
+    jid = svc.trigger_scan([ACCT])[0]
+    term = run_scan_job(svc, reg.get_scan_job(jid))
+    assert term["status"] == "error"
+    assert reg.get_account(ACCT)["onboarding_status"] == "active"
+    assert svc.trigger_scan([ACCT]), "the account can no longer be scheduled"
 
 
 def test_drain_once_runs_all_queued():

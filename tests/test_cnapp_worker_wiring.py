@@ -110,12 +110,21 @@ def test_an_unwired_session_factory_fails_the_job_without_denying_the_account():
     assert svc.trigger_scan([ACCT]), "the account dropped out of the ACTIVE set"
 
 
+def _refusal(code="AccessDenied"):
+    """A botocore-shaped ClientError carrying an error code, which is what the
+    worker classifies on. A bare RuntimeError whose message merely mentions
+    AccessDenied is NOT a refusal."""
+    e = RuntimeError("%s" % code)
+    e.response = {"Error": {"Code": code, "Message": "no"}}
+    return e
+
+
 def test_a_real_assume_role_refusal_still_denies():
     """The negative control. Making the case above non-denying must not disable the
     signal for the case denial is FOR: we reached AWS and were refused, which is a
     fact about the customer's trust policy."""
     def refusing(_aid):
-        raise RuntimeError("AccessDenied: not authorized to assume role")
+        raise _refusal("AccessDenied")
 
     svc, reg = _svc(session_factory=refusing)
     _active(reg)
@@ -136,6 +145,95 @@ def test_a_wrong_account_session_still_denies():
     term = cnapp_worker.run_scan_job(svc, reg.get_scan_job(jid))
     assert term["status"] == "error"
     assert reg.get_account(ACCT)["onboarding_status"] == "denied"
+
+
+class _BrokenSession:
+    """A session whose STS call fails for a reason we choose."""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    def client(self, service, **k):
+        exc = self._exc
+
+        class C:
+            def get_caller_identity(self):
+                raise exc
+        return C()
+
+
+def test_a_transient_credential_check_failure_does_not_deny():
+    """The pre-check reaches AWS to confirm the session lands in the right account.
+    When that call cannot COMPLETE, it has learned nothing about the customer — so
+    the job fails and their onboarding status is untouched. Denying here was the
+    second half of the same defect as the assume-role path."""
+    svc, reg = _svc(session_factory=lambda aid: _BrokenSession(
+        _refusal("RequestTimeout")))
+    _active(reg)
+    jid = svc.trigger_scan([ACCT])[0]
+
+    term = cnapp_worker.run_scan_job(svc, reg.get_scan_job(jid))
+    assert term["status"] == "error"
+    assert "credential check failed" in term["error"]
+    assert reg.get_account(ACCT)["onboarding_status"] == "active"
+
+
+def test_a_refused_credential_check_denies():
+    """The negative control for the test above: STS answering AccessDenied IS a
+    statement about their trust policy."""
+    svc, reg = _svc(session_factory=lambda aid: _BrokenSession(
+        _refusal("AccessDenied")))
+    _active(reg)
+    jid = svc.trigger_scan([ACCT])[0]
+
+    term = cnapp_worker.run_scan_job(svc, reg.get_scan_job(jid))
+    assert term["status"] == "error"
+    assert reg.get_account(ACCT)["onboarding_status"] == "denied"
+
+
+# ── the classifier, directly ────────────────────────────────────────────────
+
+@pytest.mark.parametrize("code", ["AccessDenied", "AccessDeniedException",
+                                  "AuthFailure", "UnauthorizedOperation",
+                                  "NotAuthorized", "UnauthorizedAccess"])
+def test_a_refusal_code_is_a_refusal(code):
+    assert cnapp_worker._is_refusal(_refusal(code)) is True
+
+
+@pytest.mark.parametrize("code", ["ThrottlingException", "RequestLimitExceeded",
+                                  "RequestTimeout", "ServiceUnavailable",
+                                  "InternalError", "EndpointConnectionError",
+                                  "InvalidClientTokenId", "ExpiredToken"])
+def test_everything_else_is_transient(code):
+    """INCLUDING codes that sound like an auth problem. `InvalidClientTokenId` and
+    `ExpiredToken` are OUR credentials being wrong, not their trust policy refusing
+    us, and denying their account for our expired token is the same class of mistake
+    as denying it for a DNS blip."""
+    assert cnapp_worker._is_refusal(_refusal(code)) is False
+
+
+def test_an_unrecognised_exception_is_transient():
+    """The default has to be 'do not deny'. The two mistakes are not symmetric: a
+    transient failure wrongly denied removes the account from every future scan
+    silently, while a refusal wrongly retried fails again in the open next tick."""
+    assert cnapp_worker._is_refusal(RuntimeError("something odd")) is False
+    assert cnapp_worker._is_refusal(ValueError()) is False
+
+
+def test_a_message_mentioning_access_denied_is_not_a_refusal():
+    """The classifier reads the ERROR CODE, not the text. The old tests raised
+    RuntimeError("AccessDenied assuming role") and expected a denial, which is how a
+    blanket deny looked correct: the fixture said the words."""
+    assert cnapp_worker._is_refusal(
+        RuntimeError("AccessDenied: not authorized")) is False
+
+
+def test_a_refusal_can_be_identified_by_exception_type():
+    """botocore is an optional import here, so an error may arrive without a
+    `response` dict. The exception's own type name is the fallback."""
+    class AccessDenied(Exception):
+        pass
+    assert cnapp_worker._is_refusal(AccessDenied()) is True
 
 
 # ── 2. production actually supplies the seam ────────────────────────────────

@@ -454,7 +454,13 @@ no boto3/psycopg/FastAPI in the pure path).
   rotates → never breaks the deployed trust). `serialize_scanner` mirrors `save_json`
   + `graph_full`; `org_overview` aggregates active accounts.
 - **`cnapp_worker.py`** — `run_scan_job`: re-checks the account is still active (TOCTOU),
-  builds the assumed session, **fail-closed pre-validate**, runs the engine **trapping
+  builds the assumed session, **fail-closed pre-validate** — which fails the JOB on any
+  problem but marks the ACCOUNT `denied` only when AWS actually refused us
+  (`_is_refusal`: an `AccessDenied`-family error code, or a session that authenticates
+  into a different account). A throttle, a timeout, a DNS blip or our own expired
+  token fails the job and leaves their onboarding status alone, because `denied`
+  removes an account from `trigger_scan`'s ACTIVE set permanently — one bad minute
+  used to stop scanning an estate until somebody re-onboarded it — runs the engine **trapping
   `sys.exit(2)`** (but NOT `KeyboardInterrupt`), persists results, stamps `last_scan_at`
   only on success. Run it with **`python -m hub.cnapp_worker`** (one tick for a
   cron/CronJob, or `--interval N` to loop; `--drain-only` where something else owns

@@ -28,20 +28,66 @@ from hub import cnapp_onboarding
 from hub.cnapp_service import ScanSpec, serialize_scanner
 
 
-def _pre_validate(session, account_id: str) -> Optional[str]:
-    """Confirm the assumed session actually points at ``account_id`` before running
-    a full scan. Returns None on success, else a short failure reason. Fails CLOSED:
-    an empty/unknown observed account is a failure, never a pass."""
+#: Error codes that mean AWS ANSWERED AND SAID NO. Only these justify marking a
+#: customer's account 'denied'; see `_is_refusal`.
+_REFUSAL_CODES = frozenset({
+    "AccessDenied", "AccessDeniedException", "AuthFailure", "NotAuthorized",
+    "UnauthorizedOperation", "UnauthorizedAccess",
+})
+
+
+def _is_refusal(exc) -> bool:
+    """True only when AWS answered and refused us.
+
+    DENIAL IS THE EXCEPTION, NOT THE DEFAULT, and the asymmetry is the whole reason
+    this function exists. `run_scan_job` used to pass `deny=True` for ANY exception
+    out of `session_factory` or the credential pre-check, so a throttle, a DNS blip
+    or an STS timeout set the account to 'denied' — and `trigger_scan` enqueues only
+    ACTIVE accounts, so that account was never scanned again until somebody
+    re-onboarded it. A single bad minute could silently stop monitoring an estate.
+
+    The two mistakes do not cost the same:
+
+      * a transient failure wrongly DENIED removes the account from every future
+        scan, quietly, and nothing in the product ever revisits it;
+      * a genuine refusal wrongly RETRIED simply fails again on the next tick, in
+        the open, with the job record saying why.
+
+    So anything unrecognised is treated as transient. A botocore `ClientError`
+    carries its code in `response["Error"]["Code"]`; without one, the exception's
+    own type name is tried, which keeps this working when boto3 is absent (the
+    import is optional — see `aws_live_scanner`).
+    """
+    code = ""
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = str((response.get("Error") or {}).get("Code") or "")
+    return (code or type(exc).__name__) in _REFUSAL_CODES
+
+
+def _pre_validate(session, account_id: str):
+    """Confirm the assumed session actually points at ``account_id``.
+
+    Returns ``(reason, deny)`` — ``(None, False)`` on success. Fails CLOSED: an
+    empty or unknown observed account is a failure, never a pass.
+
+    THE TWO FAILURES ARE NOT THE SAME FACT. A session that authenticates into the
+    WRONG account is a statement about the customer's configuration and denies. An
+    STS call that could not complete says nothing about them at all, so it fails the
+    job and leaves their onboarding status alone.
+    """
     try:
         sts = session.client("sts")
         observed = str((sts.get_caller_identity() or {}).get("Account", "") or "")
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception as e:                           # noqa: BLE001
-        return f"credential check failed: {type(e).__name__}: {e}"
+        return (f"credential check failed: {type(e).__name__}: {e}",
+                _is_refusal(e))
     if observed != account_id:
-        return f"assumed session is account {observed or '<unknown>'}, expected {account_id}"
-    return None
+        return (f"assumed session is account {observed or '<unknown>'}, "
+                f"expected {account_id}", True)
+    return None, False
 
 
 def run_scan_job(svc, job: dict, *, spec: ScanSpec = None) -> dict:
@@ -90,12 +136,15 @@ def run_scan_job(svc, job: dict, *, spec: ScanSpec = None) -> dict:
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception as e:                            # noqa: BLE001
-        return fail(f"could not assume role: {type(e).__name__}: {e}", deny=True)
+        # deny ONLY if AWS refused us. A throttle or a network blip is our problem
+        # or nobody's, and denying on it removes the account from every future scan.
+        return fail(f"could not assume role: {type(e).__name__}: {e}",
+                    deny=_is_refusal(e))
 
     # 2. pre-validate creds before the (expensive) scan
-    reason = _pre_validate(session, account_id)
+    reason, deny = _pre_validate(session, account_id)
     if reason:
-        return fail(reason, deny=True)
+        return fail(reason, deny=deny)
 
     # 3. run the engine, trapping its sys.exit(2) (but never KeyboardInterrupt)
     try:
