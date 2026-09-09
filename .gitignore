@@ -64,3 +64,9 @@ credentials.json
 # ranking. Regenerate with `python scripts/coverage_gap.py`; do not commit it, since
 # nothing tests its currency and a stale ranking reads as a current one.
 coverage_gap.json
+
+# The raw _add recording behind docs/CHECK_FIRING.md, written by
+# `OVERWATCH_RECORD_CHECKS=fired.json python -m pytest tests/ -q`. The generated doc
+# is committed and tested for currency; this input is not, for the coverage_gap.json
+# reason -- a recording from an older suite would read as a current measurement.
+fired.json

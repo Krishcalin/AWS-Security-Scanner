@@ -35,7 +35,7 @@
   - [Prerequisites (Live Scanner)](#prerequisites-live-scanner)
   - [Quick Start (Live Scanner)](#quick-start-live-scanner)
   - [CLI Reference (Live Scanner)](#cli-reference-live-scanner)
-  - [Security Checks Coverage (460 severity-mapped checks across 90 sections)](#security-checks-coverage-460-severity-mapped-checks-across-90-sections)
+  - [Security Checks Coverage (460 severity-mapped checks across 91 sections)](#security-checks-coverage-460-severity-mapped-checks-across-91-sections)
   - [Compliance Framework Mapping](#compliance-framework-mapping)
   - [Risk Scoring](#risk-scoring)
   - [CI/CD & AWS Security Hub Integration](#cicd--aws-security-hub-integration)
@@ -77,7 +77,7 @@ This repository contains **two complementary AWS security scanners**:
 
 | Scanner | File | Type | Input | Checks |
 |---------|------|------|-------|--------|
-| **OverWatch** (Live CNAPP) | `aws_live_scanner.py` | Live AWS API audit + security graph + attack-path CNAPP | Running AWS account (multi-account via AssumeRole) | 460 severity-mapped across 90 sections |
+| **OverWatch** (Live CNAPP) | `aws_live_scanner.py` | Live AWS API audit + security graph + attack-path CNAPP | Running AWS account (multi-account via AssumeRole) | 460 severity-mapped across 91 sections |
 | **IaC Security Scanner** | `aws_offline_scanner.py` | Static analysis | CloudFormation + Terraform files | 100+ (60+ TF regex + 42 CF structural) |
 
 Use **OverWatch** to audit a running AWS estate — CIS/compliance posture, effective-permissions CIEM, agentless
@@ -254,7 +254,7 @@ options:
 The live scanner connects to a running AWS account via **boto3**, performing **read-only** security checks aligned to multiple compliance frameworks. It produces colour-coded terminal output with PASS/FAIL/WARN verdicts, posture scoring, JSON/HTML reports, and saves evidence artefacts to a timestamped output directory.
 
 - **Read-only by design** -- never modifies AWS resources
-- **460 severity-mapped checks** across 90 audit sections (all 460 actionable, each with a detailed remediation write-up)
+- **460 severity-mapped checks** across 91 audit sections (all 460 actionable, each with a detailed remediation write-up)
 - **Effective internet-exposure engine** (CNAPP Phase 2) -- computes *true* reachability (`aws_exposure.py`): a workload is flagged internet-exposed only when a public IP/EIP/IPv6 **and** an active IGW route **and** open security-group ingress **and** a permissive stateless NACL (inbound + ephemeral return) all line up — killing the "SG allows 0.0.0.0/0" false positive. sg-references, NAT routes, private subnets and blocked-return NACLs are correctly *not* exposed
 - **First attack path** -- `ATTACK-01` chains it end-to-end: `Internet → exposed EC2 → instance-profile role → privilege escalation to admin` (CRITICAL)
 - **Network micro-segmentation** (Phase-3) -- **Layer A** (`SEG-01..06`, always-on, config-only, zero new grant) flags over-permissive security groups (world-open sensitive ports, wide ranges, unused SGs, SG-chains to a world-open group, unrestricted egress) as a distinct lens from the 4-gate reachability oracle — a config-level SG hole is caught even when the host is not currently reachable. **Layer B** (`FLOW-01..03`, opt-in `--flow-logs`) reads VPC Flow-Log *observed traffic* via CloudWatch Logs Insights to recommend evidence-based scope-downs ("only these /24s ever connected"), flag allowed-but-never-used ports, and surface top reject/recon talkers — annotating the graph's `EXPOSED_TO` edges with observed evidence (kept **out** of the traversable attack-path set so the low-FP reachability guarantee is preserved), and failing open to a `FLOW-00` note when the optional resource-scoped `logs:StartQuery` grant is absent
@@ -297,7 +297,7 @@ The live scanner connects to a running AWS account via **boto3**, performing **r
 ### Quick Start (Live Scanner)
 
 ```bash
-# Run full audit (all 90 sections, 460 severity-mapped checks)
+# Run full audit (all 91 sections, 460 severity-mapped checks)
 python -m engine.aws_live_scanner
 
 # Target a specific region
@@ -381,7 +381,7 @@ options:
   --version             Show scanner version
 ```
 
-### Security Checks Coverage (460 severity-mapped checks across 90 sections)
+### Security Checks Coverage (460 severity-mapped checks across 91 sections)
 
 | Section | Check IDs | Description |
 |---------|-----------|-------------|
@@ -924,7 +924,7 @@ cd frontend && npm install && npm run dev     # http://localhost:5173  (sample d
 AWS-Security-Scanner/
 ├── engine/            # the scanning engine — collection, checks, correlation, scoring
 │   ├── aws_offline_scanner.py      # IaC Security Scanner (CloudFormation + Terraform, no credentials)
-│   ├── aws_live_scanner.py         # Live Audit Scanner v3.0.0 (90 sections, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, least-priv, AI-SPM, CDR, forensics, copilot, vuln-ingest, supply-chain, registry)
+│   ├── aws_live_scanner.py         # Live Audit Scanner v3.0.0 (91 sections, graph, exposure+L7, deep-plane, correlate, effperm, state, ciem, sidescan, KSPM/KIEM, flow-logs, backends, remediate, codetocloud, finding-detail, engine-EOL, winvuln, DSPM, secrets, least-priv, AI-SPM, CDR, forensics, copilot, vuln-ingest, supply-chain, registry)
 │   ├── aws_remediate.py            # Remediation engine — prioritized plan + remediation-as-code + exports, pure (read-only)
 │   ├── aws_codetocloud.py          # Code-to-cloud — IaC index + tiered T1–T5 matcher (TF/CFN → finding source), pure
 │   ├── aws_graph_neptune_loader.py # Neptune live loader — bulk-load/openCypher runners (mock-tested), pure builders

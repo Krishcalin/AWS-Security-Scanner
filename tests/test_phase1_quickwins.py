@@ -439,7 +439,7 @@ def test_rds_08_iam_auth_only_supported_engines():
         {"DBInstanceIdentifier": "db-oracle", "Engine": "oracle-se2",
          "IAMDatabaseAuthenticationEnabled": False}])   # engine has no IAM auth -> skipped
     s._check_rds()
-    warns = [r for r in s.results if r.check_id == "RDS-08" and r.status == "WARN"]
+    warns = [r for r in s.results if r.check_id == "RDS-08" and r.status == "FAIL"]
     assert {r.resource for r in warns} == {"db-off"}
     assert any(r.check_id == "RDS-08" and r.status == "PASS" and r.resource == "db-on"
                for r in s.results)
@@ -494,7 +494,7 @@ def test_elb_07_flags_monitor_mode_only():
                       "arn:str": {"routing.http.desync_mitigation_mode": "strictest"}})
                       # def-lb: attribute absent -> defaults to 'defensive' -> PASS
     s._check_elb()
-    warns = [r for r in s.results if r.check_id == "ELB-07" and r.status == "WARN"]
+    warns = [r for r in s.results if r.check_id == "ELB-07" and r.status == "FAIL"]
     passes = [r for r in s.results if r.check_id == "ELB-07" and r.status == "PASS"]
     assert {r.resource for r in warns} == {"mon-lb"}
     assert {r.resource for r in passes} == {"str-lb", "def-lb"}
@@ -572,7 +572,7 @@ def test_s3_07_tls_policy_present_vs_absent():
                     versioning={"with-tls": "Enabled", "no-tls": "Enabled"})
     s._check_s3()
     p = {r.resource for r in s.results if r.check_id == "S3-07" and r.status == "PASS"}
-    w = {r.resource for r in s.results if r.check_id == "S3-07" and r.status == "WARN"}
+    w = {r.resource for r in s.results if r.check_id == "S3-07" and r.status == "FAIL"}
     assert p == {"with-tls"} and w == {"no-tls"}
 
 
@@ -584,7 +584,7 @@ def test_s3_07_narrow_deny_is_not_pass():
     s = _s3_scanner(["partial"], policies={"partial": narrow},
                     versioning={"partial": "Enabled"})
     s._check_s3()
-    w = {r.resource for r in s.results if r.check_id == "S3-07" and r.status == "WARN"}
+    w = {r.resource for r in s.results if r.check_id == "S3-07" and r.status == "FAIL"}
     assert w == {"partial"}   # a PutObject-only deny still leaves HTTP GET -> WARN, not PASS
 
 
@@ -592,7 +592,7 @@ def test_s3_08_versioning():
     s = _s3_scanner(["v-on", "v-off"], versioning={"v-on": "Enabled"})   # v-off -> None
     s._check_s3()
     p = {r.resource for r in s.results if r.check_id == "S3-08" and r.status == "PASS"}
-    w = {r.resource for r in s.results if r.check_id == "S3-08" and r.status == "WARN"}
+    w = {r.resource for r in s.results if r.check_id == "S3-08" and r.status == "FAIL"}
     assert p == {"v-on"} and w == {"v-off"}
 
 
@@ -613,14 +613,14 @@ def _vpc_scanner(sgs, vpcs=None, flow_logs=None):
     return s
 
 
-def test_vpc_04_default_sg_with_rules_warns():
+def test_vpc_04_default_sg_with_rules_fails():
     s = _vpc_scanner([
         {"GroupId": "sg-def", "GroupName": "default", "VpcId": "vpc-1",
          "IpPermissions": [{"IpProtocol": "-1"}], "IpPermissionsEgress": [{"IpProtocol": "-1"}]},
         {"GroupId": "sg-app", "GroupName": "app", "VpcId": "vpc-1",
          "IpPermissions": [], "IpPermissionsEgress": []}])
     s._check_vpc()
-    w = [r for r in s.results if r.check_id == "VPC-04" and r.status == "WARN"]
+    w = [r for r in s.results if r.check_id == "VPC-04" and r.status == "FAIL"]
     assert len(w) == 1 and "sg-def" in w[0].resource
     assert not any(r.check_id == "VPC-04" and r.status == "PASS" for r in s.results)
 
@@ -630,7 +630,7 @@ def test_vpc_04_hardened_default_sg_passes():
                        "IpPermissions": [], "IpPermissionsEgress": []}])
     s._check_vpc()
     assert any(r.check_id == "VPC-04" and r.status == "PASS" for r in s.results)
-    assert not any(r.check_id == "VPC-04" and r.status == "WARN" for r in s.results)
+    assert not any(r.check_id == "VPC-04" and r.status == "FAIL" for r in s.results)
 
 
 def test_vpc_04_no_default_sg_no_finding():
@@ -697,7 +697,7 @@ def test_log_06_guardduty_features():
         {"Name": "SOME_UNKNOWN_FEATURE", "Status": "DISABLED"}]}   # unknown -> ignored
     s._check_guardduty_features("det-1", detector)
     warns = {r.resource.split(":")[-1] for r in s.results
-             if r.check_id == "LOG-06" and r.status == "WARN"}
+             if r.check_id == "LOG-06" and r.status == "FAIL"}
     passes = {r.resource.split(":")[-1] for r in s.results
               if r.check_id == "LOG-06" and r.status == "PASS"}
     assert warns == {"RUNTIME_MONITORING", "RDS_LOGIN_EVENTS"}
@@ -931,7 +931,7 @@ def test_vpc_04_default_sg_second_page():
     ec2.describe_flow_logs.return_value = {"FlowLogs": []}
     s._clients["ec2:us-east-1"] = ec2
     s._check_vpc()
-    assert any(r.check_id == "VPC-04" and r.status == "WARN" and "sg-def" in r.resource
+    assert any(r.check_id == "VPC-04" and r.status == "FAIL" and "sg-def" in r.resource
                for r in s.results)
 
 
@@ -1000,5 +1000,5 @@ def test_elb_07_lb_second_page():
     elb.describe_listeners.return_value = {"Listeners": []}
     s._clients["elbv2:us-east-1"] = elb
     s._check_elb()
-    assert any(r.check_id == "ELB-07" and r.status == "WARN" and r.resource == "mon-lb"
+    assert any(r.check_id == "ELB-07" and r.status == "FAIL" and r.resource == "mon-lb"
                for r in s.results)

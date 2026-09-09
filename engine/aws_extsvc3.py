@@ -555,7 +555,11 @@ CHECKS = _cd.register(
            "Treat service-account credentials that bound over plain LDAP as exposed and "
            "rotate them, prioritising any with delegated directory rights.")),
 
-    _C(id="DIRSVC-02", section="DIRECTORYSERVICE", severity="MEDIUM", compliance=_ACC,
+    # LOW, not MEDIUM: the check emits WARN/PASS only -- a shared directory is a fact
+    # to verify, not a defect the scanner can call. `_add` forces a WARN to LOW, so a
+    # MEDIUM here advertised a severity the check could never render. See CHANGELOG
+    # (bucket B) and docs/CHECK_FIRING.md.
+    _C(id="DIRSVC-02", section="DIRECTORYSERVICE", severity="LOW", compliance=_ACC,
        permissions=(
            _P("ds:DescribeSharedDirectories",
               "read which accounts a directory is shared with -- sharing a directory "

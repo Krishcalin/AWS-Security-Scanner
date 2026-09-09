@@ -323,7 +323,7 @@ def test_log_07_no_kms_fails():
     assert any(r.check_id == "LOG-07" and r.status == "FAIL" for r in s.results)
 
 
-def test_log_08_data_events_pass_and_management_only_warn():
+def test_log_08_data_events_pass_and_management_only_fail():
     s, ct = _ct_scanner([_trail()])
     ct.get_event_selectors.return_value = {"EventSelectors": [
         {"DataResources": [{"Type": "AWS::S3::Object", "Values": ["arn:aws:s3:::x/"]}]}]}
@@ -331,7 +331,7 @@ def test_log_08_data_events_pass_and_management_only_warn():
     assert any(r.check_id == "LOG-08" and r.status == "PASS" for r in s.results)
     s2, ct2 = _ct_scanner([_trail()])          # default: management-only
     s2._check_cloudtrail_config()
-    assert any(r.check_id == "LOG-08" and r.status == "WARN" for r in s2.results)
+    assert any(r.check_id == "LOG-08" and r.status == "FAIL" for r in s2.results)
 
 
 def test_log_08_advanced_selectors_data_pass():

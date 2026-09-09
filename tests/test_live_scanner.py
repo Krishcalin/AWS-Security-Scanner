@@ -147,7 +147,16 @@ class TestDataStructures(unittest.TestCase):
         # events). SIDESCAN adds none -- its guard returns before any client is
         # built unless --side-scan is set, which is what makes dispatching it always
         # the safe fix rather than a new default behaviour.
-        self.assertEqual(len(SECTIONS), 90)
+        #
+        # 91: +NHI -- and like the batch above, no new coverage and no new API call.
+        # NHI-01..05 were already registered in all four metadata maps and counted in
+        # the published total; `engine/aws_nhi.py` held the logic and its own test
+        # file. What was missing was a caller. The module was IMPORTED by three
+        # production modules (its CheckDefs register at import time) and referenced by
+        # none, so the checks were catalogued and unfirable. `_check_nhi` reads the
+        # principals `_get_iam_principals` already fetched and the credential report
+        # the IAM section already reads, so the scan cost is zero new calls.
+        self.assertEqual(len(SECTIONS), 91)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

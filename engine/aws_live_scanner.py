@@ -285,6 +285,12 @@ SECTIONS = [
     # NOTE CloudFormation is STACK-*, not CFN-* -- CFN-01..06 are CLOUDFRONT.
     "CLOUDFORMATION", "FIREWALLMANAGER", "ECRPUBLIC", "MULTIPARTYAPPROVAL",
     "WICKR", "MEDIAPACKAGE",
+    # NHI reads what the IAM section already fetched (principals + credential
+    # report) and makes no call of its own, so it can sit anywhere before
+    # CORRELATE. `aws_nhi` had been complete and callerless since it was written;
+    # this entry, its CHECK_MAP row and `_check_nhi` are the three things that
+    # were missing. See SECTION 91.
+    "NHI",
     "CORRELATE",
 ]
 
@@ -379,6 +385,7 @@ SECTION_LABELS = {
     "AI_THREAT":      "LLMJACKING & AI CONTROL TAMPERING",
     "CORRELATE":      "ATTACK-PATH CORRELATION & CHOKE POINTS",
     "SIDESCAN":       "AGENTLESS WORKLOAD SIDE-SCAN (EBS)",
+    "NHI":            "NON-HUMAN (MACHINE) IDENTITY",
 }
 
 
@@ -402,6 +409,33 @@ IDLE_DB_WINDOW_DAYS = 14
 IDLE_DB_PERIOD_SECONDS = 86400
 
 # Map check_id → default severity when status is FAIL
+#
+# "WHEN STATUS IS FAIL" IS THE WHOLE CONTRACT, and it is why some entries here read
+# lower than the risk they name. `_add` reads this map, COMPLIANCE_MAP and
+# REMEDIATION_MAP only for a FAIL: a WARN is forced to LOW and carries no remediation,
+# an INFO carries neither. So a check whose code can only WARN renders LOW however it
+# is registered, and a MEDIUM against it is a severity the product can never show.
+#
+# docs/CHECK_FIRING.md measured 46 such checks. Those whose condition is a definite
+# misconfiguration now FAIL (the code changed). The rest are declared LOW here on
+# purpose, in two kinds:
+#
+#   * a hardening PREFERENCE, not a defect -- "uses the AWS-managed KMS key rather
+#     than a CMK" (SEC-03, SFN-03, RSS-02, BDR-03, AGT-01, AGT-03), reserved
+#     concurrency (LMB-05), a Lambda outside a VPC (LMB-02), DynamoDB billing mode
+#     (DDB-03), an unused secret (SEC-04), Redshift version-upgrade opt-out (RS-07),
+#     AgentCore surfaces (AGC-03, AGC-04);
+#   * an honest COULD-NOT-DETERMINE -- WINVULN-03's WARN exists specifically to
+#     remove a silent false-clean, and VPC-06/EKS-04/EKS-05/EKS-07 report a state the
+#     agentless boundary cannot resolve;
+#   * a GRADATION beneath a check that already FAILs -- AILOG-05/06 report partial
+#     Bedrock/AgentCore data-event coverage where AILOG-04 owns the total-absence
+#     FAIL. Raising them would report one gap three times;
+#   * a verdict resting on evidence too WEAK to assert -- MART-03's only ownership
+#     signal is whether a bucket name carries a different account id.
+#
+# Raising one of these back to MEDIUM without also giving the check a FAIL path puts
+# it straight back into the gap it was measured out of.
 CHECK_SEVERITY = {
     # Agentless side-scan (CWPP, Phase 6)
     "CWPP-01": "HIGH", "CWPP-02": "CRITICAL", "CWPP-03": "HIGH",
@@ -409,14 +443,14 @@ CHECK_SEVERITY = {
     "CWPP-05": "HIGH", "CWPP-06": "CRITICAL",
     # Phase 8: Windows agentless OS-vuln (SSM patch compliance) — WINVULN-03 is the
     # interim explicit-WARN that removes the silent false-clean on Windows hosts.
-    "WINVULN-01": "HIGH", "WINVULN-02": "CRITICAL", "WINVULN-03": "MEDIUM", "WINVULN-04": "LOW",
+    "WINVULN-01": "HIGH", "WINVULN-02": "CRITICAL", "WINVULN-03": "LOW", "WINVULN-04": "LOW",
     "IAM-01": "CRITICAL", "IAM-02": "CRITICAL", "IAM-04": "HIGH",
     "IAM-05": "MEDIUM", "IAM-06": "HIGH", "IAM-10": "MEDIUM",
     "IAM-07": "MEDIUM", "IAM-08": "MEDIUM",
     "S3-01": "HIGH", "S3-03": "HIGH", "S3-05": "MEDIUM",
     "S3-07": "MEDIUM", "S3-08": "MEDIUM", "S3-09": "HIGH", "S3-10": "HIGH",
     "VPC-01": "HIGH", "VPC-03": "MEDIUM", "VPC-04": "MEDIUM",
-    "VPC-05": "HIGH", "VPC-06": "MEDIUM",
+    "VPC-05": "HIGH", "VPC-06": "LOW",
     "LOG-01": "CRITICAL", "LOG-03": "HIGH", "LOG-04": "CRITICAL", "LOG-05": "MEDIUM",
     "LOG-06": "MEDIUM", "LOG-07": "MEDIUM", "LOG-08": "MEDIUM", "LOG-09": "CRITICAL",
     "LOG-10": "HIGH",
@@ -447,12 +481,12 @@ CHECK_SEVERITY = {
     "CFN-04": "MEDIUM", "CFN-05": "HIGH", "CFN-06": "MEDIUM",
     "R53-01": "MEDIUM", "R53-02": "MEDIUM", "R53-03": "HIGH",
     "R53-04": "LOW", "R53-05": "MEDIUM",
-    "BDR-01": "HIGH", "BDR-02": "HIGH", "BDR-03": "MEDIUM",
+    "BDR-01": "HIGH", "BDR-02": "HIGH", "BDR-03": "LOW",
     "BDR-04": "MEDIUM", "BDR-05": "HIGH",
-    "AGT-01": "MEDIUM", "AGT-02": "HIGH", "AGT-03": "MEDIUM",
+    "AGT-01": "LOW", "AGT-02": "HIGH", "AGT-03": "LOW",
     "AGT-04": "HIGH", "AGT-05": "HIGH",
-    "LMB-01": "HIGH", "LMB-02": "MEDIUM", "LMB-03": "HIGH",
-    "LMB-04": "MEDIUM", "LMB-05": "MEDIUM", "LMB-06": "MEDIUM",
+    "LMB-01": "HIGH", "LMB-02": "LOW", "LMB-03": "HIGH",
+    "LMB-04": "MEDIUM", "LMB-05": "LOW", "LMB-06": "MEDIUM",
     "LMB-07": "HIGH",
     # Function URLs: an AuthType of NONE is an unauthenticated HTTPS endpoint on the
     # open internet, which is HIGH for the same reason LMB-01 is. The CORS wildcard
@@ -460,10 +494,10 @@ CHECK_SEVERITY = {
     # which, since severity is per check and cannot vary per finding.
     "LMB-08": "HIGH", "LMB-09": "MEDIUM",
     "EKS-01": "HIGH", "EKS-02": "HIGH", "EKS-03": "MEDIUM",
-    "EKS-04": "MEDIUM", "EKS-05": "MEDIUM",
+    "EKS-04": "LOW", "EKS-05": "LOW",
     "ECS-01": "CRITICAL", "ECS-02": "HIGH", "ECS-03": "MEDIUM",
     "ECS-04": "HIGH", "ECS-05": "MEDIUM",
-    "SEC-01": "HIGH", "SEC-02": "HIGH", "SEC-03": "MEDIUM", "SEC-04": "MEDIUM",
+    "SEC-01": "HIGH", "SEC-02": "HIGH", "SEC-03": "LOW", "SEC-04": "LOW",
     "SEC-05": "CRITICAL",
     "WAF-01": "HIGH", "WAF-02": "MEDIUM", "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
     "WAF-05": "MEDIUM",
@@ -471,17 +505,17 @@ CHECK_SEVERITY = {
     "ELC-05": "HIGH", "ELC-06": "MEDIUM",
     "OSR-01": "HIGH", "OSR-02": "HIGH", "OSR-03": "MEDIUM",
     "OSR-04": "HIGH", "OSR-05": "HIGH", "OSR-06": "MEDIUM", "OSR-07": "HIGH",
-    "DDB-01": "HIGH", "DDB-02": "HIGH", "DDB-03": "MEDIUM", "DDB-04": "MEDIUM",
+    "DDB-01": "HIGH", "DDB-02": "HIGH", "DDB-03": "LOW", "DDB-04": "MEDIUM",
     "DDB-05": "CRITICAL",
-    "SFN-01": "MEDIUM", "SFN-02": "LOW", "SFN-03": "MEDIUM",
+    "SFN-01": "MEDIUM", "SFN-02": "LOW", "SFN-03": "LOW",
     "APIGW-01": "MEDIUM", "APIGW-02": "MEDIUM", "APIGW-03": "HIGH", "APIGW-04": "LOW",
     "ELB-01": "MEDIUM", "ELB-02": "HIGH", "ELB-03": "MEDIUM",
     "ELB-04": "LOW", "ELB-05": "MEDIUM", "ELB-07": "MEDIUM",
     "CLB-01": "HIGH", "CLB-02": "MEDIUM",
     "EBS-01": "HIGH", "EBS-02": "HIGH", "EBS-03": "MEDIUM", "EBS-04": "CRITICAL",
     "RS-01": "HIGH", "RS-02": "HIGH", "RS-03": "MEDIUM", "RS-04": "MEDIUM", "RS-05": "LOW",
-    "RS-06": "HIGH", "RS-07": "MEDIUM",
-    "RSS-01": "HIGH", "RSS-02": "MEDIUM", "RSS-03": "HIGH", "RSS-04": "MEDIUM",
+    "RS-06": "HIGH", "RS-07": "LOW",
+    "RSS-01": "HIGH", "RSS-02": "LOW", "RSS-03": "HIGH", "RSS-04": "MEDIUM",
     "EFS-01": "HIGH", "EFS-02": "MEDIUM", "EFS-03": "LOW",
     "ACM-01": "HIGH", "ACM-02": "MEDIUM", "ACM-03": "LOW",
     "ACM-04": "HIGH", "ACM-05": "MEDIUM",
@@ -513,7 +547,7 @@ CHECK_SEVERITY = {
     # AGC-03/04 disclose SURFACE rather than misconfiguration, so they are WARN in
     # the emit and MEDIUM here: nothing is wrong, and an operator who does not know
     # the surface exists cannot have decided it was acceptable.
-    "AGC-03": "MEDIUM", "AGC-04": "MEDIUM",
+    "AGC-03": "LOW", "AGC-04": "LOW",
     # AGC-05 is CRITICAL only when the gateway admits callers it never authorizes
     # AND hands them the gateway role downstream; the permissive inbound modes are
     # supported designs on their own, so the grade is what earns the severity.
@@ -620,7 +654,7 @@ CHECK_SEVERITY = {
     # Unpinned and cross-account are MEDIUM: both are preconditions rather than
     # exploitation, and a team that deliberately shares an artifact bucket with a
     # partner should not be handed a CRITICAL for a working arrangement.
-    "MART-02": "MEDIUM", "MART-03": "MEDIUM",
+    "MART-02": "MEDIUM", "MART-03": "LOW",
     # The opt-in scan. CRITICAL only when a global with no explainable reason to be in a
     # serialized model is present -- MART-05 carries the far commoner "this format can
     # execute at all", which is LOW because nearly every PyTorch model is in it.
@@ -630,7 +664,7 @@ CHECK_SEVERITY = {
     # Forensic coverage. AILOG-04 is HIGH because without AWS::Bedrock::Model data
     # events there is no record of who invoked which model -- the question AITHR-01
     # needs for LLMjacking and the first one an incident responder asks.
-    "AILOG-04": "HIGH", "AILOG-05": "MEDIUM", "AILOG-06": "MEDIUM",
+    "AILOG-04": "HIGH", "AILOG-05": "LOW", "AILOG-06": "LOW",
     "VEC-01": "HIGH", "VEC-02": "HIGH", "VEC-03": "CRITICAL",
     "VEC-04": "MEDIUM",
     # s3vectors. VEC-05 is public, VEC-06 cross-account: a named external account is a
@@ -689,11 +723,11 @@ CHECK_SEVERITY = {
     "GLC-01": "CRITICAL", "GLC-02": "MEDIUM", "GLC-03": "LOW",
     "R53-01": "MEDIUM", "R53-02": "MEDIUM", "R53-03": "HIGH", "R53-04": "LOW", "R53-05": "MEDIUM",
     "R53-06": "HIGH",
-    "DDB-03": "MEDIUM", "DDB-04": "MEDIUM",
-    "EKS-04": "MEDIUM", "EKS-05": "MEDIUM", "EKS-06": "HIGH",
+    "DDB-03": "LOW", "DDB-04": "MEDIUM",
+    "EKS-04": "LOW", "EKS-05": "LOW", "EKS-06": "HIGH",
     "ECS-04": "HIGH", "ECS-05": "MEDIUM",
     "ECS-06": "HIGH", "ECS-07": "CRITICAL", "ECS-08": "HIGH",
-    "FARGATE-01": "LOW", "FARGATE-02": "HIGH", "EKS-07": "MEDIUM",
+    "FARGATE-01": "LOW", "FARGATE-02": "HIGH", "EKS-07": "LOW",
     # Phase 3 KSPM/KIEM (agentless CIS-EKS + K8s RBAC / EKS Access Entries)
     "EKS-08": "MEDIUM",
     "KIEM-01": "HIGH", "KIEM-02": "MEDIUM", "KIEM-03": "MEDIUM", "KIEM-04": "HIGH",
@@ -703,13 +737,13 @@ CHECK_SEVERITY = {
     "SEG-01": "MEDIUM", "SEG-02": "HIGH", "SEG-05": "MEDIUM", "SEG-06": "LOW",
     # Phase 3 Layer-B VPC Flow-Log observed-traffic overlay (opt-in, WARN/INFO only)
     "FLOW-01": "LOW", "FLOW-02": "LOW",
-    "SEC-03": "MEDIUM", "SEC-04": "MEDIUM",
+    "SEC-03": "LOW", "SEC-04": "LOW",
     "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
     "ELC-04": "MEDIUM", "OSR-03": "MEDIUM",
-    "SFN-01": "MEDIUM", "SFN-02": "LOW", "SFN-03": "MEDIUM",
+    "SFN-01": "MEDIUM", "SFN-02": "LOW", "SFN-03": "LOW",
     "APIGW-04": "LOW", "ELB-04": "LOW", "RS-05": "LOW",
     "ACM-03": "LOW", "COG-04": "LOW", "AGW2-03": "LOW",
-    "LMB-05": "MEDIUM",
+    "LMB-05": "LOW",
     # Cost/hygiene — orphaned/idle resources (emitted WARN => severity forced LOW; never
     # penalizes the posture score, which counts FAIL only). Surface waste, don't distort risk.
     "EBS-05": "LOW", "EC2-09": "LOW", "ELB-08": "LOW", "RDS-13": "LOW",
@@ -2432,7 +2466,10 @@ class AWSLiveScanner:
     # whole CloudTrail sweep once per region. AI_LOGGING and VECTORSTORE hold no
     # internal sweep and are regional, so --all-regions visits them properly.
     GLOBAL_SECTIONS = {"IAM", "S3", "ROUTE53", "CLOUDFRONT", "IAMPRIVESC", "CORRELATE",
-                       "CLOUDWATCH", "AI_THREAT", "SHADOW_AI"}
+                       "CLOUDWATCH", "AI_THREAT", "SHADOW_AI",
+                       # IAM is global, so NHI reads the same principals in every
+                       # region. Regional would emit each finding once per region.
+                       "NHI"}
 
     def __init__(
         self,
@@ -3020,7 +3057,7 @@ class AWSLiveScanner:
                     self._add("PASS", "S3-05", "S3", bname,
                               f"Access logging enabled | {bname}")
                 else:
-                    self._add("WARN", "S3-05", "S3", bname,
+                    self._add("FAIL", "S3-05", "S3", bname,
                               f"Access logging disabled | {bname}")
             except Exception:
                 pass
@@ -3033,9 +3070,18 @@ class AWSLiveScanner:
                 if isinstance(stmts, dict):
                     stmts = [stmts]
             except Exception as e:
-                # No policy at all -> not public (S3-09 silent); TLS-only also not enforced.
-                self._add("WARN", "S3-07", "S3", bname,
-                          f"No bucket policy enforcing TLS-only access | {bname}")
+                # No policy at all -> not public (S3-09 silent); TLS-only also not
+                # enforced. But AccessDenied is not "no policy" -- it is "we could not
+                # read it", and reporting that as an absent policy states a fact we do
+                # not have. S3-09 below already split these two; S3-07 did not.
+                if "denied" in str(e).lower():
+                    self._add("WARN", "S3-07", "S3", bname,
+                              f"Cannot evaluate bucket policy (access denied) — TLS-only "
+                              f"enforcement UNKNOWN, not absent | {bname}")
+                else:
+                    self._add("FAIL", "S3-07", "S3", bname,
+                              f"No bucket policy, so nothing denies plaintext HTTP "
+                              f"access to this bucket | {bname}")
                 # AccessDenied (not NoSuchBucketPolicy) means exposure is UNKNOWN, not clean.
                 if "denied" in str(e).lower():
                     self._add("WARN", "S3-09", "S3", bname,
@@ -3047,7 +3093,7 @@ class AWSLiveScanner:
                     self._add("PASS", "S3-07", "S3", bname,
                               f"Bucket policy denies non-TLS access | {bname}")
                 else:
-                    self._add("WARN", "S3-07", "S3", bname,
+                    self._add("FAIL", "S3-07", "S3", bname,
                               f"Bucket policy does NOT enforce TLS "
                               f"(no aws:SecureTransport deny) | {bname}")
                 # S3-09/10 — public + cross-account exposure classification
@@ -3060,7 +3106,7 @@ class AWSLiveScanner:
                     self._add("PASS", "S3-08", "S3", bname,
                               f"Versioning enabled | {bname}")
                 else:
-                    self._add("WARN", "S3-08", "S3", bname,
+                    self._add("FAIL", "S3-08", "S3", bname,
                               f"Versioning not enabled — no rollback from object "
                               f"overwrite/ransomware | {bname}")
             except Exception:
@@ -3220,7 +3266,7 @@ class AWSLiveScanner:
                       "No Security Groups expose high-risk ports to 0.0.0.0/0 or ::/0")
 
         for res, ni, no in default_sg_issues:
-            self._add("WARN", "VPC-04", "VPC", res,
+            self._add("FAIL", "VPC-04", "VPC", res,
                       f"Default SG has {ni} inbound / {no} outbound rule(s) — CIS 5.4 "
                       f"requires it to restrict ALL traffic | {res}")
         if default_seen and not default_sg_issues:
@@ -3481,7 +3527,7 @@ class AWSLiveScanner:
                     self._add("PASS", "LOG-08", "LOGGING", name,
                               f"Trail '{name}' records data-plane events")
                 else:
-                    self._add("WARN", "LOG-08", "LOGGING", name,
+                    self._add("FAIL", "LOG-08", "LOGGING", name,
                               f"Trail '{name}' logs management events only; no S3/Lambda/"
                               f"DynamoDB data-event visibility")
             except Exception as e:
@@ -3619,7 +3665,7 @@ class AWSLiveScanner:
                 self._add("PASS", "LOG-06", "LOGGING", f"{did}:{name}",
                           f"GuardDuty {label} ENABLED | {did}")
             else:
-                self._add("WARN", "LOG-06", "LOGGING", f"{did}:{name}",
+                self._add("FAIL", "LOG-06", "LOGGING", f"{did}:{name}",
                           f"GuardDuty {label} DISABLED — reduced threat coverage | {did}")
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -4364,7 +4410,7 @@ class AWSLiveScanner:
                     self._add("PASS", "CNT-04", "ECR", rname,
                               f"Tag immutability=IMMUTABLE | {rname}")
                 elif mut:
-                    self._add("WARN", "CNT-04", "ECR", rname,
+                    self._add("FAIL", "CNT-04", "ECR", rname,
                               f"Tag mutability={mut} — tags overwritable "
                               f"(supply-chain poisoning) | {rname}")
                 self._check_ecr_repo_policy(ecr, repo)      # CNT-03
@@ -4886,7 +4932,7 @@ class AWSLiveScanner:
                 self._add("PASS", "RDS-08", "RDS", iid,
                           f"IAM DB authentication=ON | {iid} ({engine})")
             else:
-                self._add("WARN", "RDS-08", "RDS", iid,
+                self._add("FAIL", "RDS-08", "RDS", iid,
                           f"IAM DB authentication=OFF — relies on static DB passwords "
                           f"| {iid} ({engine})")
 
@@ -5174,10 +5220,14 @@ class AWSLiveScanner:
                     self._add("PASS", "GLC-02", "GLACIER", vname,
                               f"Vault Lock=Locked | {vname} (created: {cd})")
                 else:
-                    self._add("WARN", "GLC-02", "GLACIER", vname,
-                              f"Vault Lock state={state} | {vname}")
+                    self._add("FAIL", "GLC-02", "GLACIER", vname,
+                              f"Vault Lock state={state}, not Locked — the WORM "
+                              f"policy is not yet enforceable | {vname}")
             except glacier.exceptions.ResourceNotFoundException:
-                self._add("WARN", "GLC-02", "GLACIER", vname,
+                # Not an error: the API says this vault has no lock, which is the
+                # finding. The generic handler below stays WARN, because there the
+                # answer is genuinely unknown.
+                self._add("FAIL", "GLC-02", "GLACIER", vname,
                           f"No Vault Lock on '{vname}' — WORM protection absent")
             except Exception as e:
                 self._add("WARN", "GLC-02", "GLACIER", vname, str(e))
@@ -5556,7 +5606,7 @@ class AWSLiveScanner:
                     ssl_protos = set(custom_cfg.get("OriginSslProtocols", {}).get("Items", []))
                     weak = ssl_protos & {"SSLv3", "TLSv1", "TLSv1.1"}
                     if weak:
-                        self._add("WARN", "CFN-06", "CLOUDFRONT", domain,
+                        self._add("FAIL", "CFN-06", "CLOUDFRONT", domain,
                                   f"Origin '{oid}' negotiates weak TLS to origin {sorted(weak)} "
                                   f"(policy={origin_proto}) | {domain}")
                     elif ssl_protos:
@@ -6902,7 +6952,7 @@ class AWSLiveScanner:
         mode = acfg.get("authenticationMode") or "API_AND_CONFIG_MAP"
         bootstrap = acfg.get("bootstrapClusterCreatorAdminPermissions")
         if mode == "CONFIG_MAP":
-            self._add("WARN", "EKS-08", "EKS", cname,
+            self._add("FAIL", "EKS-08", "EKS", cname,
                       f"EKS '{cname}' authenticationMode=CONFIG_MAP — the AWS->Kubernetes identity "
                       f"mapping lives ONLY in the aws-auth ConfigMap, invisible to AWS APIs. Grant "
                       f"an EKS access entry (aws eks update-cluster-config --access-config "
@@ -7039,7 +7089,7 @@ class AWSLiveScanner:
             meta = sa.get("metadata") or {}
             if meta.get("name") == "default" and not aws_kube.is_system_namespace(meta.get("namespace")) \
                     and aws_kube.sa_automounts_token(sa):
-                self._add("WARN", "KSPM-04", "EKS", f"{cname}/{meta.get('namespace')}",
+                self._add("FAIL", "KSPM-04", "EKS", f"{cname}/{meta.get('namespace')}",
                           f"EKS '{cname}' ns {meta.get('namespace')}: the default ServiceAccount "
                           f"auto-mounts its API token (set automountServiceAccountToken: false). | {cname}")
 
@@ -7150,13 +7200,13 @@ class AWSLiveScanner:
                 "kind": "principal_admin", "principal": parn, "admin_cap": admin_cap,
                 "cluster_arn": cluster_arn, "conditioned": (scope != "cluster")})
         elif tier in ("NAMESPACE_ADMIN", "EDIT"):
-            self._add("WARN", "KIEM-02", "EKS", pshort,
+            self._add("FAIL", "KIEM-02", "EKS", pshort,
                       f"AWS principal {parn} has {tier.lower().replace('_', '-')} "
                       f"({scope} scope) on EKS '{cname}' — in-cluster privilege that can often be "
                       f"escalated (rbac write / SA impersonation / secrets). Scope to least "
                       f"privilege. | {parn}")
         elif tier == "SECRET":
-            self._add("WARN", "KIEM-03", "EKS", pshort,
+            self._add("FAIL", "KIEM-03", "EKS", pshort,
                       f"AWS principal {parn} can READ Kubernetes Secrets on EKS '{cname}' "
                       f"(AmazonEKSAdminViewPolicy). K8s Secrets often hold DB/cloud credentials — "
                       f"a crown-jewel read surface. | {parn}")
@@ -7214,7 +7264,7 @@ class AWSLiveScanner:
                 # ECS-02 — Root user
                 user = cd.get("user", "")
                 if not user or user == "root" or user == "0":
-                    self._add("WARN", "ECS-02", "ECS", f"{td_name}/{cname}",
+                    self._add("FAIL", "ECS-02", "ECS", f"{td_name}/{cname}",
                               f"Container '{cname}' runs as root (no user set)")
                 # ECS-03 — Log configuration
                 if not cd.get("logConfiguration"):
@@ -7231,7 +7281,7 @@ class AWSLiveScanner:
                         break
                 # ECS-05 — Read-only root filesystem
                 if not cd.get("readonlyRootFilesystem", False):
-                    self._add("WARN", "ECS-05", "ECS", f"{td_name}/{cname}",
+                    self._add("FAIL", "ECS-05", "ECS", f"{td_name}/{cname}",
                               f"Container '{cname}' root filesystem is writable")
                 # ECS-08 — dangerous Linux capabilities (container-level). linuxParameters
                 # and capabilities are both optional -> chain-guard the .get()s.
@@ -7561,9 +7611,10 @@ class AWSLiveScanner:
                 rules = s.get("RotationRules", {})
                 days = rules.get("AutomaticallyAfterDays", 0)
                 if days > 90:
-                    self._add("WARN", "SEC-02", "SECRETS", sname,
-                              f"Secret '{sname}' rotation interval={days}d "
-                              "(recommend ≤90)")
+                    self._add("FAIL", "SEC-02", "SECRETS", sname,
+                              f"Secret '{sname}' rotates every {days}d, past the "
+                              f"90-day maximum — a credential lives that long "
+                              f"after a compromise nobody noticed")
                 else:
                     self._add("PASS", "SEC-02", "SECRETS", sname,
                               f"Secret '{sname}' rotation every {days}d")
@@ -7701,9 +7752,10 @@ class AWSLiveScanner:
                     # WAF-04 — Default action
                     default_action = detail.get("DefaultAction", {})
                     if "Allow" in default_action:
-                        self._add("WARN", "WAF-04", "WAF", aname,
-                                  f"WAF '{aname}' default action is ALLOW "
-                                  "(consider BLOCK)")
+                        self._add("FAIL", "WAF-04", "WAF", aname,
+                                  f"WAF '{aname}' default action is ALLOW — any "
+                                  f"request matching no rule is permitted, so the "
+                                  f"ACL only blocks what it explicitly names")
                     # WAF-05 — managed rule group presence (baseline OWASP coverage). Only
                     # when rules exist (WAF-03 owns the no-rules FAIL). A managed group nested
                     # inside And/Or/Not/ScopeDown is not detected — top-level is the norm.
@@ -7771,7 +7823,7 @@ class AWSLiveScanner:
                 self._add("PASS", "ELC-04", "ELASTICACHE", rgid,
                           f"Auto failover=ON | {rgid}")
             else:
-                self._add("WARN", "ELC-04", "ELASTICACHE", rgid,
+                self._add("FAIL", "ELC-04", "ELASTICACHE", rgid,
                           f"Auto failover=OFF | {rgid}")
             # ELC-06 — Redis/Valkey RBAC (user groups). Replication groups are Redis/Valkey
             # only (Memcached has none), so absent/empty UserGroupIds means no per-user
@@ -8238,9 +8290,9 @@ class AWSLiveScanner:
                     self._add("PASS", "ELB-07", "ELB", name,
                               f"Desync mitigation mode='{mode}' | {name}")
                 else:
-                    self._add("WARN", "ELB-07", "ELB", name,
+                    self._add("FAIL", "ELB-07", "ELB", name,
                               f"Desync mitigation mode='{mode}' — HTTP request-smuggling "
-                              f"exposure (recommend 'defensive' or 'strictest') | {name}")
+                              f"exposure; set 'defensive' or 'strictest' | {name}")
 
             # ELB-08 — Load balancer with no healthy backend targets (cost/hygiene; ALB + NLB).
             # Fail-open: a throttled/denied read must NOT change the scan outcome.
@@ -8614,7 +8666,7 @@ class AWSLiveScanner:
                         self._add("PASS", "RSS-04", "REDSHIFT", wgn,
                                   f"Enhanced VPC routing=ON | {wgn}")
                     else:
-                        self._add("WARN", "RSS-04", "REDSHIFT", wgn,
+                        self._add("FAIL", "RSS-04", "REDSHIFT", wgn,
                                   f"Enhanced VPC routing=OFF | {wgn}")
             # Namespaces: customer-managed CMK gap (RSS-02)
             try:
@@ -9157,6 +9209,12 @@ class AWSLiveScanner:
             missing = [t for t in cov["bedrock_missing"]
                        if t != aws_ailog.MODEL_DATA_TYPE]
             if missing:
+                # WARN, deliberately, and declared LOW to match. AILOG-04 is THE
+                # finding when there is no model data-event coverage at all; 05 and 06
+                # report PARTIAL coverage, a gradation beneath it. Raising them to FAIL
+                # would report one gap three times -- which
+                # test_no_ai_coverage_at_all_reports_once_not_three_times exists to
+                # prevent, and which the bucket-B pass nearly did.
                 self._add("WARN", "AILOG-05", "AI_LOGGING", "cloudtrail",
                           f"Bedrock data events cover model invocations but not "
                           f"{', '.join(missing)} — agent, knowledge-base and guardrail "
@@ -11540,6 +11598,11 @@ class AWSLiveScanner:
                       f"changed | {where}")
 
         # MART-03 -- an artifact owned by somebody else's account.
+        # WARN, deliberately, and declared LOW to match. The only ownership signal here
+        # is whether the bucket NAME carries a different account id -- see
+        # `_looks_like_account_scoped`, whose docstring settles it: "A name is weak
+        # evidence, so the check it feeds is a WARN." A FAIL would assert foreignness
+        # from a naming convention, which is the thing that helper exists not to do.
         if bucket and self.account and self._foreign_artifact_bucket(bucket):
             self._add("WARN", "MART-03", "SAGEMAKER", where,
                       f"Model '{model_name}' loads executable model code from "
@@ -12382,12 +12445,20 @@ class AWSLiveScanner:
                 + _inline(g.get("GroupPolicyList"))
             )
 
+        def _tags(detail) -> Dict[str, str]:
+            """AWS tag list -> dict. `Tags` arrives on the SAME
+            GetAccountAuthorizationDetails page as everything else here, so carrying it
+            costs no call and no grant."""
+            return {str(t.get("Key", "")): str(t.get("Value", ""))
+                    for t in (detail.get("Tags") or []) if t.get("Key")}
+
         for u in users:
             stmts = _managed(u.get("AttachedManagedPolicies")) + _inline(u.get("UserPolicyList"))
             for gname in u.get("GroupList", []):
                 stmts += group_stmts.get(gname, [])
             _finalize("user", u.get("UserName", ""), u.get("Arn", ""), stmts,
                       groups=list(u.get("GroupList", [])),
+                      tags=_tags(u),
                       boundary=_resolve_boundary(u.get("PermissionsBoundary")))
 
         for r in roles:
@@ -12396,9 +12467,15 @@ class AWSLiveScanner:
             stmts = _managed(r.get("AttachedManagedPolicies")) + _inline(r.get("RolePolicyList"))
             trust = parse_trust_policy(r.get("AssumeRolePolicyDocument"))
             inst_profiles = [ip.get("Arn", "") for ip in r.get("InstanceProfileList", [])]
+            # trust_raw is the UNPARSED document. `parse_trust_policy` keeps only a
+            # boolean for conditions (all its callers need is the graph edge), and the
+            # condition CONTENTS are exactly what NHI-04 (sts:ExternalId) and NHI-05
+            # (:sub) read. Carrying the original alongside is what lets those two report
+            # a real answer instead of NOT_EVALUATED -- see aws_nhi._is_normalized.
             _finalize("role", r.get("RoleName", ""), r.get("Arn", ""), stmts,
-                      trust=trust, instance_profiles=inst_profiles,
-                      path=r.get("Path", ""),
+                      trust=trust, trust_raw=r.get("AssumeRolePolicyDocument"),
+                      instance_profiles=inst_profiles,
+                      path=r.get("Path", ""), tags=_tags(r),
                       boundary=_resolve_boundary(r.get("PermissionsBoundary")))
 
         self._iam_principals = principals
@@ -12406,6 +12483,161 @@ class AWSLiveScanner:
 
     def _admin_cap_id(self) -> str:
         return f"capability:admin:{self.account or 'account'}"
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SECTION 91: NON-HUMAN IDENTITY (NHI-01..05)
+    #
+    # `aws_nhi` shipped complete -- classification, five checks, a permission ledger,
+    # full write-ups, and its own test file -- and nothing ever called it. It was
+    # imported by three modules and referenced by none of them, which is why
+    # `test_unreached_modules.py` did not catch it: that ratchet asks whether a module
+    # is IMPORTED. An unused import is exactly what a wired module looks like from
+    # there, so the five checks sat registered in all four metadata maps, counted in
+    # the published total, and unable to fire. This section is the missing caller.
+    #
+    # NO NEW GRANT, which is the module's own stated contract. Both inputs are already
+    # collected: `_get_iam_principals` makes the single
+    # GetAccountAuthorizationDetails call (now also carrying the raw trust document
+    # and tags off that same page), and `_get_credential_report` is what the IAM
+    # section already reads for key age and console passwords.
+    # ═══════════════════════════════════════════════════════════════════════════
+    def _nhi_principal(self, p: Dict, cred: Dict[str, Dict]) -> Dict:
+        """One `_get_iam_principals` entry in the shape `aws_nhi` reads.
+
+        The credential-report join supplies the two facts
+        GetAccountAuthorizationDetails does not return -- whether a console password
+        exists, and how old the oldest access key is. A user absent from the report
+        (or no report at all) leaves both as None rather than False: `classify_principal`
+        treats `has_login_profile is True` and `is False` as different evidence, and
+        None is the third answer -- we did not find out.
+        """
+        row = cred.get(p.get("arn") or "") or {}
+        out: Dict = {
+            "kind": "IAMRole" if p.get("type") == "role" else "IAMUser",
+            "name": p.get("name", ""),
+            "arn": p.get("arn", ""),
+            "tags": p.get("tags") or {},
+        }
+        if p.get("type") == "role":
+            # Prefer the raw document: its conditions are readable, so NHI-04/05 can
+            # reach a verdict. Fall back to the normalized form, which makes them
+            # report themselves NOT_EVALUATED -- an honest answer, not silence.
+            out["trust_policy"] = p.get("trust_raw") or p.get("trust")
+            out["has_instance_profile"] = bool(p.get("instance_profiles"))
+            return out
+
+        if row:
+            out["has_login_profile"] = row.get("password_enabled") == "true"
+            active = [k for k in ("access_key_1", "access_key_2")
+                      if row.get(f"{k}_active") == "true"]
+            out["access_key_count"] = len(active)
+            ages = [a for a in (_cred_age_days(row.get(f"{k}_last_rotated", ""))
+                                for k in active) if a is not None]
+            if ages:
+                out["oldest_key_age_days"] = max(ages)
+        return out
+
+    def _nhi_classification(self, prin: Dict) -> Dict:
+        """The verdict, with the one resolution a caller is better placed to make.
+
+        A console password is CONFIGURED human evidence, so `classify_principal` never
+        returns `machine` for an identity that has one — `ambiguous` where there is
+        also structural machine evidence, `human` where the rest is only naming. NHI-01
+        is gated on a `machine` verdict, so on the module's own classification it can
+        never fire, and its unit test says as much: it supplies a verdict by hand, "the
+        way a caller with better evidence would". This is that caller.
+
+        The better evidence is not new evidence. We re-ask the SAME classifier with the
+        password removed: if the identity is still a machine on its own structural
+        grounds — a service-principal trust, a workload issuer, an instance profile —
+        then the password is the anomaly rather than a reason to abandon the verdict,
+        which is what `classify_principal` already says in prose ("a machine identity
+        holding one is itself the finding"). If the ambiguity has any OTHER human
+        source (SAML federation, say), the re-ask does not return `machine` and the
+        verdict stands ambiguous — nothing is forced.
+        """
+        cls = aws_nhi.classify_principal(prin)
+        if cls.get("verdict") == aws_nhi.MACHINE or prin.get("has_login_profile") is not True:
+            return cls
+        # False, not absent. `classify_principal`'s service-account fallback reads
+        # `has_login_profile is False` explicitly, so dropping the key would leave it
+        # None and the re-ask would decide nothing for exactly the IAM users this is
+        # about — a service account holding both access keys and a console password.
+        alone = aws_nhi.classify_principal({**prin, "has_login_profile": False})
+        if alone.get("verdict") == aws_nhi.MACHINE:
+            return {**cls, "verdict": aws_nhi.MACHINE, "confidence": alone.get("confidence")}
+        return cls
+
+    def _check_nhi(self):
+        """NHI-01..05 — machine identities judged as machine identities.
+
+        Every finding names the classification and its confidence, because a finding
+        derived from a WEAK verdict deserves to be read differently from one derived
+        from a service-principal trust. `aws_nhi` never raises a finding off a naming
+        convention alone; the section inherits that.
+        """
+        self._section_header("NHI")
+        try:
+            principals = self._get_iam_principals()
+        except Exception as e:
+            self._add("WARN", "NHI-01", "NHI", "iam",
+                      f"Could not enumerate IAM principals: {e}")
+            return
+        if not principals:
+            self._add("INFO", "NHI-00", "NHI", "iam",
+                      "No IAM principals enumerated — machine-identity posture not "
+                      "assessed | iam")
+            return
+
+        # The credential report is best-effort: IAM-07 already WARNs when it is
+        # unavailable, so this section stays silent about it rather than repeating a
+        # finding somebody else owns. Without it NHI-01/02 simply cannot fire, which
+        # is why `_nhi_principal` leaves those inputs None.
+        cred: Dict[str, Dict] = {}
+        try:
+            for row in self._get_credential_report():
+                arn = row.get("arn", "")
+                if arn:
+                    cred[arn] = row
+        except Exception:
+            pass
+
+        # What the caller believes it owns. `aws_nhi` treats an EMPTY set as "cannot
+        # judge" and stays silent rather than calling every internal trust
+        # third-party, so our own account is the minimum honest input.
+        # `trusted_accounts` is the SAME allowlist the cross-account grant checks
+        # already honour, so an operator who has told the scanner a sibling account is
+        # theirs does not have to tell it twice.
+        known = {str(a) for a in getattr(self, "trusted_accounts", set())}
+        if self.account:
+            known.add(str(self.account))
+
+        shaped = [self._nhi_principal(p, cred) for p in principals]
+        summary = aws_nhi.summarize(shaped)
+        for prin in shaped:
+            try:
+                findings = aws_nhi.nhi_findings(
+                    prin, classification=self._nhi_classification(prin),
+                    known_accounts=sorted(known))
+            except Exception as e:
+                self._add("WARN", "NHI-01", "NHI", prin["name"],
+                          f"Machine-identity assessment failed for {prin['name']}: {e}")
+                continue
+            for f in findings:
+                # NOT_EVALUATED is the module reporting that its input could not answer
+                # the question. That is INFO -- emitting it as a FAIL would invent a
+                # finding, and dropping it would read as "no such risk here".
+                status = "INFO" if f.get("status") == "NOT_EVALUATED" else "FAIL"
+                node = prin["arn"] or prin["name"]
+                self._add(status, f["check_id"], "NHI", prin["name"],
+                          f"{f['detail']} [classified {f.get('classification')}, "
+                          f"confidence {f.get('classification_confidence')}] | {node}")
+
+        # The coverage note is emitted whether or not anything failed: how much of the
+        # identity surface could NOT be classified is the measure of this section's
+        # own reach, and a summary that reported only findings would overstate it.
+        if summary.get("coverage_note"):
+            self._add("INFO", "NHI-00", "NHI", "account", f"{summary['coverage_note']} | iam")
 
     def _build_identity_graph(self, principals: List[Dict]) -> SecurityGraph:
         """Project principals + their trust and privesc facts onto a graph:
@@ -16747,6 +16979,7 @@ class AWSLiveScanner:
             "THREAT":         self._check_threat,
             "DATA":           self._check_data,
             "AI_THREAT":      self._check_ai_threat,
+            "NHI":            self._check_nhi,
             "CORRELATE":      self._check_correlate,
         }
 

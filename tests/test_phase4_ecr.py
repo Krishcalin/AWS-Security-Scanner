@@ -70,7 +70,7 @@ def test_cnt_04_tag_immutability():
                       _repo("c", "IMMUTABLE_WITH_EXCLUSION")])
     s._check_ecr()
     assert any(r.check_id == "CNT-04" and r.status == "PASS" and r.resource == "a" for r in s.results)
-    warns = {r.resource for r in s.results if r.check_id == "CNT-04" and r.status == "WARN"}
+    warns = {r.resource for r in s.results if r.check_id == "CNT-04" and r.status == "FAIL"}
     assert warns == {"b", "c"}                       # MUTABLE + *_WITH_EXCLUSION -> WARN
 
 

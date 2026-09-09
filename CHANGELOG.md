@@ -6,6 +6,75 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — findings (BREAKING for anyone gating on counts or scores)
+
+Both entries below come from `docs/CHECK_FIRING.md`, which measures which checks the
+suite can actually make fire. `_add` reads severity, compliance and remediation from
+the catalogue **only for a FAIL** — a WARN is forced to LOW and carries no
+remediation — so a check registered MEDIUM or HIGH that can only WARN has never
+rendered what the catalogue advertises for it. 46 checks were in that state.
+
+- **21 checks now emit FAIL where they previously emitted WARN.** Each describes a
+  definite misconfiguration and sat beside siblings in the same function that already
+  FAIL for comparable conditions: `ECS-02` (container runs as root) and `ECS-05`
+  (writable root filesystem) next to `ECS-01`/`ECS-03`; `SEC-02` (rotation interval
+  past 90 days) next to `SEC-01` (rotation off); `WAF-04` (default action ALLOW) next
+  to `WAF-03` (no rules). Also `S3-05`, `S3-07`, `S3-08`, `VPC-04` (CIS 5.4 default
+  security group), `CNT-04`, `CFN-06`, `GLC-02`, `LOG-06`, `LOG-08`, `RDS-08`,
+  `RSS-04`, `ELB-07`, `ELC-04`, `EKS-08`, `KIEM-02`, `KIEM-03`, `KSPM-04`.
+
+  **Risk scores and failed-check counts will rise on existing estates**, because
+  findings that scored 0.5 as a forced-LOW WARN now score at their declared severity.
+  Anything gating CI on a failed-check count needs re-baselining.
+
+- **22 checks are now declared LOW** to match what they can render, rather than
+  advertising a severity they could never reach. Three kinds: a hardening
+  **preference** rather than a defect (`SEC-03`, `SEC-04`, `SFN-03`, `RSS-02`,
+  `BDR-03`, `AGT-01`, `AGT-03`, `LMB-02`, `LMB-05`, `DDB-03`, `RS-07`, `AGC-03`,
+  `AGC-04`, `DIRSVC-02`); an honest **could-not-determine** (`WINVULN-03`, whose WARN
+  exists specifically to remove a silent false-clean, plus `VPC-06`, `EKS-04`,
+  `EKS-05`, `EKS-07`); and a **gradation** beneath a check that already FAILs
+  (`AILOG-05`/`AILOG-06`, where `AILOG-04` owns the total-absence FAIL) or resting on
+  evidence too weak to assert (`MART-03`, whose only ownership signal is whether a
+  bucket NAME carries a different account id). No scoring change: a WARN already
+  rendered LOW.
+
+`WAF-01`, `SHAI-03` and `ACM-05` are deliberately untouched. Each needs a logic
+change rather than a status flip — `WAF-01`'s only posture WARN is "no Web ACLs in
+this scope", and a blanket FAIL would flag every account with nothing to protect.
+
+### Fixed
+
+- **`S3-07` reported "no bucket policy enforcing TLS-only access" on AccessDenied.**
+  One exception handler answered two different questions: a missing policy (TLS is
+  genuinely not enforced) and an unreadable one (we could not tell). It stated the
+  first for both. The `S3-09` line immediately below it already drew exactly this
+  distinction. Access-denied now WARNs as UNKNOWN; a genuinely absent policy FAILs.
+- **Seven `CHECK_SEVERITY` entries were declared twice with different values.** The
+  map re-declares some ids in a later "backfilled" block and a dict literal takes the
+  last, so editing the first occurrence changed nothing, silently.
+  `test_check_maps_lockstep.py` now fails on any duplicate whose values disagree
+  unless it is named as an intentional override (`SM-02` and `SM-04`, which are
+  raised to HIGH on purpose).
+
+### Added
+
+- **`NHI` section (SECTION 91) — `NHI-01`..`NHI-05` can now fire.**
+  `engine/aws_nhi.py` shipped complete, with its own test file, and nothing ever
+  called it: it was imported by three production modules (its CheckDefs register at
+  import time, which is what put the five ids in all four metadata maps) and
+  referenced by none of them. The checks were catalogued, counted in the published
+  total, and unreachable. The section reads the principals `_get_iam_principals`
+  already fetches and the credential report the IAM section already reads — **no new
+  API call and no new IAM grant**. `_get_iam_principals` now also carries the raw
+  `AssumeRolePolicyDocument` and resource tags, both already present on the same
+  `GetAccountAuthorizationDetails` page; the raw document is what lets `NHI-04`
+  (`sts:ExternalId`) and `NHI-05` (`:sub`) reach a verdict instead of reporting
+  themselves `NOT_EVALUATED`.
+- **`test_unreached_modules.py` now asks whether a module is CALLED, not merely
+  imported.** An unused import satisfied the old ratchet, which is why `aws_nhi`
+  hid in it. A module that registers CheckDefs must have a production caller.
+
 ## [3.0.0] — 2026-08-28
 
 **A major version because the import surface changed, not because the product

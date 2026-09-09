@@ -17,7 +17,7 @@ carries neither - so a check that never fails never renders what the catalogue
 advertises for it.
 
 
-**460 registered checks.** 305 are proven to FAIL in the suite; 85 run but have never been driven to a failure; 70 were never observed at all.
+**460 registered checks.** 331 are proven to FAIL in the suite; 67 run but have never been driven to a failure; 62 were never observed at all.
 
 
 ## Never observed
@@ -29,7 +29,7 @@ No test makes these emit anything. Each is registered in all four metadata maps 
 - `AGT-05` (declared HIGH)
 - `AMP-01` (declared MEDIUM)
 - `BDR-02` (declared HIGH)
-- `BDR-03` (declared MEDIUM)
+- `BDR-03` (declared LOW)
 - `BDR-04` (declared MEDIUM)
 - `CART-01` (declared HIGH)
 - `CGP-01` (declared MEDIUM)
@@ -49,35 +49,28 @@ No test makes these emit anything. Each is registered in all four metadata maps 
 - `HSM-01` (declared MEDIUM)
 - `HSM-02` (declared HIGH)
 - `IMI-01` (declared MEDIUM)
-- `KIEM-02` (declared MEDIUM)
 - `KSPM-02` (declared HIGH)
-- `KSPM-04` (declared MEDIUM)
 - `LATT-02` (declared MEDIUM)
 - `LMB-01` (declared HIGH)
 - `LSAIL-01` (declared HIGH)
 - `LSAIL-02` (declared HIGH)
-- `MART-03` (declared MEDIUM)
+- `MART-03` (declared LOW)
 - `MBC-01` (declared MEDIUM)
 - `MPV-01` (declared MEDIUM)
 - `NFW-01` (declared MEDIUM)
 - `NFW-02` (declared HIGH)
 - `NFW-03` (declared MEDIUM)
-- `NHI-01` (declared HIGH)
-- `NHI-02` (declared MEDIUM)
-- `NHI-03` (declared LOW)
-- `NHI-04` (declared HIGH)
-- `NHI-05` (declared HIGH)
 - `NWM-01` (declared MEDIUM)
 - `PCA-01` (declared HIGH)
 - `S3T-01` (declared HIGH)
 - `S3T-02` (declared MEDIUM)
 - `SEC-01` (declared HIGH)
-- `SEC-04` (declared MEDIUM)
+- `SEC-04` (declared LOW)
 - `SEG-02` (declared HIGH)
 - `SEG-06` (declared LOW)
 - `SFN-01` (declared MEDIUM)
 - `SFN-02` (declared LOW)
-- `SFN-03` (declared MEDIUM)
+- `SFN-03` (declared LOW)
 - `SGW-01` (declared HIGH)
 - `SGW-02` (declared MEDIUM)
 - `SM-12` (declared MEDIUM)
@@ -93,7 +86,6 @@ No test makes these emit anything. Each is registered in all four metadata maps 
 - `VPC-03` (declared MEDIUM)
 - `VULN-03` (declared HIGH)
 - `WAF-01` (declared HIGH)
-- `WAF-04` (declared MEDIUM)
 
 
 ## Runs, but never fails
@@ -104,13 +96,13 @@ These emit only WARN/INFO/PASS in the suite. Where the declared severity is abov
 |---|---|---|
 | `ACM-03` | LOW | PASS/WARN |
 | `ACM-05` | MEDIUM | WARN |
-| `AGC-03` | MEDIUM | WARN |
-| `AGC-04` | MEDIUM | WARN |
-| `AGT-01` | MEDIUM | INFO/WARN |
-| `AGT-03` | MEDIUM | WARN |
+| `AGC-03` | LOW | WARN |
+| `AGC-04` | LOW | WARN |
+| `AGT-01` | LOW | INFO/WARN |
+| `AGT-03` | LOW | WARN |
 | `AGW2-03` | LOW | PASS/WARN |
-| `AILOG-05` | MEDIUM | WARN |
-| `AILOG-06` | MEDIUM | WARN |
+| `AILOG-05` | LOW | WARN |
+| `AILOG-06` | LOW | WARN |
 | `APIGW-04` | LOW | PASS/WARN |
 | `BDR-01` | HIGH | INFO/WARN |
 | `BDR-05` | HIGH | PASS |
@@ -118,40 +110,29 @@ These emit only WARN/INFO/PASS in the suite. Where the declared severity is abov
 | `CFN-02` | HIGH | PASS |
 | `CFN-03` | HIGH | PASS |
 | `CFN-04` | MEDIUM | PASS |
-| `CFN-06` | MEDIUM | PASS/WARN |
-| `CNT-04` | MEDIUM | PASS/WARN |
 | `CNT-05` | LOW | PASS/WARN |
 | `COG-04` | LOW | PASS/WARN |
 | `DDB-01` | HIGH | PASS |
-| `DDB-03` | MEDIUM | INFO/PASS |
+| `DDB-03` | LOW | INFO/PASS |
 | `DDB-04` | MEDIUM | PASS |
-| `DIRSVC-02` | MEDIUM | PASS |
+| `DIRSVC-02` | LOW | PASS |
 | `EBS-05` | LOW | WARN |
 | `EC2-09` | LOW | WARN |
-| `ECS-02` | HIGH | WARN |
-| `ECS-05` | MEDIUM | WARN |
 | `EFS-03` | LOW | WARN |
-| `EKS-04` | MEDIUM | INFO |
-| `EKS-05` | MEDIUM | WARN |
-| `EKS-07` | MEDIUM | INFO |
-| `EKS-08` | MEDIUM | INFO/WARN |
+| `EKS-04` | LOW | INFO |
+| `EKS-05` | LOW | WARN |
+| `EKS-07` | LOW | INFO |
 | `ELB-04` | LOW | WARN |
-| `ELB-07` | MEDIUM | PASS/WARN |
 | `ELB-08` | LOW | WARN |
-| `ELC-04` | MEDIUM | WARN |
 | `ENC-03` | MEDIUM | PASS/WARN |
 | `FARGATE-01` | LOW | INFO |
 | `FLOW-01` | LOW | WARN |
 | `FLOW-02` | LOW | WARN |
 | `FW-02` | MEDIUM | PASS |
-| `GLC-02` | MEDIUM | WARN |
 | `GLC-03` | LOW | WARN |
-| `KIEM-03` | MEDIUM | WARN |
 | `LF-02` | HIGH | PASS |
-| `LMB-02` | MEDIUM | WARN |
-| `LMB-05` | MEDIUM | WARN |
-| `LOG-06` | MEDIUM | PASS/WARN |
-| `LOG-08` | MEDIUM | PASS/WARN |
+| `LMB-02` | LOW | WARN |
+| `LMB-05` | LOW | WARN |
 | `MCP-04` | LOW | WARN |
 | `OSR-02` | HIGH | PASS |
 | `OSR-03` | MEDIUM | PASS |
@@ -161,17 +142,11 @@ These emit only WARN/INFO/PASS in the suite. Where the declared severity is abov
 | `R53-03` | HIGH | WARN |
 | `R53-04` | LOW | WARN |
 | `RDS-05` | LOW | WARN |
-| `RDS-08` | MEDIUM | PASS/WARN |
 | `RDS-13` | LOW | WARN |
 | `RS-05` | LOW | PASS/WARN |
-| `RS-07` | MEDIUM | PASS/WARN |
-| `RSS-02` | MEDIUM | PASS/WARN |
-| `RSS-04` | MEDIUM | PASS/WARN |
-| `S3-05` | MEDIUM | PASS/WARN |
-| `S3-07` | MEDIUM | PASS/WARN |
-| `S3-08` | MEDIUM | PASS/WARN |
-| `SEC-02` | HIGH | PASS |
-| `SEC-03` | MEDIUM | PASS |
+| `RS-07` | LOW | PASS/WARN |
+| `RSS-02` | LOW | PASS/WARN |
+| `SEC-03` | LOW | PASS |
 | `SECRET-02` | LOW | WARN |
 | `SEGREC-01` | INFO | INFO |
 | `SHAI-03` | MEDIUM | PASS/WARN |
@@ -181,9 +156,8 @@ These emit only WARN/INFO/PASS in the suite. Where the declared severity is abov
 | `SQS-03` | MEDIUM | WARN |
 | `SQS-04` | LOW | PASS |
 | `THREAT-01` | HIGH | INFO |
-| `VPC-04` | MEDIUM | PASS/WARN |
-| `VPC-06` | MEDIUM | INFO/PASS/WARN |
-| `WINVULN-03` | MEDIUM | INFO/WARN |
+| `VPC-06` | LOW | INFO/PASS/WARN |
+| `WINVULN-03` | LOW | INFO/WARN |
 | `WINVULN-04` | LOW | PASS |
 | `WKR-01` | INFO | INFO |
 | `XFER-03` | INFO | INFO |
@@ -214,6 +188,7 @@ A finding whose id the catalogue does not know renders with the default severity
 - `KMS-01` (PASS)
 - `KSPM-00` (INFO)
 - `MART-00` (INFO)
+- `NHI-00` (INFO)
 - `NITRO-00` (INFO)
 - `PATHS-01` (INFO)
 - `PENT-00` (INFO)

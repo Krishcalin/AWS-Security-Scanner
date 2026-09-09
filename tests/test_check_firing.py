@@ -67,8 +67,32 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #:
 #: The honest invariants are the ends: unobserved can only fall, proven-failing can
 #: only rise. Lower/raise these when the doc is regenerated; never the other way.
-MAX_NEVER_OBSERVED = 70
-MIN_PROVEN_FAILING = 305
+#: NHI-01..05 are the first checks moved by fixing a REACHABILITY defect rather than
+#: by writing a fixture. `engine/aws_nhi.py` was complete and callerless: imported by
+#: three production modules (its CheckDefs register at import time, which is what put
+#: the five ids in all four maps) and referenced by none, so the checks were
+#: catalogued, counted in the published total, and could not fire. Wiring the NHI
+#: section moved all five straight to proven-failing: 305 -> 310 and 70 -> 65.
+#:
+#: One of the five needed more than a caller. NHI-01 is gated on a `machine` verdict,
+#: and a console password is CONFIGURED human evidence -- so `classify_principal`
+#: never returns `machine` for the identity NHI-01 describes, and the check was
+#: unsatisfiable through the module's own classifier. See
+#: `AWSLiveScanner._nhi_classification`, and `test_nhi.py`, whose NHI-01 test supplies
+#: a verdict by hand precisely because nothing else could.
+#: The bucket-B pass then moved 17 more from the middle to proven-failing (310 -> 327,
+#: and 85 -> 68 in the middle). Those were not new fixtures: each check already had a
+#: test driving it to its bad configuration and asserting WARN, because the check had
+#: always been able to detect the problem and had only ever been able to report it at
+#: LOW with no remediation. Flipping the status and the expectation together is what
+#: turned a detected condition into a rendered finding.
+#: Four of the 21 had no driving test at all -- the condition was reachable and
+#: nothing exercised it -- so the change would have shipped as an unproven claim,
+#: which is the very thing this file exists to make visible. tests/test_bucketb_
+#: driving.py closes those (SEC-02, WAF-04, KIEM-02, KSPM-04) and takes the ends to
+#: 331 / 62.
+MAX_NEVER_OBSERVED = 62
+MIN_PROVEN_FAILING = 331
 
 
 def doc_text() -> str:

@@ -76,10 +76,10 @@ def _custom_origin(oid, ssl_protos, opp="https-only"):
             "OriginSslProtocols": {"Items": ssl_protos}}}
 
 
-def test_cfn06_weak_origin_tls_warns():
+def test_cfn06_weak_origin_tls_fails():
     s = _cfn_scanner([_custom_origin("o1", ["TLSv1", "TLSv1.2"])])
     s._check_cloudfront()
-    assert "WARN" in _status(s, "CFN-06")
+    assert "FAIL" in _status(s, "CFN-06")
 
 
 def test_cfn06_strong_origin_tls_passes():

@@ -61,10 +61,10 @@ def _status(s, cid):
 
 
 # ── EKS-08 auth mode ─────────────────────────────────────────────────────────
-def test_eks08_config_map_warns():
+def test_eks08_config_map_fails():
     s = _scanner()
     s._check_eks_kiem(_eks(), CLUSTER, _cluster(mode="CONFIG_MAP"))
-    assert "WARN" in _status(s, "EKS-08")
+    assert "FAIL" in _status(s, "EKS-08")
 
 
 def test_eks08_api_mode_info():
@@ -121,7 +121,7 @@ def test_kiem03_secret_reader():
     s = _scanner()
     s._check_eks_kiem(_eks(entries=[parn], assoc=[{"policyArn": ADMINVIEW,
                        "accessScope": {"type": "cluster"}}]), CLUSTER, _cluster())
-    assert "WARN" in _status(s, "KIEM-03")
+    assert "FAIL" in _status(s, "KIEM-03")
 
 
 # ── Pod Identity SA -> IAM role (cross-plane, no K8s API) ─────────────────────
