@@ -125,6 +125,7 @@ FLOORS = {
     "test_cis_db_cluster_and_cache.py": 18,
     "test_cis_db_inventory.py": 6,
     "test_cis_db_keyspaces_timestream.py": 18,
+    "test_cis_db_mapping.py": 18,
     "test_cis_db_memorydb.py": 21,
     "test_cis_db_tls.py": 24,
     "test_cnapp_api.py": 7,

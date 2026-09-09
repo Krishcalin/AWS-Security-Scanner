@@ -168,4 +168,7 @@ def test_the_shipped_file_still_validates():
     # The loader is where a hand-edited file gets caught: it rejects edges targeting a
     # native framework, unknown NIST controls, blank targets, missing confidence and
     # duplicate framework ids. Reaching this line at all means none of those fired.
-    assert len(frameworks) == 44
+    # 45: +CIS-DB, registered when the CIS AWS Database Services mapping landed. It is a
+    # NATIVE framework -- hand-tagged per check -- so it adds a framework without adding
+    # any crosswalk edge, which is why the edge assertions above are unchanged.
+    assert len(frameworks) == 45

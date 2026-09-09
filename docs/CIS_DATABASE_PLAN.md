@@ -4,9 +4,9 @@
 
 | # | Scope | Planned | Actual | State |
 |---|---|---:|---|---|
-| 0 | The 98-row mapping table + `NOT_DETERMINABLE` | 0 | — | **BLOCKED** — needs the source PDF |
+| 0 | The 98-row mapping table + `NOT_DETERMINABLE` | 0 | **98 rows**, as data in `engine/aws_cis_db_map.py` | done |
 | 1 | Fix the AUR engine filter | 0 | **6** (DOCDB-04/05, NEP-01..04) | done |
-| 2 | `CIS-DB` key + map the already-covered recs | 0 | — | **BLOCKED** — needs the source PDF |
+| 2 | `CIS-DB` key + map the already-covered recs | 0 | **42 checks keyed**; 31 recommendations covered | done |
 | 3 | TLS enforcement | ~4 | **4** (RDS-14, AUR-06, DOCDB-06, NEP-05) | done |
 | 4 | Cluster-level 2.8/2.10; ElastiCache fields | ~3 | **4** (AUR-07/08, ELC-07/08) | done |
 | 5 | MemoryDB | ~5 | **6** (MDB-01..06) | done |
@@ -31,11 +31,18 @@ number added each time. Suite 6018 → 6151 passing.
    is a judgement, but "botocore ships no service model for it", which is checkable and is
    asserted by a test.
 
-**Tranches 0 and 2 need the benchmark PDF re-attached.** They are the mapping layer: the
-98-row table and the `CIS-DB` compliance key across the ~40 already-covered recommendations.
-Building them from recollection would mean inventing recommendation numbers and titles,
-which would make a compliance mapping worse than no mapping. The *checks* do not depend on
-them — everything above ships mapped to PCI-DSS / HIPAA / SOC2 / NIST in the ordinary way.
+**All seven tranches are now done.** Tranches 0 and 2 were blocked on the benchmark
+document and are complete as of its arrival: see
+[`CIS_DATABASE_BENCHMARK.md`](CIS_DATABASE_BENCHMARK.md) for all 98 recommendations
+and what OverWatch does about each, and `engine/aws_cis_db_map.py` for the mapping
+held as data so it cannot drift from the catalogue.
+
+The mapping pass found one thing worth its own line: **the RDS instance loop still
+scores Neptune and DocumentDB instances as RDS** — the tranche-1 cluster defect,
+one level down. It is recorded in the benchmark document rather than fixed here,
+because fixing it means adding Neptune and DocumentDB instance-level checks in the
+same change, for exactly the reason tranche 1 grew from 0 checks to 6: filtering
+alone would delete the only coverage of Neptune 9.8 and 9.9.
 
 The rest of this document is the original plan as written, kept for the reasoning.
 `docs/CIS_COMPUTE_BENCHMARK.md` is what the finished article looks like, and this should be
