@@ -17,7 +17,7 @@ carries neither - so a check that never fails never renders what the catalogue
 advertises for it.
 
 
-**503 registered checks.** 410 are proven to FAIL in the suite; 62 run but have never been driven to a failure; 31 were never observed at all.
+**503 registered checks.** 413 are proven to FAIL in the suite; 62 run but have never been driven to a failure; 28 were never observed at all.
 
 
 ## Never observed
@@ -26,7 +26,6 @@ No test makes these emit anything. Each is registered in all four metadata maps 
 
 - `AMP-01` (declared MEDIUM)
 - `CGP-01` (declared MEDIUM)
-- `CWPP-01` (declared HIGH)
 - `DATA-03` (declared MEDIUM)
 - `DSQL-01` (declared MEDIUM)
 - `FMS-01` (declared MEDIUM)
@@ -38,7 +37,6 @@ No test makes these emit anything. Each is registered in all four metadata maps 
 - `MPV-01` (declared MEDIUM)
 - `NWM-01` (declared MEDIUM)
 - `SEC-04` (declared LOW)
-- `SEG-02` (declared HIGH)
 - `SEG-06` (declared LOW)
 - `SFN-01` (declared MEDIUM)
 - `SFN-02` (declared LOW)
@@ -53,7 +51,6 @@ No test makes these emit anything. Each is registered in all four metadata maps 
 - `SM-27` (declared LOW)
 - `THREAT-02` (declared MEDIUM)
 - `VPC-03` (declared MEDIUM)
-- `VULN-03` (declared HIGH)
 - `WAF-01` (declared HIGH)
 
 

@@ -156,8 +156,22 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: tests/test_read_failure_is_not_a_finding.py, which is the honest version of the same
 #: number: two checks that were counted for the wrong reason are now counted for the
 #: right one.
-MAX_NEVER_OBSERVED = 31
-MIN_PROVEN_FAILING = 410
+#: TRANCHE 7 TOOK THE LAST OF THE HIGH-SEVERITY NEVER-OBSERVED CHECKS, and they were
+#: last for a reason worth recording: three of the four reach `_add` through a
+#: NON-LITERAL id, so the static pass that located every earlier tranche's FAIL path
+#: could not see them. CWPP-01 is `fid = "CWPP-02" if m.kev else "CWPP-01"`; VULN-03 is
+#: one arm of a four-way branch on Inspector's resource type; SEG-02 is not written in
+#: the scanner at all — `aws_exposure.microseg_findings` returns dicts carrying their own
+#: "id" and the scanner emits them by `f["id"]`. That is exactly why this file records
+#: `_add` at runtime rather than grepping for it. 410 -> 413, 31 -> 28.
+#:
+#: WAF-01 IS THE ONE HIGH THAT REMAINS, and no fixture can close it: it has no FAIL path,
+#: because its only posture finding is "no Web ACLs in this scope" and a blanket FAIL
+#: would flag every account with nothing to protect. tests/test_unproven_checks_
+#: tranche7.py pins that, with the shape a useful version would need, so the gap stays
+#: visible and the decision gets made deliberately rather than by a fixture appearing.
+MAX_NEVER_OBSERVED = 28
+MIN_PROVEN_FAILING = 413
 
 
 def doc_text() -> str:
