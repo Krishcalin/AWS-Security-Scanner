@@ -10196,8 +10196,11 @@ class AWSLiveScanner:
             if not nid:
                 continue
             try:
+                # `settings`, not `networkSettings` -- the latter is a key the operation
+                # does not have, so this read always yielded {} against real AWS and
+                # WKR-01 could never fire. See tests/test_aws_api_contract.py.
                 st = (wk.get_network_settings(networkId=nid) or {}
-                      ).get("networkSettings") or {}
+                      ).get("settings") or []
             except Exception as e:
                 if self._is_access_denied(e):
                     self._coverage.note_denied("WKR-01", "wickr:GetNetworkSettings")
@@ -17355,11 +17358,17 @@ class AWSLiveScanner:
                             aws_deepplane.DSPM_READ_ACTIONS["fsxfilesystem"])
 
     def _dspm_timestream(self, g, roles):
+        # NOT get_paginator. timestream-write declares no paginators for ListDatabases
+        # or ListTables, so `client.get_paginator("list_databases")` raises
+        # OperationNotPageableError before a single call is made -- which the handler
+        # below then reported as "could not enumerate", every scan, forever. Timestream
+        # coverage had therefore never worked against real AWS and looked, in the
+        # report, exactly like an account with no Timestream in it. Both operations do
+        # page, on a plain NextToken, which is what `_tokens` walks.
+        # Found by tests/test_aws_api_contract.py.
         try:
             ts = self._client("timestream-write")
-            dbs: List[Dict] = []
-            for page in ts.get_paginator("list_databases").paginate():
-                dbs += page.get("Databases", [])
+            dbs: List[Dict] = self._tokens(ts.list_databases, "Databases")
         except Exception as e:
             self._add("INFO", "DSPM-01", "DATA", "timestream",
                       f"Could not enumerate Timestream databases in {self.region}: {e}")
@@ -17367,9 +17376,8 @@ class AWSLiveScanner:
         for db in dbs:
             dbname = db.get("DatabaseName", "")
             try:
-                tables: List[Dict] = []
-                for page in ts.get_paginator("list_tables").paginate(DatabaseName=dbname):
-                    tables += page.get("Tables", [])
+                tables: List[Dict] = self._tokens(ts.list_tables, "Tables",
+                                                  DatabaseName=dbname)
             except Exception:
                 continue
             for t in tables:

@@ -205,21 +205,49 @@ def test_an_absent_threshold_is_unknown_not_one():
 
 
 # ── Wickr ───────────────────────────────────────────────────────────────────
+# THE SHAPE THESE USED TO PASS WAS ONE AWS NEVER SENDS. GetNetworkSettings returns
+# {"settings": [{optionName, value, type}, ...]} -- a list of name/value pairs whose
+# values are STRINGS -- and both the code and these fixtures assumed a nested object.
+# The fixture agreed with the bug, so the unit tests passed while the check received {}
+# on every real scan. tests/test_aws_api_contract.py found it against botocore's model.
+def _settings(**pairs):
+    """The real GetNetworkSettings payload for the given option/value pairs."""
+    return [{"optionName": k, "value": v, "type": "BOOLEAN"} for k, v in pairs.items()]
+
+
 def test_retention_enabled_is_reported_as_context():
-    r = E.wickr_retention("n-1", {"dataRetention": {"enabled": True}})
+    r = E.wickr_retention("n-1", _settings(dataRetention="true"))
     assert r["retention_on"] is True
     assert "reported as CONTEXT rather than a defect" in r["statement"]
 
 
 def test_retention_disabled_is_quiet():
-    r = E.wickr_retention("n-1", {"dataRetention": {"enabled": False}})
+    r = E.wickr_retention("n-1", _settings(dataRetention="false"))
     assert r["retention_on"] is False and r["statement"] == ""
+
+
+def test_string_values_are_coerced_because_the_api_sends_strings():
+    """`value` is typed `string` in the model, so "true" is what arrives — not True."""
+    assert E.wickr_retention("n-1", _settings(dataRetention="true"))["retention_on"]
+    assert E.wickr_retention("n-1", _settings(dataRetention="TRUE"))["retention_on"]
+
+
+def test_an_absent_option_is_unknown_rather_than_off():
+    r = E.wickr_retention("n-1", _settings(enableTrustedDataFormat="true"))
+    assert r["retention_on"] is False and r["known"] is False
+
+
+def test_the_nested_object_form_is_still_accepted():
+    """Kept deliberately: the option NAMES are free-form strings the model does not
+    enumerate, so they cannot be verified offline and are left exactly as they were."""
+    r = E.wickr_retention("n-1", {"dataRetention": {"enabled": True}})
+    assert r["retention_on"] is True
 
 
 def test_the_wickr_finding_does_not_say_retention_is_wrong():
     """Retention is frequently a regulatory requirement. The check surfaces it, it does
     not judge it."""
-    r = E.wickr_retention("n-1", {"dataRetention": {"enabled": True}})
+    r = E.wickr_retention("n-1", _settings(dataRetention="true"))
     low = r["statement"].lower()
     assert "should be disabled" not in low and "misconfigur" not in low
 
@@ -268,8 +296,10 @@ def test_the_mpa_section_reports_a_single_approver_team():
 def test_the_wickr_section_emits_info_not_a_failure():
     c = MagicMock()
     c.list_networks.return_value = {"networks": [{"id": "n-1"}]}
+    # `settings`, the member the operation actually declares -- see the note above.
     c.get_network_settings.return_value = {
-        "networkSettings": {"dataRetention": {"enabled": True}}}
+        "settings": [{"optionName": "dataRetention", "value": "true",
+                      "type": "BOOLEAN"}]}
     s = _scanner(c)
     s._check_wickr()
     assert _ids(s, "WKR-01", "INFO") and not _ids(s, "WKR-01", "FAIL")
