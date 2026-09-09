@@ -262,7 +262,7 @@ SECTIONS = [
     "AI_LOGGING", "SHADOW_AI", "VECTORSTORE",
     # Batch 1 of the 426-service coverage gap analysis. Each is its own top-level
     # section: a defect in a nested one takes out every test of its host.
-    "IOT", "EMR", "CODEBUILD", "DOCDB", "IMAGEBUILDER", "TRANSFER",
+    "IOT", "EMR", "CODEBUILD", "DOCDB", "NEPTUNE", "IMAGEBUILDER", "TRANSFER",
     # Batch 2. Declared via aws_checkdef rather than five hand-edited literals.
     "NETWORKFIREWALL", "LIGHTSAIL", "PRIVATECA", "QUICKSIGHT",
     "IDENTITYCENTER", "GLUE",
@@ -331,6 +331,7 @@ SECTION_LABELS = {
     "EMR":            "AMAZON EMR",
     "CODEBUILD":      "AWS CODEBUILD",
     "DOCDB":          "AMAZON DOCUMENTDB",
+    "NEPTUNE":        "AMAZON NEPTUNE",
     "IMAGEBUILDER":   "EC2 IMAGE BUILDER",
     "TRANSFER":       "AWS TRANSFER FAMILY",
     "NETWORKFIREWALL": "AWS NETWORK FIREWALL",
@@ -447,6 +448,22 @@ IDLE_DB_PERIOD_SECONDS = 86400
 #
 # Raising one of these back to MEDIUM without also giving the check a FAIL path puts
 # it straight back into the gap it was measured out of.
+
+#: Engines that `rds:DescribeDBClusters` returns which are NOT Aurora.
+#
+# DocumentDB and Neptune are separate services built on the same control plane, so they
+# come back from the RDS cluster APIs alongside Aurora and Multi-AZ DB clusters. The DSPM
+# path (`_dspm_rds`) has always branched on `Engine` for exactly this reason. AUR-01..05
+# did not, and scored them as Aurora: a DocumentDB cluster's encryption gap was reported
+# twice, once as AUR-01 and once as DOCDB-02, with AUR-01 offering a modify command that
+# DocumentDB does not support -- and Neptune posture was reported under Aurora labelling
+# while nothing in the product knew what Neptune was.
+#
+# DENY-list, not an allow-list. RDS keeps adding Aurora engine variants; an allow-list
+# would silently drop each new one out of coverage, which is the failure mode that is
+# hardest to notice. Only these two are known to share the API.
+NON_AURORA_CLUSTER_ENGINES = frozenset({"docdb", "neptune"})
+
 CHECK_SEVERITY = {
     # Agentless side-scan (CWPP, Phase 6)
     "CWPP-01": "HIGH", "CWPP-02": "CRITICAL", "CWPP-03": "HIGH",
@@ -659,6 +676,13 @@ CHECK_SEVERITY = {
     "EMR-01": "HIGH", "EMR-02": "MEDIUM",
     "CB-01": "HIGH", "CB-02": "MEDIUM",
     "DOCDB-01": "CRITICAL", "DOCDB-02": "HIGH", "DOCDB-03": "MEDIUM",
+    # DOCDB-04/05 and NEP-01..04 exist because AUR-01..05 used to reach DocumentDB and
+    # Neptune clusters through the shared RDS control plane. Severities mirror the Aurora
+    # check each one replaces: AUR-02 -> *-04 deletion protection (MEDIUM), AUR-04 ->
+    # NEP-03 public snapshot (CRITICAL), AUR-05 -> *-05/NEP-04 snapshot encryption (HIGH),
+    # AUR-01 -> NEP-01 storage encryption (HIGH).
+    "DOCDB-04": "MEDIUM", "DOCDB-05": "HIGH",
+    "NEP-01": "HIGH", "NEP-02": "MEDIUM", "NEP-03": "CRITICAL", "NEP-04": "HIGH",
     "IMGB-01": "HIGH",
     "XFER-01": "HIGH", "XFER-02": "MEDIUM", "XFER-03": "INFO",
     "MART-01": "CRITICAL",
@@ -1041,6 +1065,12 @@ COMPLIANCE_MAP = {
     "DOCDB-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "DOCDB-02": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "DOCDB-03": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "DOCDB-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "DOCDB-05": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "NEP-01": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "NEP-02": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "NEP-03": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "NEP-04": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "IMGB-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "XFER-01": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "XFER-02": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
@@ -1501,6 +1531,12 @@ REMEDIATION_MAP = {
     "DOCDB-01": "Stop sharing the snapshot with every AWS account immediately: aws docdb modify-db-cluster-snapshot-attribute --db-cluster-snapshot-identifier <SNAPSHOT> --attribute-name restore --values-to-remove all. Then establish how long it was public and treat the contents as disclosed for that window",
     "DOCDB-02": "DocumentDB storage encryption can only be set at creation, so this cannot be switched on in place. Create an encrypted cluster from a snapshot and cut over: aws docdb restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAPSHOT> --kms-key-id <KEY_ARN> --storage-encrypted",
     "DOCDB-03": "Export audit logs so there is a record of who connected and what they queried: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --cloudwatch-logs-export-configuration EnableLogTypes=audit. The cluster parameter group also needs audit_logs enabled",
+    "DOCDB-04": "Turn on deletion protection so the cluster cannot be dropped by a single API call or a mistaken Terraform destroy: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --deletion-protection. It takes effect immediately and does not require a reboot",
+    "DOCDB-05": "Snapshot encryption is inherited from the cluster and cannot be added to an existing snapshot. Copy it to a new encrypted snapshot and delete the plaintext one: aws docdb copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier <SNAPSHOT> --target-db-cluster-snapshot-identifier <NEW> --kms-key-id <KEY_ARN>, then aws docdb delete-db-cluster-snapshot --db-cluster-snapshot-identifier <SNAPSHOT>",
+    "NEP-01": "Neptune storage encryption can only be set at cluster creation, so this needs a migration rather than a setting change: aws neptune restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAPSHOT> --engine neptune --kms-key-id <KEY_ARN> --storage-encrypted, then cut over and delete the old cluster",
+    "NEP-02": "Turn on deletion protection so the graph cannot be dropped by a single API call: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --deletion-protection --apply-immediately",
+    "NEP-03": "Stop sharing the snapshot with every AWS account immediately: aws neptune modify-db-cluster-snapshot-attribute --db-cluster-snapshot-identifier <SNAPSHOT> --attribute-name restore --values-to-remove all. Then establish how long it was public and treat the graph contents as disclosed for that window",
+    "NEP-04": "Copy the snapshot to an encrypted one and delete the plaintext original: aws neptune copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier <SNAPSHOT> --target-db-cluster-snapshot-identifier <NEW> --kms-key-id <KEY_ARN>, then aws neptune delete-db-cluster-snapshot --db-cluster-snapshot-identifier <SNAPSHOT>",
     "IMGB-01": "Remove the wildcard principal from the Image Builder resource policy so the image and everything baked into it stops being shared beyond your account: aws imagebuilder put-image-policy --image-arn <ARN> --policy file://scoped-policy.json . Then audit the image for embedded credentials, since anyone could have pulled it",
     "XFER-01": "Stop accepting plain FTP -- credentials and file contents cross the network in the clear. Move the server to FTPS or SFTP, which carry the same workflow encrypted: aws transfer update-server --server-id <SERVER_ID> --protocols SFTP FTPS. Coordinate with clients before removing FTP",
     "XFER-02": "Attach a logging role so there is a record of who connected and which files moved: aws transfer update-server --server-id <SERVER_ID> --logging-role <ROLE_ARN>",
@@ -5409,6 +5445,13 @@ class AWSLiveScanner:
             self._add("WARN", "AUR-01", "RDS", "rds", f"describe_db_clusters failed: {e}")
             clusters = None
         if clusters is not None:
+            # DocumentDB and Neptune come back from this API too. They are scored by
+            # _check_docdb and _check_neptune under their own ids — see
+            # NON_AURORA_CLUSTER_ENGINES. Filter BEFORE the empty test, so an account
+            # holding only DocumentDB does not read as "no clusters" here.
+            clusters = [c for c in clusters
+                        if (c.get("Engine") or "").lower()
+                        not in NON_AURORA_CLUSTER_ENGINES]
             if not clusters:
                 self._add("INFO", "AUR-01", "RDS", "rds",
                           "No Aurora/Multi-AZ DB clusters found in this region")
@@ -5460,6 +5503,12 @@ class AWSLiveScanner:
                       f"describe_db_cluster_snapshots failed: {e}")
             csnaps = None
         if csnaps is not None:
+            # Same overlap as the cluster loop above: DBClusterSnapshot carries Engine,
+            # and DocumentDB/Neptune snapshots arrive here. DOCDB-01/05 and NEP-03/04
+            # own those.
+            csnaps = [s for s in csnaps
+                      if (s.get("Engine") or "").lower()
+                      not in NON_AURORA_CLUSTER_ENGINES]
             if not csnaps:
                 self._add("INFO", "AUR-04", "RDS", "cluster-snapshots",
                           "No manual Aurora/RDS cluster snapshots in this region")
@@ -11614,6 +11663,22 @@ class AWSLiveScanner:
             sid = (sn or {}).get("DBClusterSnapshotIdentifier")
             if not sid:
                 continue
+            # The docdb endpoint is a fork of the RDS control plane and these APIs are
+            # not reliably engine-scoped, so filter the way the RDS side now does. Only
+            # exclude a snapshot that POSITIVELY declares another engine — an absent
+            # Engine keeps the previous behaviour rather than silently dropping it.
+            sn_engine = ((sn or {}).get("Engine") or "").lower()
+            if sn_engine and sn_engine != "docdb":
+                continue
+            # DOCDB-05 — snapshot encryption at rest. Evaluated BEFORE the attribute
+            # read below, whose `continue` on failure would otherwise skip it.
+            if (sn or {}).get("StorageEncrypted") is False:
+                self._add("FAIL", "DOCDB-05", "DOCDB", sid,
+                          f"Manual DocumentDB cluster snapshot NOT encrypted at rest: "
+                          f"{sid} — a plaintext copy of the cluster that outlives it")
+            elif (sn or {}).get("StorageEncrypted") is True:
+                self._add("PASS", "DOCDB-05", "DOCDB", sid,
+                          f"DocumentDB cluster snapshot encrypted at rest | {sid}")
             try:
                 attrs = (docdb.describe_db_cluster_snapshot_attributes(
                     DBClusterSnapshotIdentifier=sid) or {}
@@ -11643,8 +11708,21 @@ class AWSLiveScanner:
                 for cid in ("DOCDB-02", "DOCDB-03"):
                     self._coverage.note_denied(cid, "rds:DescribeDBClusters")
         for c in (clusters or []):
+            c_engine = ((c or {}).get("Engine") or "").lower()
+            if c_engine and c_engine != "docdb":
+                continue
             r = aws_extsvc.docdb_cluster_posture(c)
             cid_ = r["id"] or "?"
+            # DOCDB-04 — deletion protection. docdb_cluster_posture has always computed
+            # this and nothing consumed it; until now the only thing reporting it was
+            # AUR-02, which reached DocumentDB clusters by accident.
+            if r["deletion_protection_known"] and not r["deletion_protection"]:
+                self._add("FAIL", "DOCDB-04", "DOCDB", cid_,
+                          f"DocumentDB cluster deletion protection=OFF | {cid_} — one "
+                          f"API call from permanent loss of the whole cluster")
+            elif r["deletion_protection"]:
+                self._add("PASS", "DOCDB-04", "DOCDB", cid_,
+                          f"DocumentDB cluster deletion protection=ON | {cid_}")
             if r["encryption_known"] and not r["encrypted"]:
                 self._add("FAIL", "DOCDB-02", "DOCDB", cid_, f"{r['statement']} | {cid_}")
             elif r["encrypted"]:
@@ -11656,6 +11734,112 @@ class AWSLiveScanner:
             else:
                 self._add("PASS", "DOCDB-03", "DOCDB", cid_,
                           f"DocumentDB cluster {cid_} exports audit logs | {cid_}")
+
+    def _check_neptune(self):
+        """NEP-01..04 — Amazon Neptune clusters and manual cluster snapshots.
+
+        Neptune is a separate service sharing the RDS control plane, so
+        rds:DescribeDBClusters returns Neptune clusters. Until NON_AURORA_CLUSTER_ENGINES
+        existed the Aurora checks scored them: the findings were real, but they carried
+        Aurora ids and Aurora remediation, so a Neptune graph database looked covered
+        while nothing in the product knew what Neptune was. These four ids are that
+        coverage, named correctly — and they are the reason the Aurora filter is not a
+        coverage regression."""
+        self._section_header("NEPTUNE")
+        try:
+            nep = self._client("neptune")
+        except Exception:
+            return
+
+        # ── NEP-01 encryption at rest, NEP-02 deletion protection ────────────────
+        try:
+            clusters = []
+            for page in nep.get_paginator("describe_db_clusters").paginate():
+                clusters.extend(page.get("DBClusters", []))
+        except Exception as e:
+            self._read_failed("NEP-01", "NEPTUNE", "neptune",
+                              "neptune:DescribeDBClusters", e)
+            clusters = None
+
+        if clusters is not None:
+            # The Neptune endpoint is a fork of the RDS control plane and is not reliably
+            # engine-scoped. Only drop a cluster that POSITIVELY declares another engine;
+            # an absent Engine is kept rather than silently discarded.
+            clusters = [c for c in clusters
+                        if ((c or {}).get("Engine") or "neptune").lower() == "neptune"]
+            if not clusters:
+                self._add("INFO", "NEP-01", "NEPTUNE", "neptune",
+                          "No Neptune clusters found in this region")
+            for cl in clusters:
+                cid = cl.get("DBClusterIdentifier", "unknown")
+                enc = cl.get("StorageEncrypted")
+                if enc is False:
+                    self._add("FAIL", "NEP-01", "NEPTUNE", cid,
+                              f"Neptune cluster storage encryption=OFF | {cid} — cannot "
+                              f"be enabled in place; needs a restore into a new cluster")
+                elif enc is True:
+                    self._add("PASS", "NEP-01", "NEPTUNE", cid,
+                              f"Neptune cluster storage encryption=ON | {cid}")
+                dp = cl.get("DeletionProtection")
+                if dp is False:
+                    self._add("FAIL", "NEP-02", "NEPTUNE", cid,
+                              f"Neptune cluster deletion protection=OFF | {cid} — one "
+                              f"API call from permanent loss of the whole graph")
+                elif dp is True:
+                    self._add("PASS", "NEP-02", "NEPTUNE", cid,
+                              f"Neptune cluster deletion protection=ON | {cid}")
+
+        # ── NEP-03 snapshot public visibility, NEP-04 snapshot encryption ────────
+        try:
+            snaps = []
+            for page in nep.get_paginator("describe_db_cluster_snapshots").paginate(
+                    SnapshotType="manual"):
+                snaps.extend(page.get("DBClusterSnapshots", []))
+        except Exception as e:
+            self._read_failed("NEP-03", "NEPTUNE", "neptune",
+                              "neptune:DescribeDBClusterSnapshots", e)
+            snaps = None
+
+        if snaps is not None:
+            snaps = [s for s in snaps
+                     if ((s or {}).get("Engine") or "neptune").lower() == "neptune"]
+            if not snaps:
+                self._add("INFO", "NEP-03", "NEPTUNE", "cluster-snapshots",
+                          "No manual Neptune cluster snapshots in this region")
+            for sn in snaps:
+                sid = (sn or {}).get("DBClusterSnapshotIdentifier")
+                if not sid:
+                    continue
+                # Encryption first: the attribute read below bails out on failure, and
+                # a visibility read we could not make must not also cost us this.
+                if sn.get("StorageEncrypted") is False:
+                    self._add("FAIL", "NEP-04", "NEPTUNE", sid,
+                              f"Manual Neptune cluster snapshot NOT encrypted at rest: "
+                              f"{sid} — a plaintext copy of the graph that outlives it")
+                elif sn.get("StorageEncrypted") is True:
+                    self._add("PASS", "NEP-04", "NEPTUNE", sid,
+                              f"Neptune cluster snapshot encrypted at rest | {sid}")
+                try:
+                    attrs = (nep.describe_db_cluster_snapshot_attributes(
+                        DBClusterSnapshotIdentifier=sid) or {}
+                    ).get("DBClusterSnapshotAttributesResult", {}).get(
+                        "DBClusterSnapshotAttributes") or []
+                except Exception as e:
+                    # NOT a PASS. Visibility is undetermined, and saying nothing here
+                    # would read as "not public" in the report.
+                    self._read_failed("NEP-03", "NEPTUNE", sid,
+                                      "neptune:DescribeDBClusterSnapshotAttributes", e)
+                    continue
+                if any((a or {}).get("AttributeName") == "restore"
+                       and "all" in ((a or {}).get("AttributeValues") or [])
+                       for a in attrs):
+                    self._add("FAIL", "NEP-03", "NEPTUNE", sid,
+                              f"Neptune cluster snapshot PUBLICLY RESTORABLE by any AWS "
+                              f"account: {sid} — CRITICAL")
+                else:
+                    self._add("PASS", "NEP-03", "NEPTUNE", sid,
+                              f"Neptune cluster snapshot {sid} is not shared publicly "
+                              f"| {sid}")
 
     def _check_imagebuilder(self):
         """IMGB-01 resource policies, plus IMGB-02/03 (CIS-Compute 17.1, 17.2).
@@ -17907,6 +18091,7 @@ class AWSLiveScanner:
             "EMR":            self._check_emr,
             "CODEBUILD":      self._check_codebuild,
             "DOCDB":          self._check_docdb,
+            "NEPTUNE":        self._check_neptune,
             "IMAGEBUILDER":   self._check_imagebuilder,
             "TRANSFER":       self._check_transfer,
             "NETWORKFIREWALL": self._check_networkfirewall,

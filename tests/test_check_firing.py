@@ -170,8 +170,16 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: would flag every account with nothing to protect. tests/test_unproven_checks_
 #: tranche7.py pins that, with the shape a useful version would need, so the gap stays
 #: visible and the decision gets made deliberately rather than by a fixture appearing.
+#: 413 -> 419: DOCDB-04/05 and NEP-01..04, added by the CIS Database benchmark work as
+#: the price of fixing a defect rather than as new coverage. AUR-01..05 iterated
+#: `rds:DescribeDBClusters` with no `Engine` filter, and that API returns DocumentDB and
+#: Neptune clusters too — so DocumentDB encryption was reported twice under two ids with
+#: contradictory remediation, and Neptune posture was reported as Aurora. Filtering the
+#: Aurora loop alone would have DELETED four real findings, so the six ids exist to keep
+#: them, correctly labelled. All six are proven failing on the run that added them, which
+#: is why this moves by exactly six. See tests/test_db_engine_routing.py.
 MAX_NEVER_OBSERVED = 28
-MIN_PROVEN_FAILING = 413
+MIN_PROVEN_FAILING = 419
 
 
 def doc_text() -> str:

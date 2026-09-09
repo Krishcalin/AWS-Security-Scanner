@@ -876,7 +876,15 @@ def _graph(rng, account_id, profile, want_instances):
                         KIND_INSTANCE, name=host, account=account_id)
         edge("internet", instance, E_EXPOSED, ports="22,443",
              basis="0.0.0.0/0 security group")
-        role_id = roles[index % len(roles)][0]
+        # The first two exposed instances SHARE a role on purpose. A path is
+        # internet -> instance -> role -> terminal, and every instance is unique, so the
+        # role is the only node two paths can ever share -- which means the choke-point
+        # list is non-empty only when `index % len(roles)` repeats. That held by
+        # arithmetic accident (more instances than roles) until a change in catalogue
+        # size shifted the rng stream, and then all 42 seeded paths had distinct roles
+        # and "fix one, break many" rendered empty in every demo org. Pinning the first
+        # two makes the property the comment above claims actually hold.
+        role_id = roles[0][0] if index < 2 else roles[index % len(roles)][0]
         edge(instance, role_id, E_HAS_ROLE, basis="instance profile")
 
     return {"directed": True, "multigraph": False,

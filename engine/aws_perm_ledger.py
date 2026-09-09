@@ -361,6 +361,43 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "read EnabledCloudwatchLogsExports -- whether any record exists of who "
              "connected and what they queried"),
     ),
+    "DOCDB-04": (
+        _req("rds:DescribeDBClusters",
+             "read DeletionProtection -- whether a single DeleteDBCluster call can "
+             "destroy the cluster and its automated backups together"),
+    ),
+    "DOCDB-05": (
+        _req("rds:DescribeDBClusterSnapshots",
+             "read StorageEncrypted on manual snapshots -- encryption is inherited at "
+             "creation and cannot be added later, so a plaintext snapshot is permanent"),
+    ),
+    # Neptune shares the RDS control plane, and its IAM actions are rds:* -- a role that
+    # can already read RDS clusters needs NO new grant for NEP-01..04. The actions are
+    # listed anyway so the ledger states what each check reads rather than leaving it to
+    # be inferred from the service the client was built for.
+    "NEP-01": (
+        _req("rds:DescribeDBClusters",
+             "read StorageEncrypted -- Neptune encryption is creation-time only, so this "
+             "determines whether a snapshot-restore migration is required"),
+    ),
+    "NEP-02": (
+        _req("rds:DescribeDBClusters",
+             "read DeletionProtection -- for a graph the recovery path after an "
+             "accidental delete is usually a full re-ingest, not a restore"),
+    ),
+    "NEP-03": (
+        _req("rds:DescribeDBClusterSnapshots",
+             "enumerate manual Neptune cluster snapshots, which are the copies that get "
+             "shared and moved between accounts"),
+        _req("rds:DescribeDBClusterSnapshotAttributes",
+             "read the restore attribute -- a value of 'all' means ANY AWS account can "
+             "restore the graph, which is an observation rather than an inference"),
+    ),
+    "NEP-04": (
+        _req("rds:DescribeDBClusterSnapshots",
+             "read StorageEncrypted on manual snapshots -- an unencrypted snapshot is a "
+             "plaintext copy of the graph that outlives the cluster it came from"),
+    ),
     "IMGB-01": (
         _req("imagebuilder:ListImages",
          "enumerate golden images this account owns and builds"),

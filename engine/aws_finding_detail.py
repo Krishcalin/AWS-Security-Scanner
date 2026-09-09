@@ -3788,6 +3788,73 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Set a retention period on the log group that matches your investigation window, and confirm events are arriving rather than assuming they are.",
         ],
     },
+    "DOCDB-04": {
+        "risk": "This DocumentDB cluster has deletion protection switched off, so a single DeleteDBCluster call destroys it. The realistic failure here is almost never malice -- it is a Terraform plan that decides a cluster needs replacing, a script that iterates the wrong account, or an operator who deletes what they believe is the staging copy. Deletion protection exists because the blast radius is total and immediate: the cluster and its automated backups go together, and while a manual snapshot survives, most clusters running without deletion protection are also running without a manual snapshot policy, because both settings tend to reflect the same level of care. Recovery from automated backups is possible only within the retention window and only if the deletion did not also remove them. The setting costs nothing, has no performance implication, and is a single API call to enable -- the only thing it does is force a second, deliberate step before an irreversible one.",
+        "impact": "One API call permanently destroys the cluster and its automated backups, with recovery possible only from a manual snapshot that may not exist.",
+        "steps": [
+            "Enable it now -- immediate, no reboot: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --deletion-protection",
+            "Confirm: aws docdb describe-db-clusters --db-cluster-identifier <CLUSTER> --query 'DBClusters[0].DeletionProtection'",
+            "Take a manual snapshot as well, since deletion protection does not protect against a cluster that is corrupted rather than deleted: aws docdb create-db-cluster-snapshot --db-cluster-identifier <CLUSTER> --db-cluster-snapshot-identifier <SNAPSHOT>",
+            "Set deletion_protection = true in the IaC module that owns this cluster, or the next apply will turn it back off.",
+            "Prevent recurrence with an SCP denying rds:DeleteDBCluster outside a break-glass role.",
+        ],
+    },
+    "DOCDB-05": {
+        "risk": "This manual DocumentDB cluster snapshot is not encrypted at rest. A snapshot is a complete, independent copy of the database that outlives the cluster it came from, and manual snapshots in particular are never cleaned up automatically -- they sit in the account until somebody deletes them, which frequently means years. Snapshot encryption is inherited from the source cluster and cannot be turned on afterwards, so an unencrypted snapshot is permanent evidence that the cluster was unencrypted when it was taken, and it stays readable on that basis even after the cluster itself has been migrated to an encrypted one. The practical risk is movement: snapshots get copied between regions, shared with other accounts, and restored into development environments where production controls do not apply. Each of those operations produces another plaintext copy, and the compliance position is that regulated data exists at rest unencrypted in a location nobody is monitoring.",
+        "impact": "A complete plaintext copy of the database persists independently of the cluster and can be copied or restored into environments with weaker controls.",
+        "steps": [
+            "Copy it to an encrypted snapshot: aws docdb copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier <SNAPSHOT> --target-db-cluster-snapshot-identifier <NEW> --kms-key-id <KEY_ARN>",
+            "Verify the copy is encrypted before deleting anything: aws docdb describe-db-cluster-snapshots --db-cluster-snapshot-identifier <NEW> --query 'DBClusterSnapshots[0].StorageEncrypted'",
+            "Delete the plaintext original: aws docdb delete-db-cluster-snapshot --db-cluster-snapshot-identifier <SNAPSHOT>",
+            "Check whether it was ever copied to another region or shared with another account, because those copies are separate objects that this deletion does not touch.",
+            "Fix the source: an unencrypted snapshot means the cluster is unencrypted, which is DOCDB-02 and needs a migration rather than a setting change.",
+        ],
+    },
+    "NEP-01": {
+        "risk": "This Neptune cluster is not encrypted at rest. Neptune holds graph data, and graph data is unusually sensitive relative to its volume: the value of a graph is the relationships, so a Neptune cluster used for fraud detection, identity resolution, network topology or access modelling encodes exactly the map an attacker would otherwise have to build. Reading the underlying storage requires access to AWS infrastructure rather than your network, so the direct risk is bounded -- but the lifecycle risk is not. Unencrypted storage means every snapshot taken from this cluster is also unencrypted, and snapshots travel: they get copied across regions, shared with partner accounts, and restored into development environments. The operational constraint that matters is that Neptune storage encryption can only be set when the cluster is created. There is no modify path, so this is a planned migration through a snapshot restore, not a setting to toggle.",
+        "impact": "Cluster storage and every snapshot taken from it are unencrypted, so copies that leave production carry the full graph with them.",
+        "steps": [
+            "Plan this as a migration -- Neptune storage encryption cannot be enabled on an existing cluster.",
+            "Snapshot the cluster: aws neptune create-db-cluster-snapshot --db-cluster-identifier <CLUSTER> --db-cluster-snapshot-identifier <SNAPSHOT>",
+            "Restore into a new encrypted cluster: aws neptune restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAPSHOT> --engine neptune --kms-key-id <KEY_ARN> --storage-encrypted",
+            "Cut the application over, verify query results match, then delete the old cluster AND its unencrypted snapshots -- the snapshots are the part most often left behind.",
+            "Prevent recurrence with an SCP requiring StorageEncrypted on rds:CreateDBCluster for the neptune engine.",
+        ],
+    },
+    "NEP-02": {
+        "risk": "This Neptune cluster has deletion protection switched off, so a single DeleteDBCluster call destroys it along with its automated backups. Graph databases are rebuilt from source systems rather than restored from a dump in most architectures, which means the recovery path after an accidental deletion is usually a full re-ingest -- hours to days of pipeline work, during which anything depending on the graph is down. That makes the practical cost of losing a Neptune cluster higher than the raw data volume suggests. The deletion itself is rarely malicious: it is an IaC plan that decides the cluster needs replacing, a cleanup script pointed at the wrong account, or a cluster that looked idle because graph workloads are bursty. Deletion protection does not prevent any legitimate operation; it only forces a second deliberate step before an irreversible one, and it is a single API call with no reboot and no performance cost.",
+        "impact": "One API call permanently destroys the graph and its automated backups, and recovery typically means a full re-ingest rather than a restore.",
+        "steps": [
+            "Enable it: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --deletion-protection --apply-immediately",
+            "Confirm: aws neptune describe-db-clusters --db-cluster-identifier <CLUSTER> --query 'DBClusters[0].DeletionProtection'",
+            "Take a manual snapshot too -- deletion protection does not help with corruption: aws neptune create-db-cluster-snapshot --db-cluster-identifier <CLUSTER> --db-cluster-snapshot-identifier <SNAPSHOT>",
+            "Set deletion_protection = true in the IaC module that owns this cluster, or the next apply reverts it.",
+            "Confirm the re-ingest pipeline actually still works, since that is the real recovery path for a graph.",
+        ],
+    },
+    "NEP-03": {
+        "risk": "This Neptune cluster snapshot is shared with ALL AWS accounts -- its restore attribute contains the value all, which is AWS terminology for public. Like the DocumentDB equivalent this is a direct OBSERVATION rather than an inference: the attribute either lists all or it does not. Where it does, any person with any AWS account can restore your graph database into their own account and traverse every edge in it, with no network path to cross, no credential to steal, and no trace in your account because the restore happens in theirs. For a graph database the disclosure is qualitatively worse than for a row store: the relationships are the payload, so a restored Neptune snapshot hands over the modelled structure -- who is connected to whom, which identities resolve to the same person, how the network is laid out -- rather than records that still need correlating. Snapshots are also commonly made public by accident while sharing to a partner account.",
+        "impact": "Any AWS account can restore this snapshot and traverse the entire graph, with no trace in your account because the restore happens in theirs.",
+        "steps": [
+            "Remove the public share immediately: aws neptune modify-db-cluster-snapshot-attribute --db-cluster-snapshot-identifier <SNAPSHOT> --attribute-name restore --values-to-remove all",
+            "Confirm it is no longer public: aws neptune describe-db-cluster-snapshot-attributes --db-cluster-snapshot-identifier <SNAPSHOT>",
+            "Establish the exposure window from CloudTrail: aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=ModifyDBClusterSnapshotAttribute",
+            "Treat the graph as disclosed for that window -- you cannot enumerate who restored it, because those restores happened in other accounts.",
+            "If a partner genuinely needs it, share to specific account IDs instead: --values-to-add <ACCOUNT_ID>",
+            "Add an SCP denying rds:ModifyDBClusterSnapshotAttribute with a restore value of all.",
+        ],
+    },
+    "NEP-04": {
+        "risk": "This manual Neptune cluster snapshot is not encrypted at rest. Snapshot encryption is inherited from the source cluster and cannot be added to a snapshot after the fact, so an unencrypted snapshot is a permanent plaintext copy of the graph that outlives the cluster it came from. Manual snapshots are never garbage-collected -- they persist until somebody deletes them deliberately, which in practice often means indefinitely, long after the team that created them has moved on and the cluster itself has been migrated to encrypted storage. The exposure grows with movement rather than time: snapshots get copied to other regions for DR, shared with partner accounts, and restored into development environments where production access controls do not apply, and each of those produces another readable copy. For regulated data the compliance position is simply that unencrypted copies exist at rest in locations nobody is monitoring.",
+        "impact": "A complete plaintext copy of the graph persists independently of the cluster and can be copied or restored into weaker environments.",
+        "steps": [
+            "Copy it to an encrypted snapshot: aws neptune copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier <SNAPSHOT> --target-db-cluster-snapshot-identifier <NEW> --kms-key-id <KEY_ARN>",
+            "Verify the copy is encrypted before deleting anything: aws neptune describe-db-cluster-snapshots --db-cluster-snapshot-identifier <NEW> --query 'DBClusterSnapshots[0].StorageEncrypted'",
+            "Delete the plaintext original: aws neptune delete-db-cluster-snapshot --db-cluster-snapshot-identifier <SNAPSHOT>",
+            "Check for cross-region copies and cross-account shares, which are separate objects this deletion does not touch.",
+            "Fix the source cluster (NEP-01) -- an unencrypted snapshot means the cluster it came from is unencrypted too.",
+        ],
+    },
     "IMGB-01": {
         "risk": "This EC2 Image Builder resource has a resource policy granting a wildcard principal, which shares the image -- and everything baked into it -- beyond your account. A golden image is not merely an operating system: it is the OS plus your agents, your configuration, your base packages, and frequently your bootstrap credentials. Image pipelines routinely embed things during the build that nobody intends to publish: a package-repository token, a monitoring agent key, an internal CA bundle, hard-coded configuration pointing at internal endpoints. Sharing the image publishes all of it, and unlike a running instance an image can be copied silently and inspected offline at leisure. The wider intelligence value matters too: your golden image reveals your standard build, your agent versions, and therefore which vulnerabilities your entire fleet is carrying.",
         "impact": "The image and everything baked into it -- agents, configuration, any embedded credential -- is shared beyond your account and can be copied and inspected offline.",

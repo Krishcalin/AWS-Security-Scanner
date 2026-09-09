@@ -17,7 +17,7 @@ carries neither - so a check that never fails never renders what the catalogue
 advertises for it.
 
 
-**503 registered checks.** 413 are proven to FAIL in the suite; 62 run but have never been driven to a failure; 28 were never observed at all.
+**509 registered checks.** 419 are proven to FAIL in the suite; 62 run but have never been driven to a failure; 28 were never observed at all.
 
 
 ## Never observed
