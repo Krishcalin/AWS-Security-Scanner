@@ -104,8 +104,30 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: LSAIL-01 is the one check that moved for a reason other than being added: it had
 #: never been observed because nothing built a Lightsail instance fixture, and the new
 #: Lightsail cases do.
-MAX_NEVER_OBSERVED = 61
-MIN_PROVEN_FAILING = 374
+#:
+#: TRANCHE 5 TOOK THE LOUDEST CLAIMS FIRST. Of the 61 never-observed checks, 26 were
+#: declared CRITICAL or HIGH -- the catalogue telling an operator a finding is urgent
+#: while nothing anywhere had seen it produced. An AST pass showed 22 of the 26 already
+#: had a literal FAIL path and were simply never driven, because the nearest existing
+#: fixture sets the SAFE value: ECS-02 (root user) was observed and ECS-01 (privileged)
+#: was not, from the same loop over the same task definition, because nothing in the
+#: suite had ever set `privileged: true`. tests/test_unproven_checks_tranche5.py drives
+#: all 22, and EXTACCESS-02 came with them from a negative case.
+#:
+#: 61 -> 33 never observed and 374 -> 397 proven failing. Five more (BDR-03, HSM-01,
+#: NFW-01, NFW-03, S3T-02) moved out of never-observed into the middle rather than to
+#: proven, because the new fixtures make their sections run and they answer PASS on the
+#: configuration under test. That is progress and the middle is a residual, not a
+#: ceiling -- see the note at the top of this block.
+#:
+#: FOUR OF THE 26 ARE STILL NOT DRIVEN, and the reasons are recorded in that file's
+#: DEFERRED map rather than left to be rediscovered: WAF-01 has no FAIL path at all
+#: (its only posture WARN is "no Web ACLs in this scope", and a blanket FAIL would flag
+#: every account with nothing to protect), and CWPP-01, SEG-02 and VULN-03 reach `_add`
+#: through a non-literal id, so neither the static pass nor a reader can locate their
+#: FAIL path. Those need the id made legible first.
+MAX_NEVER_OBSERVED = 33
+MIN_PROVEN_FAILING = 397
 
 
 def doc_text() -> str:
