@@ -17,7 +17,7 @@ carries neither - so a check that never fails never renders what the catalogue
 advertises for it.
 
 
-**509 registered checks.** 419 are proven to FAIL in the suite; 62 run but have never been driven to a failure; 28 were never observed at all.
+**513 registered checks.** 423 are proven to FAIL in the suite; 62 run but have never been driven to a failure; 28 were never observed at all.
 
 
 ## Never observed
@@ -102,7 +102,7 @@ These emit only WARN/INFO/PASS in the suite. Where the declared severity is abov
 | `OSR-03` | MEDIUM | PASS |
 | `R53-02` | LOW | WARN |
 | `R53-04` | LOW | INFO/WARN |
-| `RDS-05` | LOW | WARN |
+| `RDS-05` | LOW | PASS/WARN |
 | `RDS-13` | LOW | WARN |
 | `RS-05` | LOW | PASS/WARN |
 | `RS-07` | LOW | PASS/WARN |

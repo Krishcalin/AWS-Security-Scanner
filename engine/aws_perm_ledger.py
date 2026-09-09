@@ -398,6 +398,32 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "read StorageEncrypted on manual snapshots -- an unencrypted snapshot is a "
              "plaintext copy of the graph that outlives the cluster it came from"),
     ),
+    # ── TLS enforcement (CIS AWS Database Services v2.0.0) ───────────────────
+    # The first checks in the product to read a DB parameter group. Two NEW actions on
+    # the scanning role, and they are the whole cost of covering a control that spans
+    # four services: nothing in DescribeDBInstances or DescribeDBClusters says whether
+    # the database requires TLS or merely accepts it.
+    "RDS-14": (
+        _req("rds:DescribeDBParameters",
+             "read rds.force_ssl / require_secure_transport from the INSTANCE parameter "
+             "group -- the only place that says whether TLS is required or optional"),
+    ),
+    "AUR-06": (
+        _req("rds:DescribeDBClusterParameters",
+             "read rds.force_ssl / require_secure_transport from the CLUSTER parameter "
+             "group, which is where Aurora holds it and where a Serverless v1 cluster "
+             "with no instances holds it too"),
+    ),
+    "DOCDB-06": (
+        _req("rds:DescribeDBClusterParameters",
+             "read the tls cluster parameter -- DocumentDB ships with it enabled, so "
+             "finding it disabled means somebody turned it off deliberately"),
+    ),
+    "NEP-05": (
+        _req("rds:DescribeDBClusterParameters",
+             "read neptune_enforce_ssl -- whether Gremlin/SPARQL queries and their "
+             "results cross the network in cleartext"),
+    ),
     "IMGB-01": (
         _req("imagebuilder:ListImages",
          "enumerate golden images this account owns and builds"),

@@ -93,6 +93,7 @@ from engine import aws_nitro
 from engine import aws_perimeter
 from engine import aws_checkdef
 from engine import aws_cis_compute
+from engine import aws_cis_db
 from engine import aws_extsvc
 from engine import aws_extsvc2
 from engine import aws_extsvc3
@@ -683,6 +684,11 @@ CHECK_SEVERITY = {
     # AUR-01 -> NEP-01 storage encryption (HIGH).
     "DOCDB-04": "MEDIUM", "DOCDB-05": "HIGH",
     "NEP-01": "HIGH", "NEP-02": "MEDIUM", "NEP-03": "CRITICAL", "NEP-04": "HIGH",
+    # TLS enforcement (CIS Database v2.0.0, one of the five things v2.0.0 added). HIGH
+    # across all four: an unenforced database accepts cleartext client sessions carrying
+    # credentials and rows, and unlike encryption at rest the attacker needs only a
+    # position on the network rather than access to AWS storage.
+    "RDS-14": "HIGH", "AUR-06": "HIGH", "DOCDB-06": "HIGH", "NEP-05": "HIGH",
     "IMGB-01": "HIGH",
     "XFER-01": "HIGH", "XFER-02": "MEDIUM", "XFER-03": "INFO",
     "MART-01": "CRITICAL",
@@ -1071,6 +1077,14 @@ COMPLIANCE_MAP = {
     "NEP-02": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
     "NEP-03": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "NEP-04": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    # TLS in transit — PCI-DSS 4.2.1 is the "strong cryptography during transmission"
+    # requirement, and SC-8 is NIST's transmission-confidentiality control. Distinct from
+    # the SC-28 at-rest mappings above, which is the point: these four checks close a
+    # control that no at-rest check speaks to.
+    "RDS-14": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "AUR-06": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "DOCDB-06": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "NEP-05": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "IMGB-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "XFER-01": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "XFER-02": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
@@ -1537,6 +1551,10 @@ REMEDIATION_MAP = {
     "NEP-02": "Turn on deletion protection so the graph cannot be dropped by a single API call: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --deletion-protection --apply-immediately",
     "NEP-03": "Stop sharing the snapshot with every AWS account immediately: aws neptune modify-db-cluster-snapshot-attribute --db-cluster-snapshot-identifier <SNAPSHOT> --attribute-name restore --values-to-remove all. Then establish how long it was public and treat the graph contents as disclosed for that window",
     "NEP-04": "Copy the snapshot to an encrypted one and delete the plaintext original: aws neptune copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier <SNAPSHOT> --target-db-cluster-snapshot-identifier <NEW> --kms-key-id <KEY_ARN>, then aws neptune delete-db-cluster-snapshot --db-cluster-snapshot-identifier <SNAPSHOT>",
+    "RDS-14": "Require TLS in the instance parameter group — rds.force_ssl=1 for PostgreSQL and SQL Server, require_secure_transport=ON for MySQL and MariaDB: aws rds modify-db-parameter-group --db-parameter-group-name <PG> --parameters ParameterName=rds.force_ssl,ParameterValue=1,ApplyMethod=pending-reboot. Confirm every client presents a certificate BEFORE rebooting, because this rejects cleartext connections the moment it takes effect",
+    "AUR-06": "Require TLS in the CLUSTER parameter group — rds.force_ssl=1 for Aurora PostgreSQL, require_secure_transport=ON for Aurora MySQL: aws rds modify-db-cluster-parameter-group --db-cluster-parameter-group-name <PG> --parameters ParameterName=rds.force_ssl,ParameterValue=1,ApplyMethod=pending-reboot. Move every client to TLS first — this rejects cleartext connections once applied",
+    "DOCDB-06": "Turn TLS back on in the cluster parameter group: aws docdb modify-db-cluster-parameter-group --db-cluster-parameter-group-name <PG> --parameters ParameterName=tls,ParameterValue=enabled,ApplyMethod=pending-reboot, then reboot the instances. DocumentDB ships with tls=enabled, so this being off is a deliberate change worth understanding before reverting",
+    "NEP-05": "Require TLS on the cluster parameter group: aws neptune modify-db-cluster-parameter-group --db-cluster-parameter-group-name <PG> --parameters ParameterName=neptune_enforce_ssl,ParameterValue=1,ApplyMethod=pending-reboot, then reboot. Neptune engine 1.0.4.0 and later require TLS regardless, so an upgrade is the more durable fix",
     "IMGB-01": "Remove the wildcard principal from the Image Builder resource policy so the image and everything baked into it stops being shared beyond your account: aws imagebuilder put-image-policy --image-arn <ARN> --policy file://scoped-policy.json . Then audit the image for embedded credentials, since anyone could have pulled it",
     "XFER-01": "Stop accepting plain FTP -- credentials and file contents cross the network in the clear. Move the server to FTPS or SFTP, which carry the same workflow encrypted: aws transfer update-server --server-id <SERVER_ID> --protocols SFTP FTPS. Coordinate with clients before removing FTP",
     "XFER-02": "Attach a logging role so there is a record of who connected and which files moved: aws transfer update-server --server-id <SERVER_ID> --logging-role <ROLE_ARN>",
@@ -2548,6 +2566,12 @@ class AWSLiveScanner:
         self.attack_paths: List = []       # ranked AttackPath objects (Phase 4 correlate)
         self.choke_points: List = []       # ranked ChokePoint objects
         self._clients: Dict[str, object] = {}
+        # DB (cluster) parameter groups, cached per scan by (service, kind, name). A
+        # group is shared by every instance using it, and reading one is several pages
+        # of a few hundred parameters -- fetching it per instance would multiply that by
+        # the size of the fleet for no new information. A failed read caches None so it
+        # is attempted once rather than once per resource.
+        self._param_cache: Dict[tuple, Optional[List[Dict]]] = {}
         self._cred_report:  Optional[List[Dict]] = None
         self._cred_report_ok: bool = False
         self._all_regions:  Optional[List[str]]  = None
@@ -3681,6 +3705,71 @@ class AWSLiveScanner:
         if hasattr(e, "response"):
             code = (getattr(e, "response", {}) or {}).get("Error", {}).get("Code", "")
         return code in ("AccessDenied", "AccessDeniedException") or "AccessDenied" in str(e)
+
+    def _db_parameters(self, client, group: str, *, service: str,
+                       cluster: bool) -> List[Dict]:
+        """Every parameter in a DB (cluster) parameter group, once per group per scan.
+
+        Raises on a failed read rather than swallowing it — TLS enforcement is decided
+        from this listing, and an empty list would read as "the parameter is absent",
+        which the pure rule correctly reports as UNDECIDED but which would then be
+        indistinguishable from a group that genuinely lacks it. The caller turns the
+        exception into a `_read_failed` WARN, which says what actually happened.
+        """
+        key = (service, "cluster" if cluster else "instance", group)
+        if key in self._param_cache:
+            cached = self._param_cache[key]
+            if cached is None:
+                raise RuntimeError(
+                    f"{service} parameter group {group} could not be read earlier in "
+                    f"this scan")
+            return cached
+        op = ("describe_db_cluster_parameters" if cluster
+              else "describe_db_parameters")
+        kw = ({"DBClusterParameterGroupName": group} if cluster
+              else {"DBParameterGroupName": group})
+        params: List[Dict] = []
+        try:
+            for page in client.get_paginator(op).paginate(**kw):
+                params.extend(page.get("Parameters", []) or [])
+        except Exception:
+            self._param_cache[key] = None
+            raise
+        self._param_cache[key] = params
+        return params
+
+    def _check_tls_enforced(self, client, *, check_id: str, section: str,
+                            resource: str, engine: str, group: str,
+                            service: str, cluster: bool, action: str) -> None:
+        """One TLS-enforcement verdict, shared by RDS-14, AUR-06, DOCDB-06 and NEP-05.
+
+        The four checks differ only in which client holds the parameter group and
+        whether it is an instance or a cluster group; the decision itself is one pure
+        function, so it is written once.
+        """
+        if not group:
+            self._add("WARN", check_id, section, resource,
+                      f"{check_id} NOT EVALUATED — {resource} names no parameter "
+                      f"group, so TLS enforcement cannot be read")
+            return
+        try:
+            params = self._db_parameters(client, group, service=service,
+                                         cluster=cluster)
+        except Exception as e:
+            self._read_failed(check_id, section, resource, action, e)
+            return
+        r = aws_cis_db.tls_enforcement(engine, params, group)
+        if not r["known"]:
+            # Undecided is NOT a pass. Saying nothing here renders as "encrypted in
+            # transit" in a report, which is the failure this whole check exists to end.
+            self._add("WARN", check_id, section, resource,
+                      f"{r['statement']} | {resource}")
+        elif r["enforced"]:
+            self._add("PASS", check_id, section, resource,
+                      f"{r['statement']} | {resource}")
+        else:
+            self._add("FAIL", check_id, section, resource,
+                      f"{r['statement']} | {resource}")
 
     def _read_failed(self, check_id: str, section: str, resource: str,
                      action: str, e) -> None:
@@ -5355,6 +5444,22 @@ class AWSLiveScanner:
                           f"IAM DB authentication=OFF — relies on static DB passwords "
                           f"| {iid} ({engine})")
 
+        # RDS-14 — TLS enforced for client connections.
+        # Every RDS engine ACCEPTS TLS; almost none REQUIRE it, and nothing in
+        # describe_db_instances says which. The setting lives in the instance parameter
+        # group, so this is the first check in the product to read one — the read is
+        # cached per group, because a group is shared by every instance using it.
+        self._log("RDS-14: TLS enforced for client connections")
+        for db in _rds_instances():
+            iid    = db["DBInstanceIdentifier"]
+            engine = db.get("Engine", "")
+            groups = db.get("DBParameterGroups") or []
+            group  = (groups[0] or {}).get("DBParameterGroupName", "") if groups else ""
+            self._check_tls_enforced(
+                rds, check_id="RDS-14", section="RDS", resource=iid,
+                engine=engine, group=group, service="rds", cluster=False,
+                action="rds:DescribeDBParameters")
+
         # RDS-06 — Public snapshot visibility  +  RDS-11 — snapshot encryption at rest
         self._log("RDS-06/RDS-11: RDS snapshot public visibility and encryption at rest")
         try:
@@ -5488,6 +5593,14 @@ class AWSLiveScanner:
                 else:
                     self._add("INFO", "AUR-03", "RDS", cid,
                               f"Cluster engine EOL not evaluable: {engine} {ev} | {cid}")
+                # AUR-06 — TLS enforced for client connections. A CLUSTER parameter for
+                # Aurora, which is why RDS-14 (the instance-group equivalent) cannot
+                # answer it: a Serverless v1 cluster has no instances to read at all.
+                self._check_tls_enforced(
+                    rds, check_id="AUR-06", section="RDS", resource=cid,
+                    engine=engine, group=cl.get("DBClusterParameterGroup", ""),
+                    service="rds", cluster=True,
+                    action="rds:DescribeDBClusterParameters")
 
         # AUR-04/05 — Aurora CLUSTER snapshots: public visibility + encryption at rest.
         # Distinct API + id-namespace from instance snapshots (RDS-06/11) — zero overlap.
@@ -11734,6 +11847,15 @@ class AWSLiveScanner:
             else:
                 self._add("PASS", "DOCDB-03", "DOCDB", cid_,
                           f"DocumentDB cluster {cid_} exports audit logs | {cid_}")
+            # DOCDB-06 — TLS enforced. DocumentDB ships with tls=enabled, but it is a
+            # cluster parameter and can be turned off, and nothing in
+            # describe_db_clusters reports it.
+            self._check_tls_enforced(
+                docdb, check_id="DOCDB-06", section="DOCDB", resource=cid_,
+                engine=(c or {}).get("Engine") or "docdb",
+                group=(c or {}).get("DBClusterParameterGroup", ""),
+                service="docdb", cluster=True,
+                action="rds:DescribeDBClusterParameters")
 
     def _check_neptune(self):
         """NEP-01..04 — Amazon Neptune clusters and manual cluster snapshots.
@@ -11788,6 +11910,13 @@ class AWSLiveScanner:
                 elif dp is True:
                     self._add("PASS", "NEP-02", "NEPTUNE", cid,
                               f"Neptune cluster deletion protection=ON | {cid}")
+                # NEP-05 — TLS enforced (neptune_enforce_ssl).
+                self._check_tls_enforced(
+                    nep, check_id="NEP-05", section="NEPTUNE", resource=cid,
+                    engine=cl.get("Engine") or "neptune",
+                    group=cl.get("DBClusterParameterGroup", ""),
+                    service="neptune", cluster=True,
+                    action="rds:DescribeDBClusterParameters")
 
         # ── NEP-03 snapshot public visibility, NEP-04 snapshot encryption ────────
         try:

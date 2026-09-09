@@ -178,8 +178,13 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: Aurora loop alone would have DELETED four real findings, so the six ids exist to keep
 #: them, correctly labelled. All six are proven failing on the run that added them, which
 #: is why this moves by exactly six. See tests/test_db_engine_routing.py.
+#: 419 -> 423: RDS-14, AUR-06, DOCDB-06, NEP-05 — TLS enforcement, the one control in the
+#: CIS Database benchmark that spans four services and that OverWatch had NO coverage of.
+#: Every RDS engine accepts TLS and almost none require it; the difference lives in a
+#: parameter group, and nothing in the product read one before this. All four are proven
+#: failing, which is why this moves by exactly four. See tests/test_cis_db_tls.py.
 MAX_NEVER_OBSERVED = 28
-MIN_PROVEN_FAILING = 419
+MIN_PROVEN_FAILING = 423
 
 
 def doc_text() -> str:
