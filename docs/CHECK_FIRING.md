@@ -17,7 +17,7 @@ carries neither - so a check that never fails never renders what the catalogue
 advertises for it.
 
 
-**503 registered checks.** 397 are proven to FAIL in the suite; 73 run but have never been driven to a failure; 33 were never observed at all.
+**503 registered checks.** 409 are proven to FAIL in the suite; 61 run but have never been driven to a failure; 33 were never observed at all.
 
 
 ## Never observed
@@ -75,13 +75,8 @@ These emit only WARN/INFO/PASS in the suite. Where the declared severity is abov
 | `AILOG-05` | LOW | WARN |
 | `AILOG-06` | LOW | WARN |
 | `APIGW-04` | LOW | PASS/WARN |
-| `BDR-01` | HIGH | INFO/PASS/WARN |
 | `BDR-03` | LOW | INFO |
 | `BDR-05` | HIGH | PASS |
-| `CFN-01` | HIGH | PASS |
-| `CFN-02` | HIGH | PASS |
-| `CFN-03` | HIGH | PASS |
-| `CFN-04` | MEDIUM | PASS |
 | `CNT-05` | LOW | PASS/WARN |
 | `COG-04` | LOW | PASS/WARN |
 | `DDB-01` | HIGH | PASS |
@@ -103,20 +98,14 @@ These emit only WARN/INFO/PASS in the suite. Where the declared severity is abov
 | `FW-02` | MEDIUM | PASS |
 | `GLC-03` | LOW | WARN |
 | `HSM-01` | MEDIUM | PASS |
-| `LF-02` | HIGH | PASS |
 | `LMB-02` | LOW | WARN |
 | `LMB-05` | LOW | WARN |
-| `LSAIL-01` | HIGH | PASS |
 | `MCP-04` | LOW | WARN |
 | `NFW-01` | MEDIUM | PASS |
 | `NFW-03` | MEDIUM | PASS |
-| `OSR-02` | HIGH | PASS |
 | `OSR-03` | MEDIUM | PASS |
-| `OSR-04` | HIGH | PASS |
-| `OSR-05` | HIGH | PASS |
 | `R53-02` | MEDIUM | WARN |
-| `R53-03` | HIGH | WARN |
-| `R53-04` | LOW | WARN |
+| `R53-04` | LOW | INFO/WARN |
 | `RDS-05` | LOW | WARN |
 | `RDS-13` | LOW | WARN |
 | `RS-05` | LOW | PASS/WARN |
@@ -132,7 +121,6 @@ These emit only WARN/INFO/PASS in the suite. Where the declared severity is abov
 | `SNS-01` | MEDIUM | WARN |
 | `SQS-03` | MEDIUM | WARN |
 | `SQS-04` | LOW | PASS |
-| `THREAT-01` | HIGH | INFO |
 | `VPC-06` | LOW | INFO/PASS/WARN |
 | `WINVULN-03` | LOW | INFO/WARN |
 | `WINVULN-04` | LOW | PASS |

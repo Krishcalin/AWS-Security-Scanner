@@ -126,8 +126,21 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: every account with nothing to protect), and CWPP-01, SEG-02 and VULN-03 reach `_add`
 #: through a non-literal id, so neither the static pass nor a reader can locate their
 #: FAIL path. Those need the id made legible first.
+#: TRANCHE 6 TOOK THE OTHER END: the 13 checks declared HIGH that RAN but had never been
+#: driven to a failure. That bucket is easy to mistake for harmless and is not, because of
+#: the asymmetry at the top of this file -- a check that has only ever PASSed or WARNed has
+#: never once rendered the severity, compliance mapping or remediation the catalogue holds
+#: for it. Eleven are driven by tests/test_unproven_checks_tranche6.py, and CFN-04 came
+#: with them. 397 -> 409 proven failing; the middle falls 73 -> 61.
+#:
+#: THE OTHER TWO ARE NOT A COVERAGE GAP. BDR-05 and DDB-01 have exactly one literal FAIL
+#: site each and it sits inside an `except` handler -- `_add("FAIL", ..., str(e))`. Their
+#: declared HIGH is reachable only by making the AWS call throw, so a fixture would prove
+#: the error handler rather than the check. They belong to a wider defect: eleven checks
+#: report a FAILED READ as their finding while the security condition they exist for is a
+#: WARN. That is fixed as its own change, not papered over with a fixture here.
 MAX_NEVER_OBSERVED = 33
-MIN_PROVEN_FAILING = 397
+MIN_PROVEN_FAILING = 409
 
 
 def doc_text() -> str:
