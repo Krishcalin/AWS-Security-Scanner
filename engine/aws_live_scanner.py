@@ -471,7 +471,7 @@ CHECK_SEVERITY = {
     "CW-14": "MEDIUM", "CW-15": "MEDIUM", "CW-16": "MEDIUM",
     "ENC-03": "MEDIUM",
     "KMS-02": "CRITICAL", "KMS-03": "HIGH", "KMS-04": "HIGH",
-    "EC2-04": "HIGH", "EC2-05": "MEDIUM", "EC2-06": "HIGH",
+    "EC2-04": "HIGH", "EC2-05": "LOW", "EC2-06": "HIGH",
     "EC2-07": "HIGH", "EC2-08": "HIGH",
     "SSM-01": "HIGH", "SSM-02": "HIGH", "LT-01": "HIGH", "ASG-01": "HIGH",
     "AMI-02": "MEDIUM", "AMI-03": "MEDIUM",
@@ -485,14 +485,14 @@ CHECK_SEVERITY = {
     "AUR-01": "HIGH", "AUR-02": "MEDIUM", "AUR-03": "HIGH",
     "AUR-04": "CRITICAL", "AUR-05": "HIGH",
     "GLC-01": "CRITICAL", "GLC-02": "MEDIUM", "GLC-03": "LOW",
-    "SNS-01": "MEDIUM", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
-    "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "MEDIUM", "SQS-04": "LOW",
+    "SNS-01": "LOW", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
+    "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "LOW", "SQS-04": "LOW",
     "CFN-01": "HIGH", "CFN-02": "HIGH", "CFN-03": "HIGH",
     "CFN-04": "MEDIUM", "CFN-05": "HIGH", "CFN-06": "MEDIUM",
-    "R53-01": "MEDIUM", "R53-02": "MEDIUM", "R53-03": "HIGH",
+    "R53-01": "MEDIUM", "R53-02": "LOW", "R53-03": "HIGH",
     "R53-04": "LOW", "R53-05": "MEDIUM",
     "BDR-01": "HIGH", "BDR-02": "HIGH", "BDR-03": "LOW",
-    "BDR-04": "MEDIUM", "BDR-05": "HIGH",
+    "BDR-04": "LOW", "BDR-05": "HIGH",
     "AGT-01": "LOW", "AGT-02": "HIGH", "AGT-03": "LOW",
     "AGT-04": "HIGH", "AGT-05": "HIGH",
     "LMB-01": "HIGH", "LMB-02": "LOW", "LMB-03": "HIGH",
@@ -515,7 +515,7 @@ CHECK_SEVERITY = {
     "ELC-05": "HIGH", "ELC-06": "MEDIUM",
     "OSR-01": "HIGH", "OSR-02": "HIGH", "OSR-03": "MEDIUM",
     "OSR-04": "HIGH", "OSR-05": "HIGH", "OSR-06": "MEDIUM", "OSR-07": "HIGH",
-    "DDB-01": "HIGH", "DDB-02": "HIGH", "DDB-03": "LOW", "DDB-04": "MEDIUM",
+    "DDB-01": "LOW", "DDB-02": "HIGH", "DDB-03": "LOW", "DDB-04": "MEDIUM",
     "DDB-05": "CRITICAL",
     "SFN-01": "MEDIUM", "SFN-02": "LOW", "SFN-03": "LOW",
     "APIGW-01": "MEDIUM", "APIGW-02": "MEDIUM", "APIGW-03": "HIGH", "APIGW-04": "LOW",
@@ -728,10 +728,10 @@ CHECK_SEVERITY = {
     "CHOKEPOINT-01": "HIGH",
     # Backfilled service checks (previously severity-less on FAIL)
     "CNT-01": "MEDIUM", "BCK-01": "MEDIUM",
-    "SNS-01": "MEDIUM", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
-    "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "MEDIUM", "SQS-04": "LOW",
+    "SNS-01": "LOW", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
+    "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "LOW", "SQS-04": "LOW",
     "GLC-01": "CRITICAL", "GLC-02": "MEDIUM", "GLC-03": "LOW",
-    "R53-01": "MEDIUM", "R53-02": "MEDIUM", "R53-03": "HIGH", "R53-04": "LOW", "R53-05": "MEDIUM",
+    "R53-01": "MEDIUM", "R53-02": "LOW", "R53-03": "HIGH", "R53-04": "LOW", "R53-05": "MEDIUM",
     "R53-06": "HIGH",
     "DDB-03": "LOW", "DDB-04": "MEDIUM",
     "EKS-04": "LOW", "EKS-05": "LOW", "EKS-06": "HIGH",
@@ -3578,6 +3578,31 @@ class AWSLiveScanner:
             code = (getattr(e, "response", {}) or {}).get("Error", {}).get("Code", "")
         return code in ("AccessDenied", "AccessDeniedException") or "AccessDenied" in str(e)
 
+    def _read_failed(self, check_id: str, section: str, resource: str,
+                     action: str, e) -> None:
+        """A read we could not make is NOT a security finding. Report it as one.
+
+        THE DEFECT THIS REPLACES. Ten checks answered a failed AWS call with
+        ``_add("FAIL", <id>, ..., str(e))``, which is wrong twice over. First, a denied
+        or throttled call rendered as a FAIL carrying that check's remediation — advice
+        for a problem nobody observed, addressed to an operator whose actual problem is a
+        missing grant. Second, and worse, for all ten that error path was the check's
+        ONLY literal FAIL: `_add` reads severity, compliance and remediation from the
+        catalogue for no other status, so a check declared HIGH could reach HIGH only by
+        the call failing, while the misconfiguration it exists to find was a WARN forced
+        to LOW with no remediation. The catalogue described the error handler.
+
+        WARN, NOT INFO, AND NOT SILENCE. "We could not look" is not "nothing is wrong",
+        and dropping it would be the phantom-pass this codebase has removed elsewhere
+        (LOG-09's AccessDenied path, WINVULN-03's whole reason for existing). The
+        coverage ledger records the denial so the finding can say which grant would
+        answer the question."""
+        if self._is_access_denied(e):
+            self._coverage.note_denied(check_id, action)
+        self._add("WARN", check_id, section, resource,
+                  f"{check_id} NOT EVALUATED — {action} failed ({e}). "
+                  f"Not assessed, not clean")
+
     @staticmethod
     def _error_code(e) -> str:
         """The AWS error code on an exception, or "" if it carries none.
@@ -4080,7 +4105,7 @@ class AWSLiveScanner:
                                       f"Public IP {i['PublicIpAddress']} on "
                                       f"{name} — verify if intentional")
         except Exception as e:
-            self._add("FAIL", "EC2-05", "EC2", "ec2", str(e))
+            self._read_failed("EC2-05", "EC2", "ec2", "ec2:DescribeInstances", e)
 
         # ── Phase 6 compute depth: SSM patch posture + launch-template/ASG IMDSv2
         # scale-out drift. Each sub-check is self-guarding; isolate so one failing does
@@ -5575,7 +5600,7 @@ class AWSLiveScanner:
                     self._add("WARN", "SNS-01", "SNS", name,
                               f"SSE-KMS=OFF | {name}")
             except Exception as e:
-                self._add("FAIL", "SNS-01", "SNS", name, str(e))
+                self._read_failed("SNS-01", "SNS", name, "sns:GetTopicAttributes", e)
 
         # SNS-02 — Access policy wildcard check
         self._log("SNS-02: SNS topics — access policy (no wildcard Principal)")
@@ -5648,15 +5673,24 @@ class AWSLiveScanner:
                     endpoint = sub.get("Endpoint", "")
                     if endpoint.startswith("arn:aws") and ":" in endpoint:
                         parts = endpoint.split(":")
+                        # The trusted-account allowlist is what makes this a FAIL rather
+                        # than noise: a subscription to a partner account you have named
+                        # is a decision, one to an account nobody listed is a standing
+                        # copy of every message on the topic leaving the estate. Same
+                        # gate as LMB-14, AMI-05 and ECS-14.
+                        known = {str(a) for a in self.trusted_accounts}
+                        known.add(str(self.account))
                         if (len(parts) > 4
                                 and parts[4]
-                                and parts[4] != self.account):
+                                and parts[4] not in known):
                             topic_name = sub["TopicArn"].split(":")[-1]
-                            self._add("WARN", "SNS-04", "SNS", topic_name,
+                            self._add("FAIL", "SNS-04", "SNS", topic_name,
                                       f"Cross-account subscription | "
-                                      f"Topic={topic_name} → Account={parts[4]}")
+                                      f"Topic={topic_name} → Account={parts[4]}"
+                                      f" (not this account and not on the "
+                                      f"trusted-account list)")
         except Exception as e:
-            self._add("FAIL", "SNS-04", "SNS", "sns", str(e))
+            self._read_failed("SNS-04", "SNS", "sns", "sns:ListSubscriptions", e)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 12: AMAZON SQS
@@ -5761,7 +5795,7 @@ class AWSLiveScanner:
                               f"No DLQ for queue '{name}' — "
                               "unprocessed messages may be lost")
             except Exception as e:
-                self._add("FAIL", "SQS-03", "SQS", name, str(e))
+                self._read_failed("SQS-03", "SQS", name, "sqs:GetQueueAttributes", e)
 
         # SQS-04 — Message retention and visibility timeout
         self._log("SQS-04: SQS queues — retention and visibility timeout")
@@ -5786,7 +5820,7 @@ class AWSLiveScanner:
                               f"Retention={ret_days:.1f}d "
                               f"VisibilityTimeout={visibility}s | {name}")
             except Exception as e:
-                self._add("FAIL", "SQS-04", "SQS", name, str(e))
+                self._read_failed("SQS-04", "SQS", name, "sqs:GetQueueAttributes", e)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 13: AMAZON CLOUDFRONT
@@ -6004,7 +6038,7 @@ class AWSLiveScanner:
                     self._add("WARN", "R53-02", "ROUTE53", zname,
                               f"Could not check DNSSEC for '{zname}': {de}")
         except Exception as e:
-            self._add("FAIL", "R53-02", "ROUTE53", "route53", str(e))
+            self._read_failed("R53-02", "ROUTE53", "route53", "route53:ListHostedZones", e)
 
         # R53-03 — Domain transfer lock + auto-renewal
         self._log("R53-03: Route 53 — domain transfer lock and auto-renewal")
@@ -6063,7 +6097,8 @@ class AWSLiveScanner:
                                   f"Health check {hcid} type={htype} "
                                   f"port={port}")
         except Exception as e:
-            self._add("FAIL", "R53-04", "ROUTE53", "health-checks", str(e))
+            self._read_failed("R53-04", "ROUTE53", "health-checks",
+                              "route53:ListHealthChecks", e)
 
         # R53-05 — Resolver DNS Firewall + query logging
         self._log("R53-05: Route 53 Resolver — DNS Firewall and query logging")
@@ -6436,7 +6471,8 @@ class AWSLiveScanner:
                           "No Bedrock VPC endpoints — traffic uses public "
                           "internet; consider PrivateLink for data isolation")
         except Exception as e:
-            self._add("FAIL", "BDR-04", "BEDROCK", "bedrock", str(e))
+            self._read_failed("BDR-04", "BEDROCK", "bedrock",
+                              "ec2:DescribeVpcEndpoints", e)
 
         # BDR-05 — IAM least privilege for Bedrock
         self._log("BDR-05: Bedrock — IAM permissions wildcard check")
@@ -6467,7 +6503,13 @@ class AWSLiveScanner:
                                 and resource == "*"
                             )
                             if bedrock_wild or broad_invoke:
-                                self._add("WARN", "BDR-05", "BEDROCK",
+                                # FAIL, not WARN. A customer-managed policy allowing
+                                # bedrock:* (or * ) on * is a definite over-grant, the
+                                # same class the IAM checks already FAIL for -- and
+                                # until this line changed, BDR-05's only FAIL was its
+                                # own error handler, so its declared HIGH was reachable
+                                # only by iam:ListPolicies throwing.
+                                self._add("FAIL", "BDR-05", "BEDROCK",
                                           policy["PolicyName"],
                                           f"Overly broad Bedrock permission in "
                                           f"policy '{policy['PolicyName']}' "
@@ -6481,7 +6523,7 @@ class AWSLiveScanner:
                           "No wildcard Bedrock permissions in "
                           "customer-managed policies")
         except Exception as e:
-            self._add("FAIL", "BDR-05", "BEDROCK", "iam", str(e))
+            self._read_failed("BDR-05", "BEDROCK", "iam", "iam:ListPolicies", e)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 16: AWS BEDROCK AGENT CORE
@@ -8586,7 +8628,7 @@ class AWSLiveScanner:
             for page in paginator.paginate():
                 tables.extend(page.get("TableNames", []))
         except Exception as e:
-            self._add("FAIL", "DDB-01", "DYNAMODB", "dynamodb", str(e))
+            self._read_failed("DDB-01", "DYNAMODB", "dynamodb", "dynamodb:ListTables", e)
             return
         if not tables:
             self._add("INFO", "DDB-01", "DYNAMODB", "dynamodb",

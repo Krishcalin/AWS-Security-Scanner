@@ -139,8 +139,16 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: the error handler rather than the check. They belong to a wider defect: eleven checks
 #: report a FAILED READ as their finding while the security condition they exist for is a
 #: WARN. That is fixed as its own change, not papered over with a fixture here.
-MAX_NEVER_OBSERVED = 33
-MIN_PROVEN_FAILING = 409
+#: THEN THE DEFECT BEHIND THOSE TWO WAS FIXED, and this file recorded something it was
+#: built to record. Ten checks answered a failed AWS call with `_add("FAIL", <id>, ...,
+#: str(e))`; `AWSLiveScanner._read_failed` replaced all ten with a WARN that names the
+#: action and records the denial. BDR-05 and SNS-04 gained real FAIL paths and entered
+#: proven-failing -- and EC2-05 LEFT IT. EC2-05 had been counted as proven only because a
+#: test made describe_instances throw, so what this file had certified was its error
+#: handler. A number that can fall when a false proof is withdrawn is the only kind worth
+#: ratcheting. Net 409 -> 410, and 33 -> 31 never observed.
+MAX_NEVER_OBSERVED = 31
+MIN_PROVEN_FAILING = 410
 
 
 def doc_text() -> str:

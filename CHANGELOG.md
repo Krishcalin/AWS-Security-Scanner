@@ -6,6 +6,49 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — a failed read is no longer reported as a security finding
+
+Ten checks answered a failed AWS call with `_add("FAIL", <id>, ..., str(e))` — the
+exception's text, as the finding. That was wrong twice over. A denied or throttled
+call produced a **FAIL carrying that check's remediation**, telling an operator to fix
+a misconfiguration nobody observed when their real problem was a missing grant. And
+for all ten that error path was the check's **only** literal FAIL, so — because `_add`
+reads severity, compliance and remediation from the catalogue for no other status —
+the declared severity was reachable only by the call breaking, while the
+misconfiguration the check exists to find emitted WARN, forced to LOW with no
+remediation. The catalogue was describing the error handler.
+
+Nothing asserted any of it: removing the whole shape broke no existing test.
+
+- **`AWSLiveScanner._read_failed` replaces all ten sites** (BDR-04, BDR-05, DDB-01,
+  EC2-05, R53-02, R53-04, SNS-01, SNS-04, SQS-03, SQS-04). A failed read now emits
+  WARN — never silence, which would be a phantom pass — names the action that failed,
+  and records the denial in the coverage ledger.
+- **Two conditions earned a real FAIL.** `BDR-05` (a customer-managed policy allowing
+  `bedrock:*` or `*` on `*`, the same class the IAM checks already FAIL for) and
+  `SNS-04` (a cross-account subscription), the latter now gated on the
+  trusted-account allowlist so a named partner account is a decision rather than a
+  finding — the same gate as `LMB-14`, `AMI-05` and `ECS-14`.
+- **Six severities corrected to LOW** — `BDR-04`, `DDB-01`, `EC2-05`, `R53-02`,
+  `SNS-01`, `SQS-03`. Each describes a hardening preference or an
+  honest could-not-determine ("consider PrivateLink", "consider CMK", "verify if
+  intentional"), so the code was right and the catalogue was not. No scoring change:
+  a WARN already rendered LOW. Three of the six were declared **twice** in
+  `CHECK_SEVERITY`, so every occurrence was replaced — editing the first does nothing,
+  silently.
+- **Two tripwires.** No check declared above LOW may have its only FAIL inside an
+  `except` handler (`S3-03` is exempt and justified: `get_bucket_encryption` raises
+  when a bucket has no default encryption, so there the exception *is* the signal).
+  And the count of FAIL findings whose message is just an exception's text is now
+  ratcheted, shrink-only.
+
+**Known remaining debt, named rather than left to be found:** 22 sites still report
+exception text as a FAIL. Those checks also have real FAIL paths, so their severity is
+at least reachable honestly, but a denied read on any of them still produces a
+misleading finding. `S3-03` additionally does not distinguish
+`ServerSideEncryptionConfigurationNotFoundError` from `AccessDenied` — the `S3-07`
+defect fixed in the bucket-B pass, in a second place.
+
 ### Added — CIS AWS Compute Services Benchmark v2.0.0 (43 checks, 3 sections)
 
 Full coverage of the benchmark's 82 recommendations: 33 were already covered, 44 are
