@@ -263,8 +263,8 @@ SECTIONS = [
     "AI_LOGGING", "SHADOW_AI", "VECTORSTORE",
     # Batch 1 of the 426-service coverage gap analysis. Each is its own top-level
     # section: a defect in a nested one takes out every test of its host.
-    "IOT", "EMR", "CODEBUILD", "DOCDB", "NEPTUNE", "MEMORYDB", "IMAGEBUILDER",
-    "TRANSFER",
+    "IOT", "EMR", "CODEBUILD", "DOCDB", "NEPTUNE", "MEMORYDB", "TIMESTREAM",
+    "IMAGEBUILDER", "TRANSFER",
     # Batch 2. Declared via aws_checkdef rather than five hand-edited literals.
     "NETWORKFIREWALL", "LIGHTSAIL", "PRIVATECA", "QUICKSIGHT",
     "IDENTITYCENTER", "GLUE",
@@ -335,6 +335,7 @@ SECTION_LABELS = {
     "DOCDB":          "AMAZON DOCUMENTDB",
     "NEPTUNE":        "AMAZON NEPTUNE",
     "MEMORYDB":       "AMAZON MEMORYDB",
+    "TIMESTREAM":     "AMAZON TIMESTREAM",
     "IMAGEBUILDER":   "EC2 IMAGE BUILDER",
     "TRANSFER":       "AWS TRANSFER FAMILY",
     "NETWORKFIREWALL": "AWS NETWORK FIREWALL",
@@ -704,6 +705,9 @@ CHECK_SEVERITY = {
     # not plaintext, and calling that HIGH is how a risk score stops meaning anything.
     "MDB-01": "HIGH", "MDB-02": "CRITICAL", "MDB-03": "MEDIUM",
     "MDB-04": "LOW", "MDB-05": "MEDIUM", "MDB-06": "MEDIUM",
+    # Timestream, which had no posture coverage. TS-01 is LOW for the same reason
+    # MDB-04 is: the data IS encrypted, and the finding is key ownership.
+    "TS-01": "LOW", "TS-02": "MEDIUM",
     "IMGB-01": "HIGH",
     "XFER-01": "HIGH", "XFER-02": "MEDIUM", "XFER-03": "INFO",
     "MART-01": "CRITICAL",
@@ -1109,6 +1113,8 @@ COMPLIANCE_MAP = {
     "MDB-04": {"PCI-DSS": "3.6.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
     "MDB-05": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "MDB-06": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(C)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "TS-01": {"PCI-DSS": "3.6.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
+    "TS-02": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
     # CP-9 rather than the CP-10 this would otherwise map to: the NIST axis is a FROZEN
     # 38-control universe (compliance/crosswalk.json) from which 34 further frameworks
     # are derived, so adding a control means supplying its row in every one of them.
@@ -1587,6 +1593,8 @@ REMEDIATION_MAP = {
     "AUR-07": "Raise the cluster's backup retention so a problem found next week is still recoverable: aws rds modify-db-cluster --db-cluster-identifier <CLUSTER> --backup-retention-period 7 --apply-immediately. This is a cluster setting; changing it on an instance does nothing for Aurora",
     "AUR-08": "Enable IAM database authentication on the CLUSTER so applications use short-lived tokens instead of a static password: aws rds modify-db-cluster --db-cluster-identifier <CLUSTER> --enable-iam-database-authentication --apply-immediately. Then grant rds-db:connect to the role and create the DB user with the IAM auth plugin",
     "ELC-07": "Turn on automatic snapshots so a flushed or corrupted cache is recoverable: aws elasticache modify-replication-group --replication-group-id <RG_ID> --snapshot-retention-limit 7 --apply-immediately. Set a snapshot window that misses your peak, since snapshotting adds load to the node it runs on",
+    "TS-01": "Point the rejected-data location at a KMS key rather than SSE-S3, so the customer records that land there sit under a key you control: aws timestream-write update-table --database-name <DB> --table-name <TABLE> --magnetic-store-write-properties 'EnableMagneticStoreWrites=true,MagneticStoreRejectedDataLocation={S3Configuration={BucketName=<BUCKET>,EncryptionOption=SSE_KMS,KmsKeyId=<KEY_ARN>}}'",
+    "TS-02": "Give rejected magnetic-store writes somewhere to go, or you will never know what was dropped: aws timestream-write update-table --database-name <DB> --table-name <TABLE> --magnetic-store-write-properties 'EnableMagneticStoreWrites=true,MagneticStoreRejectedDataLocation={S3Configuration={BucketName=<BUCKET>,EncryptionOption=SSE_KMS,KmsKeyId=<KEY_ARN>}}'",
     "MDB-01": "TLS cannot be enabled on an existing MemoryDB cluster, so this needs a rebuild: snapshot it with aws memorydb create-snapshot --cluster-name <CLUSTER> --snapshot-name <SNAP>, then aws memorydb create-cluster --cluster-name <NEW> --tls-enabled --snapshot-name <SNAP> --node-type <TYPE> --acl-name <ACL> and cut over",
     "MDB-02": "Stop the cluster accepting unauthenticated connections. Create users with real authentication and an ACL containing only those: aws memorydb create-user --user-name <USER> --authentication-mode Type=iam --access-string 'on ~* &* +@all', then aws memorydb create-acl --acl-name <ACL> --user-names <USER>, then aws memorydb update-cluster --cluster-name <CLUSTER> --acl-name <ACL>",
     "MDB-03": "Turn on automatic snapshots -- MemoryDB is a durable datastore, so this is data loss and not a cold cache: aws memorydb update-cluster --cluster-name <CLUSTER> --snapshot-retention-limit 7",
@@ -12185,6 +12193,76 @@ class AWSLiveScanner:
             elif mode == "multiaz":
                 self._add("PASS", "MDB-06", "MEMORYDB", name, f"Multi-AZ | {name}")
 
+    def _check_timestream(self):
+        """TS-01/02 — Amazon Timestream magnetic-store write rejection.
+
+        Timestream held DSPM crown-jewel discovery only. Both checks are about the same
+        overlooked surface: when magnetic-store writes are on, records that fail
+        validation are diverted to an S3 bucket the SERVICE writes on your behalf, which
+        is customer data in a location no other check looks at.
+
+        list_databases and list_tables declare NO paginators (timestream-write ships
+        none), which is what broke `_dspm_timestream` until it was fixed to walk
+        NextToken with `_tokens`. Same approach here rather than the same bug."""
+        self._section_header("TIMESTREAM")
+        try:
+            ts = self._client("timestream-write")
+        except Exception:
+            return
+
+        try:
+            databases = self._tokens(ts.list_databases, "Databases")
+        except Exception as e:
+            self._read_failed("TS-01", "TIMESTREAM", "timestream",
+                              "timestream:ListDatabases", e)
+            return
+
+        tables = []
+        for db in (databases or []):
+            dname = (db or {}).get("DatabaseName")
+            if not dname:
+                continue
+            try:
+                tables.extend(self._tokens(ts.list_tables, "Tables",
+                                           DatabaseName=dname) or [])
+            except Exception as e:
+                self._read_failed("TS-01", "TIMESTREAM", dname,
+                                  "timestream:ListTables", e)
+
+        if not tables:
+            self._add("INFO", "TS-01", "TIMESTREAM", "timestream",
+                      "No Timestream tables found in this region")
+            return
+
+        for t in tables:
+            res = f"{(t or {}).get('DatabaseName', '?')}.{(t or {}).get('TableName', '?')}"
+            props = (t or {}).get("MagneticStoreWriteProperties") or {}
+            if props.get("EnableMagneticStoreWrites") is not True:
+                continue                  # nothing is being diverted anywhere
+            loc = ((props.get("MagneticStoreRejectedDataLocation") or {})
+                   .get("S3Configuration") or {})
+            if not loc.get("BucketName"):
+                # TS-02 — writes on, nowhere for rejects to go. Records that fail
+                # validation are dropped with no copy and no way to learn what was lost.
+                self._add("FAIL", "TS-02", "TIMESTREAM", res,
+                          f"Magnetic-store writes enabled with NO rejected-data "
+                          f"location | {res} — records that fail validation are "
+                          f"discarded silently")
+                continue
+            self._add("PASS", "TS-02", "TIMESTREAM", res,
+                      f"Rejected magnetic-store writes are captured to "
+                      f"s3://{loc['BucketName']} | {res}")
+            # TS-01 — how that diverted customer data is encrypted.
+            opt = str(loc.get("EncryptionOption") or "").strip().upper()
+            if opt == "SSE_S3":
+                self._add("FAIL", "TS-01", "TIMESTREAM", res,
+                          f"Rejected-data bucket s3://{loc['BucketName']} uses SSE-S3 "
+                          f"rather than a KMS key | {res} — customer records land there "
+                          f"under a key you neither control nor can audit")
+            elif opt == "SSE_KMS":
+                self._add("PASS", "TS-01", "TIMESTREAM", res,
+                          f"Rejected-data bucket uses SSE-KMS | {res}")
+
     def _check_imagebuilder(self):
         """IMGB-01 resource policies, plus IMGB-02/03 (CIS-Compute 17.1, 17.2).
 
@@ -18437,6 +18515,7 @@ class AWSLiveScanner:
             "DOCDB":          self._check_docdb,
             "NEPTUNE":        self._check_neptune,
             "MEMORYDB":       self._check_memorydb,
+            "TIMESTREAM":     self._check_timestream,
             "IMAGEBUILDER":   self._check_imagebuilder,
             "TRANSFER":       self._check_transfer,
             "NETWORKFIREWALL": self._check_networkfirewall,

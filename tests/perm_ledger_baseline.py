@@ -197,6 +197,8 @@ BASELINE = {
             "storagegateway:DescribeNFSFileShares",
             "storagegateway:DescribeSMBFileShares",
             "storagegateway:ListFileShares",
+            "timestream:ListDatabases",
+            "timestream:ListTables",
             "transfer:DescribeServer",
             "transfer:ListServers",
             "verifiedpermissions:GetPolicyStore",
@@ -372,6 +374,8 @@ BASELINE = {
             "SW-01",
             "SW-02",
             "TFLOW-01",
+            "TS-01",
+            "TS-02",
             "VEC-01",
             "VEC-02",
             "VEC-03",
@@ -392,7 +396,7 @@ BASELINE = {
             "XFER-03",
             "XRAY-01",
         ],
-        "annotated_policy_rows": 175,
+        "annotated_policy_rows": 177,
     },
     "shipped_role": {
         "missing_actions": [
@@ -541,6 +545,8 @@ BASELINE = {
             "storagegateway:DescribeNFSFileShares",
             "storagegateway:DescribeSMBFileShares",
             "storagegateway:ListFileShares",
+            "timestream:ListDatabases",
+            "timestream:ListTables",
             "transfer:DescribeServer",
             "transfer:ListServers",
             "verifiedpermissions:GetPolicyStore",
@@ -699,6 +705,8 @@ BASELINE = {
             "SW-01",
             "SW-02",
             "TFLOW-01",
+            "TS-01",
+            "TS-02",
             "VEC-01",
             "VEC-02",
             "VEC-03",
@@ -719,7 +727,7 @@ BASELINE = {
             "XFER-03",
             "XRAY-01",
         ],
-        "annotated_policy_rows": 161,
+        "annotated_policy_rows": 163,
     },
 }
 # ─────────────────────────────────────────────────────────────────────────────

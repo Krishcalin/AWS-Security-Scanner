@@ -182,7 +182,15 @@ class TestDataStructures(unittest.TestCase):
         # and OverWatch reported nothing. Three new calls and three new IAM actions on a
         # separate memorydb:* prefix, which is the honest price of a service that was
         # entirely invisible.
-        self.assertEqual(len(SECTIONS), 96)
+        #
+        # 97: +TIMESTREAM. KEYSPACES was written alongside it and WITHDRAWN: Amazon
+        # Keyspaces authorises ListKeyspaces/ListTables/GetTable under cassandra:Select,
+        # the same action that authorises reading table rows, and AWS offers no
+        # metadata-only alternative -- so covering it would have put a customer-data read
+        # into the default scanning role. The reason is recorded in
+        # aws_cis_db.NOT_DETERMINABLE rather than lost, because the checks themselves
+        # were trivial and the decision was about the GRANT.
+        self.assertEqual(len(SECTIONS), 97)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

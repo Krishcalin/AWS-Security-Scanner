@@ -193,8 +193,14 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: Redis datastore with unauthenticated access and nothing was reported. MDB-02 is the
 #: one that matters: a passwordless ACL user is an observation, not an inference, and
 #: MemoryDB creates one by default. See tests/test_cis_db_memorydb.py.
+#: 433 -> 435: TS-01/TS-02. Timestream held DSPM discovery only, and both checks are
+#: about the same overlooked surface -- with magnetic-store writes on, records that fail
+#: validation are written by the SERVICE to an S3 bucket that no other check looks at.
+#: Only two, not four: KS-01/KS-02 were written and WITHDRAWN because Keyspaces'
+#: control-plane reads are authorised by cassandra:Select, which also reads table rows.
+#: See tests/test_cis_db_keyspaces_timestream.py.
 MAX_NEVER_OBSERVED = 28
-MIN_PROVEN_FAILING = 433
+MIN_PROVEN_FAILING = 435
 
 
 def doc_text() -> str:

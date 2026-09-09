@@ -3947,6 +3947,28 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Make sure the client library reconnects on failover and that the application degrades gracefully when the cache is briefly unavailable.",
         ],
     },
+    "TS-01": {
+        "risk": "This Timestream table diverts rejected magnetic-store writes to an S3 bucket encrypted with SSE-S3 rather than a KMS key. The significance is in what ends up there. When magnetic-store writes are enabled, records that fail validation are not discarded -- they are written to this bucket, in full, by the service. That is real customer telemetry: the measure names, dimension values and timestamps of whatever failed, which for an IoT or application-metrics workload can be device identifiers, user identifiers or location data. It is customer data sitting in a location that no other check in a typical review looks at, because it was created by the service rather than by the team, and it accumulates quietly for as long as writes keep failing. SSE-S3 does encrypt it, so this is a key-ownership finding rather than a plaintext one -- LOW for the same reason the other key-ownership checks are -- but it means there is no key policy governing that data, no attributable key-usage trail, and no way to revoke access to it by disabling a key.",
+        "impact": "Rejected customer records accumulate in an S3 bucket under a key you neither control nor can audit.",
+        "steps": [
+            "Look at what is actually in the bucket first -- the volume tells you whether writes are failing routinely, which is its own problem: aws s3 ls s3://<BUCKET>/<PREFIX>/ --recursive --summarize",
+            "Switch the location to a KMS key: aws timestream-write update-table --database-name <DB> --table-name <TABLE> --magnetic-store-write-properties 'EnableMagneticStoreWrites=true,MagneticStoreRejectedDataLocation={S3Configuration={BucketName=<BUCKET>,EncryptionOption=SSE_KMS,KmsKeyId=<KEY_ARN>}}'",
+            "Objects already written keep their old encryption -- re-encrypt or delete them, because the setting is not retroactive.",
+            "Give the bucket a lifecycle rule, since nothing expires rejected data on its own.",
+            "Confirm the bucket blocks public access and is not shared more widely than the table it serves.",
+        ],
+    },
+    "TS-02": {
+        "risk": "This Timestream table has magnetic-store writes enabled but no rejected-data location configured, so records that fail validation are discarded with no copy kept and no notification. Magnetic-store writes accept late-arriving data, which is exactly the traffic most likely to be malformed -- a device with a drifting clock, a backfill job with the wrong units, a schema change that did not reach every producer. Timestream rejects those records, and with nowhere to put them the rejection is silent: the write call can succeed at the batch level while individual records vanish, so the first sign of trouble is a dashboard that is quietly wrong rather than an error anybody sees. The consequence is worse for security than for operations. Timestream frequently holds the telemetry that detection and audit rely on, and silently dropped records mean gaps in that record which are indistinguishable from periods when nothing happened. An investigation cannot tell an absence of events from an absence of data.",
+        "impact": "Records that fail validation are dropped silently, leaving gaps in telemetry that cannot be distinguished from periods of no activity.",
+        "steps": [
+            "Configure a rejected-data location so failures become visible: aws timestream-write update-table --database-name <DB> --table-name <TABLE> --magnetic-store-write-properties 'EnableMagneticStoreWrites=true,MagneticStoreRejectedDataLocation={S3Configuration={BucketName=<BUCKET>,EncryptionOption=SSE_KMS,KmsKeyId=<KEY_ARN>}}'",
+            "Use a KMS key rather than SSE-S3 while you are here -- the rejected records are customer data (TS-01).",
+            "Alarm on objects arriving in that prefix, because a rejected-data bucket nobody looks at restores the silence this fixes.",
+            "Check whether records are being rejected today by comparing what producers send against what queries return over the same window.",
+            "If magnetic-store writes are not actually needed for this table, turning them off is the simpler fix.",
+        ],
+    },
     "MDB-01": {
         "risk": "This MemoryDB cluster has TLS disabled, so every client connection crosses the VPC in cleartext -- the authentication exchange, the commands, and the data returned. MemoryDB is not a cache in the way ElastiCache often is: it is a durable, multi-AZ Redis-compatible datastore with a transaction log, and systems choose it precisely because the data in it is authoritative rather than reconstructible. So the traffic being read in transit is primary data. Redis wire protocol is plain text and trivially parsed, meaning an attacker capturing traffic needs no tooling beyond tcpdump to read both the credentials and the values. The usual mitigating argument -- that this is inside a VPC -- is exactly the assumption an attacker with any foothold relies on, and a compromised container on the same subnet, a peered VPC or an over-broad security group all defeat it. The operational fact that matters: TLS is set at cluster creation and cannot be changed afterwards, so this is a rebuild rather than a setting change.",
         "impact": "Credentials and authoritative data cross the network in cleartext, readable with ordinary packet capture by anything with a network position.",

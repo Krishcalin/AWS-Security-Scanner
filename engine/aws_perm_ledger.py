@@ -421,6 +421,22 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "read MultiAZ -- whether an availability-zone failure removes the whole "
              "cache, which also decides whether ELC-04's failover has anywhere to go"),
     ),
+    # ── Timestream, likewise uncovered ───────────────────────────────────────
+    # Keyspaces is NOT here on purpose: its only control-plane read action is
+    # cassandra:Select, which also authorises reading table ROWS. See
+    # aws_cis_db.NOT_DETERMINABLE['keyspaces-needs-a-data-read-grant'].
+    "TS-01": (
+        _req("timestream:ListDatabases",
+             "enumerate Timestream databases, which is the only way to reach tables"),
+        _req("timestream:ListTables",
+             "read MagneticStoreWriteProperties -- the encryption option on the bucket "
+             "the SERVICE writes rejected customer records to"),
+    ),
+    "TS-02": (
+        _req("timestream:ListTables",
+             "read whether magnetic-store writes have a rejected-data location at all; "
+             "without one, records that fail validation are dropped silently"),
+    ),
     # ── MemoryDB, which had no posture coverage at all ───────────────────────
     # Three NEW actions. memorydb:* is its own IAM prefix, so a role that can read RDS
     # and ElastiCache can read none of this -- the grant has to be added deliberately.

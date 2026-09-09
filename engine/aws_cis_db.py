@@ -45,7 +45,36 @@ __all__ = [
 #: claim about what is out of scope is worth exactly as much as its reason — the
 #: precedent is the identically-named dict in ``aws_cis_compute.py``, which declined 5 of
 #: 82 Compute recommendations rather than registering checks that could never fire.
-NOT_DETERMINABLE: Dict[str, str] = {}
+NOT_DETERMINABLE: Dict[str, str] = {
+    "timestream-database-key-ownership": (
+        "whether a Timestream database uses a customer-managed key or the AWS-managed "
+        "one cannot be told from the API. Every database returns a KmsKeyId, and for the "
+        "AWS-managed key that is still an ARN in the customer's own account with the "
+        "same shape as a CMK -- there is no field distinguishing them and no alias in "
+        "the response to match on. Guessing from the key id would be wrong in both "
+        "directions"),
+    "keyspaces-needs-a-data-read-grant": (
+        "Amazon Keyspaces authorises its control-plane reads -- ListKeyspaces, ListTables "
+        "and GetTable -- under cassandra:Select, and that is the SAME action that "
+        "authorises reading table rows. AWS offers no metadata-only read action for the "
+        "service, so covering it would mean adding an action to the scanning role that "
+        "permits reading customer data. That crosses the read-only-of-CONFIG line this "
+        "product's role is built on, and which "
+        "tests/test_perm_ledger.py::test_the_additive_policy_contains_only_read_actions "
+        "already enforces by excluding s3:GetObject and logs:StartQuery for exactly the "
+        "same reason. The checks themselves would be straightforward -- "
+        "pointInTimeRecovery.status and encryptionSpecification.type are both plain "
+        "enums -- so this is a decision about the GRANT, not about feasibility. If it is "
+        "ever wanted, it belongs in an opt-in permission block alongside the other "
+        "data-plane reads rather than in the default policy"),
+    "qldb-everything": (
+        "Amazon QLDB has NO service model in the pinned botocore at all -- boto3 cannot "
+        "construct a client for it, so none of section 11 is buildable regardless of "
+        "whether it would be worth building. AWS removed the service from the SDK. "
+        "tests/test_cis_db_keyspaces_timestream.py asserts this rather than asserting "
+        "the judgement, so if AWS ever restores the model the decision gets re-made "
+        "instead of silently standing"),
+}
 
 #: A DIFFERENT KIND OF DECLINE, and the distinction is worth keeping. These are readable
 #: from the control plane and deliberately not reported, because a benchmark
