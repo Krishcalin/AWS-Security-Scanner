@@ -1,9 +1,47 @@
 # CIS AWS Database Services Benchmark v2.0.0 — implementation plan
 
-**Status: proposed, not built.** This is the plan for covering the benchmark, written after
-reading it end to end. Nothing here is claimed as implemented; `docs/CIS_COMPUTE_BENCHMARK.md`
-is what the finished article looks like, and this document should be replaced by its
-equivalent (`docs/CIS_DATABASE_BENCHMARK.md`) as the tranches land.
+## Status
+
+| # | Scope | Planned | Actual | State |
+|---|---|---:|---|---|
+| 0 | The 98-row mapping table + `NOT_DETERMINABLE` | 0 | — | **BLOCKED** — needs the source PDF |
+| 1 | Fix the AUR engine filter | 0 | **6** (DOCDB-04/05, NEP-01..04) | done |
+| 2 | `CIS-DB` key + map the already-covered recs | 0 | — | **BLOCKED** — needs the source PDF |
+| 3 | TLS enforcement | ~4 | **4** (RDS-14, AUR-06, DOCDB-06, NEP-05) | done |
+| 4 | Cluster-level 2.8/2.10; ElastiCache fields | ~3 | **4** (AUR-07/08, ELC-07/08) | done |
+| 5 | MemoryDB | ~5 | **6** (MDB-01..06) | done |
+| 6 | Neptune + Keyspaces + Timestream | ~10 | **2** (TS-01/02); Neptune landed in 1; Keyspaces declined | done |
+
+**22 checks added. 503 → 525.** Sections 94 → 97 (NEPTUNE, MEMORYDB, TIMESTREAM).
+Proven-failing 413 → 435; every new check is proven, so the count moved by exactly the
+number added each time. Suite 6018 → 6151 passing.
+
+**Three things went differently from the plan, and all three are worth recording:**
+
+1. **Tranche 1 was not free.** The plan said 0 new checks. Filtering the Aurora loop alone
+   would have *deleted* four real findings — DocumentDB deletion protection and snapshot
+   encryption, and all of Neptune — so six ids exist to keep them under correct labels.
+   Deleting findings is not a fix for mislabelling them.
+2. **Keyspaces was built and withdrawn.** Its control-plane reads are authorised by
+   `cassandra:Select`, the same action that reads table rows, and AWS offers no
+   metadata-only alternative. `tests/test_perm_ledger.py` caught it. See
+   `aws_cis_db.NOT_DETERMINABLE['keyspaces-needs-a-data-read-grant']` — a decision about
+   the *grant*, not about feasibility.
+3. **QLDB is declined on stronger grounds than proposed.** Not "AWS is retiring it", which
+   is a judgement, but "botocore ships no service model for it", which is checkable and is
+   asserted by a test.
+
+**Tranches 0 and 2 need the benchmark PDF re-attached.** They are the mapping layer: the
+98-row table and the `CIS-DB` compliance key across the ~40 already-covered recommendations.
+Building them from recollection would mean inventing recommendation numbers and titles,
+which would make a compliance mapping worse than no mapping. The *checks* do not depend on
+them — everything above ships mapped to PCI-DSS / HIPAA / SOC2 / NIST in the ordinary way.
+
+The rest of this document is the original plan as written, kept for the reasoning.
+`docs/CIS_COMPUTE_BENCHMARK.md` is what the finished article looks like, and this should be
+replaced by its equivalent (`docs/CIS_DATABASE_BENCHMARK.md`) once tranche 0 can run.
+
+---
 
 > **On the source document.** CIS Benchmarks may not be redistributed, and the PDF is
 > deliberately not in this repository — it stays in the session scratchpad only. What is
