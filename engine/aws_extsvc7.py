@@ -42,7 +42,7 @@ Pure functions over dicts. No boto3, no network, no I/O.
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence
 from urllib.parse import unquote
 
 from engine import aws_checkdef as _cd
@@ -238,9 +238,44 @@ def mpa_approval_team(team: Optional[dict]) -> dict:
 
 
 # ── AWS Wickr ───────────────────────────────────────────────────────────────
-def wickr_retention(network_id: str, settings: Optional[dict]) -> dict:
+def _wickr_settings(settings) -> dict:
+    """Normalise `GetNetworkSettings` output to a mapping.
+
+    THE SHAPE AWS ACTUALLY RETURNS is ``{"settings": [{optionName, value, type}, ...]}``
+    — a LIST of name/value pairs where every value is a STRING — not the nested object
+    this module was written against. The scanner compounded it by reading
+    ``networkSettings``, a key the operation does not have, so on real AWS this function
+    always received ``{}`` and WKR-01 could never fire.
+
+    Neither half could be caught by a fixture: the fixture was written from the same
+    misunderstanding as the code. `tests/test_aws_api_contract.py` found it by checking
+    the key against botocore's own service model, which is the only description of the
+    API that nobody here wrote.
+
+    The dict form is still accepted, because the option NAMES below are free-form
+    strings the model does not enumerate — they cannot be verified offline, so they are
+    left exactly as they were rather than guessed at again."""
+    if isinstance(settings, Mapping):
+        return dict(settings)
+    out: Dict[str, object] = {}
+    for item in (settings or []):
+        if not isinstance(item, Mapping):
+            continue
+        name = item.get("optionName")
+        if not name:
+            continue
+        raw = item.get("value")
+        # Values arrive as strings; "true"/"false" are the only ones this reads.
+        if isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
+            out[str(name)] = raw.strip().lower() == "true"
+        else:
+            out[str(name)] = raw
+    return out
+
+
+def wickr_retention(network_id: str, settings) -> dict:
     """Retention on an end-to-end encrypted messenger: context, not a defect."""
-    s = _d(settings)
+    s = _wickr_settings(settings)
     retention = _d(s.get("dataRetention"))
     enabled = retention.get("enabled") if "enabled" in retention else s.get("dataRetention")
     on = enabled is True

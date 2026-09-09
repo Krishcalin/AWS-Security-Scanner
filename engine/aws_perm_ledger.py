@@ -361,6 +361,147 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "read EnabledCloudwatchLogsExports -- whether any record exists of who "
              "connected and what they queried"),
     ),
+    "DOCDB-04": (
+        _req("rds:DescribeDBClusters",
+             "read DeletionProtection -- whether a single DeleteDBCluster call can "
+             "destroy the cluster and its automated backups together"),
+    ),
+    "DOCDB-05": (
+        _req("rds:DescribeDBClusterSnapshots",
+             "read StorageEncrypted on manual snapshots -- encryption is inherited at "
+             "creation and cannot be added later, so a plaintext snapshot is permanent"),
+    ),
+    # Neptune shares the RDS control plane, and its IAM actions are rds:* -- a role that
+    # can already read RDS clusters needs NO new grant for NEP-01..04. The actions are
+    # listed anyway so the ledger states what each check reads rather than leaving it to
+    # be inferred from the service the client was built for.
+    "NEP-01": (
+        _req("rds:DescribeDBClusters",
+             "read StorageEncrypted -- Neptune encryption is creation-time only, so this "
+             "determines whether a snapshot-restore migration is required"),
+    ),
+    "NEP-02": (
+        _req("rds:DescribeDBClusters",
+             "read DeletionProtection -- for a graph the recovery path after an "
+             "accidental delete is usually a full re-ingest, not a restore"),
+    ),
+    "NEP-03": (
+        _req("rds:DescribeDBClusterSnapshots",
+             "enumerate manual Neptune cluster snapshots, which are the copies that get "
+             "shared and moved between accounts"),
+        _req("rds:DescribeDBClusterSnapshotAttributes",
+             "read the restore attribute -- a value of 'all' means ANY AWS account can "
+             "restore the graph, which is an observation rather than an inference"),
+    ),
+    "NEP-04": (
+        _req("rds:DescribeDBClusterSnapshots",
+             "read StorageEncrypted on manual snapshots -- an unencrypted snapshot is a "
+             "plaintext copy of the graph that outlives the cluster it came from"),
+    ),
+    # AUR-07/08 and ELC-07/08 read fields already present in responses the scanner
+    # fetches for AUR-01..03 and ELC-01..04, so they cost NO new call and NO new grant.
+    # Listed anyway, because the ledger's job is to say what each check reads.
+    "AUR-07": (
+        _req("rds:DescribeDBClusters",
+             "read BackupRetentionPeriod from the CLUSTER -- for Aurora this is where "
+             "it lives, and a Serverless v1 cluster has no instance to read instead"),
+    ),
+    "AUR-08": (
+        _req("rds:DescribeDBClusters",
+             "read IAMDatabaseAuthenticationEnabled from the CLUSTER -- whether "
+             "applications hold a static DB password or a 15-minute IAM token"),
+    ),
+    "ELC-07": (
+        _req("elasticache:DescribeReplicationGroups",
+             "read SnapshotRetentionLimit -- whether anything exists to restore a "
+             "flushed or corrupted Redis dataset from"),
+    ),
+    "ELC-08": (
+        _req("elasticache:DescribeReplicationGroups",
+             "read MultiAZ -- whether an availability-zone failure removes the whole "
+             "cache, which also decides whether ELC-04's failover has anywhere to go"),
+    ),
+    # ── Timestream, likewise uncovered ───────────────────────────────────────
+    # Keyspaces is NOT here on purpose: its only control-plane read action is
+    # cassandra:Select, which also authorises reading table ROWS. See
+    # aws_cis_db.NOT_DETERMINABLE['keyspaces-needs-a-data-read-grant'].
+    "TS-01": (
+        _req("timestream:ListDatabases",
+             "enumerate Timestream databases, which is the only way to reach tables"),
+        _req("timestream:ListTables",
+             "read MagneticStoreWriteProperties -- the encryption option on the bucket "
+             "the SERVICE writes rejected customer records to"),
+    ),
+    "TS-02": (
+        _req("timestream:ListTables",
+             "read whether magnetic-store writes have a rejected-data location at all; "
+             "without one, records that fail validation are dropped silently"),
+    ),
+    # ── MemoryDB, which had no posture coverage at all ───────────────────────
+    # Three NEW actions. memorydb:* is its own IAM prefix, so a role that can read RDS
+    # and ElastiCache can read none of this -- the grant has to be added deliberately.
+    "MDB-01": (
+        _req("memorydb:DescribeClusters",
+             "read TLSEnabled -- set at creation and unchangeable afterwards, so this "
+             "decides whether the cluster needs rebuilding rather than reconfiguring"),
+    ),
+    "MDB-02": (
+        _req("memorydb:DescribeClusters",
+             "read ACLName, which is the only thing on the cluster naming its access "
+             "control"),
+        _req("memorydb:DescribeUsers",
+             "read Authentication.Type -- a value of 'no-password' is unauthenticated "
+             "access as an observation rather than an inference"),
+        _req("memorydb:DescribeACLs",
+             "resolve the cluster's ACL to the users it grants, since the cluster names "
+             "the ACL and not its members"),
+    ),
+    "MDB-03": (
+        _req("memorydb:DescribeClusters",
+             "read SnapshotRetentionLimit -- MemoryDB is a durable datastore, so this "
+             "is the difference between recoverable and lost"),
+    ),
+    "MDB-04": (
+        _req("memorydb:DescribeClusters",
+             "read KmsKeyId -- MemoryDB is always encrypted, so this is key ownership "
+             "and not whether the data is protected"),
+    ),
+    "MDB-05": (
+        _req("memorydb:DescribeClusters",
+             "read AutoMinorVersionUpgrade -- whether engine security fixes arrive on "
+             "their own or wait for somebody to schedule them"),
+    ),
+    "MDB-06": (
+        _req("memorydb:DescribeClusters",
+             "read AvailabilityMode -- single-AZ discards the multi-AZ durability that "
+             "is the reason to choose MemoryDB over ElastiCache"),
+    ),
+    # ── TLS enforcement (CIS AWS Database Services v2.0.0) ───────────────────
+    # The first checks in the product to read a DB parameter group. Two NEW actions on
+    # the scanning role, and they are the whole cost of covering a control that spans
+    # four services: nothing in DescribeDBInstances or DescribeDBClusters says whether
+    # the database requires TLS or merely accepts it.
+    "RDS-14": (
+        _req("rds:DescribeDBParameters",
+             "read rds.force_ssl / require_secure_transport from the INSTANCE parameter "
+             "group -- the only place that says whether TLS is required or optional"),
+    ),
+    "AUR-06": (
+        _req("rds:DescribeDBClusterParameters",
+             "read rds.force_ssl / require_secure_transport from the CLUSTER parameter "
+             "group, which is where Aurora holds it and where a Serverless v1 cluster "
+             "with no instances holds it too"),
+    ),
+    "DOCDB-06": (
+        _req("rds:DescribeDBClusterParameters",
+             "read the tls cluster parameter -- DocumentDB ships with it enabled, so "
+             "finding it disabled means somebody turned it off deliberately"),
+    ),
+    "NEP-05": (
+        _req("rds:DescribeDBClusterParameters",
+             "read neptune_enforce_ssl -- whether Gremlin/SPARQL queries and their "
+             "results cross the network in cleartext"),
+    ),
     "IMGB-01": (
         _req("imagebuilder:ListImages",
          "enumerate golden images this account owns and builds"),

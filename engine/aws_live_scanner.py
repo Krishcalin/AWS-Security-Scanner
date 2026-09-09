@@ -57,6 +57,7 @@ from typing import List, Dict, Optional
 
 try:
     import boto3
+    from botocore.config import Config as BotoConfig
     from botocore.exceptions import ClientError, NoCredentialsError
     HAS_BOTO3 = True
 except ImportError:
@@ -92,6 +93,7 @@ from engine import aws_nitro
 from engine import aws_perimeter
 from engine import aws_checkdef
 from engine import aws_cis_compute
+from engine import aws_cis_db
 from engine import aws_extsvc
 from engine import aws_extsvc2
 from engine import aws_extsvc3
@@ -261,7 +263,8 @@ SECTIONS = [
     "AI_LOGGING", "SHADOW_AI", "VECTORSTORE",
     # Batch 1 of the 426-service coverage gap analysis. Each is its own top-level
     # section: a defect in a nested one takes out every test of its host.
-    "IOT", "EMR", "CODEBUILD", "DOCDB", "IMAGEBUILDER", "TRANSFER",
+    "IOT", "EMR", "CODEBUILD", "DOCDB", "NEPTUNE", "MEMORYDB", "TIMESTREAM",
+    "IMAGEBUILDER", "TRANSFER",
     # Batch 2. Declared via aws_checkdef rather than five hand-edited literals.
     "NETWORKFIREWALL", "LIGHTSAIL", "PRIVATECA", "QUICKSIGHT",
     "IDENTITYCENTER", "GLUE",
@@ -330,6 +333,9 @@ SECTION_LABELS = {
     "EMR":            "AMAZON EMR",
     "CODEBUILD":      "AWS CODEBUILD",
     "DOCDB":          "AMAZON DOCUMENTDB",
+    "NEPTUNE":        "AMAZON NEPTUNE",
+    "MEMORYDB":       "AMAZON MEMORYDB",
+    "TIMESTREAM":     "AMAZON TIMESTREAM",
     "IMAGEBUILDER":   "EC2 IMAGE BUILDER",
     "TRANSFER":       "AWS TRANSFER FAMILY",
     "NETWORKFIREWALL": "AWS NETWORK FIREWALL",
@@ -446,6 +452,22 @@ IDLE_DB_PERIOD_SECONDS = 86400
 #
 # Raising one of these back to MEDIUM without also giving the check a FAIL path puts
 # it straight back into the gap it was measured out of.
+
+#: Engines that `rds:DescribeDBClusters` returns which are NOT Aurora.
+#
+# DocumentDB and Neptune are separate services built on the same control plane, so they
+# come back from the RDS cluster APIs alongside Aurora and Multi-AZ DB clusters. The DSPM
+# path (`_dspm_rds`) has always branched on `Engine` for exactly this reason. AUR-01..05
+# did not, and scored them as Aurora: a DocumentDB cluster's encryption gap was reported
+# twice, once as AUR-01 and once as DOCDB-02, with AUR-01 offering a modify command that
+# DocumentDB does not support -- and Neptune posture was reported under Aurora labelling
+# while nothing in the product knew what Neptune was.
+#
+# DENY-list, not an allow-list. RDS keeps adding Aurora engine variants; an allow-list
+# would silently drop each new one out of coverage, which is the failure mode that is
+# hardest to notice. Only these two are known to share the API.
+NON_AURORA_CLUSTER_ENGINES = frozenset({"docdb", "neptune"})
+
 CHECK_SEVERITY = {
     # Agentless side-scan (CWPP, Phase 6)
     "CWPP-01": "HIGH", "CWPP-02": "CRITICAL", "CWPP-03": "HIGH",
@@ -471,7 +493,7 @@ CHECK_SEVERITY = {
     "CW-14": "MEDIUM", "CW-15": "MEDIUM", "CW-16": "MEDIUM",
     "ENC-03": "MEDIUM",
     "KMS-02": "CRITICAL", "KMS-03": "HIGH", "KMS-04": "HIGH",
-    "EC2-04": "HIGH", "EC2-05": "MEDIUM", "EC2-06": "HIGH",
+    "EC2-04": "HIGH", "EC2-05": "LOW", "EC2-06": "HIGH",
     "EC2-07": "HIGH", "EC2-08": "HIGH",
     "SSM-01": "HIGH", "SSM-02": "HIGH", "LT-01": "HIGH", "ASG-01": "HIGH",
     "AMI-02": "MEDIUM", "AMI-03": "MEDIUM",
@@ -485,14 +507,14 @@ CHECK_SEVERITY = {
     "AUR-01": "HIGH", "AUR-02": "MEDIUM", "AUR-03": "HIGH",
     "AUR-04": "CRITICAL", "AUR-05": "HIGH",
     "GLC-01": "CRITICAL", "GLC-02": "MEDIUM", "GLC-03": "LOW",
-    "SNS-01": "MEDIUM", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
-    "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "MEDIUM", "SQS-04": "LOW",
+    "SNS-01": "LOW", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
+    "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "LOW", "SQS-04": "LOW",
     "CFN-01": "HIGH", "CFN-02": "HIGH", "CFN-03": "HIGH",
     "CFN-04": "MEDIUM", "CFN-05": "HIGH", "CFN-06": "MEDIUM",
-    "R53-01": "MEDIUM", "R53-02": "MEDIUM", "R53-03": "HIGH",
+    "R53-01": "MEDIUM", "R53-02": "LOW", "R53-03": "HIGH",
     "R53-04": "LOW", "R53-05": "MEDIUM",
     "BDR-01": "HIGH", "BDR-02": "HIGH", "BDR-03": "LOW",
-    "BDR-04": "MEDIUM", "BDR-05": "HIGH",
+    "BDR-04": "LOW", "BDR-05": "HIGH",
     "AGT-01": "LOW", "AGT-02": "HIGH", "AGT-03": "LOW",
     "AGT-04": "HIGH", "AGT-05": "HIGH",
     "LMB-01": "HIGH", "LMB-02": "LOW", "LMB-03": "HIGH",
@@ -515,7 +537,7 @@ CHECK_SEVERITY = {
     "ELC-05": "HIGH", "ELC-06": "MEDIUM",
     "OSR-01": "HIGH", "OSR-02": "HIGH", "OSR-03": "MEDIUM",
     "OSR-04": "HIGH", "OSR-05": "HIGH", "OSR-06": "MEDIUM", "OSR-07": "HIGH",
-    "DDB-01": "HIGH", "DDB-02": "HIGH", "DDB-03": "LOW", "DDB-04": "MEDIUM",
+    "DDB-01": "LOW", "DDB-02": "HIGH", "DDB-03": "LOW", "DDB-04": "MEDIUM",
     "DDB-05": "CRITICAL",
     "SFN-01": "MEDIUM", "SFN-02": "LOW", "SFN-03": "LOW",
     "APIGW-01": "MEDIUM", "APIGW-02": "MEDIUM", "APIGW-03": "HIGH", "APIGW-04": "LOW",
@@ -658,6 +680,34 @@ CHECK_SEVERITY = {
     "EMR-01": "HIGH", "EMR-02": "MEDIUM",
     "CB-01": "HIGH", "CB-02": "MEDIUM",
     "DOCDB-01": "CRITICAL", "DOCDB-02": "HIGH", "DOCDB-03": "MEDIUM",
+    # DOCDB-04/05 and NEP-01..04 exist because AUR-01..05 used to reach DocumentDB and
+    # Neptune clusters through the shared RDS control plane. Severities mirror the Aurora
+    # check each one replaces: AUR-02 -> *-04 deletion protection (MEDIUM), AUR-04 ->
+    # NEP-03 public snapshot (CRITICAL), AUR-05 -> *-05/NEP-04 snapshot encryption (HIGH),
+    # AUR-01 -> NEP-01 storage encryption (HIGH).
+    "DOCDB-04": "MEDIUM", "DOCDB-05": "HIGH",
+    "NEP-01": "HIGH", "NEP-02": "MEDIUM", "NEP-03": "CRITICAL", "NEP-04": "HIGH",
+    # TLS enforcement (CIS Database v2.0.0, one of the five things v2.0.0 added). HIGH
+    # across all four: an unenforced database accepts cleartext client sessions carrying
+    # credentials and rows, and unlike encryption at rest the attacker needs only a
+    # position on the network rather than access to AWS storage.
+    "RDS-14": "HIGH", "AUR-06": "HIGH", "DOCDB-06": "HIGH", "NEP-05": "HIGH",
+    # Cluster-level backup retention and IAM auth. MEDIUM, matching the instance-level
+    # RDS-03/RDS-08 they split from -- same control, read from the plane that actually
+    # owns it for Aurora. ELC-07/08 are availability-and-recovery controls, which is
+    # what MEDIUM is for: real, worth reporting, not a breach.
+    "AUR-07": "MEDIUM", "AUR-08": "MEDIUM",
+    "ELC-07": "MEDIUM", "ELC-08": "MEDIUM",
+    # MemoryDB, which had no posture coverage at all. MDB-02 is CRITICAL because a
+    # passwordless ACL user is a direct OBSERVATION of unauthenticated access to a
+    # durable datastore, in the same sense DOCDB-01 observes a public snapshot. MDB-04 is
+    # LOW because MemoryDB is ALWAYS encrypted at rest -- the finding is key ownership,
+    # not plaintext, and calling that HIGH is how a risk score stops meaning anything.
+    "MDB-01": "HIGH", "MDB-02": "CRITICAL", "MDB-03": "MEDIUM",
+    "MDB-04": "LOW", "MDB-05": "MEDIUM", "MDB-06": "MEDIUM",
+    # Timestream, which had no posture coverage. TS-01 is LOW for the same reason
+    # MDB-04 is: the data IS encrypted, and the finding is key ownership.
+    "TS-01": "LOW", "TS-02": "MEDIUM",
     "IMGB-01": "HIGH",
     "XFER-01": "HIGH", "XFER-02": "MEDIUM", "XFER-03": "INFO",
     "MART-01": "CRITICAL",
@@ -728,10 +778,10 @@ CHECK_SEVERITY = {
     "CHOKEPOINT-01": "HIGH",
     # Backfilled service checks (previously severity-less on FAIL)
     "CNT-01": "MEDIUM", "BCK-01": "MEDIUM",
-    "SNS-01": "MEDIUM", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
-    "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "MEDIUM", "SQS-04": "LOW",
+    "SNS-01": "LOW", "SNS-02": "HIGH", "SNS-03": "HIGH", "SNS-04": "MEDIUM",
+    "SQS-01": "HIGH", "SQS-02": "CRITICAL", "SQS-03": "LOW", "SQS-04": "LOW",
     "GLC-01": "CRITICAL", "GLC-02": "MEDIUM", "GLC-03": "LOW",
-    "R53-01": "MEDIUM", "R53-02": "MEDIUM", "R53-03": "HIGH", "R53-04": "LOW", "R53-05": "MEDIUM",
+    "R53-01": "MEDIUM", "R53-02": "LOW", "R53-03": "HIGH", "R53-04": "LOW", "R53-05": "MEDIUM",
     "R53-06": "HIGH",
     "DDB-03": "LOW", "DDB-04": "MEDIUM",
     "EKS-04": "LOW", "EKS-05": "LOW", "EKS-06": "HIGH",
@@ -1040,6 +1090,36 @@ COMPLIANCE_MAP = {
     "DOCDB-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "DOCDB-02": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "DOCDB-03": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "DOCDB-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "DOCDB-05": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "NEP-01": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "NEP-02": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "NEP-03": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "NEP-04": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    # TLS in transit — PCI-DSS 4.2.1 is the "strong cryptography during transmission"
+    # requirement, and SC-8 is NIST's transmission-confidentiality control. Distinct from
+    # the SC-28 at-rest mappings above, which is the point: these four checks close a
+    # control that no at-rest check speaks to.
+    "RDS-14": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "AUR-06": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "DOCDB-06": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "NEP-05": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "AUR-07": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "AUR-08": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
+    "ELC-07": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "MDB-01": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "MDB-02": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2"},
+    "MDB-03": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "MDB-04": {"PCI-DSS": "3.6.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
+    "MDB-05": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "MDB-06": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(C)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "TS-01": {"PCI-DSS": "3.6.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
+    "TS-02": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
+    # CP-9 rather than the CP-10 this would otherwise map to: the NIST axis is a FROZEN
+    # 38-control universe (compliance/crosswalk.json) from which 34 further frameworks
+    # are derived, so adding a control means supplying its row in every one of them.
+    # CP-9 is that universe's representative for the contingency-planning family.
+    "ELC-08": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(C)", "SOC2": "A1.2", "NIST": "CP-9"},
     "IMGB-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "XFER-01": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "XFER-02": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
@@ -1500,6 +1580,28 @@ REMEDIATION_MAP = {
     "DOCDB-01": "Stop sharing the snapshot with every AWS account immediately: aws docdb modify-db-cluster-snapshot-attribute --db-cluster-snapshot-identifier <SNAPSHOT> --attribute-name restore --values-to-remove all. Then establish how long it was public and treat the contents as disclosed for that window",
     "DOCDB-02": "DocumentDB storage encryption can only be set at creation, so this cannot be switched on in place. Create an encrypted cluster from a snapshot and cut over: aws docdb restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAPSHOT> --kms-key-id <KEY_ARN> --storage-encrypted",
     "DOCDB-03": "Export audit logs so there is a record of who connected and what they queried: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --cloudwatch-logs-export-configuration EnableLogTypes=audit. The cluster parameter group also needs audit_logs enabled",
+    "DOCDB-04": "Turn on deletion protection so the cluster cannot be dropped by a single API call or a mistaken Terraform destroy: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --deletion-protection. It takes effect immediately and does not require a reboot",
+    "DOCDB-05": "Snapshot encryption is inherited from the cluster and cannot be added to an existing snapshot. Copy it to a new encrypted snapshot and delete the plaintext one: aws docdb copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier <SNAPSHOT> --target-db-cluster-snapshot-identifier <NEW> --kms-key-id <KEY_ARN>, then aws docdb delete-db-cluster-snapshot --db-cluster-snapshot-identifier <SNAPSHOT>",
+    "NEP-01": "Neptune storage encryption can only be set at cluster creation, so this needs a migration rather than a setting change: aws neptune restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAPSHOT> --engine neptune --kms-key-id <KEY_ARN> --storage-encrypted, then cut over and delete the old cluster",
+    "NEP-02": "Turn on deletion protection so the graph cannot be dropped by a single API call: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --deletion-protection --apply-immediately",
+    "NEP-03": "Stop sharing the snapshot with every AWS account immediately: aws neptune modify-db-cluster-snapshot-attribute --db-cluster-snapshot-identifier <SNAPSHOT> --attribute-name restore --values-to-remove all. Then establish how long it was public and treat the graph contents as disclosed for that window",
+    "NEP-04": "Copy the snapshot to an encrypted one and delete the plaintext original: aws neptune copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier <SNAPSHOT> --target-db-cluster-snapshot-identifier <NEW> --kms-key-id <KEY_ARN>, then aws neptune delete-db-cluster-snapshot --db-cluster-snapshot-identifier <SNAPSHOT>",
+    "RDS-14": "Require TLS in the instance parameter group — rds.force_ssl=1 for PostgreSQL and SQL Server, require_secure_transport=ON for MySQL and MariaDB: aws rds modify-db-parameter-group --db-parameter-group-name <PG> --parameters ParameterName=rds.force_ssl,ParameterValue=1,ApplyMethod=pending-reboot. Confirm every client presents a certificate BEFORE rebooting, because this rejects cleartext connections the moment it takes effect",
+    "AUR-06": "Require TLS in the CLUSTER parameter group — rds.force_ssl=1 for Aurora PostgreSQL, require_secure_transport=ON for Aurora MySQL: aws rds modify-db-cluster-parameter-group --db-cluster-parameter-group-name <PG> --parameters ParameterName=rds.force_ssl,ParameterValue=1,ApplyMethod=pending-reboot. Move every client to TLS first — this rejects cleartext connections once applied",
+    "DOCDB-06": "Turn TLS back on in the cluster parameter group: aws docdb modify-db-cluster-parameter-group --db-cluster-parameter-group-name <PG> --parameters ParameterName=tls,ParameterValue=enabled,ApplyMethod=pending-reboot, then reboot the instances. DocumentDB ships with tls=enabled, so this being off is a deliberate change worth understanding before reverting",
+    "NEP-05": "Require TLS on the cluster parameter group: aws neptune modify-db-cluster-parameter-group --db-cluster-parameter-group-name <PG> --parameters ParameterName=neptune_enforce_ssl,ParameterValue=1,ApplyMethod=pending-reboot, then reboot. Neptune engine 1.0.4.0 and later require TLS regardless, so an upgrade is the more durable fix",
+    "AUR-07": "Raise the cluster's backup retention so a problem found next week is still recoverable: aws rds modify-db-cluster --db-cluster-identifier <CLUSTER> --backup-retention-period 7 --apply-immediately. This is a cluster setting; changing it on an instance does nothing for Aurora",
+    "AUR-08": "Enable IAM database authentication on the CLUSTER so applications use short-lived tokens instead of a static password: aws rds modify-db-cluster --db-cluster-identifier <CLUSTER> --enable-iam-database-authentication --apply-immediately. Then grant rds-db:connect to the role and create the DB user with the IAM auth plugin",
+    "ELC-07": "Turn on automatic snapshots so a flushed or corrupted cache is recoverable: aws elasticache modify-replication-group --replication-group-id <RG_ID> --snapshot-retention-limit 7 --apply-immediately. Set a snapshot window that misses your peak, since snapshotting adds load to the node it runs on",
+    "TS-01": "Point the rejected-data location at a KMS key rather than SSE-S3, so the customer records that land there sit under a key you control: aws timestream-write update-table --database-name <DB> --table-name <TABLE> --magnetic-store-write-properties 'EnableMagneticStoreWrites=true,MagneticStoreRejectedDataLocation={S3Configuration={BucketName=<BUCKET>,EncryptionOption=SSE_KMS,KmsKeyId=<KEY_ARN>}}'",
+    "TS-02": "Give rejected magnetic-store writes somewhere to go, or you will never know what was dropped: aws timestream-write update-table --database-name <DB> --table-name <TABLE> --magnetic-store-write-properties 'EnableMagneticStoreWrites=true,MagneticStoreRejectedDataLocation={S3Configuration={BucketName=<BUCKET>,EncryptionOption=SSE_KMS,KmsKeyId=<KEY_ARN>}}'",
+    "MDB-01": "TLS cannot be enabled on an existing MemoryDB cluster, so this needs a rebuild: snapshot it with aws memorydb create-snapshot --cluster-name <CLUSTER> --snapshot-name <SNAP>, then aws memorydb create-cluster --cluster-name <NEW> --tls-enabled --snapshot-name <SNAP> --node-type <TYPE> --acl-name <ACL> and cut over",
+    "MDB-02": "Stop the cluster accepting unauthenticated connections. Create users with real authentication and an ACL containing only those: aws memorydb create-user --user-name <USER> --authentication-mode Type=iam --access-string 'on ~* &* +@all', then aws memorydb create-acl --acl-name <ACL> --user-names <USER>, then aws memorydb update-cluster --cluster-name <CLUSTER> --acl-name <ACL>",
+    "MDB-03": "Turn on automatic snapshots -- MemoryDB is a durable datastore, so this is data loss and not a cold cache: aws memorydb update-cluster --cluster-name <CLUSTER> --snapshot-retention-limit 7",
+    "MDB-04": "The key is chosen at creation and cannot be changed, so switching to a customer-managed key means a restore: aws memorydb create-cluster --cluster-name <NEW> --kms-key-id <KEY_ARN> --snapshot-name <SNAP> --node-type <TYPE> --acl-name <ACL>. Worth doing only where you need an auditable key policy or the ability to revoke by disabling the key",
+    "MDB-05": "Let the engine take its own security fixes: aws memorydb update-cluster --cluster-name <CLUSTER> --auto-minor-version-upgrade",
+    "MDB-06": "Multi-AZ needs at least one replica per shard, so add replicas rather than flipping a flag: aws memorydb update-cluster --cluster-name <CLUSTER> --replica-configuration ReplicaCount=1. Confirm the replicas landed in different availability zones afterwards",
+    "ELC-08": "Enable Multi-AZ so the group survives an availability-zone failure: aws elasticache modify-replication-group --replication-group-id <RG_ID> --multi-az-enabled --automatic-failover-enabled --apply-immediately. It needs at least one replica in another AZ, so add one first if there is none: aws elasticache increase-replica-count --replication-group-id <RG_ID> --new-replica-count 1 --apply-immediately",
     "IMGB-01": "Remove the wildcard principal from the Image Builder resource policy so the image and everything baked into it stops being shared beyond your account: aws imagebuilder put-image-policy --image-arn <ARN> --policy file://scoped-policy.json . Then audit the image for embedded credentials, since anyone could have pulled it",
     "XFER-01": "Stop accepting plain FTP -- credentials and file contents cross the network in the clear. Move the server to FTPS or SFTP, which carry the same workflow encrypted: aws transfer update-server --server-id <SERVER_ID> --protocols SFTP FTPS. Coordinate with clients before removing FTP",
     "XFER-02": "Attach a logging role so there is a record of who connected and which files moved: aws transfer update-server --server-id <SERVER_ID> --logging-role <ROLE_ARN>",
@@ -2511,6 +2613,12 @@ class AWSLiveScanner:
         self.attack_paths: List = []       # ranked AttackPath objects (Phase 4 correlate)
         self.choke_points: List = []       # ranked ChokePoint objects
         self._clients: Dict[str, object] = {}
+        # DB (cluster) parameter groups, cached per scan by (service, kind, name). A
+        # group is shared by every instance using it, and reading one is several pages
+        # of a few hundred parameters -- fetching it per instance would multiply that by
+        # the size of the fleet for no new information. A failed read caches None so it
+        # is attempted once rather than once per resource.
+        self._param_cache: Dict[tuple, Optional[List[Dict]]] = {}
         self._cred_report:  Optional[List[Dict]] = None
         self._cred_report_ok: bool = False
         self._all_regions:  Optional[List[str]]  = None
@@ -2670,6 +2778,39 @@ class AWSLiveScanner:
         # every Lambda deploy in the account.
         self._agent_lambda_names = set()
 
+    def _boto_config(self):
+        """The retry and identification policy every client is built with.
+
+        WHY THIS IS NOT THE DEFAULT'S PROBLEM TO SOLVE. botocore's default retry mode is
+        `legacy`: a small fixed number of attempts with no client-side rate limiting. That
+        is sized for an application making a handful of calls, and a scan is the opposite
+        shape — 94 sections, each enumerating a service, multiplied by every region when
+        --all-regions is set. The account most likely to throttle is the large one, which
+        is also the one whose posture matters most.
+
+        WHAT THROTTLING USED TO PRODUCE. Until the change that added this, a throttled
+        read did not merely go missing: 22 call sites reported the exception's own text
+        as a FAIL finding, five of them CRITICAL, each carrying that check's remediation.
+        So the estate most likely to throttle was the one most likely to be handed
+        fabricated findings. `_read_failed` fixed the reporting; this reduces how often
+        the situation arises at all.
+
+        ADAPTIVE, NOT JUST MORE ATTEMPTS. `adaptive` adds a client-side rate limiter that
+        slows down BEFORE being throttled, which is what stops a wide scan from spending
+        its retry budget fighting itself. `max_attempts` is raised to 10 for the same
+        reason a scan differs from an application: there is no user waiting on any single
+        call, and a section that gives up early reports silence that looks like a clean
+        result.
+
+        THE USER AGENT IS NOT DECORATION. It puts `OverWatch/<version>` in CloudTrail's
+        `userAgent` for every call this tool makes, so an operator reviewing their own
+        trail can tell our reads from anything else using the same role — which is the
+        first question asked when an unfamiliar burst of Describe calls shows up."""
+        return BotoConfig(  # type: ignore[name-defined]
+            retries={"max_attempts": 10, "mode": "adaptive"},
+            user_agent_extra=f"OverWatch/{VERSION}",
+        )
+
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
         if not HAS_BOTO3:
@@ -2680,7 +2821,8 @@ class AWSLiveScanner:
         if key not in self._clients:
             factory = self._session or boto3  # assumed-role session or ambient creds
             self._clients[key] = factory.client(  # type: ignore[name-defined]
-                service, region_name=region or self.region
+                service, region_name=region or self.region,
+                config=self._boto_config(),
             )
         return self._clients[key]
 
@@ -2910,7 +3052,8 @@ class AWSLiveScanner:
                 self._add("FAIL", "IAM-05", "IAM", "password-policy",
                           "No account password policy set")
             else:
-                self._add("FAIL", "IAM-05", "IAM", "password-policy", str(e))
+                self._read_failed("IAM-05", "IAM", "password-policy",
+                                  "iam:GetAccountPasswordPolicy", e)
 
         # IAM-06 — Stale access keys (>90 days)
         self._log("IAM-06: Stale access keys (>90 days)")
@@ -3045,9 +3188,19 @@ class AWSLiveScanner:
                 else:
                     self._add("FAIL", "S3-01", "S3", bname,
                               f"BPA NOT fully enabled | {bname}")
-            except Exception:
-                self._add("FAIL", "S3-01", "S3", bname,
-                          f"No BPA config | {bname}")
+            except Exception as e:
+                # ABSENCE AND REFUSAL ARE DIFFERENT ANSWERS, and S3 signals both by
+                # raising. NoSuchPublicAccessBlockConfiguration means the bucket
+                # genuinely has no Block Public Access config; AccessDenied means we
+                # were not allowed to look, which is common on buckets owned by another
+                # account. Stating the first for both asserts a fact about the bucket
+                # that was never established — the S3-07 defect the bucket-B pass fixed.
+                if self._error_code(e) == "NoSuchPublicAccessBlockConfiguration":
+                    self._add("FAIL", "S3-01", "S3", bname,
+                              f"No BPA config | {bname}")
+                else:
+                    self._read_failed("S3-01", "S3", bname,
+                                      "s3:GetBucketPublicAccessBlock", e)
 
             # Encryption
             try:
@@ -3059,9 +3212,18 @@ class AWSLiveScanner:
                 ]
                 self._add("PASS", "S3-03", "S3", bname,
                           f"Encryption={alg} | {bname}")
-            except Exception:
-                self._add("FAIL", "S3-03", "S3", bname,
-                          f"No default encryption | {bname}")
+            except Exception as e:
+                # Same split. ServerSideEncryptionConfigurationNotFoundError IS the
+                # detection here — S3 has no other way to say "no default encryption" —
+                # so it stays a FAIL. Everything else is a read we could not make.
+                if self._error_code(e) in (
+                        "ServerSideEncryptionConfigurationNotFoundError",
+                        "ServerSideEncryptionConfigurationNotFoundException"):
+                    self._add("FAIL", "S3-03", "S3", bname,
+                              f"No default encryption | {bname}")
+                else:
+                    self._read_failed("S3-03", "S3", bname,
+                                      "s3:GetEncryptionConfiguration", e)
 
             # Access logging
             try:
@@ -3274,7 +3436,8 @@ class AWSLiveScanner:
                                 found_any = True
         except Exception as e:
             sg_error = True
-            self._add("FAIL", "VPC-01", "VPC", "security-groups", str(e))
+            self._read_failed("VPC-01", "VPC", "security-groups",
+                              "ec2:DescribeSecurityGroups", e)
 
         if not found_any and not sg_error:
             self._add("PASS", "VPC-01", "VPC", "all-sgs",
@@ -3308,7 +3471,7 @@ class AWSLiveScanner:
                     self._add("FAIL", "VPC-03", "VPC", vid,
                               f"No Flow Logs | {vid}")
         except Exception as e:
-            self._add("FAIL", "VPC-03", "VPC", "vpcs", str(e))
+            self._read_failed("VPC-03", "VPC", "vpcs", "ec2:DescribeVpcs", e)
 
         # VPC-05 — NACL allows internet ingress to admin ports 22/3389. NACLs are STATELESS
         # and RuleNumber first-match-wins, so a low-numbered deny before an allow-all negates
@@ -3435,7 +3598,8 @@ class AWSLiveScanner:
                                   f"Trail '{t['Name']}' OK (multi-region, "
                                   "validation enabled, logging active)")
         except Exception as e:
-            self._add("FAIL", "LOG-01", "LOGGING", "cloudtrail", str(e))
+            self._read_failed("LOG-01", "LOGGING", "cloudtrail",
+                              "cloudtrail:DescribeTrails", e)
 
         # LOG-03 — AWS Config recorder
         self._log("LOG-03: AWS Config recorder status")
@@ -3455,7 +3619,8 @@ class AWSLiveScanner:
                     self._add("FAIL", "LOG-03", "LOGGING", r["name"],
                               f"AWS Config NOT recording | {r['name']}")
         except Exception as e:
-            self._add("FAIL", "LOG-03", "LOGGING", "config", str(e))
+            self._read_failed("LOG-03", "LOGGING", "config",
+                              "config:DescribeConfigurationRecorderStatus", e)
 
         # LOG-04 — GuardDuty
         self._log("LOG-04: GuardDuty enabled in current region")
@@ -3477,7 +3642,8 @@ class AWSLiveScanner:
                         self._add("FAIL", "LOG-04", "LOGGING", did,
                                   f"GuardDuty {status} | {did}")
         except Exception as e:
-            self._add("FAIL", "LOG-04", "LOGGING", "guardduty", str(e))
+            self._read_failed("LOG-04", "LOGGING", "guardduty",
+                              "guardduty:ListDetectors", e)
 
         # LOG-05 — Security Hub standards
         self._log("LOG-05: Security Hub standards")
@@ -3493,15 +3659,24 @@ class AWSLiveScanner:
                     self._add("PASS", "LOG-05", "LOGGING", std_name,
                               f"Security Hub standard: {std_name} — "
                               f"{s.get('StandardsStatus', '')}")
-        except ClientError as e:
-            code = e.response["Error"]["Code"]
-            if code in ("InvalidAccessException", "AccessDeniedException"):
+        except Exception as e:
+            # TWO ANSWERS, NOT ONE. InvalidAccessException and AccessDenied were treated
+            # as the same finding, and they are opposites: the first means Security Hub
+            # genuinely is not subscribed in this region (a real posture FAIL), the
+            # second means we were refused the read and know nothing about it. Reporting
+            # the second as the first states a fact about the account that was never
+            # established -- the S3-07 defect, in a third place.
+            #
+            # `except Exception`, not `except ClientError`: the name is bound only when
+            # boto3 imported (see the top of this module), so catching it by name raises
+            # NameError wherever boto3 is absent -- which is every environment the test
+            # suite runs in. Reading the code off whatever was raised works either way.
+            if self._error_code(e) == "InvalidAccessException":
                 self._add("FAIL", "LOG-05", "LOGGING", "securityhub",
                           "Security Hub not enabled in this region")
             else:
-                self._add("FAIL", "LOG-05", "LOGGING", "securityhub", str(e))
-        except Exception as e:
-            self._add("FAIL", "LOG-05", "LOGGING", "securityhub", str(e))
+                self._read_failed("LOG-05", "LOGGING", "securityhub",
+                                  "securityhub:GetEnabledStandards", e)
 
         # LOG-07..LOG-10 — CloudTrail configuration depth
         self._check_cloudtrail_config()
@@ -3577,6 +3752,96 @@ class AWSLiveScanner:
         if hasattr(e, "response"):
             code = (getattr(e, "response", {}) or {}).get("Error", {}).get("Code", "")
         return code in ("AccessDenied", "AccessDeniedException") or "AccessDenied" in str(e)
+
+    def _db_parameters(self, client, group: str, *, service: str,
+                       cluster: bool) -> List[Dict]:
+        """Every parameter in a DB (cluster) parameter group, once per group per scan.
+
+        Raises on a failed read rather than swallowing it — TLS enforcement is decided
+        from this listing, and an empty list would read as "the parameter is absent",
+        which the pure rule correctly reports as UNDECIDED but which would then be
+        indistinguishable from a group that genuinely lacks it. The caller turns the
+        exception into a `_read_failed` WARN, which says what actually happened.
+        """
+        key = (service, "cluster" if cluster else "instance", group)
+        if key in self._param_cache:
+            cached = self._param_cache[key]
+            if cached is None:
+                raise RuntimeError(
+                    f"{service} parameter group {group} could not be read earlier in "
+                    f"this scan")
+            return cached
+        op = ("describe_db_cluster_parameters" if cluster
+              else "describe_db_parameters")
+        kw = ({"DBClusterParameterGroupName": group} if cluster
+              else {"DBParameterGroupName": group})
+        params: List[Dict] = []
+        try:
+            for page in client.get_paginator(op).paginate(**kw):
+                params.extend(page.get("Parameters", []) or [])
+        except Exception:
+            self._param_cache[key] = None
+            raise
+        self._param_cache[key] = params
+        return params
+
+    def _check_tls_enforced(self, client, *, check_id: str, section: str,
+                            resource: str, engine: str, group: str,
+                            service: str, cluster: bool, action: str) -> None:
+        """One TLS-enforcement verdict, shared by RDS-14, AUR-06, DOCDB-06 and NEP-05.
+
+        The four checks differ only in which client holds the parameter group and
+        whether it is an instance or a cluster group; the decision itself is one pure
+        function, so it is written once.
+        """
+        if not group:
+            self._add("WARN", check_id, section, resource,
+                      f"{check_id} NOT EVALUATED — {resource} names no parameter "
+                      f"group, so TLS enforcement cannot be read")
+            return
+        try:
+            params = self._db_parameters(client, group, service=service,
+                                         cluster=cluster)
+        except Exception as e:
+            self._read_failed(check_id, section, resource, action, e)
+            return
+        r = aws_cis_db.tls_enforcement(engine, params, group)
+        if not r["known"]:
+            # Undecided is NOT a pass. Saying nothing here renders as "encrypted in
+            # transit" in a report, which is the failure this whole check exists to end.
+            self._add("WARN", check_id, section, resource,
+                      f"{r['statement']} | {resource}")
+        elif r["enforced"]:
+            self._add("PASS", check_id, section, resource,
+                      f"{r['statement']} | {resource}")
+        else:
+            self._add("FAIL", check_id, section, resource,
+                      f"{r['statement']} | {resource}")
+
+    def _read_failed(self, check_id: str, section: str, resource: str,
+                     action: str, e) -> None:
+        """A read we could not make is NOT a security finding. Report it as one.
+
+        THE DEFECT THIS REPLACES. Ten checks answered a failed AWS call with
+        ``_add("FAIL", <id>, ..., str(e))``, which is wrong twice over. First, a denied
+        or throttled call rendered as a FAIL carrying that check's remediation — advice
+        for a problem nobody observed, addressed to an operator whose actual problem is a
+        missing grant. Second, and worse, for all ten that error path was the check's
+        ONLY literal FAIL: `_add` reads severity, compliance and remediation from the
+        catalogue for no other status, so a check declared HIGH could reach HIGH only by
+        the call failing, while the misconfiguration it exists to find was a WARN forced
+        to LOW with no remediation. The catalogue described the error handler.
+
+        WARN, NOT INFO, AND NOT SILENCE. "We could not look" is not "nothing is wrong",
+        and dropping it would be the phantom-pass this codebase has removed elsewhere
+        (LOG-09's AccessDenied path, WINVULN-03's whole reason for existing). The
+        coverage ledger records the denial so the finding can say which grant would
+        answer the question."""
+        if self._is_access_denied(e):
+            self._coverage.note_denied(check_id, action)
+        self._add("WARN", check_id, section, resource,
+                  f"{check_id} NOT EVALUATED — {action} failed ({e}). "
+                  f"Not assessed, not clean")
 
     @staticmethod
     def _error_code(e) -> str:
@@ -3892,7 +4157,7 @@ class AWSLiveScanner:
                 self._add("WARN", "ENC-03", "KMS", "all-keys",
                           "No customer-managed KMS keys found")
         except Exception as e:
-            self._add("FAIL", "ENC-03", "KMS", "kms", str(e))
+            self._read_failed("ENC-03", "KMS", "kms", "kms:ListKeys", e)
 
     def _check_kms_key_policy(self, kms, kid: str, meta: Dict) -> None:
         """KMS-02 (public) / KMS-04 (cross-account or org) key-policy exposure. Its own
@@ -4041,7 +4306,7 @@ class AWSLiveScanner:
                 self._add("PASS", "EC2-04", "EC2", "all-instances",
                           "All EC2 instances enforce IMDSv2")
         except Exception as e:
-            self._add("FAIL", "EC2-04", "EC2", "ec2", str(e))
+            self._read_failed("EC2-04", "EC2", "ec2", "ec2:DescribeInstances", e)
 
         # EC2-06 — EBS volume encryption
         self._log("EC2-06: EBS volume encryption")
@@ -4057,7 +4322,7 @@ class AWSLiveScanner:
                           f"UNENCRYPTED EBS volume: {v['VolumeId']} "
                           f"State={v['State']}")
         except Exception as e:
-            self._add("FAIL", "EC2-06", "EC2", "ebs", str(e))
+            self._read_failed("EC2-06", "EC2", "ebs", "ec2:DescribeVolumes", e)
 
         # EC2-05 — EC2 instances with public IPs
         self._log("EC2-05: EC2 instances with public IPs")
@@ -4080,7 +4345,7 @@ class AWSLiveScanner:
                                       f"Public IP {i['PublicIpAddress']} on "
                                       f"{name} — verify if intentional")
         except Exception as e:
-            self._add("FAIL", "EC2-05", "EC2", "ec2", str(e))
+            self._read_failed("EC2-05", "EC2", "ec2", "ec2:DescribeInstances", e)
 
         # ── Phase 6 compute depth: SSM patch posture + launch-template/ASG IMDSv2
         # scale-out drift. Each sub-check is self-guarding; isolate so one failing does
@@ -5226,6 +5491,22 @@ class AWSLiveScanner:
                           f"IAM DB authentication=OFF — relies on static DB passwords "
                           f"| {iid} ({engine})")
 
+        # RDS-14 — TLS enforced for client connections.
+        # Every RDS engine ACCEPTS TLS; almost none REQUIRE it, and nothing in
+        # describe_db_instances says which. The setting lives in the instance parameter
+        # group, so this is the first check in the product to read one — the read is
+        # cached per group, because a group is shared by every instance using it.
+        self._log("RDS-14: TLS enforced for client connections")
+        for db in _rds_instances():
+            iid    = db["DBInstanceIdentifier"]
+            engine = db.get("Engine", "")
+            groups = db.get("DBParameterGroups") or []
+            group  = (groups[0] or {}).get("DBParameterGroupName", "") if groups else ""
+            self._check_tls_enforced(
+                rds, check_id="RDS-14", section="RDS", resource=iid,
+                engine=engine, group=group, service="rds", cluster=False,
+                action="rds:DescribeDBParameters")
+
         # RDS-06 — Public snapshot visibility  +  RDS-11 — snapshot encryption at rest
         self._log("RDS-06/RDS-11: RDS snapshot public visibility and encryption at rest")
         try:
@@ -5265,7 +5546,8 @@ class AWSLiveScanner:
                 self._add("PASS", "RDS-11", "RDS", "snapshots",
                           f"All {len(snaps)} manual RDS snapshots encrypted at rest")
         except Exception as e:
-            self._add("FAIL", "RDS-06", "RDS", "rds-snapshots", str(e))
+            self._read_failed("RDS-06", "RDS", "rds-snapshots",
+                              "rds:DescribeDBSnapshots", e)
 
         # RDS-12 — Instance engine end-of-life (Aurora skipped here; AUR-03 covers it at
         # the cluster level). Inline-paginate in OWN try/except — do NOT reuse
@@ -5315,6 +5597,13 @@ class AWSLiveScanner:
             self._add("WARN", "AUR-01", "RDS", "rds", f"describe_db_clusters failed: {e}")
             clusters = None
         if clusters is not None:
+            # DocumentDB and Neptune come back from this API too. They are scored by
+            # _check_docdb and _check_neptune under their own ids — see
+            # NON_AURORA_CLUSTER_ENGINES. Filter BEFORE the empty test, so an account
+            # holding only DocumentDB does not read as "no clusters" here.
+            clusters = [c for c in clusters
+                        if (c.get("Engine") or "").lower()
+                        not in NON_AURORA_CLUSTER_ENGINES]
             if not clusters:
                 self._add("INFO", "AUR-01", "RDS", "rds",
                           "No Aurora/Multi-AZ DB clusters found in this region")
@@ -5351,6 +5640,42 @@ class AWSLiveScanner:
                 else:
                     self._add("INFO", "AUR-03", "RDS", cid,
                               f"Cluster engine EOL not evaluable: {engine} {ev} | {cid}")
+                # AUR-06 — TLS enforced for client connections. A CLUSTER parameter for
+                # Aurora, which is why RDS-14 (the instance-group equivalent) cannot
+                # answer it: a Serverless v1 cluster has no instances to read at all.
+                self._check_tls_enforced(
+                    rds, check_id="AUR-06", section="RDS", resource=cid,
+                    engine=engine, group=cl.get("DBClusterParameterGroup", ""),
+                    service="rds", cluster=True,
+                    action="rds:DescribeDBClusterParameters")
+                # AUR-07 — CLUSTER backup retention. RDS-03 reads this from
+                # describe_db_instances, where for an Aurora cluster it is not the
+                # authoritative value and for a Serverless v1 cluster there is no
+                # instance to read at all. The threshold is <7 rather than ==0 because a
+                # cluster's minimum is 1 day: "backups off" is unreachable here, and the
+                # real gap is the DEFAULT of one day, which loses anything discovered
+                # more than a day late.
+                retention = cl.get("BackupRetentionPeriod")
+                if isinstance(retention, int) and retention < 7:
+                    self._add("FAIL", "AUR-07", "RDS", cid,
+                              f"Cluster backup retention={retention}d (recommend >=7) "
+                              f"| {cid} — a problem found later than that is "
+                              f"unrecoverable")
+                elif isinstance(retention, int):
+                    self._add("PASS", "AUR-07", "RDS", cid,
+                              f"Cluster backup retention={retention}d | {cid}")
+                # AUR-08 — CLUSTER IAM database authentication. Same split as AUR-07:
+                # RDS-08 reads the instance field, and the cluster owns this for Aurora.
+                if engine and not any(e in engine for e in
+                                      ("mysql", "postgres", "mariadb", "aurora")):
+                    pass                      # IAM auth is not offered on this engine
+                elif cl.get("IAMDatabaseAuthenticationEnabled") is True:
+                    self._add("PASS", "AUR-08", "RDS", cid,
+                              f"Cluster IAM DB authentication=ON | {cid} ({engine})")
+                elif cl.get("IAMDatabaseAuthenticationEnabled") is False:
+                    self._add("FAIL", "AUR-08", "RDS", cid,
+                              f"Cluster IAM DB authentication=OFF — relies on static DB "
+                              f"passwords | {cid} ({engine})")
 
         # AUR-04/05 — Aurora CLUSTER snapshots: public visibility + encryption at rest.
         # Distinct API + id-namespace from instance snapshots (RDS-06/11) — zero overlap.
@@ -5366,6 +5691,12 @@ class AWSLiveScanner:
                       f"describe_db_cluster_snapshots failed: {e}")
             csnaps = None
         if csnaps is not None:
+            # Same overlap as the cluster loop above: DBClusterSnapshot carries Engine,
+            # and DocumentDB/Neptune snapshots arrive here. DOCDB-01/05 and NEP-03/04
+            # own those.
+            csnaps = [s for s in csnaps
+                      if (s.get("Engine") or "").lower()
+                      not in NON_AURORA_CLUSTER_ENGINES]
             if not csnaps:
                 self._add("INFO", "AUR-04", "RDS", "cluster-snapshots",
                           "No manual Aurora/RDS cluster snapshots in this region")
@@ -5453,7 +5784,7 @@ class AWSLiveScanner:
         try:
             vaults = glacier.list_vaults(accountId="-")["VaultList"]
         except Exception as e:
-            self._add("FAIL", "GLC-01", "GLACIER", "glacier", str(e))
+            self._read_failed("GLC-01", "GLACIER", "glacier", "glacier:ListVaults", e)
             return
 
         if not vaults:
@@ -5575,7 +5906,7 @@ class AWSLiveScanner:
                     self._add("WARN", "SNS-01", "SNS", name,
                               f"SSE-KMS=OFF | {name}")
             except Exception as e:
-                self._add("FAIL", "SNS-01", "SNS", name, str(e))
+                self._read_failed("SNS-01", "SNS", name, "sns:GetTopicAttributes", e)
 
         # SNS-02 — Access policy wildcard check
         self._log("SNS-02: SNS topics — access policy (no wildcard Principal)")
@@ -5614,7 +5945,7 @@ class AWSLiveScanner:
                               f"Access policy OK (no unconstrained wildcard) "
                               f"| {name}")
             except Exception as e:
-                self._add("FAIL", "SNS-02", "SNS", name, str(e))
+                self._read_failed("SNS-02", "SNS", name, "sns:GetTopicAttributes", e)
 
         # SNS-03 — No insecure HTTP subscriptions
         self._log("SNS-03: SNS topics — no HTTP subscriptions")
@@ -5637,7 +5968,8 @@ class AWSLiveScanner:
                                   f"HTTPS subscription on '{name}' "
                                   f"→ {endpoint[:60]}")
             except Exception as e:
-                self._add("FAIL", "SNS-03", "SNS", name, str(e))
+                self._read_failed("SNS-03", "SNS", name,
+                                  "sns:ListSubscriptionsByTopic", e)
 
         # SNS-04 — Cross-account subscriptions
         self._log("SNS-04: SNS cross-account subscriptions")
@@ -5648,15 +5980,24 @@ class AWSLiveScanner:
                     endpoint = sub.get("Endpoint", "")
                     if endpoint.startswith("arn:aws") and ":" in endpoint:
                         parts = endpoint.split(":")
+                        # The trusted-account allowlist is what makes this a FAIL rather
+                        # than noise: a subscription to a partner account you have named
+                        # is a decision, one to an account nobody listed is a standing
+                        # copy of every message on the topic leaving the estate. Same
+                        # gate as LMB-14, AMI-05 and ECS-14.
+                        known = {str(a) for a in self.trusted_accounts}
+                        known.add(str(self.account))
                         if (len(parts) > 4
                                 and parts[4]
-                                and parts[4] != self.account):
+                                and parts[4] not in known):
                             topic_name = sub["TopicArn"].split(":")[-1]
-                            self._add("WARN", "SNS-04", "SNS", topic_name,
+                            self._add("FAIL", "SNS-04", "SNS", topic_name,
                                       f"Cross-account subscription | "
-                                      f"Topic={topic_name} → Account={parts[4]}")
+                                      f"Topic={topic_name} → Account={parts[4]}"
+                                      f" (not this account and not on the "
+                                      f"trusted-account list)")
         except Exception as e:
-            self._add("FAIL", "SNS-04", "SNS", "sns", str(e))
+            self._read_failed("SNS-04", "SNS", "sns", "sns:ListSubscriptions", e)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 12: AMAZON SQS
@@ -5668,7 +6009,7 @@ class AWSLiveScanner:
         try:
             queues = sqs.list_queues().get("QueueUrls", [])
         except Exception as e:
-            self._add("FAIL", "SQS-01", "SQS", "sqs", str(e))
+            self._read_failed("SQS-01", "SQS", "sqs", "sqs:ListQueues", e)
             return
 
         if not queues:
@@ -5696,7 +6037,7 @@ class AWSLiveScanner:
                     self._add("FAIL", "SQS-01", "SQS", name,
                               f"No encryption at rest | {name}")
             except Exception as e:
-                self._add("FAIL", "SQS-01", "SQS", name, str(e))
+                self._read_failed("SQS-01", "SQS", name, "sqs:GetQueueAttributes", e)
 
         # SQS-02 — Access policy (no unauthenticated public access)
         self._log("SQS-02: SQS queues — no unauthenticated public access")
@@ -5735,7 +6076,7 @@ class AWSLiveScanner:
                     self._add("PASS", "SQS-02", "SQS", name,
                               f"Queue policy OK | {name}")
             except Exception as e:
-                self._add("FAIL", "SQS-02", "SQS", name, str(e))
+                self._read_failed("SQS-02", "SQS", name, "sqs:GetQueueAttributes", e)
 
         # SQS-03 — Dead Letter Queue configured
         self._log("SQS-03: SQS queues — Dead Letter Queue configured")
@@ -5761,7 +6102,7 @@ class AWSLiveScanner:
                               f"No DLQ for queue '{name}' — "
                               "unprocessed messages may be lost")
             except Exception as e:
-                self._add("FAIL", "SQS-03", "SQS", name, str(e))
+                self._read_failed("SQS-03", "SQS", name, "sqs:GetQueueAttributes", e)
 
         # SQS-04 — Message retention and visibility timeout
         self._log("SQS-04: SQS queues — retention and visibility timeout")
@@ -5786,7 +6127,7 @@ class AWSLiveScanner:
                               f"Retention={ret_days:.1f}d "
                               f"VisibilityTimeout={visibility}s | {name}")
             except Exception as e:
-                self._add("FAIL", "SQS-04", "SQS", name, str(e))
+                self._read_failed("SQS-04", "SQS", name, "sqs:GetQueueAttributes", e)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 13: AMAZON CLOUDFRONT
@@ -5803,7 +6144,8 @@ class AWSLiveScanner:
                 "DistributionList", {}
             ).get("Items", [])
         except Exception as e:
-            self._add("FAIL", "CFN-01", "CLOUDFRONT", "cloudfront", str(e))
+            self._read_failed("CFN-01", "CLOUDFRONT", "cloudfront",
+                              "cloudfront:ListDistributions", e)
             return
 
         if not dists:
@@ -5970,7 +6312,8 @@ class AWSLiveScanner:
                     self._add("FAIL", "R53-01", "ROUTE53", zname,
                               f"Query logging DISABLED | {zname} {tag}")
         except Exception as e:
-            self._add("FAIL", "R53-01", "ROUTE53", "route53", str(e))
+            self._read_failed("R53-01", "ROUTE53", "route53",
+                              "route53:ListHostedZones", e)
 
         # R53-02 — DNSSEC signing on public zones
         self._log("R53-02: Route 53 — DNSSEC signing on public hosted zones")
@@ -6004,7 +6347,7 @@ class AWSLiveScanner:
                     self._add("WARN", "R53-02", "ROUTE53", zname,
                               f"Could not check DNSSEC for '{zname}': {de}")
         except Exception as e:
-            self._add("FAIL", "R53-02", "ROUTE53", "route53", str(e))
+            self._read_failed("R53-02", "ROUTE53", "route53", "route53:ListHostedZones", e)
 
         # R53-03 — Domain transfer lock + auto-renewal
         self._log("R53-03: Route 53 — domain transfer lock and auto-renewal")
@@ -6063,7 +6406,8 @@ class AWSLiveScanner:
                                   f"Health check {hcid} type={htype} "
                                   f"port={port}")
         except Exception as e:
-            self._add("FAIL", "R53-04", "ROUTE53", "health-checks", str(e))
+            self._read_failed("R53-04", "ROUTE53", "health-checks",
+                              "route53:ListHealthChecks", e)
 
         # R53-05 — Resolver DNS Firewall + query logging
         self._log("R53-05: Route 53 Resolver — DNS Firewall and query logging")
@@ -6436,7 +6780,8 @@ class AWSLiveScanner:
                           "No Bedrock VPC endpoints — traffic uses public "
                           "internet; consider PrivateLink for data isolation")
         except Exception as e:
-            self._add("FAIL", "BDR-04", "BEDROCK", "bedrock", str(e))
+            self._read_failed("BDR-04", "BEDROCK", "bedrock",
+                              "ec2:DescribeVpcEndpoints", e)
 
         # BDR-05 — IAM least privilege for Bedrock
         self._log("BDR-05: Bedrock — IAM permissions wildcard check")
@@ -6467,7 +6812,13 @@ class AWSLiveScanner:
                                 and resource == "*"
                             )
                             if bedrock_wild or broad_invoke:
-                                self._add("WARN", "BDR-05", "BEDROCK",
+                                # FAIL, not WARN. A customer-managed policy allowing
+                                # bedrock:* (or * ) on * is a definite over-grant, the
+                                # same class the IAM checks already FAIL for -- and
+                                # until this line changed, BDR-05's only FAIL was its
+                                # own error handler, so its declared HIGH was reachable
+                                # only by iam:ListPolicies throwing.
+                                self._add("FAIL", "BDR-05", "BEDROCK",
                                           policy["PolicyName"],
                                           f"Overly broad Bedrock permission in "
                                           f"policy '{policy['PolicyName']}' "
@@ -6481,7 +6832,7 @@ class AWSLiveScanner:
                           "No wildcard Bedrock permissions in "
                           "customer-managed policies")
         except Exception as e:
-            self._add("FAIL", "BDR-05", "BEDROCK", "iam", str(e))
+            self._read_failed("BDR-05", "BEDROCK", "iam", "iam:ListPolicies", e)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 16: AWS BEDROCK AGENT CORE
@@ -6795,7 +7146,7 @@ class AWSLiveScanner:
             for page in paginator.paginate():
                 funcs.extend(page["Functions"])
         except Exception as e:
-            self._add("FAIL", "LMB-01", "LAMBDA", "lambda", str(e))
+            self._read_failed("LMB-01", "LAMBDA", "lambda", "lambda:ListFunctions", e)
             return
         if not funcs:
             self._add("INFO", "LMB-01", "LAMBDA", "lambda",
@@ -8179,7 +8530,8 @@ class AWSLiveScanner:
             for page in paginator.paginate():
                 secrets.extend(page["SecretList"])
         except Exception as e:
-            self._add("FAIL", "SEC-01", "SECRETS", "secrets", str(e))
+            self._read_failed("SEC-01", "SECRETS", "secrets",
+                              "secretsmanager:ListSecrets", e)
             return
         if not secrets:
             self._add("INFO", "SEC-01", "SECRETS", "secrets",
@@ -8424,6 +8776,31 @@ class AWSLiveScanner:
                     self._add("FAIL", "ELC-06", "ELASTICACHE", rgid,
                               f"No RBAC user group — no per-user access control "
                               f"(relies on AUTH token / network isolation) | {rgid}")
+            # ELC-07 — automatic backups. A retention of 0 means ElastiCache takes no
+            # snapshots at all, so a flushed or corrupted cache is gone: for the many
+            # deployments that treat Redis as a datastore rather than a cache, that is
+            # data loss and not just a cold start. Replication groups are Redis/Valkey
+            # only, which is what keeps this off Memcached — where the field exists but
+            # means nothing, because Memcached cannot be snapshotted.
+            retention = rg.get("SnapshotRetentionLimit")
+            if isinstance(retention, int) and retention <= 0:
+                self._add("FAIL", "ELC-07", "ELASTICACHE", rgid,
+                          f"Automatic backups DISABLED (SnapshotRetentionLimit=0) "
+                          f"| {rgid} — nothing to restore from")
+            elif isinstance(retention, int):
+                self._add("PASS", "ELC-07", "ELASTICACHE", rgid,
+                          f"Snapshot retention={retention}d | {rgid}")
+            # ELC-08 — Multi-AZ. NOTE the shape: MultiAZ is a STRING enum
+            # ('enabled'/'disabled'), not a boolean, so a truthiness test would read
+            # 'disabled' as True and pass every unprotected group.
+            multi_az = str(rg.get("MultiAZ") or "").lower()
+            if multi_az == "enabled":
+                self._add("PASS", "ELC-08", "ELASTICACHE", rgid,
+                          f"Multi-AZ=ON | {rgid}")
+            elif multi_az == "disabled":
+                self._add("FAIL", "ELC-08", "ELASTICACHE", rgid,
+                          f"Multi-AZ=OFF | {rgid} — an AZ failure takes the cache with "
+                          f"it, and ELC-04's failover has nowhere to fail over to")
 
         # ELC-05 — Engine end-of-life. describe_replication_groups carries NO EngineVersion
         # (verified), so this uses describe_cache_clusters. Dedup by replication group so an
@@ -8586,7 +8963,7 @@ class AWSLiveScanner:
             for page in paginator.paginate():
                 tables.extend(page.get("TableNames", []))
         except Exception as e:
-            self._add("FAIL", "DDB-01", "DYNAMODB", "dynamodb", str(e))
+            self._read_failed("DDB-01", "DYNAMODB", "dynamodb", "dynamodb:ListTables", e)
             return
         if not tables:
             self._add("INFO", "DDB-01", "DYNAMODB", "dynamodb",
@@ -10081,8 +10458,11 @@ class AWSLiveScanner:
             if not nid:
                 continue
             try:
+                # `settings`, not `networkSettings` -- the latter is a key the operation
+                # does not have, so this read always yielded {} against real AWS and
+                # WKR-01 could never fire. See tests/test_aws_api_contract.py.
                 st = (wk.get_network_settings(networkId=nid) or {}
-                      ).get("networkSettings") or {}
+                      ).get("settings") or []
             except Exception as e:
                 if self._is_access_denied(e):
                     self._coverage.note_denied("WKR-01", "wickr:GetNetworkSettings")
@@ -11496,6 +11876,22 @@ class AWSLiveScanner:
             sid = (sn or {}).get("DBClusterSnapshotIdentifier")
             if not sid:
                 continue
+            # The docdb endpoint is a fork of the RDS control plane and these APIs are
+            # not reliably engine-scoped, so filter the way the RDS side now does. Only
+            # exclude a snapshot that POSITIVELY declares another engine — an absent
+            # Engine keeps the previous behaviour rather than silently dropping it.
+            sn_engine = ((sn or {}).get("Engine") or "").lower()
+            if sn_engine and sn_engine != "docdb":
+                continue
+            # DOCDB-05 — snapshot encryption at rest. Evaluated BEFORE the attribute
+            # read below, whose `continue` on failure would otherwise skip it.
+            if (sn or {}).get("StorageEncrypted") is False:
+                self._add("FAIL", "DOCDB-05", "DOCDB", sid,
+                          f"Manual DocumentDB cluster snapshot NOT encrypted at rest: "
+                          f"{sid} — a plaintext copy of the cluster that outlives it")
+            elif (sn or {}).get("StorageEncrypted") is True:
+                self._add("PASS", "DOCDB-05", "DOCDB", sid,
+                          f"DocumentDB cluster snapshot encrypted at rest | {sid}")
             try:
                 attrs = (docdb.describe_db_cluster_snapshot_attributes(
                     DBClusterSnapshotIdentifier=sid) or {}
@@ -11525,8 +11921,21 @@ class AWSLiveScanner:
                 for cid in ("DOCDB-02", "DOCDB-03"):
                     self._coverage.note_denied(cid, "rds:DescribeDBClusters")
         for c in (clusters or []):
+            c_engine = ((c or {}).get("Engine") or "").lower()
+            if c_engine and c_engine != "docdb":
+                continue
             r = aws_extsvc.docdb_cluster_posture(c)
             cid_ = r["id"] or "?"
+            # DOCDB-04 — deletion protection. docdb_cluster_posture has always computed
+            # this and nothing consumed it; until now the only thing reporting it was
+            # AUR-02, which reached DocumentDB clusters by accident.
+            if r["deletion_protection_known"] and not r["deletion_protection"]:
+                self._add("FAIL", "DOCDB-04", "DOCDB", cid_,
+                          f"DocumentDB cluster deletion protection=OFF | {cid_} — one "
+                          f"API call from permanent loss of the whole cluster")
+            elif r["deletion_protection"]:
+                self._add("PASS", "DOCDB-04", "DOCDB", cid_,
+                          f"DocumentDB cluster deletion protection=ON | {cid_}")
             if r["encryption_known"] and not r["encrypted"]:
                 self._add("FAIL", "DOCDB-02", "DOCDB", cid_, f"{r['statement']} | {cid_}")
             elif r["encrypted"]:
@@ -11538,6 +11947,321 @@ class AWSLiveScanner:
             else:
                 self._add("PASS", "DOCDB-03", "DOCDB", cid_,
                           f"DocumentDB cluster {cid_} exports audit logs | {cid_}")
+            # DOCDB-06 — TLS enforced. DocumentDB ships with tls=enabled, but it is a
+            # cluster parameter and can be turned off, and nothing in
+            # describe_db_clusters reports it.
+            self._check_tls_enforced(
+                docdb, check_id="DOCDB-06", section="DOCDB", resource=cid_,
+                engine=(c or {}).get("Engine") or "docdb",
+                group=(c or {}).get("DBClusterParameterGroup", ""),
+                service="docdb", cluster=True,
+                action="rds:DescribeDBClusterParameters")
+
+    def _check_neptune(self):
+        """NEP-01..04 — Amazon Neptune clusters and manual cluster snapshots.
+
+        Neptune is a separate service sharing the RDS control plane, so
+        rds:DescribeDBClusters returns Neptune clusters. Until NON_AURORA_CLUSTER_ENGINES
+        existed the Aurora checks scored them: the findings were real, but they carried
+        Aurora ids and Aurora remediation, so a Neptune graph database looked covered
+        while nothing in the product knew what Neptune was. These four ids are that
+        coverage, named correctly — and they are the reason the Aurora filter is not a
+        coverage regression."""
+        self._section_header("NEPTUNE")
+        try:
+            nep = self._client("neptune")
+        except Exception:
+            return
+
+        # ── NEP-01 encryption at rest, NEP-02 deletion protection ────────────────
+        try:
+            clusters = []
+            for page in nep.get_paginator("describe_db_clusters").paginate():
+                clusters.extend(page.get("DBClusters", []))
+        except Exception as e:
+            self._read_failed("NEP-01", "NEPTUNE", "neptune",
+                              "neptune:DescribeDBClusters", e)
+            clusters = None
+
+        if clusters is not None:
+            # The Neptune endpoint is a fork of the RDS control plane and is not reliably
+            # engine-scoped. Only drop a cluster that POSITIVELY declares another engine;
+            # an absent Engine is kept rather than silently discarded.
+            clusters = [c for c in clusters
+                        if ((c or {}).get("Engine") or "neptune").lower() == "neptune"]
+            if not clusters:
+                self._add("INFO", "NEP-01", "NEPTUNE", "neptune",
+                          "No Neptune clusters found in this region")
+            for cl in clusters:
+                cid = cl.get("DBClusterIdentifier", "unknown")
+                enc = cl.get("StorageEncrypted")
+                if enc is False:
+                    self._add("FAIL", "NEP-01", "NEPTUNE", cid,
+                              f"Neptune cluster storage encryption=OFF | {cid} — cannot "
+                              f"be enabled in place; needs a restore into a new cluster")
+                elif enc is True:
+                    self._add("PASS", "NEP-01", "NEPTUNE", cid,
+                              f"Neptune cluster storage encryption=ON | {cid}")
+                dp = cl.get("DeletionProtection")
+                if dp is False:
+                    self._add("FAIL", "NEP-02", "NEPTUNE", cid,
+                              f"Neptune cluster deletion protection=OFF | {cid} — one "
+                              f"API call from permanent loss of the whole graph")
+                elif dp is True:
+                    self._add("PASS", "NEP-02", "NEPTUNE", cid,
+                              f"Neptune cluster deletion protection=ON | {cid}")
+                # NEP-05 — TLS enforced (neptune_enforce_ssl).
+                self._check_tls_enforced(
+                    nep, check_id="NEP-05", section="NEPTUNE", resource=cid,
+                    engine=cl.get("Engine") or "neptune",
+                    group=cl.get("DBClusterParameterGroup", ""),
+                    service="neptune", cluster=True,
+                    action="rds:DescribeDBClusterParameters")
+
+        # ── NEP-03 snapshot public visibility, NEP-04 snapshot encryption ────────
+        try:
+            snaps = []
+            for page in nep.get_paginator("describe_db_cluster_snapshots").paginate(
+                    SnapshotType="manual"):
+                snaps.extend(page.get("DBClusterSnapshots", []))
+        except Exception as e:
+            self._read_failed("NEP-03", "NEPTUNE", "neptune",
+                              "neptune:DescribeDBClusterSnapshots", e)
+            snaps = None
+
+        if snaps is not None:
+            snaps = [s for s in snaps
+                     if ((s or {}).get("Engine") or "neptune").lower() == "neptune"]
+            if not snaps:
+                self._add("INFO", "NEP-03", "NEPTUNE", "cluster-snapshots",
+                          "No manual Neptune cluster snapshots in this region")
+            for sn in snaps:
+                sid = (sn or {}).get("DBClusterSnapshotIdentifier")
+                if not sid:
+                    continue
+                # Encryption first: the attribute read below bails out on failure, and
+                # a visibility read we could not make must not also cost us this.
+                if sn.get("StorageEncrypted") is False:
+                    self._add("FAIL", "NEP-04", "NEPTUNE", sid,
+                              f"Manual Neptune cluster snapshot NOT encrypted at rest: "
+                              f"{sid} — a plaintext copy of the graph that outlives it")
+                elif sn.get("StorageEncrypted") is True:
+                    self._add("PASS", "NEP-04", "NEPTUNE", sid,
+                              f"Neptune cluster snapshot encrypted at rest | {sid}")
+                try:
+                    attrs = (nep.describe_db_cluster_snapshot_attributes(
+                        DBClusterSnapshotIdentifier=sid) or {}
+                    ).get("DBClusterSnapshotAttributesResult", {}).get(
+                        "DBClusterSnapshotAttributes") or []
+                except Exception as e:
+                    # NOT a PASS. Visibility is undetermined, and saying nothing here
+                    # would read as "not public" in the report.
+                    self._read_failed("NEP-03", "NEPTUNE", sid,
+                                      "neptune:DescribeDBClusterSnapshotAttributes", e)
+                    continue
+                if any((a or {}).get("AttributeName") == "restore"
+                       and "all" in ((a or {}).get("AttributeValues") or [])
+                       for a in attrs):
+                    self._add("FAIL", "NEP-03", "NEPTUNE", sid,
+                              f"Neptune cluster snapshot PUBLICLY RESTORABLE by any AWS "
+                              f"account: {sid} — CRITICAL")
+                else:
+                    self._add("PASS", "NEP-03", "NEPTUNE", sid,
+                              f"Neptune cluster snapshot {sid} is not shared publicly "
+                              f"| {sid}")
+
+    def _check_memorydb(self):
+        """MDB-01..06 — Amazon MemoryDB.
+
+        MemoryDB had no posture coverage at all: the client was constructed exactly once
+        in the whole product, for DSPM crown-jewel discovery, so an account could hold a
+        durable Redis datastore with unauthenticated access and OverWatch would report
+        nothing about it.
+
+        MDB-02 is the reason this section is worth having. MemoryDB authenticates through
+        ACLs of named users, and a user's Authentication.Type is one of 'password',
+        'no-password' or 'iam'. A 'no-password' user can be connected as by anything that
+        reaches the endpoint, and MemoryDB creates one by default — so the common case is
+        a cluster whose only protection is its security group."""
+        self._section_header("MEMORYDB")
+        try:
+            mdb = self._client("memorydb")
+        except Exception:
+            return
+
+        # Users and ACLs first: MDB-02 needs both, and a cluster names only its ACL.
+        open_users, acl_open = frozenset(), {}
+        acl_known = True
+        try:
+            users = []
+            for page in mdb.get_paginator("describe_users").paginate():
+                users.extend(page.get("Users", []) or [])
+            acls = []
+            for page in mdb.get_paginator("describe_acls").paginate():
+                acls.extend(page.get("ACLs", []) or [])
+            open_users = aws_cis_db.memorydb_open_users(users)
+            acl_open = aws_cis_db.memorydb_acl_open_users(acls, open_users)
+        except Exception as e:
+            # Without the ACL listing MDB-02 is UNDECIDED for every cluster. Say so once
+            # here rather than emitting a per-cluster verdict that is not one.
+            acl_known = False
+            self._read_failed("MDB-02", "MEMORYDB", "memorydb",
+                              "memorydb:DescribeACLs", e)
+
+        try:
+            clusters = []
+            for page in mdb.get_paginator("describe_clusters").paginate():
+                clusters.extend(page.get("Clusters", []) or [])
+        except Exception as e:
+            self._read_failed("MDB-01", "MEMORYDB", "memorydb",
+                              "memorydb:DescribeClusters", e)
+            return
+
+        if not clusters:
+            self._add("INFO", "MDB-01", "MEMORYDB", "memorydb",
+                      "No MemoryDB clusters found in this region")
+            return
+
+        for c in clusters:
+            name = (c or {}).get("Name") or "unknown"
+            # MDB-01 — TLS. MemoryDB enables it at creation and it cannot be changed
+            # afterwards, so False here means the cluster was created that way.
+            tls = c.get("TLSEnabled")
+            if tls is False:
+                self._add("FAIL", "MDB-01", "MEMORYDB", name,
+                          f"TLS DISABLED | {name} — client traffic crosses the VPC in "
+                          f"cleartext and this cannot be changed on an existing cluster")
+            elif tls is True:
+                self._add("PASS", "MDB-01", "MEMORYDB", name, f"TLS enabled | {name}")
+
+            # MDB-02 — unauthenticated access through the cluster's ACL.
+            acl_name = (c.get("ACLName") or "").strip()
+            if not acl_known:
+                pass                      # already reported once, above
+            elif not acl_name:
+                self._add("WARN", "MDB-02", "MEMORYDB", name,
+                          f"MDB-02 NOT EVALUATED — {name} names no ACL")
+            elif acl_name in acl_open:
+                who = ", ".join(acl_open[acl_name])
+                self._add("FAIL", "MDB-02", "MEMORYDB", name,
+                          f"UNAUTHENTICATED ACCESS | {name} — ACL {acl_name} grants "
+                          f"passwordless user(s) {who}, so anything that reaches the "
+                          f"endpoint can connect")
+            else:
+                self._add("PASS", "MDB-02", "MEMORYDB", name,
+                          f"ACL {acl_name} grants no passwordless user | {name}")
+
+            # MDB-03 — automatic snapshots. MemoryDB is a durable datastore rather than
+            # a cache, so this is data-loss exposure and not a warm-up cost.
+            retention = c.get("SnapshotRetentionLimit")
+            if isinstance(retention, int) and retention <= 0:
+                self._add("FAIL", "MDB-03", "MEMORYDB", name,
+                          f"Automatic snapshots DISABLED | {name} — nothing to restore "
+                          f"a durable datastore from")
+            elif isinstance(retention, int):
+                self._add("PASS", "MDB-03", "MEMORYDB", name,
+                          f"Snapshot retention={retention}d | {name}")
+
+            # MDB-04 — key ownership. MemoryDB is ALWAYS encrypted at rest, so this is
+            # not "unencrypted"; it is whether you hold the key. LOW on purpose.
+            if c.get("KmsKeyId"):
+                self._add("PASS", "MDB-04", "MEMORYDB", name,
+                          f"Encrypted with a customer-managed key | {name}")
+            else:
+                self._add("FAIL", "MDB-04", "MEMORYDB", name,
+                          f"Encrypted with the AWS-owned key rather than a "
+                          f"customer-managed key | {name} — no key policy to audit and "
+                          f"no way to revoke access by disabling the key")
+
+            # MDB-05 — engine patching.
+            amu = c.get("AutoMinorVersionUpgrade")
+            if amu is False:
+                self._add("FAIL", "MDB-05", "MEMORYDB", name,
+                          f"Auto minor version upgrade=OFF | {name} — engine security "
+                          f"fixes require a manual upgrade nobody is scheduled to do")
+            elif amu is True:
+                self._add("PASS", "MDB-05", "MEMORYDB", name,
+                          f"Auto minor version upgrade=ON | {name}")
+
+            # MDB-06 — availability mode. A STRING enum ('singleaz'/'multiaz'), so this
+            # decides on the recognised values only.
+            mode = str(c.get("AvailabilityMode") or "").strip().lower()
+            if mode == "singleaz":
+                self._add("FAIL", "MDB-06", "MEMORYDB", name,
+                          f"Single-AZ | {name} — an availability-zone failure takes the "
+                          f"datastore with it")
+            elif mode == "multiaz":
+                self._add("PASS", "MDB-06", "MEMORYDB", name, f"Multi-AZ | {name}")
+
+    def _check_timestream(self):
+        """TS-01/02 — Amazon Timestream magnetic-store write rejection.
+
+        Timestream held DSPM crown-jewel discovery only. Both checks are about the same
+        overlooked surface: when magnetic-store writes are on, records that fail
+        validation are diverted to an S3 bucket the SERVICE writes on your behalf, which
+        is customer data in a location no other check looks at.
+
+        list_databases and list_tables declare NO paginators (timestream-write ships
+        none), which is what broke `_dspm_timestream` until it was fixed to walk
+        NextToken with `_tokens`. Same approach here rather than the same bug."""
+        self._section_header("TIMESTREAM")
+        try:
+            ts = self._client("timestream-write")
+        except Exception:
+            return
+
+        try:
+            databases = self._tokens(ts.list_databases, "Databases")
+        except Exception as e:
+            self._read_failed("TS-01", "TIMESTREAM", "timestream",
+                              "timestream:ListDatabases", e)
+            return
+
+        tables = []
+        for db in (databases or []):
+            dname = (db or {}).get("DatabaseName")
+            if not dname:
+                continue
+            try:
+                tables.extend(self._tokens(ts.list_tables, "Tables",
+                                           DatabaseName=dname) or [])
+            except Exception as e:
+                self._read_failed("TS-01", "TIMESTREAM", dname,
+                                  "timestream:ListTables", e)
+
+        if not tables:
+            self._add("INFO", "TS-01", "TIMESTREAM", "timestream",
+                      "No Timestream tables found in this region")
+            return
+
+        for t in tables:
+            res = f"{(t or {}).get('DatabaseName', '?')}.{(t or {}).get('TableName', '?')}"
+            props = (t or {}).get("MagneticStoreWriteProperties") or {}
+            if props.get("EnableMagneticStoreWrites") is not True:
+                continue                  # nothing is being diverted anywhere
+            loc = ((props.get("MagneticStoreRejectedDataLocation") or {})
+                   .get("S3Configuration") or {})
+            if not loc.get("BucketName"):
+                # TS-02 — writes on, nowhere for rejects to go. Records that fail
+                # validation are dropped with no copy and no way to learn what was lost.
+                self._add("FAIL", "TS-02", "TIMESTREAM", res,
+                          f"Magnetic-store writes enabled with NO rejected-data "
+                          f"location | {res} — records that fail validation are "
+                          f"discarded silently")
+                continue
+            self._add("PASS", "TS-02", "TIMESTREAM", res,
+                      f"Rejected magnetic-store writes are captured to "
+                      f"s3://{loc['BucketName']} | {res}")
+            # TS-01 — how that diverted customer data is encrypted.
+            opt = str(loc.get("EncryptionOption") or "").strip().upper()
+            if opt == "SSE_S3":
+                self._add("FAIL", "TS-01", "TIMESTREAM", res,
+                          f"Rejected-data bucket s3://{loc['BucketName']} uses SSE-S3 "
+                          f"rather than a KMS key | {res} — customer records land there "
+                          f"under a key you neither control nor can audit")
+            elif opt == "SSE_KMS":
+                self._add("PASS", "TS-01", "TIMESTREAM", res,
+                          f"Rejected-data bucket uses SSE-KMS | {res}")
 
     def _check_imagebuilder(self):
         """IMGB-01 resource policies, plus IMGB-02/03 (CIS-Compute 17.1, 17.2).
@@ -17240,11 +17964,17 @@ class AWSLiveScanner:
                             aws_deepplane.DSPM_READ_ACTIONS["fsxfilesystem"])
 
     def _dspm_timestream(self, g, roles):
+        # NOT get_paginator. timestream-write declares no paginators for ListDatabases
+        # or ListTables, so `client.get_paginator("list_databases")` raises
+        # OperationNotPageableError before a single call is made -- which the handler
+        # below then reported as "could not enumerate", every scan, forever. Timestream
+        # coverage had therefore never worked against real AWS and looked, in the
+        # report, exactly like an account with no Timestream in it. Both operations do
+        # page, on a plain NextToken, which is what `_tokens` walks.
+        # Found by tests/test_aws_api_contract.py.
         try:
             ts = self._client("timestream-write")
-            dbs: List[Dict] = []
-            for page in ts.get_paginator("list_databases").paginate():
-                dbs += page.get("Databases", [])
+            dbs: List[Dict] = self._tokens(ts.list_databases, "Databases")
         except Exception as e:
             self._add("INFO", "DSPM-01", "DATA", "timestream",
                       f"Could not enumerate Timestream databases in {self.region}: {e}")
@@ -17252,9 +17982,8 @@ class AWSLiveScanner:
         for db in dbs:
             dbname = db.get("DatabaseName", "")
             try:
-                tables: List[Dict] = []
-                for page in ts.get_paginator("list_tables").paginate(DatabaseName=dbname):
-                    tables += page.get("Tables", [])
+                tables: List[Dict] = self._tokens(ts.list_tables, "Tables",
+                                                  DatabaseName=dbname)
             except Exception:
                 continue
             for t in tables:
@@ -17784,6 +18513,9 @@ class AWSLiveScanner:
             "EMR":            self._check_emr,
             "CODEBUILD":      self._check_codebuild,
             "DOCDB":          self._check_docdb,
+            "NEPTUNE":        self._check_neptune,
+            "MEMORYDB":       self._check_memorydb,
+            "TIMESTREAM":     self._check_timestream,
             "IMAGEBUILDER":   self._check_imagebuilder,
             "TRANSFER":       self._check_transfer,
             "NETWORKFIREWALL": self._check_networkfirewall,

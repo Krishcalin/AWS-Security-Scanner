@@ -17,7 +17,7 @@ carries neither - so a check that never fails never renders what the catalogue
 advertises for it.
 
 
-**503 registered checks.** 409 are proven to FAIL in the suite; 61 run but have never been driven to a failure; 33 were never observed at all.
+**525 registered checks.** 435 are proven to FAIL in the suite; 62 run but have never been driven to a failure; 28 were never observed at all.
 
 
 ## Never observed
@@ -25,9 +25,7 @@ advertises for it.
 No test makes these emit anything. Each is registered in all four metadata maps and counted in the catalogue total.
 
 - `AMP-01` (declared MEDIUM)
-- `BDR-04` (declared MEDIUM)
 - `CGP-01` (declared MEDIUM)
-- `CWPP-01` (declared HIGH)
 - `DATA-03` (declared MEDIUM)
 - `DSQL-01` (declared MEDIUM)
 - `FMS-01` (declared MEDIUM)
@@ -39,7 +37,6 @@ No test makes these emit anything. Each is registered in all four metadata maps 
 - `MPV-01` (declared MEDIUM)
 - `NWM-01` (declared MEDIUM)
 - `SEC-04` (declared LOW)
-- `SEG-02` (declared HIGH)
 - `SEG-06` (declared LOW)
 - `SFN-01` (declared MEDIUM)
 - `SFN-02` (declared LOW)
@@ -52,10 +49,8 @@ No test makes these emit anything. Each is registered in all four metadata maps 
 - `SM-24` (declared MEDIUM)
 - `SM-26` (declared MEDIUM)
 - `SM-27` (declared LOW)
-- `SNS-04` (declared MEDIUM)
 - `THREAT-02` (declared MEDIUM)
 - `VPC-03` (declared MEDIUM)
-- `VULN-03` (declared HIGH)
 - `WAF-01` (declared HIGH)
 
 
@@ -76,14 +71,15 @@ These emit only WARN/INFO/PASS in the suite. Where the declared severity is abov
 | `AILOG-06` | LOW | WARN |
 | `APIGW-04` | LOW | PASS/WARN |
 | `BDR-03` | LOW | INFO |
-| `BDR-05` | HIGH | PASS |
+| `BDR-04` | LOW | WARN |
 | `CNT-05` | LOW | PASS/WARN |
 | `COG-04` | LOW | PASS/WARN |
-| `DDB-01` | HIGH | PASS |
+| `DDB-01` | LOW | PASS/WARN |
 | `DDB-03` | LOW | INFO/PASS |
 | `DDB-04` | MEDIUM | PASS |
 | `DIRSVC-02` | LOW | PASS |
 | `EBS-05` | LOW | WARN |
+| `EC2-05` | LOW | WARN |
 | `EC2-09` | LOW | WARN |
 | `EFS-03` | LOW | WARN |
 | `EKS-04` | LOW | INFO |
@@ -104,9 +100,9 @@ These emit only WARN/INFO/PASS in the suite. Where the declared severity is abov
 | `NFW-01` | MEDIUM | PASS |
 | `NFW-03` | MEDIUM | PASS |
 | `OSR-03` | MEDIUM | PASS |
-| `R53-02` | MEDIUM | WARN |
+| `R53-02` | LOW | WARN |
 | `R53-04` | LOW | INFO/WARN |
-| `RDS-05` | LOW | WARN |
+| `RDS-05` | LOW | PASS/WARN |
 | `RDS-13` | LOW | WARN |
 | `RS-05` | LOW | PASS/WARN |
 | `RS-07` | LOW | PASS/WARN |
@@ -118,8 +114,8 @@ These emit only WARN/INFO/PASS in the suite. Where the declared severity is abov
 | `SHAI-03` | MEDIUM | PASS/WARN |
 | `SM-22` | MEDIUM | PASS |
 | `SM-25` | MEDIUM | PASS |
-| `SNS-01` | MEDIUM | WARN |
-| `SQS-03` | MEDIUM | WARN |
+| `SNS-01` | LOW | PASS/WARN |
+| `SQS-03` | LOW | WARN |
 | `SQS-04` | LOW | PASS |
 | `VPC-06` | LOW | INFO/PASS/WARN |
 | `WINVULN-03` | LOW | INFO/WARN |

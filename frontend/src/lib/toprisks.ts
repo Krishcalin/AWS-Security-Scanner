@@ -67,7 +67,8 @@ export const RISK_CATEGORIES: RiskCategory[] = [
   {
     slug: 'data', title: 'Data Security', icon: Database,
     prefixes: ['DSPM-', 'DATA-', 'EXTACCESS-', 'S3-', 'S3T-', 'RDS-', 'DDB-', 'AUR-',
-      'DOCDB-', 'DSQL-', 'EFS-', 'RS-', 'RSS-', 'OSR-', 'EBS-', 'GLC-', 'BCK-',
+      'DOCDB-', 'NEP-', 'MDB-', 'TS-', 'DSQL-', 'EFS-', 'RS-', 'RSS-', 'OSR-',
+      'EBS-', 'GLC-', 'BCK-',
       'SGW-', 'LF-', 'EMR-', 'QS-', 'AMP-'],
     seeAll: '/data-security',
   },

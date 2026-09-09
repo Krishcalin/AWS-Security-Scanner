@@ -356,15 +356,16 @@ def test_dspm_timestream_crown_with_reader():
     tbl = f"arn:aws:timestream:us-east-1:{ACCT}:database/db/table/metrics"
     s, g = _dspm_scanner([_role("ts-reader", [_stmt("Allow", {"timestream:select"}, {tbl.lower()})])])
     ts = MagicMock()
-
-    def get_pag(op):
-        p = MagicMock()
-        if "databases" in op:
-            p.paginate.return_value = [{"Databases": [{"DatabaseName": "db"}]}]
-        else:
-            p.paginate.return_value = [{"Tables": [{"TableName": "metrics", "Arn": tbl}]}]
-        return p
-    ts.get_paginator.side_effect = get_pag
+    # NOT a paginator. timestream-write declares none for ListDatabases/ListTables, so
+    # `get_paginator(...)` raises OperationNotPageableError against real AWS -- which
+    # the section's handler reported as "could not enumerate", every scan. This fixture
+    # used to supply the paginator the API does not have, so the test passed while the
+    # code could never work. Both page on a plain NextToken.
+    ts.get_paginator.side_effect = AssertionError(
+        "timestream-write has no paginators; the code must walk NextToken")
+    ts.list_databases.return_value = {"Databases": [{"DatabaseName": "db"}]}
+    ts.list_tables.return_value = {
+        "Tables": [{"TableName": "metrics", "Arn": tbl}]}
     ts.list_tags_for_resource.return_value = {"Tags": [_tag("DataClassification", "confidential")]}
     s._clients["timestream-write:us-east-1"] = ts
     s._collect_dspm(g)

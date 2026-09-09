@@ -6,6 +6,77 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — a failed read is no longer reported as a security finding
+
+Ten checks answered a failed AWS call with `_add("FAIL", <id>, ..., str(e))` — the
+exception's text, as the finding. That was wrong twice over. A denied or throttled
+call produced a **FAIL carrying that check's remediation**, telling an operator to fix
+a misconfiguration nobody observed when their real problem was a missing grant. And
+for all ten that error path was the check's **only** literal FAIL, so — because `_add`
+reads severity, compliance and remediation from the catalogue for no other status —
+the declared severity was reachable only by the call breaking, while the
+misconfiguration the check exists to find emitted WARN, forced to LOW with no
+remediation. The catalogue was describing the error handler.
+
+Nothing asserted any of it: removing the whole shape broke no existing test.
+
+- **`AWSLiveScanner._read_failed` replaces all ten sites** (BDR-04, BDR-05, DDB-01,
+  EC2-05, R53-02, R53-04, SNS-01, SNS-04, SQS-03, SQS-04). A failed read now emits
+  WARN — never silence, which would be a phantom pass — names the action that failed,
+  and records the denial in the coverage ledger.
+- **Two conditions earned a real FAIL.** `BDR-05` (a customer-managed policy allowing
+  `bedrock:*` or `*` on `*`, the same class the IAM checks already FAIL for) and
+  `SNS-04` (a cross-account subscription), the latter now gated on the
+  trusted-account allowlist so a named partner account is a decision rather than a
+  finding — the same gate as `LMB-14`, `AMI-05` and `ECS-14`.
+- **Six severities corrected to LOW** — `BDR-04`, `DDB-01`, `EC2-05`, `R53-02`,
+  `SNS-01`, `SQS-03`. Each describes a hardening preference or an
+  honest could-not-determine ("consider PrivateLink", "consider CMK", "verify if
+  intentional"), so the code was right and the catalogue was not. No scoring change:
+  a WARN already rendered LOW. Three of the six were declared **twice** in
+  `CHECK_SEVERITY`, so every occurrence was replaced — editing the first does nothing,
+  silently.
+- **Two tripwires.** No check declared above LOW may have its only FAIL inside an
+  `except` handler (`S3-03` is exempt and justified: `get_bucket_encryption` raises
+  when a bucket has no default encryption, so there the exception *is* the signal).
+  And the count of FAIL findings whose message is just an exception's text is now
+  ratcheted, shrink-only.
+
+**All 32 sites are now converted** (the ten above plus 22 more in checks that also had
+real FAIL paths, five of them CRITICAL — a throttled `DescribeTrails` produced a
+CRITICAL `LOG-01: <boto error text>`). The ratchet floor is zero.
+
+- **Absence is not refusal.** `S3-01`, `S3-03` and `LOG-05` each signalled both by
+  raising and reported the first for both — "No BPA config", "No default encryption",
+  "Security Hub not enabled in this region" — asserting facts about the account that
+  had never been established. All three now split on the error code;
+  `ServerSideEncryptionConfigurationNotFoundError` and `InvalidAccessException` stay
+  FAILs because there they *are* the detection.
+- **A second false proof fell out.** `VPC-01` left `CHECK_FIRING`'s proven-failing set
+  when its error path stopped being a FAIL: the product's most recognisable check —
+  a security group opening SSH to `0.0.0.0/0` — had only ever been certified by a test
+  that made `DescribeSecurityGroups` throw. It now has driving tests for the real path.
+
+### Changed — every AWS client is built with a retry and identification policy
+
+`_client()` passed no botocore `Config`, so all 94 sections ran on the default `legacy`
+retry mode: a fixed handful of attempts, no client-side rate limiting. That is sized for
+an application making a few calls, not a scan enumerating 94 services across every
+region — and the account most likely to throttle is the large one whose posture matters
+most, which was also the one most likely to be handed the fabricated findings above.
+
+- `retries={"mode": "adaptive", "max_attempts": 10}` — adaptive adds the rate limiter
+  that slows down *before* being throttled; more attempts alone just spends the budget
+  faster.
+- `user_agent_extra="OverWatch/<version>"`, so an operator reviewing their own
+  CloudTrail can tell our reads from anything else using the same role.
+
+Note for contributors: **boto3 is not installed in the test environment**, so
+`HAS_BOTO3` is False and `_client()` had never been executed by any of the ~6000 tests —
+every AWS client in the suite is a `MagicMock` injected straight into `_clients`. That
+is why nothing caught the missing retry policy. The new tests supply the two names the
+real import would have bound rather than skipping.
+
 ### Added — CIS AWS Compute Services Benchmark v2.0.0 (43 checks, 3 sections)
 
 Full coverage of the benchmark's 82 recommendations: 33 were already covered, 44 are

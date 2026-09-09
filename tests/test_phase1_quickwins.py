@@ -944,7 +944,16 @@ def test_vpc_01_api_error_surfaces_not_false_pass():
     ec2.describe_flow_logs.return_value = {"FlowLogs": []}
     s._clients["ec2:us-east-1"] = ec2
     s._check_vpc()
-    assert any(r.check_id == "VPC-01" and r.status == "FAIL" for r in s.results)
+    # WARN, not FAIL. The test's point -- an API error must surface rather than become a
+    # false all-clear -- is unchanged, and its sibling below (ELB-01) always asserted
+    # WARN for the identical situation. VPC-01 was the outlier: a denied
+    # DescribeSecurityGroups produced a HIGH FAIL carrying VPC-01's remediation, telling
+    # the operator to close a security-group rule nobody had observed.
+    warns = [r for r in s.results if r.check_id == "VPC-01" and r.status == "WARN"]
+    assert warns, "a failed read must surface"
+    assert "NOT EVALUATED" in warns[0].message
+    assert not any(r.check_id == "VPC-01" and r.status == "FAIL" for r in s.results), (
+        "a read we could not make is not a misconfiguration")
     # the error must NOT be masked by a false 'all-sgs' PASS
     assert not any(r.check_id == "VPC-01" and r.status == "PASS" for r in s.results)
 

@@ -112,5 +112,12 @@ Deliberate, and named rather than left to be discovered:
 - **Inbound ticket sync is not built** (`OW2-CC-021`). ServiceDesk Plus ticket
   creation is outbound only; a ticket closed while the finding persists does not
   reopen — `OW2-AR-030` says the finding wins.
-- **`iam:ListAccessKeys` is not collected**, so the leaked-key join (NHI-02) is
-  inert.
+- **`iam:ListAccessKeys` is not collected**, so no live access-key inventory exists.
+  This does **not** affect `NHI-02`, which measures key *age* and reads it from the
+  credential report — `NHI-02` is proven to fire (`docs/CHECK_FIRING.md`). What is
+  missing is the leaked-key join in
+  `aws_ingest_credexp.correlate(known_key_ids=...)`: without an inventory, a leaked AWS
+  key id found in a breach corpus cannot be matched against a live key in this account,
+  which that module's own `coverage()` names as the highest-value gap. `aws_ingest_credexp`
+  has no caller either, so the grant would currently buy nothing — wiring the ingest and
+  collecting the keys are one decision, not two.

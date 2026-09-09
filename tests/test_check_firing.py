@@ -139,8 +139,68 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: the error handler rather than the check. They belong to a wider defect: eleven checks
 #: report a FAILED READ as their finding while the security condition they exist for is a
 #: WARN. That is fixed as its own change, not papered over with a fixture here.
-MAX_NEVER_OBSERVED = 33
-MIN_PROVEN_FAILING = 409
+#: THEN THE DEFECT BEHIND THOSE TWO WAS FIXED, and this file recorded something it was
+#: built to record. Ten checks answered a failed AWS call with `_add("FAIL", <id>, ...,
+#: str(e))`; `AWSLiveScanner._read_failed` replaced all ten with a WARN that names the
+#: action and records the denial. BDR-05 and SNS-04 gained real FAIL paths and entered
+#: proven-failing -- and EC2-05 LEFT IT. EC2-05 had been counted as proven only because a
+#: test made describe_instances throw, so what this file had certified was its error
+#: handler. A number that can fall when a false proof is withdrawn is the only kind worth
+#: ratcheting. Net 409 -> 410, and 33 -> 31 never observed.
+#:
+#: THEN THE REMAINING 22 SITES WERE CONVERTED, and it happened a second time: VPC-01 left
+#: proven-failing. VPC-01 is the product's most recognisable check -- a security group
+#: opening SSH to 0.0.0.0/0 -- and what had certified it was a test that made
+#: DescribeSecurityGroups throw. Its real detection path had never been driven. The total
+#: is unchanged at 410 because that path is now driven in
+#: tests/test_read_failure_is_not_a_finding.py, which is the honest version of the same
+#: number: two checks that were counted for the wrong reason are now counted for the
+#: right one.
+#: TRANCHE 7 TOOK THE LAST OF THE HIGH-SEVERITY NEVER-OBSERVED CHECKS, and they were
+#: last for a reason worth recording: three of the four reach `_add` through a
+#: NON-LITERAL id, so the static pass that located every earlier tranche's FAIL path
+#: could not see them. CWPP-01 is `fid = "CWPP-02" if m.kev else "CWPP-01"`; VULN-03 is
+#: one arm of a four-way branch on Inspector's resource type; SEG-02 is not written in
+#: the scanner at all — `aws_exposure.microseg_findings` returns dicts carrying their own
+#: "id" and the scanner emits them by `f["id"]`. That is exactly why this file records
+#: `_add` at runtime rather than grepping for it. 410 -> 413, 31 -> 28.
+#:
+#: WAF-01 IS THE ONE HIGH THAT REMAINS, and no fixture can close it: it has no FAIL path,
+#: because its only posture finding is "no Web ACLs in this scope" and a blanket FAIL
+#: would flag every account with nothing to protect. tests/test_unproven_checks_
+#: tranche7.py pins that, with the shape a useful version would need, so the gap stays
+#: visible and the decision gets made deliberately rather than by a fixture appearing.
+#: 413 -> 419: DOCDB-04/05 and NEP-01..04, added by the CIS Database benchmark work as
+#: the price of fixing a defect rather than as new coverage. AUR-01..05 iterated
+#: `rds:DescribeDBClusters` with no `Engine` filter, and that API returns DocumentDB and
+#: Neptune clusters too — so DocumentDB encryption was reported twice under two ids with
+#: contradictory remediation, and Neptune posture was reported as Aurora. Filtering the
+#: Aurora loop alone would have DELETED four real findings, so the six ids exist to keep
+#: them, correctly labelled. All six are proven failing on the run that added them, which
+#: is why this moves by exactly six. See tests/test_db_engine_routing.py.
+#: 419 -> 423: RDS-14, AUR-06, DOCDB-06, NEP-05 — TLS enforcement, the one control in the
+#: CIS Database benchmark that spans four services and that OverWatch had NO coverage of.
+#: Every RDS engine accepts TLS and almost none require it; the difference lives in a
+#: parameter group, and nothing in the product read one before this. All four are proven
+#: failing, which is why this moves by exactly four. See tests/test_cis_db_tls.py.
+#: 423 -> 427: AUR-07/08 read backup retention and IAM auth from the CLUSTER, which is
+#: where Aurora holds them — RDS-03/RDS-08 read the instance fields, and a Serverless v1
+#: cluster has no instances at all. ELC-07/08 read two fields that were already arriving
+#: in a response the ElastiCache section paginated and never looked at. No new API call
+#: and no new IAM grant between the four of them.
+#: 427 -> 433: MDB-01..06. MemoryDB had NO posture coverage — the client was constructed
+#: once in the whole product, for DSPM discovery — so an account could hold a durable
+#: Redis datastore with unauthenticated access and nothing was reported. MDB-02 is the
+#: one that matters: a passwordless ACL user is an observation, not an inference, and
+#: MemoryDB creates one by default. See tests/test_cis_db_memorydb.py.
+#: 433 -> 435: TS-01/TS-02. Timestream held DSPM discovery only, and both checks are
+#: about the same overlooked surface -- with magnetic-store writes on, records that fail
+#: validation are written by the SERVICE to an S3 bucket that no other check looks at.
+#: Only two, not four: KS-01/KS-02 were written and WITHDRAWN because Keyspaces'
+#: control-plane reads are authorised by cassandra:Select, which also reads table rows.
+#: See tests/test_cis_db_keyspaces_timestream.py.
+MAX_NEVER_OBSERVED = 28
+MIN_PROVEN_FAILING = 435
 
 
 def doc_text() -> str:

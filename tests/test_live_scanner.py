@@ -165,7 +165,32 @@ class TestDataStructures(unittest.TestCase):
         # covering a service that was previously invisible, and is why they are here
         # rather than gated behind a flag: a section that only runs when asked for is
         # the defect the AI-section note above records.
-        self.assertEqual(len(SECTIONS), 94)
+        #
+        # 95: +NEPTUNE -- and this one is a CORRECTION, not an expansion. AUR-01..05
+        # iterated everything rds:DescribeDBClusters returns, which includes DocumentDB
+        # and Neptune clusters, so Neptune posture was already being reported: under
+        # Aurora check ids, with Aurora remediation, while nothing in the product knew
+        # what Neptune was. Filtering the Aurora loop (NON_AURORA_CLUSTER_ENGINES) would
+        # have DELETED that coverage, so NEP-01..04 exist to keep it, correctly labelled.
+        # It costs two new calls on a default scan, both against a service whose IAM
+        # actions are rds:* -- so the scanning role needs no new grant.
+        #
+        # 96: +MEMORYDB -- and unlike NEPTUNE above this IS new coverage. The memorydb
+        # client was built exactly once in the whole product, for DSPM crown-jewel
+        # discovery, so an account could hold a durable Redis datastore with
+        # unauthenticated access (MemoryDB creates a passwordless ACL user by DEFAULT)
+        # and OverWatch reported nothing. Three new calls and three new IAM actions on a
+        # separate memorydb:* prefix, which is the honest price of a service that was
+        # entirely invisible.
+        #
+        # 97: +TIMESTREAM. KEYSPACES was written alongside it and WITHDRAWN: Amazon
+        # Keyspaces authorises ListKeyspaces/ListTables/GetTable under cassandra:Select,
+        # the same action that authorises reading table rows, and AWS offers no
+        # metadata-only alternative -- so covering it would have put a customer-data read
+        # into the default scanning role. The reason is recorded in
+        # aws_cis_db.NOT_DETERMINABLE rather than lost, because the checks themselves
+        # were trivial and the decision was about the GRANT.
+        self.assertEqual(len(SECTIONS), 97)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:
