@@ -13,13 +13,30 @@ wrong twice over:
      misconfiguration it exists to find emitted WARN — forced to LOW, no remediation.
      The catalogue was describing the error handler.
 
-HOW IT SURVIVED. Nothing asserted it. Removing the whole shape broke no existing test,
-which is the same reason `docs/CHECK_FIRING.md` had to be built in the first place: a
-check that only ever emits the wrong thing looks identical, from the suite, to one
-nobody wrote a test for.
+There were 32 sites in all: those ten, and 22 more in checks that also had real FAIL
+paths — five of them CRITICAL, so a throttled `DescribeTrails` produced a CRITICAL
+"LOG-01: <boto error text>". All 32 now go through `_read_failed`.
 
-WHAT THIS FILE PINS. The two checks whose condition earned a real FAIL, the behaviour of
-the replacement helper, and two tripwires so the shape cannot come back.
+HOW IT SURVIVED. Nothing asserted it. Removing the whole shape broke exactly one test,
+and that test was asserting the defect. It is the same reason `docs/CHECK_FIRING.md` had
+to be built: a check that only ever emits the wrong thing looks identical, from the
+suite, to one nobody wrote a test for.
+
+TWO FALSE PROOFS FELL OUT OF IT. `EC2-05` and then `VPC-01` left CHECK_FIRING's
+proven-failing set when their error paths stopped being FAILs — both had been certified
+by a test that made the AWS call throw. VPC-01 is the product's most recognisable check
+(a security group opening SSH to the world) and had a perfectly good detection path that
+nothing had ever driven. It is driven at the bottom of this file.
+
+ABSENCE IS NOT REFUSAL. Three sites signalled both by raising and reported the first for
+both: `S3-01` ("No BPA config"), `S3-03` ("No default encryption") and `LOG-05`
+("Security Hub not enabled in this region"). Each asserted a fact about the account that
+had never been established — the S3-07 defect, in three more places. All three now split
+on the error code.
+
+WHAT THIS FILE PINS. The conditions that earned a real FAIL, the replacement helper's
+behaviour, the three absence/refusal splits, the retry policy every client is built
+with, and the tripwires that stop the shape returning.
 """
 from __future__ import annotations
 
@@ -29,7 +46,7 @@ import io
 import json
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -258,12 +275,12 @@ def test_no_check_above_low_can_only_fail_when_the_read_fails():
 
 
 #: `_add("FAIL", ..., str(e))` — an exception's text presented as a security finding.
-#: Every one of these produces, on a denied or throttled read, a FAIL carrying that
-#: check's remediation: advice for a problem nobody observed. The ten whose ONLY FAIL
-#: had this shape are fixed (see `_read_failed`); these 22 also have real FAIL paths, so
-#: their severity is at least reachable honestly, and they are the remaining debt.
-#: SHRINK-ONLY. Lower this when sites are converted; never raise it.
-MAX_EXCEPTION_TEXT_AS_A_FAILURE = 22
+#: Each produced, on a denied or throttled read, a FAIL carrying that check's
+#: remediation: advice for a problem nobody observed. There were 32 — ten whose ONLY
+#: FAIL had this shape (fixed first, see `_read_failed`) and 22 more that also had real
+#: FAIL paths, five of them CRITICAL. All 32 are converted, so the floor is now zero and
+#: this ratchet is at its end state: the shape must never reappear.
+MAX_EXCEPTION_TEXT_AS_A_FAILURE = 0
 
 
 def test_reporting_an_exception_as_a_finding_can_only_decrease():
@@ -313,3 +330,245 @@ def test_the_six_corrected_severities_match_what_their_code_can_render():
         assert CHECK_SEVERITY[cid] == "LOW", (
             f"{cid} was lowered to LOW because its only non-error finding is a WARN; "
             f"raising it again requires giving the condition a FAIL path first")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Absence and refusal are different answers
+#
+# Three call sites signalled both by raising, and reported the first for both. Each
+# stated a fact about the account that had never been established — the S3-07 defect
+# the bucket-B pass fixed, in three more places.
+# ══════════════════════════════════════════════════════════════════════════════
+class _Coded(Exception):
+    def __init__(self, code, msg="x"):
+        self.response = {"Error": {"Code": code, "Message": msg}}
+        super().__init__(f"{code}: {msg}")
+
+
+def _s3(bpa_error=None, enc_error=None):
+    s3 = MagicMock()
+    s3.list_buckets.return_value = {"Buckets": [{"Name": "b1"}]}
+    s3.get_bucket_location.return_value = {"LocationConstraint": None}
+    if bpa_error:
+        s3.get_public_access_block.side_effect = bpa_error
+    else:
+        s3.get_public_access_block.return_value = {
+            "PublicAccessBlockConfiguration": {
+                "BlockPublicAcls": True, "IgnorePublicAcls": True,
+                "BlockPublicPolicy": True, "RestrictPublicBuckets": True}}
+    if enc_error:
+        s3.get_bucket_encryption.side_effect = enc_error
+    else:
+        s3.get_bucket_encryption.return_value = {
+            "ServerSideEncryptionConfiguration": {"Rules": [
+                {"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]}}
+    s3.get_bucket_logging.return_value = {"LoggingEnabled": {"TargetBucket": "logs"}}
+    s3.get_bucket_versioning.return_value = {"Status": "Enabled"}
+    s3.get_bucket_policy.side_effect = _Coded("NoSuchBucketPolicy")
+    s3.get_bucket_acl.return_value = {"Grants": []}
+    s3.get_bucket_tagging.side_effect = _Coded("NoSuchTagSet")
+    s3.get_bucket_lifecycle_configuration.side_effect = _Coded(
+        "NoSuchLifecycleConfiguration")
+    return _scanner("S3", "s3", s3)
+
+
+def test_s3_01_genuinely_absent_bpa_still_fails():
+    """NoSuchPublicAccessBlockConfiguration is the bucket telling us it has none. That
+    is a real finding and must stay one."""
+    s = _s3(bpa_error=_Coded("NoSuchPublicAccessBlockConfiguration"))
+    s._check_s3()
+    hits = _ids(s, "S3-01", "FAIL")
+    assert hits and "No BPA config" in hits[0].message
+
+
+def test_s3_01_denied_bpa_read_is_not_reported_as_absent():
+    """A bucket owned by another account routinely refuses this read. Saying 'No BPA
+    config' asserts something about that bucket we were never told."""
+    s = _s3(bpa_error=_Coded("AccessDenied"))
+    s._check_s3()
+    assert not _ids(s, "S3-01", "FAIL")
+    warns = _ids(s, "S3-01", "WARN")
+    assert warns and "NOT EVALUATED" in warns[0].message
+
+
+def test_s3_03_genuinely_absent_encryption_still_fails():
+    """S3 has no other way to say 'no default encryption' than to raise, so here the
+    exception IS the detection — which is why S3-03 is the one exemption in the
+    structural tripwire below."""
+    s = _s3(enc_error=_Coded("ServerSideEncryptionConfigurationNotFoundError"))
+    s._check_s3()
+    hits = _ids(s, "S3-03", "FAIL")
+    assert hits and "No default encryption" in hits[0].message
+
+
+def test_s3_03_denied_encryption_read_is_not_reported_as_unencrypted():
+    s = _s3(enc_error=_Coded("AccessDenied"))
+    s._check_s3()
+    assert not _ids(s, "S3-03", "FAIL")
+    assert _ids(s, "S3-03", "WARN")
+
+
+def _securityhub(error):
+    sh = MagicMock()
+    sh.get_enabled_standards.side_effect = error
+    s = make_scanner(sections=["LOGGING"])
+    s.account = OWN
+    s._clients[f"securityhub:{REGION}"] = sh
+    for svc in ("cloudtrail", "config", "guardduty", "logs", "accessanalyzer",
+                "iam", "s3", "ec2", "sns"):
+        s._clients[f"{svc}:{REGION}"] = MagicMock()
+    return s
+
+
+def test_log_05_not_subscribed_still_fails():
+    """InvalidAccessException means Security Hub genuinely is not enabled here."""
+    s = _securityhub(_Coded("InvalidAccessException"))
+    s._check_logging()
+    hits = _ids(s, "LOG-05", "FAIL")
+    assert hits and any("not enabled in this region" in h.message for h in hits)
+
+
+def test_log_05_denied_read_is_not_reported_as_not_subscribed():
+    """AccessDenied and 'not subscribed' were treated as the same finding. They are
+    opposites: one says the control is missing, the other says we cannot tell."""
+    s = _securityhub(_Coded("AccessDeniedException"))
+    s._check_logging()
+    assert not any("not enabled in this region" in r.message
+                   for r in _ids(s, "LOG-05", "FAIL"))
+    warns = _ids(s, "LOG-05", "WARN")
+    assert warns and "NOT EVALUATED" in warns[0].message
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Every client is built with a retry and identification policy
+# ══════════════════════════════════════════════════════════════════════════════
+class _FakeBotoConfig:
+    """Stand-in for botocore.config.Config.
+
+    BOTO3 IS NOT INSTALLED IN THE TEST ENVIRONMENT, so `HAS_BOTO3` is False, `boto3` and
+    `BotoConfig` are not module attributes at all, and `_client` has never been executed
+    by any of the ~6000 tests — every AWS client in the suite is a MagicMock injected
+    straight into `_clients`. That is why nothing caught the missing retry policy, and it
+    is worth stating rather than working around silently: these tests exercise the
+    factory by supplying the two names the real import would have bound."""
+
+    def __init__(self, **kw):
+        self.retries = kw.get("retries")
+        self.user_agent_extra = kw.get("user_agent_extra")
+
+
+def _capture_client_kwargs(via_session: bool):
+    import engine.aws_live_scanner as A
+    captured = {}
+
+    def _client(service, region_name=None, config=None):
+        captured.update(service=service, region_name=region_name, config=config)
+        return MagicMock()
+
+    factory = MagicMock(client=_client)
+    with patch.object(A, "HAS_BOTO3", True), \
+            patch.object(A, "BotoConfig", _FakeBotoConfig, create=True), \
+            patch.object(A, "boto3", factory, create=True):
+        s = A.AWSLiveScanner(region="eu-west-1", sections=["IAM"])
+        s._session = factory if via_session else None
+        s._client("ec2")
+    return captured
+
+
+def test_clients_are_built_with_adaptive_retries_and_a_named_user_agent():
+    """94 sections, each enumerating a service, times every region under --all-regions.
+    botocore's default `legacy` retry mode is sized for an application making a handful
+    of calls, and the account most likely to throttle is the large one whose posture
+    matters most — and, until the rest of this file's change, the one most likely to be
+    handed fabricated findings when it did."""
+    cfg = _capture_client_kwargs(via_session=False)["config"]
+    assert cfg is not None, "clients are still built with botocore's defaults"
+    assert cfg.retries["mode"] == "adaptive", (
+        "adaptive adds the client-side rate limiter that slows down BEFORE being "
+        "throttled; raising max_attempts alone just spends the budget faster")
+    assert cfg.retries["max_attempts"] >= 10
+    assert "OverWatch/" in (cfg.user_agent_extra or ""), (
+        "an operator reviewing their own CloudTrail has to be able to tell our reads "
+        "from anything else using the same role")
+
+
+def test_the_config_reaches_the_assumed_role_session_too():
+    """Ambient credentials and an assumed-role session go through the same factory, so a
+    config attached to only one would be a per-deployment difference nobody notices
+    until a multi-account scan throttles."""
+    cfg = _capture_client_kwargs(via_session=True)["config"]
+    assert cfg is not None and cfg.retries["mode"] == "adaptive"
+
+
+def test_the_region_is_still_passed():
+    """The config argument is new; the argument that was already load-bearing must not
+    have been displaced by it."""
+    got = _capture_client_kwargs(via_session=False)
+    assert got["service"] == "ec2" and got["region_name"] == "eu-west-1"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# VPC-01 — the false proof this change exposed
+#
+# Removing the error-path FAIL took VPC-01 OUT of docs/CHECK_FIRING.md's proven set.
+# It had a perfectly good detection path -- a security group opening a risky port to
+# 0.0.0.0/0 -- and nothing had ever driven it. What certified the product's single most
+# recognisable check was a test that made DescribeSecurityGroups throw.
+# ══════════════════════════════════════════════════════════════════════════════
+def _vpc(security_groups):
+    ec2 = MagicMock()
+
+    def _pager(op):
+        p = MagicMock()
+        p.paginate.return_value = [{"SecurityGroups": list(security_groups)}]
+        return p
+
+    ec2.get_paginator.side_effect = _pager
+    ec2.describe_vpcs.return_value = {"Vpcs": []}
+    ec2.describe_flow_logs.return_value = {"FlowLogs": []}
+    return _scanner("VPC", "ec2", ec2)
+
+
+def _sg(gid, from_port, to_port, cidr="0.0.0.0/0", name="app", ipv6=False):
+    perm = {"FromPort": from_port, "ToPort": to_port, "IpProtocol": "tcp",
+            "IpRanges": [] if ipv6 else [{"CidrIp": cidr}],
+            "Ipv6Ranges": [{"CidrIpv6": "::/0"}] if ipv6 else []}
+    return {"GroupId": gid, "GroupName": name, "VpcId": "vpc-1",
+            "IpPermissions": [perm], "IpPermissionsEgress": []}
+
+
+def test_vpc01_ssh_open_to_the_world_fails():
+    s = _vpc([_sg("sg-1", 22, 22)])
+    s._check_vpc()
+    _renders(s, "VPC-01", "HIGH", contains="port 22/SSH")
+
+
+def test_vpc01_a_port_range_that_swallows_a_risky_port_fails():
+    """0-65535 names no risky port explicitly and exposes all of them, which is the
+    version an operator is most likely to have opened 'temporarily'."""
+    s = _vpc([_sg("sg-1", 0, 65535)])
+    s._check_vpc()
+    hits = _ids(s, "VPC-01", "FAIL")
+    assert len(hits) >= 5, "a range covering every risky port should name each"
+    assert any("3389/RDP" in h.message for h in hits)
+
+
+def test_vpc01_ipv6_only_exposure_fails():
+    """::/0 is the half people forget, and the check has always covered it."""
+    s = _vpc([_sg("sg-1", 3306, 3306, ipv6=True)])
+    s._check_vpc()
+    _renders(s, "VPC-01", "HIGH", contains="::/0")
+
+
+def test_vpc01_a_scoped_cidr_is_silent():
+    s = _vpc([_sg("sg-1", 22, 22, cidr="10.0.0.0/8")])
+    s._check_vpc()
+    assert not _ids(s, "VPC-01", "FAIL") and _ids(s, "VPC-01", "PASS")
+
+
+def test_vpc01_a_world_open_non_risky_port_is_silent():
+    """443 open to the world is what a load balancer looks like. VPC-01 is deliberately
+    a risky-port check, not a public-port check."""
+    s = _vpc([_sg("sg-1", 443, 443)])
+    s._check_vpc()
+    assert not _ids(s, "VPC-01", "FAIL") and _ids(s, "VPC-01", "PASS")

@@ -147,6 +147,15 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: test made describe_instances throw, so what this file had certified was its error
 #: handler. A number that can fall when a false proof is withdrawn is the only kind worth
 #: ratcheting. Net 409 -> 410, and 33 -> 31 never observed.
+#:
+#: THEN THE REMAINING 22 SITES WERE CONVERTED, and it happened a second time: VPC-01 left
+#: proven-failing. VPC-01 is the product's most recognisable check -- a security group
+#: opening SSH to 0.0.0.0/0 -- and what had certified it was a test that made
+#: DescribeSecurityGroups throw. Its real detection path had never been driven. The total
+#: is unchanged at 410 because that path is now driven in
+#: tests/test_read_failure_is_not_a_finding.py, which is the honest version of the same
+#: number: two checks that were counted for the wrong reason are now counted for the
+#: right one.
 MAX_NEVER_OBSERVED = 31
 MIN_PROVEN_FAILING = 410
 

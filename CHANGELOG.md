@@ -42,12 +42,40 @@ Nothing asserted any of it: removing the whole shape broke no existing test.
   And the count of FAIL findings whose message is just an exception's text is now
   ratcheted, shrink-only.
 
-**Known remaining debt, named rather than left to be found:** 22 sites still report
-exception text as a FAIL. Those checks also have real FAIL paths, so their severity is
-at least reachable honestly, but a denied read on any of them still produces a
-misleading finding. `S3-03` additionally does not distinguish
-`ServerSideEncryptionConfigurationNotFoundError` from `AccessDenied` — the `S3-07`
-defect fixed in the bucket-B pass, in a second place.
+**All 32 sites are now converted** (the ten above plus 22 more in checks that also had
+real FAIL paths, five of them CRITICAL — a throttled `DescribeTrails` produced a
+CRITICAL `LOG-01: <boto error text>`). The ratchet floor is zero.
+
+- **Absence is not refusal.** `S3-01`, `S3-03` and `LOG-05` each signalled both by
+  raising and reported the first for both — "No BPA config", "No default encryption",
+  "Security Hub not enabled in this region" — asserting facts about the account that
+  had never been established. All three now split on the error code;
+  `ServerSideEncryptionConfigurationNotFoundError` and `InvalidAccessException` stay
+  FAILs because there they *are* the detection.
+- **A second false proof fell out.** `VPC-01` left `CHECK_FIRING`'s proven-failing set
+  when its error path stopped being a FAIL: the product's most recognisable check —
+  a security group opening SSH to `0.0.0.0/0` — had only ever been certified by a test
+  that made `DescribeSecurityGroups` throw. It now has driving tests for the real path.
+
+### Changed — every AWS client is built with a retry and identification policy
+
+`_client()` passed no botocore `Config`, so all 94 sections ran on the default `legacy`
+retry mode: a fixed handful of attempts, no client-side rate limiting. That is sized for
+an application making a few calls, not a scan enumerating 94 services across every
+region — and the account most likely to throttle is the large one whose posture matters
+most, which was also the one most likely to be handed the fabricated findings above.
+
+- `retries={"mode": "adaptive", "max_attempts": 10}` — adaptive adds the rate limiter
+  that slows down *before* being throttled; more attempts alone just spends the budget
+  faster.
+- `user_agent_extra="OverWatch/<version>"`, so an operator reviewing their own
+  CloudTrail can tell our reads from anything else using the same role.
+
+Note for contributors: **boto3 is not installed in the test environment**, so
+`HAS_BOTO3` is False and `_client()` had never been executed by any of the ~6000 tests —
+every AWS client in the suite is a `MagicMock` injected straight into `_clients`. That
+is why nothing caught the missing retry policy. The new tests supply the two names the
+real import would have bound rather than skipping.
 
 ### Added — CIS AWS Compute Services Benchmark v2.0.0 (43 checks, 3 sections)
 

@@ -57,6 +57,7 @@ from typing import List, Dict, Optional
 
 try:
     import boto3
+    from botocore.config import Config as BotoConfig
     from botocore.exceptions import ClientError, NoCredentialsError
     HAS_BOTO3 = True
 except ImportError:
@@ -2670,6 +2671,39 @@ class AWSLiveScanner:
         # every Lambda deploy in the account.
         self._agent_lambda_names = set()
 
+    def _boto_config(self):
+        """The retry and identification policy every client is built with.
+
+        WHY THIS IS NOT THE DEFAULT'S PROBLEM TO SOLVE. botocore's default retry mode is
+        `legacy`: a small fixed number of attempts with no client-side rate limiting. That
+        is sized for an application making a handful of calls, and a scan is the opposite
+        shape — 94 sections, each enumerating a service, multiplied by every region when
+        --all-regions is set. The account most likely to throttle is the large one, which
+        is also the one whose posture matters most.
+
+        WHAT THROTTLING USED TO PRODUCE. Until the change that added this, a throttled
+        read did not merely go missing: 22 call sites reported the exception's own text
+        as a FAIL finding, five of them CRITICAL, each carrying that check's remediation.
+        So the estate most likely to throttle was the one most likely to be handed
+        fabricated findings. `_read_failed` fixed the reporting; this reduces how often
+        the situation arises at all.
+
+        ADAPTIVE, NOT JUST MORE ATTEMPTS. `adaptive` adds a client-side rate limiter that
+        slows down BEFORE being throttled, which is what stops a wide scan from spending
+        its retry budget fighting itself. `max_attempts` is raised to 10 for the same
+        reason a scan differs from an application: there is no user waiting on any single
+        call, and a section that gives up early reports silence that looks like a clean
+        result.
+
+        THE USER AGENT IS NOT DECORATION. It puts `OverWatch/<version>` in CloudTrail's
+        `userAgent` for every call this tool makes, so an operator reviewing their own
+        trail can tell our reads from anything else using the same role — which is the
+        first question asked when an unfamiliar burst of Describe calls shows up."""
+        return BotoConfig(  # type: ignore[name-defined]
+            retries={"max_attempts": 10, "mode": "adaptive"},
+            user_agent_extra=f"OverWatch/{VERSION}",
+        )
+
     # ── boto3 client factory (lazy, cached) ───────────────────────────────────
     def _client(self, service: str, region: Optional[str] = None):
         if not HAS_BOTO3:
@@ -2680,7 +2714,8 @@ class AWSLiveScanner:
         if key not in self._clients:
             factory = self._session or boto3  # assumed-role session or ambient creds
             self._clients[key] = factory.client(  # type: ignore[name-defined]
-                service, region_name=region or self.region
+                service, region_name=region or self.region,
+                config=self._boto_config(),
             )
         return self._clients[key]
 
@@ -2910,7 +2945,8 @@ class AWSLiveScanner:
                 self._add("FAIL", "IAM-05", "IAM", "password-policy",
                           "No account password policy set")
             else:
-                self._add("FAIL", "IAM-05", "IAM", "password-policy", str(e))
+                self._read_failed("IAM-05", "IAM", "password-policy",
+                                  "iam:GetAccountPasswordPolicy", e)
 
         # IAM-06 — Stale access keys (>90 days)
         self._log("IAM-06: Stale access keys (>90 days)")
@@ -3045,9 +3081,19 @@ class AWSLiveScanner:
                 else:
                     self._add("FAIL", "S3-01", "S3", bname,
                               f"BPA NOT fully enabled | {bname}")
-            except Exception:
-                self._add("FAIL", "S3-01", "S3", bname,
-                          f"No BPA config | {bname}")
+            except Exception as e:
+                # ABSENCE AND REFUSAL ARE DIFFERENT ANSWERS, and S3 signals both by
+                # raising. NoSuchPublicAccessBlockConfiguration means the bucket
+                # genuinely has no Block Public Access config; AccessDenied means we
+                # were not allowed to look, which is common on buckets owned by another
+                # account. Stating the first for both asserts a fact about the bucket
+                # that was never established — the S3-07 defect the bucket-B pass fixed.
+                if self._error_code(e) == "NoSuchPublicAccessBlockConfiguration":
+                    self._add("FAIL", "S3-01", "S3", bname,
+                              f"No BPA config | {bname}")
+                else:
+                    self._read_failed("S3-01", "S3", bname,
+                                      "s3:GetBucketPublicAccessBlock", e)
 
             # Encryption
             try:
@@ -3059,9 +3105,18 @@ class AWSLiveScanner:
                 ]
                 self._add("PASS", "S3-03", "S3", bname,
                           f"Encryption={alg} | {bname}")
-            except Exception:
-                self._add("FAIL", "S3-03", "S3", bname,
-                          f"No default encryption | {bname}")
+            except Exception as e:
+                # Same split. ServerSideEncryptionConfigurationNotFoundError IS the
+                # detection here — S3 has no other way to say "no default encryption" —
+                # so it stays a FAIL. Everything else is a read we could not make.
+                if self._error_code(e) in (
+                        "ServerSideEncryptionConfigurationNotFoundError",
+                        "ServerSideEncryptionConfigurationNotFoundException"):
+                    self._add("FAIL", "S3-03", "S3", bname,
+                              f"No default encryption | {bname}")
+                else:
+                    self._read_failed("S3-03", "S3", bname,
+                                      "s3:GetEncryptionConfiguration", e)
 
             # Access logging
             try:
@@ -3274,7 +3329,8 @@ class AWSLiveScanner:
                                 found_any = True
         except Exception as e:
             sg_error = True
-            self._add("FAIL", "VPC-01", "VPC", "security-groups", str(e))
+            self._read_failed("VPC-01", "VPC", "security-groups",
+                              "ec2:DescribeSecurityGroups", e)
 
         if not found_any and not sg_error:
             self._add("PASS", "VPC-01", "VPC", "all-sgs",
@@ -3308,7 +3364,7 @@ class AWSLiveScanner:
                     self._add("FAIL", "VPC-03", "VPC", vid,
                               f"No Flow Logs | {vid}")
         except Exception as e:
-            self._add("FAIL", "VPC-03", "VPC", "vpcs", str(e))
+            self._read_failed("VPC-03", "VPC", "vpcs", "ec2:DescribeVpcs", e)
 
         # VPC-05 — NACL allows internet ingress to admin ports 22/3389. NACLs are STATELESS
         # and RuleNumber first-match-wins, so a low-numbered deny before an allow-all negates
@@ -3435,7 +3491,8 @@ class AWSLiveScanner:
                                   f"Trail '{t['Name']}' OK (multi-region, "
                                   "validation enabled, logging active)")
         except Exception as e:
-            self._add("FAIL", "LOG-01", "LOGGING", "cloudtrail", str(e))
+            self._read_failed("LOG-01", "LOGGING", "cloudtrail",
+                              "cloudtrail:DescribeTrails", e)
 
         # LOG-03 — AWS Config recorder
         self._log("LOG-03: AWS Config recorder status")
@@ -3455,7 +3512,8 @@ class AWSLiveScanner:
                     self._add("FAIL", "LOG-03", "LOGGING", r["name"],
                               f"AWS Config NOT recording | {r['name']}")
         except Exception as e:
-            self._add("FAIL", "LOG-03", "LOGGING", "config", str(e))
+            self._read_failed("LOG-03", "LOGGING", "config",
+                              "config:DescribeConfigurationRecorderStatus", e)
 
         # LOG-04 — GuardDuty
         self._log("LOG-04: GuardDuty enabled in current region")
@@ -3477,7 +3535,8 @@ class AWSLiveScanner:
                         self._add("FAIL", "LOG-04", "LOGGING", did,
                                   f"GuardDuty {status} | {did}")
         except Exception as e:
-            self._add("FAIL", "LOG-04", "LOGGING", "guardduty", str(e))
+            self._read_failed("LOG-04", "LOGGING", "guardduty",
+                              "guardduty:ListDetectors", e)
 
         # LOG-05 — Security Hub standards
         self._log("LOG-05: Security Hub standards")
@@ -3493,15 +3552,24 @@ class AWSLiveScanner:
                     self._add("PASS", "LOG-05", "LOGGING", std_name,
                               f"Security Hub standard: {std_name} — "
                               f"{s.get('StandardsStatus', '')}")
-        except ClientError as e:
-            code = e.response["Error"]["Code"]
-            if code in ("InvalidAccessException", "AccessDeniedException"):
+        except Exception as e:
+            # TWO ANSWERS, NOT ONE. InvalidAccessException and AccessDenied were treated
+            # as the same finding, and they are opposites: the first means Security Hub
+            # genuinely is not subscribed in this region (a real posture FAIL), the
+            # second means we were refused the read and know nothing about it. Reporting
+            # the second as the first states a fact about the account that was never
+            # established -- the S3-07 defect, in a third place.
+            #
+            # `except Exception`, not `except ClientError`: the name is bound only when
+            # boto3 imported (see the top of this module), so catching it by name raises
+            # NameError wherever boto3 is absent -- which is every environment the test
+            # suite runs in. Reading the code off whatever was raised works either way.
+            if self._error_code(e) == "InvalidAccessException":
                 self._add("FAIL", "LOG-05", "LOGGING", "securityhub",
                           "Security Hub not enabled in this region")
             else:
-                self._add("FAIL", "LOG-05", "LOGGING", "securityhub", str(e))
-        except Exception as e:
-            self._add("FAIL", "LOG-05", "LOGGING", "securityhub", str(e))
+                self._read_failed("LOG-05", "LOGGING", "securityhub",
+                                  "securityhub:GetEnabledStandards", e)
 
         # LOG-07..LOG-10 — CloudTrail configuration depth
         self._check_cloudtrail_config()
@@ -3917,7 +3985,7 @@ class AWSLiveScanner:
                 self._add("WARN", "ENC-03", "KMS", "all-keys",
                           "No customer-managed KMS keys found")
         except Exception as e:
-            self._add("FAIL", "ENC-03", "KMS", "kms", str(e))
+            self._read_failed("ENC-03", "KMS", "kms", "kms:ListKeys", e)
 
     def _check_kms_key_policy(self, kms, kid: str, meta: Dict) -> None:
         """KMS-02 (public) / KMS-04 (cross-account or org) key-policy exposure. Its own
@@ -4066,7 +4134,7 @@ class AWSLiveScanner:
                 self._add("PASS", "EC2-04", "EC2", "all-instances",
                           "All EC2 instances enforce IMDSv2")
         except Exception as e:
-            self._add("FAIL", "EC2-04", "EC2", "ec2", str(e))
+            self._read_failed("EC2-04", "EC2", "ec2", "ec2:DescribeInstances", e)
 
         # EC2-06 — EBS volume encryption
         self._log("EC2-06: EBS volume encryption")
@@ -4082,7 +4150,7 @@ class AWSLiveScanner:
                           f"UNENCRYPTED EBS volume: {v['VolumeId']} "
                           f"State={v['State']}")
         except Exception as e:
-            self._add("FAIL", "EC2-06", "EC2", "ebs", str(e))
+            self._read_failed("EC2-06", "EC2", "ebs", "ec2:DescribeVolumes", e)
 
         # EC2-05 — EC2 instances with public IPs
         self._log("EC2-05: EC2 instances with public IPs")
@@ -5290,7 +5358,8 @@ class AWSLiveScanner:
                 self._add("PASS", "RDS-11", "RDS", "snapshots",
                           f"All {len(snaps)} manual RDS snapshots encrypted at rest")
         except Exception as e:
-            self._add("FAIL", "RDS-06", "RDS", "rds-snapshots", str(e))
+            self._read_failed("RDS-06", "RDS", "rds-snapshots",
+                              "rds:DescribeDBSnapshots", e)
 
         # RDS-12 — Instance engine end-of-life (Aurora skipped here; AUR-03 covers it at
         # the cluster level). Inline-paginate in OWN try/except — do NOT reuse
@@ -5478,7 +5547,7 @@ class AWSLiveScanner:
         try:
             vaults = glacier.list_vaults(accountId="-")["VaultList"]
         except Exception as e:
-            self._add("FAIL", "GLC-01", "GLACIER", "glacier", str(e))
+            self._read_failed("GLC-01", "GLACIER", "glacier", "glacier:ListVaults", e)
             return
 
         if not vaults:
@@ -5639,7 +5708,7 @@ class AWSLiveScanner:
                               f"Access policy OK (no unconstrained wildcard) "
                               f"| {name}")
             except Exception as e:
-                self._add("FAIL", "SNS-02", "SNS", name, str(e))
+                self._read_failed("SNS-02", "SNS", name, "sns:GetTopicAttributes", e)
 
         # SNS-03 — No insecure HTTP subscriptions
         self._log("SNS-03: SNS topics — no HTTP subscriptions")
@@ -5662,7 +5731,8 @@ class AWSLiveScanner:
                                   f"HTTPS subscription on '{name}' "
                                   f"→ {endpoint[:60]}")
             except Exception as e:
-                self._add("FAIL", "SNS-03", "SNS", name, str(e))
+                self._read_failed("SNS-03", "SNS", name,
+                                  "sns:ListSubscriptionsByTopic", e)
 
         # SNS-04 — Cross-account subscriptions
         self._log("SNS-04: SNS cross-account subscriptions")
@@ -5702,7 +5772,7 @@ class AWSLiveScanner:
         try:
             queues = sqs.list_queues().get("QueueUrls", [])
         except Exception as e:
-            self._add("FAIL", "SQS-01", "SQS", "sqs", str(e))
+            self._read_failed("SQS-01", "SQS", "sqs", "sqs:ListQueues", e)
             return
 
         if not queues:
@@ -5730,7 +5800,7 @@ class AWSLiveScanner:
                     self._add("FAIL", "SQS-01", "SQS", name,
                               f"No encryption at rest | {name}")
             except Exception as e:
-                self._add("FAIL", "SQS-01", "SQS", name, str(e))
+                self._read_failed("SQS-01", "SQS", name, "sqs:GetQueueAttributes", e)
 
         # SQS-02 — Access policy (no unauthenticated public access)
         self._log("SQS-02: SQS queues — no unauthenticated public access")
@@ -5769,7 +5839,7 @@ class AWSLiveScanner:
                     self._add("PASS", "SQS-02", "SQS", name,
                               f"Queue policy OK | {name}")
             except Exception as e:
-                self._add("FAIL", "SQS-02", "SQS", name, str(e))
+                self._read_failed("SQS-02", "SQS", name, "sqs:GetQueueAttributes", e)
 
         # SQS-03 — Dead Letter Queue configured
         self._log("SQS-03: SQS queues — Dead Letter Queue configured")
@@ -5837,7 +5907,8 @@ class AWSLiveScanner:
                 "DistributionList", {}
             ).get("Items", [])
         except Exception as e:
-            self._add("FAIL", "CFN-01", "CLOUDFRONT", "cloudfront", str(e))
+            self._read_failed("CFN-01", "CLOUDFRONT", "cloudfront",
+                              "cloudfront:ListDistributions", e)
             return
 
         if not dists:
@@ -6004,7 +6075,8 @@ class AWSLiveScanner:
                     self._add("FAIL", "R53-01", "ROUTE53", zname,
                               f"Query logging DISABLED | {zname} {tag}")
         except Exception as e:
-            self._add("FAIL", "R53-01", "ROUTE53", "route53", str(e))
+            self._read_failed("R53-01", "ROUTE53", "route53",
+                              "route53:ListHostedZones", e)
 
         # R53-02 — DNSSEC signing on public zones
         self._log("R53-02: Route 53 — DNSSEC signing on public hosted zones")
@@ -6837,7 +6909,7 @@ class AWSLiveScanner:
             for page in paginator.paginate():
                 funcs.extend(page["Functions"])
         except Exception as e:
-            self._add("FAIL", "LMB-01", "LAMBDA", "lambda", str(e))
+            self._read_failed("LMB-01", "LAMBDA", "lambda", "lambda:ListFunctions", e)
             return
         if not funcs:
             self._add("INFO", "LMB-01", "LAMBDA", "lambda",
@@ -8221,7 +8293,8 @@ class AWSLiveScanner:
             for page in paginator.paginate():
                 secrets.extend(page["SecretList"])
         except Exception as e:
-            self._add("FAIL", "SEC-01", "SECRETS", "secrets", str(e))
+            self._read_failed("SEC-01", "SECRETS", "secrets",
+                              "secretsmanager:ListSecrets", e)
             return
         if not secrets:
             self._add("INFO", "SEC-01", "SECRETS", "secrets",

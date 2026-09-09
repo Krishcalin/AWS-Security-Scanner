@@ -286,7 +286,7 @@ FLOORS = {
     "test_published_figures.py": 8,
     "test_qr.py": 9,
     "test_rbac_roles.py": 20,
-    "test_read_failure_is_not_a_finding.py": 13,
+    "test_read_failure_is_not_a_finding.py": 27,
     "test_registry_api.py": 6,
     "test_registry_connector_service.py": 8,
     "test_registry_connectors.py": 19,
