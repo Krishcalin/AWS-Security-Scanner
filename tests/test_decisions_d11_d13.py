@@ -265,7 +265,28 @@ def test_d12_is_recorded_as_needing_no_widening():
 # ── D13 · inbound connectors are vendor-neutral ─────────────────────────────
 
 #: The ingests that already made this call, and are the precedent D13 generalises.
-VENDOR_NEUTRAL_INGESTS = ("aws_ingest_aidr.py", "aws_ingest_credexp.py")
+#
+# PATHS, not bare filenames. These were `os.path.join(ROOT, "aws_ingest_aidr.py")` until
+# the layering refactor moved 109 flat modules into engine/ hub/ store/ — after which the
+# path never resolved, `os.path.exists` was False, and all four of these tests SKIPPED
+# instead of running. They skipped clean and green for the whole of that period, which is
+# exactly how a guard stops guarding without anyone noticing: a skip is not a failure.
+#
+# Both modules do pass on the merits (checked when this was found: no vendor host, no
+# egress primitive), so nothing had regressed behind the guard. That is luck, not a
+# reason to leave it. The existence check below is now an ASSERTION rather than a skip,
+# so the next move breaks the build instead of silencing it.
+VENDOR_NEUTRAL_INGESTS = ("engine/aws_ingest_aidr.py",
+                          "engine/aws_ingest_credexp.py")
+
+
+def _ingest_path(mod: str) -> str:
+    path = os.path.join(ROOT, *mod.split("/"))
+    assert os.path.exists(path), (
+        f"{mod} does not exist. If it moved, fix this path -- do NOT convert this back "
+        f"to a skip: these two tests skipped silently for the whole period after the "
+        f"engine/hub/store refactor, and a guard that skips is a guard that is off.")
+    return path
 
 
 @pytest.mark.parametrize("mod", VENDOR_NEUTRAL_INGESTS)
@@ -273,10 +294,7 @@ def test_d13_the_precedent_ingests_hardcode_no_vendor_endpoint(mod):
     """Both shipped without a verifiable upstream contract by keeping field names in
     an alias map rather than in the logic. A hardcoded vendor host would mean the
     module had bound itself to one supplier after all."""
-    path = os.path.join(ROOT, mod)
-    if not os.path.exists(path):
-        pytest.skip(f"{mod} not present")
-    src = _src(path)
+    src = _src(_ingest_path(mod))
     hosts = re.findall(r"https?://[a-zA-Z0-9.-]+", src)
     real = [h for h in hosts if "example" not in h and "localhost" not in h]
     assert not real, f"{mod} hardcodes a vendor endpoint: {real}"
@@ -284,10 +302,7 @@ def test_d13_the_precedent_ingests_hardcode_no_vendor_endpoint(mod):
 
 @pytest.mark.parametrize("mod", VENDOR_NEUTRAL_INGESTS)
 def test_d13_the_precedent_ingests_make_no_network_call(mod):
-    path = os.path.join(ROOT, mod)
-    if not os.path.exists(path):
-        pytest.skip(f"{mod} not present")
-    src = _src(path)
+    src = _src(_ingest_path(mod))
     for primitive in ("urllib.request", "http.client", "import socket", "requests."):
         assert primitive not in src, (
             f"{mod} performs its own egress; D13 keeps ingest offline and leaves "
