@@ -147,7 +147,25 @@ class TestDataStructures(unittest.TestCase):
         # events). SIDESCAN adds none -- its guard returns before any client is
         # built unless --side-scan is set, which is what makes dispatching it always
         # the safe fix rather than a new default behaviour.
-        self.assertEqual(len(SECTIONS), 90)
+        #
+        # 91: +NHI -- and like the batch above, no new coverage and no new API call.
+        # NHI-01..05 were already registered in all four metadata maps and counted in
+        # the published total; `engine/aws_nhi.py` held the logic and its own test
+        # file. What was missing was a caller. The module was IMPORTED by three
+        # production modules (its CheckDefs register at import time) and referenced by
+        # none, so the checks were catalogued and unfirable. `_check_nhi` reads the
+        # principals `_get_iam_principals` already fetched and the credential report
+        # the IAM section already reads, so the scan cost is zero new calls.
+        #
+        # 94: +APPRUNNER, BATCH, BEANSTALK -- the three services in the CIS AWS Compute
+        # Services Benchmark that OverWatch had no coverage of at all. Its other 40 new
+        # checks extend sections that already exist (AMI, EC2, ECS, LAMBDA, LIGHTSAIL,
+        # IMAGEBUILDER) and add no section. These three DO cost new calls on a default
+        # scan -- one List plus one Describe each -- which is the honest price of
+        # covering a service that was previously invisible, and is why they are here
+        # rather than gated behind a flag: a section that only runs when asked for is
+        # the defect the AI-section note above records.
+        self.assertEqual(len(SECTIONS), 94)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

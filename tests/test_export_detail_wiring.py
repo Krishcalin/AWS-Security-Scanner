@@ -60,7 +60,7 @@ def exports(scanner):
 def two_findings():
     return scan_with([
         ("FAIL", "RDS-02", "RDS", "prod-db", "DB PUBLICLY ACCESSIBLE | prod-db"),
-        ("WARN", "RDS-08", "RDS", "prod-db", "IAM DB authentication=OFF | prod-db"),
+        ("FAIL", "RDS-08", "RDS", "prod-db", "IAM DB authentication=OFF | prod-db"),
     ])
 
 

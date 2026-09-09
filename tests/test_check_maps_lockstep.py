@@ -184,3 +184,71 @@ def test_ai_compliance_mappings_stay_inside_the_frozen_nist_universe():
         assert nist in universe, (
             f"{cid} maps to NIST {nist}, which is outside the frozen 38-control "
             f"universe — this breaks the crosswalk accuracy validator")
+
+
+# ── duplicate keys in the catalogue literals ───────────────────────────────────
+#: CHECK_SEVERITY re-declares ids in a later "backfilled" block, and a dict literal
+#: takes the LAST one. That is used deliberately in one place: SM-02 and SM-04 are
+#: raised MEDIUM -> HIGH by a later entry, with a comment saying so and a CHANGELOG
+#: line to match. Every other duplicate agrees with itself and is merely redundant.
+#:
+#: The failure this guards is not the redundancy, it is the silence. Editing the
+#: FIRST of two declarations changes nothing, with no error and no warning -- which
+#: is exactly what happened while lowering the bucket-B severities: seven ids were
+#: set to LOW, the tests passed, and the product still used MEDIUM. So: a duplicate
+#: whose values AGREE is allowed (harmless), and a duplicate whose values DISAGREE
+#: must be named here as intentional.
+INTENTIONAL_SEVERITY_OVERRIDES = {
+    "SM-02": "HIGH",   # SageMaker.3 root access -- AWS rates it HIGH
+    "SM-04": "HIGH",   # SageMaker.2 direct internet access -- AWS rates it HIGH
+}
+
+
+def _duplicate_literal_keys(name):
+    """{key: [(line, value)]} for keys declared more than once in a source dict."""
+    import ast
+    import collections
+    import io
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "engine", "aws_live_scanner.py")
+    tree = ast.parse(io.open(path, encoding="utf-8").read())
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict)):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            continue
+        seen = collections.defaultdict(list)
+        for k, v in zip(node.value.keys, node.value.values):
+            if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                seen[k.value].append(
+                    (k.lineno, v.value if isinstance(v, ast.Constant) else "<expr>"))
+        return {k: v for k, v in seen.items() if len(v) > 1}
+    raise AssertionError("%s is not a dict literal any more; update this test" % name)
+
+
+def test_no_duplicate_severity_silently_disagrees_with_itself():
+    """A key declared twice with two different values means the entry a reader finds
+    is not the entry the product uses. Allowed only where it is deliberate."""
+    dups = _duplicate_literal_keys("CHECK_SEVERITY")
+    conflicting = {k: occ for k, occ in dups.items()
+                   if len({v for _ln, v in occ}) > 1}
+    unexpected = {k: occ for k, occ in conflicting.items()
+                  if k not in INTENTIONAL_SEVERITY_OVERRIDES}
+    assert not unexpected, (
+        "%s declared twice with different severities. The LAST one wins, so the "
+        "earlier entry is dead text and editing it does nothing. Make them agree, or "
+        "add it to INTENTIONAL_SEVERITY_OVERRIDES with the reason."
+        % {k: [f"line {ln}={v}" for ln, v in occ] for k, occ in unexpected.items()})
+
+
+def test_the_declared_overrides_are_still_overriding():
+    """Keeps the allowlist honest: an entry whose duplicate has been cleaned up, or
+    whose winning value has changed, must not sit here describing history."""
+    dups = _duplicate_literal_keys("CHECK_SEVERITY")
+    for cid, expected in sorted(INTENTIONAL_SEVERITY_OVERRIDES.items()):
+        occ = dups.get(cid)
+        assert occ, ("%s is named an intentional override but is no longer declared "
+                     "twice -- remove it from INTENTIONAL_SEVERITY_OVERRIDES" % cid)
+        assert CHECK_SEVERITY[cid] == expected, (
+            "%s is declared an intentional override to %s but resolves to %s"
+            % (cid, expected, CHECK_SEVERITY[cid]))

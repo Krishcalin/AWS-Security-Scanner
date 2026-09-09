@@ -67,8 +67,80 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #:
 #: The honest invariants are the ends: unobserved can only fall, proven-failing can
 #: only rise. Lower/raise these when the doc is regenerated; never the other way.
-MAX_NEVER_OBSERVED = 70
-MIN_PROVEN_FAILING = 305
+#: NHI-01..05 are the first checks moved by fixing a REACHABILITY defect rather than
+#: by writing a fixture. `engine/aws_nhi.py` was complete and callerless: imported by
+#: three production modules (its CheckDefs register at import time, which is what put
+#: the five ids in all four maps) and referenced by none, so the checks were
+#: catalogued, counted in the published total, and could not fire. Wiring the NHI
+#: section moved all five straight to proven-failing: 305 -> 310 and 70 -> 65.
+#:
+#: One of the five needed more than a caller. NHI-01 is gated on a `machine` verdict,
+#: and a console password is CONFIGURED human evidence -- so `classify_principal`
+#: never returns `machine` for the identity NHI-01 describes, and the check was
+#: unsatisfiable through the module's own classifier. See
+#: `AWSLiveScanner._nhi_classification`, and `test_nhi.py`, whose NHI-01 test supplies
+#: a verdict by hand precisely because nothing else could.
+#: The bucket-B pass then moved 17 more from the middle to proven-failing (310 -> 327,
+#: and 85 -> 68 in the middle). Those were not new fixtures: each check already had a
+#: test driving it to its bad configuration and asserting WARN, because the check had
+#: always been able to detect the problem and had only ever been able to report it at
+#: LOW with no remediation. Flipping the status and the expectation together is what
+#: turned a detected condition into a rendered finding.
+#: Four of the 21 had no driving test at all -- the condition was reachable and
+#: nothing exercised it -- so the change would have shipped as an unproven claim,
+#: which is the very thing this file exists to make visible. tests/test_bucketb_
+#: driving.py closes those (SEC-02, WAF-04, KIEM-02, KSPM-04) and takes the ends to
+#: 331 / 62.
+#:
+#: THE CIS COMPUTE BENCHMARK IS THE LARGEST SINGLE ADDITION THIS FILE HAS SEEN, and it
+#: moved only the floor: 460 -> 503 registered, 331 -> 374 proven-failing, unobserved
+#: DOWN from 62 to 61. Forty-three new checks and not one new entry in the unobserved
+#: list is the shape the LMB-08/09 note above describes, held at forty-three times the
+#: scale -- every one arrived with a test in tests/test_cis_compute.py that drives it to
+#: an actual FAIL. That file also asserts the same invariant locally, over its own
+#: declarations, so a forty-fourth check without a driving test fails immediately rather
+#: than at the next regeneration of the doc.
+#:
+#: LSAIL-01 is the one check that moved for a reason other than being added: it had
+#: never been observed because nothing built a Lightsail instance fixture, and the new
+#: Lightsail cases do.
+#:
+#: TRANCHE 5 TOOK THE LOUDEST CLAIMS FIRST. Of the 61 never-observed checks, 26 were
+#: declared CRITICAL or HIGH -- the catalogue telling an operator a finding is urgent
+#: while nothing anywhere had seen it produced. An AST pass showed 22 of the 26 already
+#: had a literal FAIL path and were simply never driven, because the nearest existing
+#: fixture sets the SAFE value: ECS-02 (root user) was observed and ECS-01 (privileged)
+#: was not, from the same loop over the same task definition, because nothing in the
+#: suite had ever set `privileged: true`. tests/test_unproven_checks_tranche5.py drives
+#: all 22, and EXTACCESS-02 came with them from a negative case.
+#:
+#: 61 -> 33 never observed and 374 -> 397 proven failing. Five more (BDR-03, HSM-01,
+#: NFW-01, NFW-03, S3T-02) moved out of never-observed into the middle rather than to
+#: proven, because the new fixtures make their sections run and they answer PASS on the
+#: configuration under test. That is progress and the middle is a residual, not a
+#: ceiling -- see the note at the top of this block.
+#:
+#: FOUR OF THE 26 ARE STILL NOT DRIVEN, and the reasons are recorded in that file's
+#: DEFERRED map rather than left to be rediscovered: WAF-01 has no FAIL path at all
+#: (its only posture WARN is "no Web ACLs in this scope", and a blanket FAIL would flag
+#: every account with nothing to protect), and CWPP-01, SEG-02 and VULN-03 reach `_add`
+#: through a non-literal id, so neither the static pass nor a reader can locate their
+#: FAIL path. Those need the id made legible first.
+#: TRANCHE 6 TOOK THE OTHER END: the 13 checks declared HIGH that RAN but had never been
+#: driven to a failure. That bucket is easy to mistake for harmless and is not, because of
+#: the asymmetry at the top of this file -- a check that has only ever PASSed or WARNed has
+#: never once rendered the severity, compliance mapping or remediation the catalogue holds
+#: for it. Eleven are driven by tests/test_unproven_checks_tranche6.py, and CFN-04 came
+#: with them. 397 -> 409 proven failing; the middle falls 73 -> 61.
+#:
+#: THE OTHER TWO ARE NOT A COVERAGE GAP. BDR-05 and DDB-01 have exactly one literal FAIL
+#: site each and it sits inside an `except` handler -- `_add("FAIL", ..., str(e))`. Their
+#: declared HIGH is reachable only by making the AWS call throw, so a fixture would prove
+#: the error handler rather than the check. They belong to a wider defect: eleven checks
+#: report a FAILED READ as their finding while the security condition they exist for is a
+#: WARN. That is fixed as its own change, not papered over with a fixture here.
+MAX_NEVER_OBSERVED = 33
+MIN_PROVEN_FAILING = 409
 
 
 def doc_text() -> str:

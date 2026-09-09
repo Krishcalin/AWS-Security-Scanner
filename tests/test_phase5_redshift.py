@@ -103,14 +103,14 @@ def test_rss01_public_workgroup_fails():
     assert "FAIL" in _status(s, "RSS-01")
 
 
-def test_rss03_require_ssl_false_fails_rss04_no_vpc_warns():
+def test_rss03_require_ssl_false_fails_rss04_no_vpc_fails():
     s = _rs_scanner(workgroups=[{"workgroupName": "wg", "publiclyAccessible": False,
                                  "enhancedVpcRouting": False,
                                  "configParameters": [{"parameterKey": "require_ssl",
                                                        "parameterValue": "false"}]}])
     s._check_redshift()
     assert "FAIL" in _status(s, "RSS-03")
-    assert "WARN" in _status(s, "RSS-04")
+    assert "FAIL" in _status(s, "RSS-04")
 
 
 def test_rss02_aws_owned_key_warns_cmk_present_passes():

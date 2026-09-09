@@ -107,6 +107,90 @@ def _imported_names(path: str) -> set:
     return names
 
 
+def _used_names(path: str) -> dict:
+    """{module: True} for every first-party module this file actually USES.
+
+    THE HOLE THIS CLOSES. `aws_nhi` was imported by three production modules and
+    called by none of them. It shipped complete -- five checks, a permission ledger,
+    full write-ups, its own test file -- and could not fire, because nothing invoked
+    it. `_imported_names` saw three importers and reported it reached, which is the
+    one answer that made the defect invisible: from an import-based check, an unused
+    import and a wired module look identical.
+
+    The import was not pointless, either, which is why this needs its own pass rather
+    than a stricter version of the other. `aws_nhi` registers its CheckDefs at import
+    time, so importing it really does populate the four metadata maps -- the checks
+    were registered, counted and documented while the logic behind them was
+    unreachable. Registration is not execution.
+
+    So: an attribute access on the module (`aws_nhi.nhi_findings`), or a use of a
+    symbol imported from it. Assignment targets do not count -- rebinding a name is
+    not using the module.
+    """
+    mods = _modules()
+    try:
+        tree = ast.parse(io.open(path, encoding="utf-8").read(), path)
+    except (OSError, SyntaxError):
+        return {}
+    stem = os.path.basename(path)[:-3]
+    alias = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            tail = node.module.split(".")[-1]
+            for a in node.names:
+                if tail in mods:
+                    alias[a.asname or a.name] = tail
+                elif a.name in mods:
+                    alias[a.asname or a.name] = a.name
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                tail = a.name.split(".")[-1]
+                if tail in mods:
+                    alias[a.asname or tail] = tail
+    used = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            name = node.value.id
+            mod = alias.get(name, name if name in mods else None)
+            if mod and mod != stem:
+                used[mod] = True
+        elif isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Store):
+            mod = alias.get(node.id)
+            if mod and mod != stem:
+                used[mod] = True
+    return used
+
+
+def _users() -> dict:
+    """module -> files that USE it, as opposed to merely importing it."""
+    mods = _modules()
+    found = {}
+    for d in IMPORTER_DIRS:
+        top = os.path.join(ROOT, d)
+        if not os.path.isdir(top):
+            continue
+        for dirpath, dirs, files in os.walk(top):
+            dirs[:] = [x for x in dirs if x not in ("__pycache__", "tests")]
+            for f in files:
+                if not f.endswith(".py"):
+                    continue
+                path = os.path.join(dirpath, f)
+                for name in _used_names(path):
+                    if name in mods:
+                        found.setdefault(name, set()).add(
+                            os.path.relpath(path, ROOT).replace("\\", "/"))
+    return found
+
+
+def _declares_checks(path: str) -> bool:
+    """Whether the module registers CheckDefs, i.e. puts ids in the catalogue."""
+    try:
+        src = io.open(path, encoding="utf-8").read()
+    except OSError:
+        return False
+    return "checkdef" in src and ".register(" in src
+
+
 def _importers() -> dict:
     mods = _modules()
     found = {}
@@ -131,6 +215,55 @@ def _importers() -> dict:
 @pytest.fixture(scope="module")
 def reached():
     return _importers()
+
+
+@pytest.fixture(scope="module")
+def used():
+    return _users()
+
+
+def test_a_module_that_declares_checks_is_actually_called(used):
+    """THE aws_nhi RATCHET, and the sharpest form of the rule.
+
+    A module that registers CheckDefs puts ids into the catalogue at import time --
+    they are counted in the published total, carry compliance mappings and remediation
+    write-ups, and appear to a reader as delivered coverage. If nothing then CALLS the
+    module, every one of those checks is unfirable, and the product is advertising
+    capability it does not have. That is what NHI-01..05 were: registered, documented,
+    counted, and unreachable, for as long as the module had importers and no caller.
+    """
+    mods = _modules()
+    declaring = sorted(m for m, rel in mods.items()
+                       if _declares_checks(os.path.join(ROOT, rel)))
+    assert declaring, "no module declares checks any more; this test needs rewriting"
+    silent = [m for m in declaring if m not in used]
+    assert not silent, (
+        "%s registers checks in the catalogue but nothing calls it, so those checks "
+        "cannot fire. Wire the module, or delete it with its check declarations -- do "
+        "NOT leave registered-but-unreachable checks counted in the published total."
+        % (silent,))
+
+
+def test_no_module_is_imported_without_ever_being_used(used, reached):
+    """The general form. An import is not a caller.
+
+    `test_no_module_is_unreached_without_being_declared` asks whether somebody imports
+    the module, and that question has a blind spot: an unused import satisfies it.
+    `aws_nhi` sat in it for as long as it existed. ENTRY_POINTS and UNREACHED are
+    excluded for the same reasons as above -- a process has no caller by definition,
+    and declared debt is already written down.
+    """
+    orphans = sorted(m for m in _modules()
+                     if m in reached
+                     and m not in used
+                     and m not in ENTRY_POINTS
+                     and m not in UNREACHED)
+    assert not orphans, (
+        "%s is imported but never used -- no attribute access, no imported symbol. "
+        "Either it is wired and this test is wrong, or it is dead weight that reads "
+        "as delivered capability. An import for a registration side effect is still "
+        "not a caller: aws_nhi registered five checks that way and none could fire."
+        % (orphans,))
 
 
 def test_no_module_is_unreached_without_being_declared(reached):

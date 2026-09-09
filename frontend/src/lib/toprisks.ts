@@ -114,9 +114,12 @@ export const RISK_CATEGORIES: RiskCategory[] = [
     // long tail of managed services. A category exists for these because the
     // alternative is 27% of the catalog appearing on no card at all, which reads
     // as an estate with less wrong with it than it has.
+    // APRUN- (App Runner), BATCH- and EB- (Elastic Beanstalk) arrived with the CIS
+    // Compute Services Benchmark. All three are managed compute, so they belong here
+    // rather than under Containers: none of them is a cluster the operator runs.
     prefixes: ['EC2-', 'AMI-', 'ASG-', 'LT-', 'SSM-', 'LMB-', 'SFN-', 'SQS-', 'SNS-',
       'ELC-', 'MM-', 'IOT-', 'MPV-', 'WM-', 'WSW-', 'CART-', 'CB-', 'CGP-', 'GRF-',
-      'STACK-', 'IMGB-'],
+      'STACK-', 'IMGB-', 'APRUN-', 'BATCH-', 'EB-'],
     seeAll: '/findings',
   },
 ]
