@@ -32,6 +32,8 @@ __all__ = [
     "TLS_PARAMETERS",
     "tls_parameter_for",
     "tls_enforcement",
+    "memorydb_open_users",
+    "memorydb_acl_open_users",
     "NOT_DETERMINABLE",
     "DECLINED_AS_NOT_A_FINDING",
 ]
@@ -127,6 +129,57 @@ def _find(parameters: Optional[Sequence[Mapping]], name: str) -> Optional[Mappin
         if str(p.get("ParameterName") or "").strip().lower() == name.lower():
             return p
     return None
+
+
+# ── MemoryDB access control ──────────────────────────────────────────────────
+# MemoryDB authenticates through ACLs holding named users, and a user's
+# Authentication.Type is one of 'password', 'no-password' or 'iam' — botocore's own enum,
+# not a guess. A 'no-password' user is exactly what it says: anything that can reach the
+# cluster endpoint may connect as it. MemoryDB creates such a user by default, so a
+# cluster nobody configured is a cluster whose only protection is its security group.
+#
+# This is an OBSERVATION rather than an inference, in the same sense DOCDB-01 is: the
+# authentication type either is 'no-password' or it is not. Matching on the default ACL's
+# NAME would have been a heuristic, and would miss a renamed one.
+_OPEN_AUTH = "no-password"
+
+
+def memorydb_open_users(users: Optional[Sequence[Mapping]]) -> frozenset:
+    """Names of MemoryDB users that require no authentication at all."""
+    out = set()
+    for u in users or ():
+        if not isinstance(u, Mapping):
+            continue
+        auth = u.get("Authentication")
+        auth = auth if isinstance(auth, Mapping) else {}
+        if str(auth.get("Type") or "").strip().lower() == _OPEN_AUTH:
+            name = str(u.get("Name") or "").strip()
+            if name:
+                out.add(name)
+    return frozenset(out)
+
+
+def memorydb_acl_open_users(acls: Optional[Sequence[Mapping]],
+                            open_users: Optional[frozenset]) -> Dict[str, tuple]:
+    """ACL name -> the passwordless users it grants, for ACLs that grant any.
+
+    An ACL naming no passwordless user is absent from the result rather than present with
+    an empty value, so a caller cannot accidentally treat "checked and clean" and "never
+    checked" as the same thing.
+    """
+    open_users = open_users or frozenset()
+    out: Dict[str, tuple] = {}
+    for a in acls or ():
+        if not isinstance(a, Mapping):
+            continue
+        name = str(a.get("Name") or "").strip()
+        if not name:
+            continue
+        members = [str(n) for n in (a.get("UserNames") or [])
+                   if str(n) in open_users]
+        if members:
+            out[name] = tuple(sorted(members))
+    return out
 
 
 def tls_enforcement(engine: Optional[str],

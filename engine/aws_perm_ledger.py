@@ -421,6 +421,45 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "read MultiAZ -- whether an availability-zone failure removes the whole "
              "cache, which also decides whether ELC-04's failover has anywhere to go"),
     ),
+    # ── MemoryDB, which had no posture coverage at all ───────────────────────
+    # Three NEW actions. memorydb:* is its own IAM prefix, so a role that can read RDS
+    # and ElastiCache can read none of this -- the grant has to be added deliberately.
+    "MDB-01": (
+        _req("memorydb:DescribeClusters",
+             "read TLSEnabled -- set at creation and unchangeable afterwards, so this "
+             "decides whether the cluster needs rebuilding rather than reconfiguring"),
+    ),
+    "MDB-02": (
+        _req("memorydb:DescribeClusters",
+             "read ACLName, which is the only thing on the cluster naming its access "
+             "control"),
+        _req("memorydb:DescribeUsers",
+             "read Authentication.Type -- a value of 'no-password' is unauthenticated "
+             "access as an observation rather than an inference"),
+        _req("memorydb:DescribeACLs",
+             "resolve the cluster's ACL to the users it grants, since the cluster names "
+             "the ACL and not its members"),
+    ),
+    "MDB-03": (
+        _req("memorydb:DescribeClusters",
+             "read SnapshotRetentionLimit -- MemoryDB is a durable datastore, so this "
+             "is the difference between recoverable and lost"),
+    ),
+    "MDB-04": (
+        _req("memorydb:DescribeClusters",
+             "read KmsKeyId -- MemoryDB is always encrypted, so this is key ownership "
+             "and not whether the data is protected"),
+    ),
+    "MDB-05": (
+        _req("memorydb:DescribeClusters",
+             "read AutoMinorVersionUpgrade -- whether engine security fixes arrive on "
+             "their own or wait for somebody to schedule them"),
+    ),
+    "MDB-06": (
+        _req("memorydb:DescribeClusters",
+             "read AvailabilityMode -- single-AZ discards the multi-AZ durability that "
+             "is the reason to choose MemoryDB over ElastiCache"),
+    ),
     # ── TLS enforcement (CIS AWS Database Services v2.0.0) ───────────────────
     # The first checks in the product to read a DB parameter group. Two NEW actions on
     # the scanning role, and they are the whole cost of covering a control that spans

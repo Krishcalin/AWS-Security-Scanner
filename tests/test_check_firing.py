@@ -188,8 +188,13 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: cluster has no instances at all. ELC-07/08 read two fields that were already arriving
 #: in a response the ElastiCache section paginated and never looked at. No new API call
 #: and no new IAM grant between the four of them.
+#: 427 -> 433: MDB-01..06. MemoryDB had NO posture coverage — the client was constructed
+#: once in the whole product, for DSPM discovery — so an account could hold a durable
+#: Redis datastore with unauthenticated access and nothing was reported. MDB-02 is the
+#: one that matters: a passwordless ACL user is an observation, not an inference, and
+#: MemoryDB creates one by default. See tests/test_cis_db_memorydb.py.
 MAX_NEVER_OBSERVED = 28
-MIN_PROVEN_FAILING = 427
+MIN_PROVEN_FAILING = 433
 
 
 def doc_text() -> str:

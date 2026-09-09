@@ -123,6 +123,7 @@ FLOORS = {
     "test_ci_integrations.py": 7,
     "test_cis_compute.py": 86,
     "test_cis_db_cluster_and_cache.py": 18,
+    "test_cis_db_memorydb.py": 21,
     "test_cis_db_tls.py": 24,
     "test_cnapp_api.py": 7,
     "test_cnapp_cfn.py": 5,

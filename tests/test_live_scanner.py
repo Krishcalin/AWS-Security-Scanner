@@ -174,7 +174,15 @@ class TestDataStructures(unittest.TestCase):
         # have DELETED that coverage, so NEP-01..04 exist to keep it, correctly labelled.
         # It costs two new calls on a default scan, both against a service whose IAM
         # actions are rds:* -- so the scanning role needs no new grant.
-        self.assertEqual(len(SECTIONS), 95)
+        #
+        # 96: +MEMORYDB -- and unlike NEPTUNE above this IS new coverage. The memorydb
+        # client was built exactly once in the whole product, for DSPM crown-jewel
+        # discovery, so an account could hold a durable Redis datastore with
+        # unauthenticated access (MemoryDB creates a passwordless ACL user by DEFAULT)
+        # and OverWatch reported nothing. Three new calls and three new IAM actions on a
+        # separate memorydb:* prefix, which is the honest price of a service that was
+        # entirely invisible.
+        self.assertEqual(len(SECTIONS), 96)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

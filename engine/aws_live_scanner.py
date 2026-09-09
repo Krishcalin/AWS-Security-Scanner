@@ -263,7 +263,8 @@ SECTIONS = [
     "AI_LOGGING", "SHADOW_AI", "VECTORSTORE",
     # Batch 1 of the 426-service coverage gap analysis. Each is its own top-level
     # section: a defect in a nested one takes out every test of its host.
-    "IOT", "EMR", "CODEBUILD", "DOCDB", "NEPTUNE", "IMAGEBUILDER", "TRANSFER",
+    "IOT", "EMR", "CODEBUILD", "DOCDB", "NEPTUNE", "MEMORYDB", "IMAGEBUILDER",
+    "TRANSFER",
     # Batch 2. Declared via aws_checkdef rather than five hand-edited literals.
     "NETWORKFIREWALL", "LIGHTSAIL", "PRIVATECA", "QUICKSIGHT",
     "IDENTITYCENTER", "GLUE",
@@ -333,6 +334,7 @@ SECTION_LABELS = {
     "CODEBUILD":      "AWS CODEBUILD",
     "DOCDB":          "AMAZON DOCUMENTDB",
     "NEPTUNE":        "AMAZON NEPTUNE",
+    "MEMORYDB":       "AMAZON MEMORYDB",
     "IMAGEBUILDER":   "EC2 IMAGE BUILDER",
     "TRANSFER":       "AWS TRANSFER FAMILY",
     "NETWORKFIREWALL": "AWS NETWORK FIREWALL",
@@ -695,6 +697,13 @@ CHECK_SEVERITY = {
     # what MEDIUM is for: real, worth reporting, not a breach.
     "AUR-07": "MEDIUM", "AUR-08": "MEDIUM",
     "ELC-07": "MEDIUM", "ELC-08": "MEDIUM",
+    # MemoryDB, which had no posture coverage at all. MDB-02 is CRITICAL because a
+    # passwordless ACL user is a direct OBSERVATION of unauthenticated access to a
+    # durable datastore, in the same sense DOCDB-01 observes a public snapshot. MDB-04 is
+    # LOW because MemoryDB is ALWAYS encrypted at rest -- the finding is key ownership,
+    # not plaintext, and calling that HIGH is how a risk score stops meaning anything.
+    "MDB-01": "HIGH", "MDB-02": "CRITICAL", "MDB-03": "MEDIUM",
+    "MDB-04": "LOW", "MDB-05": "MEDIUM", "MDB-06": "MEDIUM",
     "IMGB-01": "HIGH",
     "XFER-01": "HIGH", "XFER-02": "MEDIUM", "XFER-03": "INFO",
     "MART-01": "CRITICAL",
@@ -1094,6 +1103,12 @@ COMPLIANCE_MAP = {
     "AUR-07": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
     "AUR-08": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
     "ELC-07": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "MDB-01": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "MDB-02": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2"},
+    "MDB-03": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "MDB-04": {"PCI-DSS": "3.6.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
+    "MDB-05": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "MDB-06": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(C)", "SOC2": "A1.2", "NIST": "CP-9"},
     # CP-9 rather than the CP-10 this would otherwise map to: the NIST axis is a FROZEN
     # 38-control universe (compliance/crosswalk.json) from which 34 further frameworks
     # are derived, so adding a control means supplying its row in every one of them.
@@ -1572,6 +1587,12 @@ REMEDIATION_MAP = {
     "AUR-07": "Raise the cluster's backup retention so a problem found next week is still recoverable: aws rds modify-db-cluster --db-cluster-identifier <CLUSTER> --backup-retention-period 7 --apply-immediately. This is a cluster setting; changing it on an instance does nothing for Aurora",
     "AUR-08": "Enable IAM database authentication on the CLUSTER so applications use short-lived tokens instead of a static password: aws rds modify-db-cluster --db-cluster-identifier <CLUSTER> --enable-iam-database-authentication --apply-immediately. Then grant rds-db:connect to the role and create the DB user with the IAM auth plugin",
     "ELC-07": "Turn on automatic snapshots so a flushed or corrupted cache is recoverable: aws elasticache modify-replication-group --replication-group-id <RG_ID> --snapshot-retention-limit 7 --apply-immediately. Set a snapshot window that misses your peak, since snapshotting adds load to the node it runs on",
+    "MDB-01": "TLS cannot be enabled on an existing MemoryDB cluster, so this needs a rebuild: snapshot it with aws memorydb create-snapshot --cluster-name <CLUSTER> --snapshot-name <SNAP>, then aws memorydb create-cluster --cluster-name <NEW> --tls-enabled --snapshot-name <SNAP> --node-type <TYPE> --acl-name <ACL> and cut over",
+    "MDB-02": "Stop the cluster accepting unauthenticated connections. Create users with real authentication and an ACL containing only those: aws memorydb create-user --user-name <USER> --authentication-mode Type=iam --access-string 'on ~* &* +@all', then aws memorydb create-acl --acl-name <ACL> --user-names <USER>, then aws memorydb update-cluster --cluster-name <CLUSTER> --acl-name <ACL>",
+    "MDB-03": "Turn on automatic snapshots -- MemoryDB is a durable datastore, so this is data loss and not a cold cache: aws memorydb update-cluster --cluster-name <CLUSTER> --snapshot-retention-limit 7",
+    "MDB-04": "The key is chosen at creation and cannot be changed, so switching to a customer-managed key means a restore: aws memorydb create-cluster --cluster-name <NEW> --kms-key-id <KEY_ARN> --snapshot-name <SNAP> --node-type <TYPE> --acl-name <ACL>. Worth doing only where you need an auditable key policy or the ability to revoke by disabling the key",
+    "MDB-05": "Let the engine take its own security fixes: aws memorydb update-cluster --cluster-name <CLUSTER> --auto-minor-version-upgrade",
+    "MDB-06": "Multi-AZ needs at least one replica per shard, so add replicas rather than flipping a flag: aws memorydb update-cluster --cluster-name <CLUSTER> --replica-configuration ReplicaCount=1. Confirm the replicas landed in different availability zones afterwards",
     "ELC-08": "Enable Multi-AZ so the group survives an availability-zone failure: aws elasticache modify-replication-group --replication-group-id <RG_ID> --multi-az-enabled --automatic-failover-enabled --apply-immediately. It needs at least one replica in another AZ, so add one first if there is none: aws elasticache increase-replica-count --replication-group-id <RG_ID> --new-replica-count 1 --apply-immediately",
     "IMGB-01": "Remove the wildcard principal from the Image Builder resource policy so the image and everything baked into it stops being shared beyond your account: aws imagebuilder put-image-policy --image-arn <ARN> --policy file://scoped-policy.json . Then audit the image for embedded credentials, since anyone could have pulled it",
     "XFER-01": "Stop accepting plain FTP -- credentials and file contents cross the network in the clear. Move the server to FTPS or SFTP, which carry the same workflow encrypted: aws transfer update-server --server-id <SERVER_ID> --protocols SFTP FTPS. Coordinate with clients before removing FTP",
@@ -12041,6 +12062,129 @@ class AWSLiveScanner:
                               f"Neptune cluster snapshot {sid} is not shared publicly "
                               f"| {sid}")
 
+    def _check_memorydb(self):
+        """MDB-01..06 — Amazon MemoryDB.
+
+        MemoryDB had no posture coverage at all: the client was constructed exactly once
+        in the whole product, for DSPM crown-jewel discovery, so an account could hold a
+        durable Redis datastore with unauthenticated access and OverWatch would report
+        nothing about it.
+
+        MDB-02 is the reason this section is worth having. MemoryDB authenticates through
+        ACLs of named users, and a user's Authentication.Type is one of 'password',
+        'no-password' or 'iam'. A 'no-password' user can be connected as by anything that
+        reaches the endpoint, and MemoryDB creates one by default — so the common case is
+        a cluster whose only protection is its security group."""
+        self._section_header("MEMORYDB")
+        try:
+            mdb = self._client("memorydb")
+        except Exception:
+            return
+
+        # Users and ACLs first: MDB-02 needs both, and a cluster names only its ACL.
+        open_users, acl_open = frozenset(), {}
+        acl_known = True
+        try:
+            users = []
+            for page in mdb.get_paginator("describe_users").paginate():
+                users.extend(page.get("Users", []) or [])
+            acls = []
+            for page in mdb.get_paginator("describe_acls").paginate():
+                acls.extend(page.get("ACLs", []) or [])
+            open_users = aws_cis_db.memorydb_open_users(users)
+            acl_open = aws_cis_db.memorydb_acl_open_users(acls, open_users)
+        except Exception as e:
+            # Without the ACL listing MDB-02 is UNDECIDED for every cluster. Say so once
+            # here rather than emitting a per-cluster verdict that is not one.
+            acl_known = False
+            self._read_failed("MDB-02", "MEMORYDB", "memorydb",
+                              "memorydb:DescribeACLs", e)
+
+        try:
+            clusters = []
+            for page in mdb.get_paginator("describe_clusters").paginate():
+                clusters.extend(page.get("Clusters", []) or [])
+        except Exception as e:
+            self._read_failed("MDB-01", "MEMORYDB", "memorydb",
+                              "memorydb:DescribeClusters", e)
+            return
+
+        if not clusters:
+            self._add("INFO", "MDB-01", "MEMORYDB", "memorydb",
+                      "No MemoryDB clusters found in this region")
+            return
+
+        for c in clusters:
+            name = (c or {}).get("Name") or "unknown"
+            # MDB-01 — TLS. MemoryDB enables it at creation and it cannot be changed
+            # afterwards, so False here means the cluster was created that way.
+            tls = c.get("TLSEnabled")
+            if tls is False:
+                self._add("FAIL", "MDB-01", "MEMORYDB", name,
+                          f"TLS DISABLED | {name} — client traffic crosses the VPC in "
+                          f"cleartext and this cannot be changed on an existing cluster")
+            elif tls is True:
+                self._add("PASS", "MDB-01", "MEMORYDB", name, f"TLS enabled | {name}")
+
+            # MDB-02 — unauthenticated access through the cluster's ACL.
+            acl_name = (c.get("ACLName") or "").strip()
+            if not acl_known:
+                pass                      # already reported once, above
+            elif not acl_name:
+                self._add("WARN", "MDB-02", "MEMORYDB", name,
+                          f"MDB-02 NOT EVALUATED — {name} names no ACL")
+            elif acl_name in acl_open:
+                who = ", ".join(acl_open[acl_name])
+                self._add("FAIL", "MDB-02", "MEMORYDB", name,
+                          f"UNAUTHENTICATED ACCESS | {name} — ACL {acl_name} grants "
+                          f"passwordless user(s) {who}, so anything that reaches the "
+                          f"endpoint can connect")
+            else:
+                self._add("PASS", "MDB-02", "MEMORYDB", name,
+                          f"ACL {acl_name} grants no passwordless user | {name}")
+
+            # MDB-03 — automatic snapshots. MemoryDB is a durable datastore rather than
+            # a cache, so this is data-loss exposure and not a warm-up cost.
+            retention = c.get("SnapshotRetentionLimit")
+            if isinstance(retention, int) and retention <= 0:
+                self._add("FAIL", "MDB-03", "MEMORYDB", name,
+                          f"Automatic snapshots DISABLED | {name} — nothing to restore "
+                          f"a durable datastore from")
+            elif isinstance(retention, int):
+                self._add("PASS", "MDB-03", "MEMORYDB", name,
+                          f"Snapshot retention={retention}d | {name}")
+
+            # MDB-04 — key ownership. MemoryDB is ALWAYS encrypted at rest, so this is
+            # not "unencrypted"; it is whether you hold the key. LOW on purpose.
+            if c.get("KmsKeyId"):
+                self._add("PASS", "MDB-04", "MEMORYDB", name,
+                          f"Encrypted with a customer-managed key | {name}")
+            else:
+                self._add("FAIL", "MDB-04", "MEMORYDB", name,
+                          f"Encrypted with the AWS-owned key rather than a "
+                          f"customer-managed key | {name} — no key policy to audit and "
+                          f"no way to revoke access by disabling the key")
+
+            # MDB-05 — engine patching.
+            amu = c.get("AutoMinorVersionUpgrade")
+            if amu is False:
+                self._add("FAIL", "MDB-05", "MEMORYDB", name,
+                          f"Auto minor version upgrade=OFF | {name} — engine security "
+                          f"fixes require a manual upgrade nobody is scheduled to do")
+            elif amu is True:
+                self._add("PASS", "MDB-05", "MEMORYDB", name,
+                          f"Auto minor version upgrade=ON | {name}")
+
+            # MDB-06 — availability mode. A STRING enum ('singleaz'/'multiaz'), so this
+            # decides on the recognised values only.
+            mode = str(c.get("AvailabilityMode") or "").strip().lower()
+            if mode == "singleaz":
+                self._add("FAIL", "MDB-06", "MEMORYDB", name,
+                          f"Single-AZ | {name} — an availability-zone failure takes the "
+                          f"datastore with it")
+            elif mode == "multiaz":
+                self._add("PASS", "MDB-06", "MEMORYDB", name, f"Multi-AZ | {name}")
+
     def _check_imagebuilder(self):
         """IMGB-01 resource policies, plus IMGB-02/03 (CIS-Compute 17.1, 17.2).
 
@@ -18292,6 +18436,7 @@ class AWSLiveScanner:
             "CODEBUILD":      self._check_codebuild,
             "DOCDB":          self._check_docdb,
             "NEPTUNE":        self._check_neptune,
+            "MEMORYDB":       self._check_memorydb,
             "IMAGEBUILDER":   self._check_imagebuilder,
             "TRANSFER":       self._check_transfer,
             "NETWORKFIREWALL": self._check_networkfirewall,
