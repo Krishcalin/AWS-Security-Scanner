@@ -120,6 +120,7 @@ FLOORS = {
     "test_check_maps_lockstep.py": 12,
     "test_checkdef.py": 23,
     "test_ci_integrations.py": 7,
+    "test_cis_compute.py": 86,
     "test_cnapp_api.py": 7,
     "test_cnapp_cfn.py": 5,
     "test_cnapp_connectors.py": 50,

@@ -91,8 +91,21 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: which is the very thing this file exists to make visible. tests/test_bucketb_
 #: driving.py closes those (SEC-02, WAF-04, KIEM-02, KSPM-04) and takes the ends to
 #: 331 / 62.
-MAX_NEVER_OBSERVED = 62
-MIN_PROVEN_FAILING = 331
+#:
+#: THE CIS COMPUTE BENCHMARK IS THE LARGEST SINGLE ADDITION THIS FILE HAS SEEN, and it
+#: moved only the floor: 460 -> 503 registered, 331 -> 374 proven-failing, unobserved
+#: DOWN from 62 to 61. Forty-three new checks and not one new entry in the unobserved
+#: list is the shape the LMB-08/09 note above describes, held at forty-three times the
+#: scale -- every one arrived with a test in tests/test_cis_compute.py that drives it to
+#: an actual FAIL. That file also asserts the same invariant locally, over its own
+#: declarations, so a forty-fourth check without a driving test fails immediately rather
+#: than at the next regeneration of the doc.
+#:
+#: LSAIL-01 is the one check that moved for a reason other than being added: it had
+#: never been observed because nothing built a Lightsail instance fixture, and the new
+#: Lightsail cases do.
+MAX_NEVER_OBSERVED = 61
+MIN_PROVEN_FAILING = 374
 
 
 def doc_text() -> str:

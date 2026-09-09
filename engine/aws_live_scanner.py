@@ -91,6 +91,7 @@ from engine import aws_modelartifact
 from engine import aws_nitro
 from engine import aws_perimeter
 from engine import aws_checkdef
+from engine import aws_cis_compute
 from engine import aws_extsvc
 from engine import aws_extsvc2
 from engine import aws_extsvc3
@@ -285,6 +286,12 @@ SECTIONS = [
     # NOTE CloudFormation is STACK-*, not CFN-* -- CFN-01..06 are CLOUDFRONT.
     "CLOUDFORMATION", "FIREWALLMANAGER", "ECRPUBLIC", "MULTIPARTYAPPROVAL",
     "WICKR", "MEDIAPACKAGE",
+    # CIS AWS Compute Services Benchmark v2.0.0. Most of its 43 new checks extend
+    # sections that already exist (AMI, EC2, ECS, LAMBDA, LIGHTSAIL, IMAGEBUILDER);
+    # these three services had no coverage at all, so they are new sections. They go
+    # HERE rather than at the end because a section listed in CHECK_MAP and absent from
+    # this list never runs on a default scan — the defect that hid four AI sections.
+    "APPRUNNER", "BATCH", "BEANSTALK",
     # NHI reads what the IAM section already fetched (principals + credential
     # report) and makes no call of its own, so it can sit anywhere before
     # CORRELATE. `aws_nhi` had been complete and callerless since it was written;
@@ -357,6 +364,9 @@ SECTION_LABELS = {
     "FIREWALLMANAGER": "AWS FIREWALL MANAGER",
     "ECRPUBLIC":      "AMAZON ECR PUBLIC",
     "MULTIPARTYAPPROVAL": "AWS MULTI-PARTY APPROVAL",
+    "APPRUNNER":      "AWS APP RUNNER",
+    "BATCH":          "AWS BATCH",
+    "BEANSTALK":      "AWS ELASTIC BEANSTALK",
     "WICKR":          "AWS WICKR",
     "MEDIAPACKAGE":   "AWS ELEMENTAL MEDIAPACKAGE",
     "ELASTICACHE":    "AMAZON ELASTICACHE",
@@ -2490,6 +2500,11 @@ class AWSLiveScanner:
         self.results:  List[Result] = []
         self.account   = ""
         self.trusted_accounts: set = set()  # allowlist: cross-account grants to these are not flagged
+        # AMI-04 (CIS-Compute 2.1.1). A naming convention is an organisational fact that
+        # nothing in an AMI reveals, so the check reports NOT EVALUATED until this is set
+        # rather than guessing a pattern and failing correct estates.
+        self.ami_name_pattern: Optional[str] = os.environ.get(
+            "OVERWATCH_AMI_NAME_PATTERN") or None
         self._session  = session          # boto3.Session for assumed-role scans; None = ambient creds
         self.all_regions_scan = all_regions
         self.graph: Optional[SecurityGraph] = None
@@ -3563,6 +3578,20 @@ class AWSLiveScanner:
             code = (getattr(e, "response", {}) or {}).get("Error", {}).get("Code", "")
         return code in ("AccessDenied", "AccessDeniedException") or "AccessDenied" in str(e)
 
+    @staticmethod
+    def _error_code(e) -> str:
+        """The AWS error code on an exception, or "" if it carries none.
+
+        WHY NOT `except ClientError`. The name is bound only when boto3 imported (see
+        the top of this module), so catching it by name raises NameError wherever boto3
+        is absent — on the COMMON path, since ResourceNotFoundException is the ordinary
+        answer for a function with no URL, a layer with no policy, and a Lambda with no
+        resource policy. Reading the code off whatever was raised works either way."""
+        resp = getattr(e, "response", None)
+        if isinstance(resp, dict):
+            return str((resp.get("Error") or {}).get("Code") or "")
+        return ""
+
     def _check_trail_bucket(self, t: Dict, name: str) -> None:
         """LOG-09 — the CloudTrail log S3 bucket must not be public. AccessDenied =>
         INFO (org/centralized-logging bucket in another account), NEVER a false FAIL."""
@@ -4058,7 +4087,9 @@ class AWSLiveScanner:
         # not skip the others (findings emit under section="EC2").
         for _cid, _fn in (("SSM-01", self._check_ssm),
                           ("LT-01", self._check_launch_templates),
-                          ("ASG-01", self._check_asg)):
+                          ("ASG-01", self._check_asg),
+                          ("EC2-12", self._check_ec2_hygiene),
+                          ("EC2-10", self._check_ec2_tag_policy)):
             try:
                 _fn()
             except Exception as e:
@@ -4077,6 +4108,190 @@ class AWSLiveScanner:
         except Exception:
             pass                                     # fail-open (cost/hygiene, not security) — a
             # throttled/denied describe_addresses must NOT emit a finding or flip CM-8 to FAILED
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # CIS AWS Compute Services Benchmark v2.0.0 — EC2 estate hygiene
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_ec2_hygiene(self):
+        """EC2-12..EC2-17 (CIS-Compute 2.5, 2.6, 2.7, 2.10, 2.11, 2.12) + ASG-02 (2.14).
+
+        ONE describe_instances page covers five of the six. Age, monitoring state,
+        default-group membership, stop time and block-device mappings all arrive on the
+        same instance description, so batching them here costs one call rather than five
+        — which is the difference between a benchmark being implementable and being an
+        argument about scan cost."""
+        ec2 = self._client("ec2")
+        # Default security groups are per-VPC and identified by NAME, so the ids have to
+        # be resolved before any instance can be judged against them.
+        default_sgs: List[str] = []
+        try:
+            for sg in self._paginate_strict(
+                    ec2, "describe_security_groups", "SecurityGroups",
+                    Filters=[{"Name": "group-name", "Values": ["default"]}]):
+                if sg.get("GroupId"):
+                    default_sgs.append(str(sg["GroupId"]))
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("EC2-14", "ec2:DescribeSecurityGroups")
+
+        instances: List[Dict] = []
+        try:
+            for res in self._paginate_strict(
+                    ec2, "describe_instances", "Reservations",
+                    Filters=[{"Name": "instance-state-name",
+                              "Values": ["running", "stopped"]}]):
+                instances += res.get("Instances", [])
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("EC2-12", "ec2:DescribeInstances")
+            return
+
+        now = self._today_dt()
+        counts = {"EC2-12": 0, "EC2-13": 0, "EC2-14": 0, "EC2-16": 0, "EC2-17": 0}
+        running = [i for i in instances
+                   if str((i.get("State") or {}).get("Name")) == "running"]
+        for inst in instances:
+            iid = str(inst.get("InstanceId") or "?")
+            is_running = str((inst.get("State") or {}).get("Name")) == "running"
+            if is_running:
+                age = aws_cis_compute.instance_age(inst, now)
+                if age["old"]:
+                    counts["EC2-12"] += 1
+                    self._add("FAIL", "EC2-12", "EC2", iid, f"{age['statement']} | {iid}")
+                mon = aws_cis_compute.instance_monitoring(inst)
+                if not mon["detailed"]:
+                    counts["EC2-13"] += 1
+                    self._add("FAIL", "EC2-13", "EC2", iid, f"{mon['statement']} | {iid}")
+            sg = aws_cis_compute.instance_default_sg(inst, default_sgs)
+            if sg["uses_default"]:
+                counts["EC2-14"] += 1
+                self._add("FAIL", "EC2-14", "EC2", iid, f"{sg['statement']} | {iid}")
+            stopped = aws_cis_compute.instance_stopped_age(inst, now)
+            if stopped["stale"]:
+                counts["EC2-16"] += 1
+                self._add("FAIL", "EC2-16", "EC2", iid, f"{stopped['statement']} | {iid}")
+            dot = aws_cis_compute.instance_delete_on_termination(inst)
+            if dot["persists"]:
+                counts["EC2-17"] += 1
+                self._add("FAIL", "EC2-17", "EC2", iid, f"{dot['statement']} | {iid}")
+
+        if running and not counts["EC2-12"]:
+            self._add("PASS", "EC2-12", "EC2", "ec2",
+                      f"All {len(running)} running instance(s) are within the 180-day age "
+                      f"limit")
+        if running and not counts["EC2-13"]:
+            self._add("PASS", "EC2-13", "EC2", "ec2",
+                      f"All {len(running)} running instance(s) publish detailed monitoring")
+        if instances and not counts["EC2-14"]:
+            self._add("PASS", "EC2-14", "EC2", "ec2",
+                      f"No instance is attached to a default security group")
+        if instances and not counts["EC2-17"]:
+            self._add("PASS", "EC2-17", "EC2", "ec2",
+                      f"All attached volumes are deleted on instance termination")
+
+        # EC2-15 — detached ENIs. Its own call and its own guard: a denied
+        # DescribeNetworkInterfaces must not discard the five findings above.
+        try:
+            enis = self._paginate_strict(ec2, "describe_network_interfaces",
+                                         "NetworkInterfaces")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("EC2-15", "ec2:DescribeNetworkInterfaces")
+            enis = None
+        if enis is not None:
+            idle = 0
+            for eni in enis:
+                r = aws_cis_compute.eni_unused(eni)
+                if r["unused"]:
+                    idle += 1
+                    self._add("FAIL", "EC2-15", "EC2", r["eni_id"],
+                              f"{r['statement']} | {r['eni_id']}")
+            if enis and not idle:
+                self._add("PASS", "EC2-15", "EC2", "ec2",
+                          f"All {len(enis)} network interface(s) are attached")
+
+        # ASG-02 — tag propagation. describe_auto_scaling_groups again rather than
+        # threading state out of _check_asg: that method has its own failure handling and
+        # coupling them would make either one's denial break the other.
+        try:
+            asgs = self._paginate_strict(self._client("autoscaling"),
+                                         "describe_auto_scaling_groups", "AutoScalingGroups")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("ASG-02",
+                                           "autoscaling:DescribeAutoScalingGroups")
+            return
+        bad = 0
+        for asg in asgs:
+            r = aws_cis_compute.asg_tag_propagation(asg)
+            if r["bad"]:
+                bad += 1
+                self._add("FAIL", "ASG-02", "EC2", r["asg"], f"{r['statement']} | {r['asg']}")
+        if asgs and not bad:
+            self._add("PASS", "ASG-02", "EC2", "asg",
+                      f"All {len(asgs)} Auto Scaling group(s) propagate their tags at launch")
+
+    def _check_ec2_tag_policy(self):
+        """EC2-10/EC2-11 (CIS-Compute 2.3, 2.4) — organisational tag policy.
+
+        ORGANIZATIONS IS GLOBAL AND OFTEN DENIED. A standalone account has no
+        organisation at all, and a member account is normally refused ListPolicies — only
+        the management account can read them. Neither is a failure, and reporting one as
+        a FAIL would put an unfixable finding in front of every member account in an org."""
+        try:
+            org = self._client("organizations", region="us-east-1")
+            policies = self._paginate_strict(org, "list_policies", "Policies",
+                                             Filter="TAG_POLICY")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("EC2-10", "organizations:ListPolicies")
+                self._add("INFO", "EC2-10", "EC2", "organizations",
+                          "Tag policies NOT EVALUATED — organizations:ListPolicies is "
+                          "denied here, which is normal outside the management account")
+            else:
+                self._add("INFO", "EC2-10", "EC2", "organizations",
+                          "Tag policies NOT EVALUATED — this account is not in an AWS "
+                          "Organization")
+            return
+
+        r = aws_cis_compute.org_tag_policy(policies)
+        if r["applicable"] and r["count"] == 0:
+            self._add("FAIL", "EC2-10", "EC2", "organizations", r["statement"])
+            # 2.4 asks whether a tag policy covers EC2. With no policy at all, 2.3 is the
+            # finding and repeating it as 2.4 is one problem reported twice.
+            return
+        self._add("PASS", "EC2-10", "EC2", "organizations",
+                  f"The organisation has {r['count']} tag policy/policies")
+
+        docs = []
+        for p in policies:
+            try:
+                content = (org.describe_policy(PolicyId=p.get("Id"))
+                           .get("Policy", {}).get("Content"))
+                docs.append(json.loads(content) if isinstance(content, str) else content)
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("EC2-11", "organizations:DescribePolicy")
+        if not docs:
+            self._add("INFO", "EC2-11", "EC2", "organizations",
+                      "Tag policy contents could not be read, so EC2 coverage is unknown")
+            return
+        cov = aws_cis_compute.ec2_tag_policy(docs)
+        if not cov["covers_ec2"]:
+            self._add("FAIL", "EC2-11", "EC2", "organizations", cov["statement"])
+        else:
+            self._add("PASS", "EC2-11", "EC2", "organizations",
+                      "A tag policy enforces tags for ec2 resource types")
+
+    def _today_dt(self) -> datetime:
+        """The clock, honouring the `_today` test seam so age-based checks are drivable.
+
+        `self._today` is a date (the EOL checks set it); age arithmetic needs a datetime,
+        and it must be tz-aware or subtracting an AWS timestamp raises."""
+        if self._today is not None:
+            return datetime(self._today.year, self._today.month, self._today.day,
+                            tzinfo=timezone.utc)
+        return datetime.now(timezone.utc)
 
     # ── Phase 6: helper reused by _check_launch_templates + _check_asg ────────────
     def _lt_http_tokens(self, ec2, lt_id: str, version) -> Optional[str]:
@@ -4303,6 +4518,10 @@ class AWSLiveScanner:
             return
         if not images:
             self._add("INFO", "AMI-01", "AMI", "ami", "No self-owned AMIs in this region")
+            # AMI-05 asks about the images running INSTANCES were launched from, and a
+            # third-party AMI is by definition not self-owned — so returning here would
+            # make the check unreachable in exactly the estate it is about.
+            self._check_ami_provenance()
             return
         exposed = 0
         for img in images:
@@ -4376,6 +4595,77 @@ class AWSLiveScanner:
         if images and enc_ok:
             self._add("PASS", "AMI-02", "AMI", "ami",
                       f"All {len(images)} self-owned AMI(s) use encrypted snapshots")
+
+        # AMI-04 — naming convention (CIS-Compute 2.1.1). Same describe_images result,
+        # no new call. Reports NOT EVALUATED rather than PASS when no convention is
+        # configured: "we did not check" and "it complies" are different claims.
+        if not self.ami_name_pattern:
+            self._add("INFO", "AMI-04", "AMI", "ami",
+                      "AMI naming convention NOT EVALUATED — set ami_name_pattern (or "
+                      "OVERWATCH_AMI_NAME_PATTERN) to the organisation's convention")
+        else:
+            offenders = 0
+            for img in images:
+                r = aws_cis_compute.ami_naming(img, self.ami_name_pattern)
+                if r["evaluated"] and not r["matches"]:
+                    offenders += 1
+                    self._add("FAIL", "AMI-04", "AMI",
+                              f"{r['name'] or r['image_id']}",
+                              f"{r['statement']} | {r['image_id']}")
+            if images and not offenders:
+                self._add("PASS", "AMI-04", "AMI", "ami",
+                          f"All {len(images)} self-owned AMI(s) match the configured "
+                          f"naming convention")
+
+        # AMI-05 — provenance of the images instances are actually RUNNING (CIS-Compute
+        # 2.1.3). Deliberately not driven off the self-owned list above: a third-party
+        # AMI is by definition not self-owned, so an audit that only looks at images you
+        # own is blind to exactly the case this asks about.
+        self._check_ami_provenance()
+
+    def _check_ami_provenance(self):
+        """AMI-05 — running instances launched from AMIs nobody in this estate published.
+
+        Own try/except so a denied describe_instances cannot take AMI-01/02/03/04 down
+        with it: those have already emitted by the time this runs."""
+        try:
+            ec2 = self._client("ec2")
+            instances: List[Dict] = []
+            for res in self._paginate_strict(
+                    ec2, "describe_instances", "Reservations",
+                    Filters=[{"Name": "instance-state-name", "Values": ["running"]}]):
+                instances += res.get("Instances", [])
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("AMI-05", "ec2:DescribeInstances")
+            return
+        wanted = sorted({str(i.get("ImageId")) for i in instances if i.get("ImageId")})
+        if not wanted:
+            self._add("INFO", "AMI-05", "AMI", "ami",
+                      "No running instances to check AMI provenance for")
+            return
+        try:
+            # ONE describe_images for every distinct image, not one per instance: a large
+            # ASG can run hundreds of instances off a single AMI.
+            found = {str(im.get("ImageId")): im for im in
+                     ec2.describe_images(ImageIds=wanted).get("Images", [])}
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("AMI-05", "ec2:DescribeImages")
+            return
+        untrusted = 0
+        for inst in instances:
+            r = aws_cis_compute.ami_provenance(
+                inst, found.get(str(inst.get("ImageId"))), self.account,
+                self.trusted_accounts)
+            if r["untrusted"]:
+                untrusted += 1
+                self._add("FAIL", "AMI-05", "AMI", r["instance_id"],
+                          f"{r['statement']} | {r['instance_id']}")
+        if not untrusted:
+            self._add("PASS", "AMI-05", "AMI", "ami",
+                      f"All {len(instances)} running instance(s) launched from AMIs owned "
+                      f"by this account, Amazon, or a trusted account")
 
     def _check_ecr(self):
         self._section_header("ECR")
@@ -6686,9 +6976,176 @@ class AWSLiveScanner:
             self._add("INFO", "LMB-08", "LAMBDA", "lambda",
                       f"No Lambda function URLs configured across {len(funcs)} function(s)")
 
+        # CIS-Compute 12.2/12.5/12.7/12.9/12.10/12.12/12.13/12.14.
+        self._check_lambda_cis(lmb, funcs)
+
         # LMB-07 — the artifact side-scan. Opt-in; the guard inside returns
         # immediately on a default run, so this call costs nothing unasked.
         self._side_scan_lambda_artifacts(lmb, funcs)
+
+    def _check_lambda_cis(self, lmb, funcs) -> None:
+        """LMB-10..LMB-17 (CIS-Compute 12.2, 12.5, 12.7, 12.9, 12.10, 12.12-12.14).
+
+        WHAT COSTS NOTHING AND WHAT COSTS A CALL. Insights layers, the KMS key and the
+        execution-role ARN are all already on the list_functions result, so LMB-10,
+        LMB-11 and LMB-15 are free. LMB-12/13 need IAM, LMB-14 needs the resource policy,
+        LMB-17 needs the recursion config and LMB-16 needs the layer policies — each in
+        its own guard, because a single denied grant must not silently drop seven checks
+        that had nothing to do with it."""
+        # ── free from list_functions ──
+        insights_missing = 0
+        for fn in funcs:
+            fname = str(fn.get("FunctionName") or "?")
+            ins = aws_cis_compute.lambda_insights(fn)
+            if not ins["enabled"]:
+                insights_missing += 1
+                self._add("FAIL", "LMB-10", "LAMBDA", fname, f"{ins['statement']} | {fname}")
+            env = aws_cis_compute.lambda_env_cmk(fn)
+            if env["default_key"]:
+                self._add("FAIL", "LMB-15", "LAMBDA", fname, f"{env['statement']} | {fname}")
+        if funcs and not insights_missing:
+            self._add("PASS", "LMB-10", "LAMBDA", "lambda",
+                      f"All {len(funcs)} function(s) have the Lambda Insights extension")
+
+        shared = aws_cis_compute.lambda_role_sharing(funcs)
+        for r in shared:
+            self._add("FAIL", "LMB-11", "LAMBDA", r["role"].rsplit("/", 1)[-1],
+                      f"{r['statement']} | {r['role']}")
+        if funcs and not shared:
+            self._add("PASS", "LMB-11", "LAMBDA", "lambda",
+                      f"Each of the {len(funcs)} function(s) has its own execution role")
+
+        # ── LMB-12 / LMB-13: the execution role itself ──
+        iam = self._client("iam")
+        seen_roles: Dict[str, tuple] = {}      # role arn -> (exists, admin_statements)
+        for fn in funcs:
+            fname = str(fn.get("FunctionName") or "?")
+            role_arn = str(fn.get("Role") or "")
+            if not role_arn:
+                continue
+            if role_arn not in seen_roles:
+                seen_roles[role_arn] = self._lambda_role_facts(iam, role_arn)
+            exists, statements = seen_roles[role_arn]
+            miss = aws_cis_compute.lambda_role_missing(fn, exists)
+            if miss["missing"]:
+                self._add("FAIL", "LMB-12", "LAMBDA", fname, f"{miss['statement']} | {fname}")
+            if exists and statements is not None:
+                adm = aws_cis_compute.lambda_role_admin(fn, statements)
+                if adm["admin"]:
+                    self._add("FAIL", "LMB-13", "LAMBDA", fname,
+                              f"{adm['statement']} | {fname}")
+
+        # ── LMB-14: cross-account grants in the resource policy ──
+        for fn in funcs:
+            fname = str(fn.get("FunctionName") or "?")
+            try:
+                pol = json.loads(lmb.get_policy(FunctionName=fname)["Policy"])
+            except Exception as e:
+                # A function with no resource policy answers ResourceNotFoundException,
+                # which is the ordinary case and not a denial.
+                if self._error_code(e) != "ResourceNotFoundException":
+                    self._coverage.note_denied("LMB-14", "lambda:GetPolicy")
+                continue
+            r = aws_cis_compute.lambda_cross_account(
+                fname, pol.get("Statement", []), self.account, self.trusted_accounts)
+            if r["cross_account"]:
+                self._add("FAIL", "LMB-14", "LAMBDA", fname, f"{r['statement']} | {fname}")
+
+        # ── LMB-17: recursive-loop detection ──
+        for fn in funcs:
+            fname = str(fn.get("FunctionName") or "?")
+            try:
+                cfg = lmb.get_function_recursion_config(FunctionName=fname) or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("LMB-17",
+                                               "lambda:GetFunctionRecursionConfig")
+                # Older botocore has no such operation at all -- an unknown-operation
+                # error is a capability gap, not a posture finding, so stay silent.
+                break
+            r = aws_cis_compute.lambda_recursion(fname, cfg.get("RecursiveLoop"))
+            if r["allowed"]:
+                self._add("FAIL", "LMB-17", "LAMBDA", fname, f"{r['statement']} | {fname}")
+
+        # ── LMB-16: publicly shared layers. Layers are account-level, not per function. ──
+        self._check_lambda_layers(lmb)
+
+    def _lambda_role_facts(self, iam, role_arn: str):
+        """(role_exists, policy_statements) for one execution role, or (None, None).
+
+        None for existence is "we could not tell", which LMB-12 must not report as a
+        missing role -- a denied iam:GetRole and a deleted role look identical from the
+        function's side and only one of them is a finding."""
+        name = role_arn.rsplit("/", 1)[-1]
+        try:
+            iam.get_role(RoleName=name)
+        except Exception as e:
+            if self._error_code(e) in ("NoSuchEntity", "NoSuchEntityException"):
+                return False, None
+            self._coverage.note_denied("LMB-12", "iam:GetRole")
+            return None, None
+
+        statements: List[Dict] = []
+        try:
+            for pol in self._paginate_all(iam, "list_attached_role_policies",
+                                          "AttachedPolicies", RoleName=name):
+                arn = pol.get("PolicyArn")
+                if not arn:
+                    continue
+                ver = iam.get_policy(PolicyArn=arn)["Policy"]["DefaultVersionId"]
+                doc = iam.get_policy_version(PolicyArn=arn, VersionId=ver
+                                             )["PolicyVersion"]["Document"]
+                doc = json.loads(doc) if isinstance(doc, str) else doc
+                st = (doc or {}).get("Statement") or []
+                statements += [st] if isinstance(st, dict) else list(st)
+            for pname in self._paginate_all(iam, "list_role_policies", "PolicyNames",
+                                            RoleName=name):
+                doc = iam.get_role_policy(RoleName=name, PolicyName=pname
+                                          )["PolicyDocument"]
+                doc = json.loads(doc) if isinstance(doc, str) else doc
+                st = (doc or {}).get("Statement") or []
+                statements += [st] if isinstance(st, dict) else list(st)
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("LMB-13", "iam:GetPolicyVersion")
+            return True, None
+        return True, statements
+
+    def _check_lambda_layers(self, lmb) -> None:
+        """LMB-16 (CIS-Compute 12.13) — layers shared with every AWS account.
+
+        A layer with no permission policy raises ResourceNotFoundException, which is the
+        PASSING case and by far the common one, so it is silent rather than a per-layer
+        PASS that would bury the shared ones."""
+        try:
+            layers = self._paginate_strict(lmb, "list_layers", "Layers")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("LMB-16", "lambda:ListLayers")
+            return
+        public = 0
+        for layer in layers:
+            lname = str(layer.get("LayerName") or "")
+            version = ((layer.get("LatestMatchingVersion") or {}).get("Version"))
+            if not lname or version is None:
+                continue
+            try:
+                pol = json.loads((lmb.get_layer_version_policy(
+                    LayerName=lname, VersionNumber=version) or {}).get("Policy") or "{}")
+            except Exception as e:
+                # No permission policy at all is the PASSING case and by far the common
+                # one, so it must not be mistaken for a denied read.
+                if self._error_code(e) != "ResourceNotFoundException":
+                    self._coverage.note_denied("LMB-16", "lambda:GetLayerVersionPolicy")
+                continue
+            r = aws_cis_compute.lambda_layer_public(lname, version,
+                                                    pol.get("Statement", []))
+            if r["public"]:
+                public += 1
+                self._add("FAIL", "LMB-16", "LAMBDA", lname, f"{r['statement']} | {lname}")
+        if layers and not public:
+            self._add("PASS", "LMB-16", "LAMBDA", "lambda",
+                      f"None of the {len(layers)} published layer(s) is shared publicly")
 
     def _side_scan_lambda_artifacts(self, lmb, funcs) -> None:
         """LMB-07 — agentless vulnerable-dependency detection inside a Lambda artefact.
@@ -7247,9 +7704,13 @@ class AWSLiveScanner:
 
         for td_arn in td_arns[:50]:  # cap at 50 to avoid rate limits
             try:
-                td = ecs.describe_task_definition(
-                    taskDefinition=td_arn
-                )["taskDefinition"]
+                # include=TAGS for ECS-13: tags are returned only when asked for, and
+                # they arrive BESIDE taskDefinition in the response rather than inside
+                # it, so both halves have to be kept.
+                _td_resp = ecs.describe_task_definition(
+                    taskDefinition=td_arn, include=["TAGS"])
+                td = _td_resp["taskDefinition"]
+                td_tags = _td_resp.get("tags") or []
             except Exception:
                 continue
             td_name = td.get("family", td_arn.split("/")[-1])
@@ -7322,9 +7783,135 @@ class AWSLiveScanner:
                     self._add("WARN", "ECS-07", "ECS", td_name,
                               f"Task bind-mounts host path '{sp}' (hostPath mount) | {td_name}")
 
+            # ── CIS-Compute 3.12/3.13/3.15, from the SAME describe_task_definition ──
+            # ECS-16 — network mode. ECS-06 above already owns `host`; this is the rest.
+            nm = aws_cis_compute.ecs_network_mode(td)
+            if nm["not_awsvpc"]:
+                self._add("FAIL", "ECS-16", "ECS", td_name, f"{nm['statement']} | {td_name}")
+            # ECS-13 — task-definition tags, which arrive beside the definition rather
+            # than inside it (see the include=TAGS call above).
+            tg = aws_cis_compute.ecs_tags({"tags": td_tags}, "task definition", td_name)
+            if tg["untagged"]:
+                self._add("FAIL", "ECS-13", "ECS", td_name, f"{tg['statement']} | {td_name}")
+            # ECS-14 — image provenance, per container.
+            for cd in td.get("containerDefinitions", []):
+                im = aws_cis_compute.ecs_image_trust(
+                    cd.get("image"), self.account, self.trusted_accounts)
+                if im["external"]:
+                    self._add("FAIL", "ECS-14", "ECS",
+                              f"{td_name}/{cd.get('name', 'unknown')}",
+                              f"{im['statement']} | {td_name}")
+
+        # CIS-Compute 3.8/3.9/3.10/3.11/3.14/3.16 + 11.1 — cluster- and service-level.
+        self._check_ecs_cis(ecs, cluster_arns)
+
         # Phase-3: fold RUNNING Fargate tasks into the attack-path graph (task-defs above
         # are hygiene only; the running task is the exposure + identity anchor).
         self._check_fargate_tasks(ecs, cluster_arns)
+
+    def _check_ecs_cis(self, ecs, cluster_arns: List[str]) -> None:
+        """ECS-09..ECS-12, ECS-15, ECS-17 and FARGATE-03 (CIS-Compute 3.8-3.11, 3.14,
+        3.16 and 11.1).
+
+        ONE describe_clusters WITH INCLUDES. Container Insights lives under SETTINGS, ECS
+        Exec logging and the Fargate storage key under CONFIGURATIONS, and cluster tags
+        under TAGS -- all three are includes on the same call, so four checks cost one
+        request rather than three. Every block guards itself: a cluster whose services
+        cannot be listed must not discard the cluster-level findings already emitted."""
+        if not cluster_arns:
+            return
+        try:
+            clusters = (ecs.describe_clusters(
+                clusters=cluster_arns,
+                include=["SETTINGS", "CONFIGURATIONS", "TAGS"]) or {}).get("clusters") or []
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("ECS-10", "ecs:DescribeClusters")
+            return
+
+        for cluster in clusters:
+            cname = str(cluster.get("clusterName") or "?")
+            carn = str(cluster.get("clusterArn") or cname)
+
+            ci = aws_cis_compute.ecs_container_insights(cluster)
+            if ci["off"]:
+                self._add("FAIL", "ECS-10", "ECS", cname, f"{ci['statement']} | {cname}")
+            else:
+                self._add("PASS", "ECS-10", "ECS", cname,
+                          f"ECS cluster {cname} has Container Insights {ci['value']}")
+
+            ct = aws_cis_compute.ecs_tags(cluster, "cluster", cname)
+            if ct["untagged"]:
+                self._add("FAIL", "ECS-12", "ECS", cname, f"{ct['statement']} | {cname}")
+
+            fk = aws_cis_compute.ecs_fargate_ephemeral_cmk(cluster)
+            if fk["aws_owned"]:
+                self._add("FAIL", "FARGATE-03", "ECS", cname,
+                          f"{fk['statement']} | {cname}")
+            else:
+                self._add("PASS", "FARGATE-03", "ECS", cname,
+                          f"ECS cluster {cname} encrypts Fargate ephemeral storage with a "
+                          f"customer-managed key")
+
+            # Services: 3.8 platform version, 3.10 tags, 3.14 task sets, and the
+            # Exec-enabled list 3.16 needs before the cluster can be judged at all.
+            try:
+                svc_arns = self._paginate_strict(ecs, "list_services", "serviceArns",
+                                                 cluster=carn)
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("ECS-09", "ecs:ListServices")
+                continue
+            exec_enabled: List[str] = []
+            for chunk in [svc_arns[i:i + 10] for i in range(0, len(svc_arns), 10)]:
+                try:
+                    services = (ecs.describe_services(
+                        cluster=carn, services=chunk,
+                        include=["TAGS"]) or {}).get("services") or []
+                except Exception as e:
+                    if self._is_access_denied(e):
+                        self._coverage.note_denied("ECS-09", "ecs:DescribeServices")
+                    continue
+                for svc in services:
+                    sname = str(svc.get("serviceName") or "?")
+                    if svc.get("enableExecuteCommand"):
+                        exec_enabled.append(sname)
+                    pv = aws_cis_compute.ecs_platform_version(svc)
+                    if pv["outdated"]:
+                        self._add("FAIL", "ECS-09", "ECS", f"{cname}/{sname}",
+                                  f"{pv['statement']} | {sname}")
+                    st = aws_cis_compute.ecs_tags(svc, "service", sname)
+                    if st["untagged"]:
+                        self._add("FAIL", "ECS-11", "ECS", f"{cname}/{sname}",
+                                  f"{st['statement']} | {sname}")
+                    self._check_ecs_task_sets(ecs, carn, cname, svc)
+
+            el = aws_cis_compute.ecs_exec_logging(cluster, exec_enabled)
+            if el["unlogged"]:
+                self._add("FAIL", "ECS-17", "ECS", cname, f"{el['statement']} | {cname}")
+            elif el["applicable"]:
+                self._add("PASS", "ECS-17", "ECS", cname,
+                          f"ECS cluster {cname} logs ECS Exec sessions (logging=OVERRIDE)")
+
+    def _check_ecs_task_sets(self, ecs, cluster_arn: str, cname: str, svc) -> None:
+        """ECS-15 (CIS-Compute 3.14). Task sets exist only for EXTERNAL and blue/green
+        deployment controllers, so on an ordinary ECS service describe_task_sets returns
+        an empty list — cheap, and skipping the call by guessing the controller type
+        would silently miss a service whose controller was changed later."""
+        sname = str(svc.get("serviceName") or "?")
+        try:
+            sets = (ecs.describe_task_sets(
+                cluster=cluster_arn,
+                service=str(svc.get("serviceArn") or sname)) or {}).get("taskSets") or []
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("ECS-15", "ecs:DescribeTaskSets")
+            return
+        for ts in sets:
+            r = aws_cis_compute.ecs_task_set_public_ip(ts)
+            if r["public"]:
+                self._add("FAIL", "ECS-15", "ECS", f"{cname}/{sname}",
+                          f"{r['statement']} | {sname}")
 
     # ECS-07/08 dangerous-primitive tables (bare cap names, no CAP_ prefix in the ECS API)
     _DANGEROUS_CAPS = {"ALL", "SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE",
@@ -10509,6 +11096,11 @@ class AWSLiveScanner:
             else:
                 self._add("PASS", "LSAIL-01", "LIGHTSAIL", name,
                           f"Lightsail instance {name} has no world-open ports | {name}")
+            # LSAIL-03 (CIS-Compute 5.6) — same get_instances result, no new call.
+            v6 = aws_cis_compute.lightsail_ipv6(inst)
+            if v6["enabled"]:
+                self._add("FAIL", "LSAIL-03", "LIGHTSAIL", name,
+                          f"{v6['statement']} | {name}")
 
         try:
             dbs = (ls.get_relational_databases() or {}
@@ -10517,7 +11109,7 @@ class AWSLiveScanner:
             if self._is_access_denied(e):
                 self._coverage.note_denied("LSAIL-02",
                                            "lightsail:GetRelationalDatabases")
-            return
+            dbs = []
         for db in dbs:
             r = aws_extsvc2.lightsail_database(db)
             nm = r["name"] or "?"
@@ -10526,6 +11118,38 @@ class AWSLiveScanner:
             elif r["public_known"]:
                 self._add("PASS", "LSAIL-02", "LIGHTSAIL", nm,
                           f"Lightsail database {nm} is not publicly accessible | {nm}")
+
+        # LSAIL-04..07 (CIS-Compute 5.7-5.10) — Lightsail buckets. These are NOT S3
+        # buckets: they do not appear in the S3 console, s3:ListAllMyBuckets does not
+        # return them, and S3 Block Public Access does not apply, so an account that has
+        # provably locked down every S3 bucket can still be serving data anonymously here.
+        try:
+            buckets = (ls.get_buckets() or {}).get("buckets") or []
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("LSAIL-06", "lightsail:GetBuckets")
+            return
+        if not buckets:
+            self._add("INFO", "LSAIL-06", "LIGHTSAIL", "lightsail",
+                      "No Lightsail buckets in this region")
+            return
+        for b in buckets:
+            nm = str(b.get("name") or "?")
+            pub = aws_cis_compute.lightsail_bucket_public(b)
+            if pub["public"]:
+                self._add("FAIL", "LSAIL-06", "LIGHTSAIL", nm, f"{pub['statement']} | {nm}")
+            else:
+                self._add("PASS", "LSAIL-06", "LIGHTSAIL", nm,
+                          f"Lightsail bucket {nm} is private | {nm}")
+            log = aws_cis_compute.lightsail_bucket_logging(b)
+            if not log["enabled"]:
+                self._add("FAIL", "LSAIL-07", "LIGHTSAIL", nm, f"{log['statement']} | {nm}")
+            iam_r = aws_cis_compute.lightsail_bucket_iam(b)
+            if iam_r["key_based"]:
+                self._add("FAIL", "LSAIL-04", "LIGHTSAIL", nm, f"{iam_r['statement']} | {nm}")
+            att = aws_cis_compute.lightsail_bucket_attached(b)
+            if att["unattached"]:
+                self._add("FAIL", "LSAIL-05", "LIGHTSAIL", nm, f"{att['statement']} | {nm}")
 
     def _check_privateca(self):
         """PCA-01 — a private CA is a trust root, not an ordinary shared resource."""
@@ -10916,8 +11540,14 @@ class AWSLiveScanner:
                           f"DocumentDB cluster {cid_} exports audit logs | {cid_}")
 
     def _check_imagebuilder(self):
-        """IMGB-01 — EC2 Image Builder resource policies."""
+        """IMGB-01 resource policies, plus IMGB-02/03 (CIS-Compute 17.1, 17.2).
+
+        IMGB-01 asks who may USE the pipeline. IMGB-02 asks what happens to everything
+        the pipeline BUILDS, which is a standing instruction covering images that do not
+        exist yet — so the two are different questions about the same service and neither
+        substitutes for the other."""
         self._section_header("IMAGEBUILDER")
+        self._check_imagebuilder_cis()
         try:
             ib = self._client("imagebuilder")
             imgs, token, guard = [], None, 0
@@ -10954,6 +11584,225 @@ class AWSLiveScanner:
                 self._add("PASS", "IMGB-01", "IMAGEBUILDER", arn,
                           f"Image Builder resource {arn} has a resource policy with no "
                           f"wildcard principal | {arn}")
+
+    def _check_imagebuilder_cis(self):
+        """IMGB-02/IMGB-03 (CIS-Compute 17.1, 17.2). Own guards: distribution configs and
+        recipes are separate APIs, and a denial on one must not take the other down."""
+        ib = self._client("imagebuilder")
+        try:
+            dists = self._tokens(ib.list_distribution_configurations,
+                                 "distributionConfigurationSummaryList",
+                                 token_key="nextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied(
+                    "IMGB-02", "imagebuilder:ListDistributionConfigurations")
+            dists = []
+        public = 0
+        for d in dists:
+            arn = (d or {}).get("arn")
+            if not arn:
+                continue
+            try:
+                cfg = (ib.get_distribution_configuration(
+                    distributionConfigurationArn=arn) or {}
+                ).get("distributionConfiguration") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied(
+                        "IMGB-02", "imagebuilder:GetDistributionConfiguration")
+                continue
+            r = aws_cis_compute.imagebuilder_distribution_public(cfg)
+            if r["public"]:
+                public += 1
+                self._add("FAIL", "IMGB-02", "IMAGEBUILDER", r["config"] or arn,
+                          f"{r['statement']} | {arn}")
+        if dists and not public:
+            self._add("PASS", "IMGB-02", "IMAGEBUILDER", "imagebuilder",
+                      f"None of the {len(dists)} distribution configuration(s) shares "
+                      f"AMIs publicly")
+
+        try:
+            recipes = self._tokens(ib.list_image_recipes, "imageRecipeSummaryList",
+                                   token_key="nextToken", owner="Self")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("IMGB-03", "imagebuilder:ListImageRecipes")
+            return
+        for rec in recipes:
+            arn = (rec or {}).get("arn")
+            if not arn:
+                continue
+            try:
+                full = (ib.get_image_recipe(imageRecipeArn=arn) or {}
+                        ).get("imageRecipe") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("IMGB-03", "imagebuilder:GetImageRecipe")
+                continue
+            r = aws_cis_compute.imagebuilder_cleanup_disabled(full)
+            if r["cleanup_disabled"]:
+                self._add("FAIL", "IMGB-03", "IMAGEBUILDER", r["recipe"] or arn,
+                          f"{r['statement']} | {arn}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 92: AWS APP RUNNER  (CIS-Compute 6.1)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_apprunner(self):
+        """APRUN-01 — App Runner services whose egress leaves via the public internet."""
+        self._section_header("APPRUNNER")
+        try:
+            ar = self._client("apprunner")
+            services = self._tokens(ar.list_services, "ServiceSummaryList")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("APRUN-01", "apprunner:ListServices")
+            return
+        if not services:
+            self._add("INFO", "APRUN-01", "APPRUNNER", "apprunner",
+                      "No App Runner services in this region")
+            return
+        for s in services:
+            arn = (s or {}).get("ServiceArn")
+            if not arn:
+                continue
+            try:
+                full = (ar.describe_service(ServiceArn=arn) or {}).get("Service") or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("APRUN-01", "apprunner:DescribeService")
+                continue
+            r = aws_cis_compute.apprunner_egress(full)
+            nm = r["service"] or arn
+            if r["public_egress"]:
+                self._add("FAIL", "APRUN-01", "APPRUNNER", nm, f"{r['statement']} | {nm}")
+            else:
+                self._add("PASS", "APRUN-01", "APPRUNNER", nm,
+                          f"App Runner service {nm} egresses through a VPC connector | {nm}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 93: AWS BATCH  (CIS-Compute 8.1, 8.2)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_batch(self):
+        """BATCH-01 job logging, BATCH-02 confused-deputy conditions on Batch roles."""
+        self._section_header("BATCH")
+        try:
+            batch = self._client("batch")
+            # Batch pages on a lowercase `nextToken`, unlike most of the SDK.
+            defs = self._tokens(batch.describe_job_definitions, "jobDefinitions",
+                                token_key="nextToken", status="ACTIVE")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("BATCH-01", "batch:DescribeJobDefinitions")
+            defs = None
+        if defs is None:
+            pass
+        elif not defs:
+            self._add("INFO", "BATCH-01", "BATCH", "batch",
+                      "No active AWS Batch job definitions in this region")
+        else:
+            unlogged = 0
+            for jd in defs:
+                r = aws_cis_compute.batch_logging(jd)
+                if r["unlogged"]:
+                    unlogged += 1
+                    self._add("FAIL", "BATCH-01", "BATCH", r["job_definition"],
+                              f"{r['statement']} | {r['job_definition']}")
+            if not unlogged:
+                self._add("PASS", "BATCH-01", "BATCH", "batch",
+                          f"All {len(defs)} active job definition(s) configure a log driver")
+
+        # BATCH-02 — the trust policy of every role Batch can assume. IAM is global, so
+        # this is a role sweep rather than anything Batch itself reports.
+        try:
+            roles = self._paginate_strict(self._client("iam"), "list_roles", "Roles")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("BATCH-02", "iam:ListRoles")
+            return
+        checked = unguarded = 0
+        for role in roles:
+            r = aws_cis_compute.batch_confused_deputy(
+                role.get("RoleName"), role.get("AssumeRolePolicyDocument"))
+            if not r["applicable"]:
+                continue
+            checked += 1
+            if r["unguarded"]:
+                unguarded += 1
+                self._add("FAIL", "BATCH-02", "BATCH", r["role"],
+                          f"{r['statement']} | {r['role']}")
+        if checked and not unguarded:
+            self._add("PASS", "BATCH-02", "BATCH", "batch",
+                      f"All {checked} Batch service role(s) carry a source-scoping "
+                      f"condition")
+        elif not checked:
+            self._add("INFO", "BATCH-02", "BATCH", "batch",
+                      "No IAM role in this account is assumable by the Batch service")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 94: AWS ELASTIC BEANSTALK  (CIS-Compute 10.1 - 10.4)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _check_beanstalk(self):
+        """EB-01..EB-04 — managed updates, log streaming, access logs and HTTPS.
+
+        ONE DescribeConfigurationSettings PER ENVIRONMENT answers all four: Beanstalk
+        returns configuration as a flat list of (Namespace, OptionName, Value) triples,
+        and the four controls read four different namespaces off the same list."""
+        self._section_header("BEANSTALK")
+        try:
+            eb = self._client("elasticbeanstalk")
+            envs = (eb.describe_environments(
+                IncludeDeleted=False) or {}).get("Environments") or []
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("EB-01",
+                                           "elasticbeanstalk:DescribeEnvironments")
+            return
+        if not envs:
+            self._add("INFO", "EB-01", "BEANSTALK", "beanstalk",
+                      "No Elastic Beanstalk environments in this region")
+            return
+        for env in envs:
+            name = str(env.get("EnvironmentName") or "?")
+            app = str(env.get("ApplicationName") or "")
+            try:
+                settings = []
+                for cs in (eb.describe_configuration_settings(
+                        ApplicationName=app, EnvironmentName=name) or {}
+                ).get("ConfigurationSettings") or []:
+                    settings += list((cs or {}).get("OptionSettings") or [])
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied(
+                        "EB-01", "elasticbeanstalk:DescribeConfigurationSettings")
+                continue
+
+            mu = aws_cis_compute.beanstalk_managed_updates(name, settings)
+            if mu["off"]:
+                self._add("FAIL", "EB-01", "BEANSTALK", name, f"{mu['statement']} | {name}")
+            else:
+                self._add("PASS", "EB-01", "BEANSTALK", name,
+                          f"Beanstalk environment {name} has managed platform updates "
+                          f"enabled | {name}")
+
+            ls_ = aws_cis_compute.beanstalk_log_streaming(name, settings)
+            if ls_["off"]:
+                self._add("FAIL", "EB-02", "BEANSTALK", name, f"{ls_['statement']} | {name}")
+
+            al = aws_cis_compute.beanstalk_access_logs(name, settings)
+            if al["off"]:
+                self._add("FAIL", "EB-03", "BEANSTALK", name, f"{al['statement']} | {name}")
+
+            # A worker-tier environment has no load balancer at all, so `protocols` is
+            # empty and no_https stays False -- an absent listener is not a plaintext one.
+            https = aws_cis_compute.beanstalk_https(name, settings)
+            if https["no_https"]:
+                self._add("FAIL", "EB-04", "BEANSTALK", name,
+                          f"{https['statement']} | {name}")
+            elif https["secure_ports"]:
+                self._add("PASS", "EB-04", "BEANSTALK", name,
+                          f"Beanstalk environment {name} serves HTTPS on port(s) "
+                          f"{', '.join(https['secure_ports'])} | {name}")
 
     def _check_transfer(self):
         """XFER-01/02/03 — AWS Transfer Family."""
@@ -12965,6 +13814,23 @@ class AWSLiveScanner:
                 out += getattr(client, method)(**kwargs).get(key, [])
             except Exception:
                 pass
+        return out
+
+    def _paginate_strict(self, client, method: str, key: str, **kwargs) -> List[Dict]:
+        """`_paginate_all`, except that a failure RAISES instead of returning [].
+
+        `_paginate_all` is fail-soft, which is correct wherever an empty result and a
+        denied read lead to the same silence. It is wrong wherever the caller wants to
+        RECORD the denial, because a swallowed exception makes "nothing there" and
+        "not allowed to look" indistinguishable — and the coverage ledger exists
+        precisely to keep those apart. Read-only, like its sibling."""
+        out: List[Dict] = []
+        try:
+            paginator = client.get_paginator(method)
+        except Exception:
+            return list(getattr(client, method)(**kwargs).get(key, []) or [])
+        for page in paginator.paginate(**kwargs):
+            out += page.get(key, []) or []
         return out
 
     def _instance_arn(self, instance_id: str) -> str:
@@ -16952,6 +17818,9 @@ class AWSLiveScanner:
             "FIREWALLMANAGER": self._check_firewallmanager,
             "ECRPUBLIC":      self._check_ecrpublic,
             "MULTIPARTYAPPROVAL": self._check_multipartyapproval,
+            "APPRUNNER":      self._check_apprunner,
+            "BATCH":          self._check_batch,
+            "BEANSTALK":      self._check_beanstalk,
             "WICKR":          self._check_wickr,
             "MEDIAPACKAGE":   self._check_mediapackage,
             "ELASTICACHE":    self._check_elasticache,

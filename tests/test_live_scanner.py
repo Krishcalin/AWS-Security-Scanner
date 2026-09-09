@@ -156,7 +156,16 @@ class TestDataStructures(unittest.TestCase):
         # none, so the checks were catalogued and unfirable. `_check_nhi` reads the
         # principals `_get_iam_principals` already fetched and the credential report
         # the IAM section already reads, so the scan cost is zero new calls.
-        self.assertEqual(len(SECTIONS), 91)
+        #
+        # 94: +APPRUNNER, BATCH, BEANSTALK -- the three services in the CIS AWS Compute
+        # Services Benchmark that OverWatch had no coverage of at all. Its other 40 new
+        # checks extend sections that already exist (AMI, EC2, ECS, LAMBDA, LIGHTSAIL,
+        # IMAGEBUILDER) and add no section. These three DO cost new calls on a default
+        # scan -- one List plus one Describe each -- which is the honest price of
+        # covering a service that was previously invisible, and is why they are here
+        # rather than gated behind a flag: a section that only runs when asked for is
+        # the defect the AI-section note above records.
+        self.assertEqual(len(SECTIONS), 94)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

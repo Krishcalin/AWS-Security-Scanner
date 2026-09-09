@@ -17,7 +17,7 @@ carries neither - so a check that never fails never renders what the catalogue
 advertises for it.
 
 
-**460 registered checks.** 331 are proven to FAIL in the suite; 67 run but have never been driven to a failure; 62 were never observed at all.
+**503 registered checks.** 374 are proven to FAIL in the suite; 68 run but have never been driven to a failure; 61 were never observed at all.
 
 
 ## Never observed
@@ -52,7 +52,6 @@ No test makes these emit anything. Each is registered in all four metadata maps 
 - `KSPM-02` (declared HIGH)
 - `LATT-02` (declared MEDIUM)
 - `LMB-01` (declared HIGH)
-- `LSAIL-01` (declared HIGH)
 - `LSAIL-02` (declared HIGH)
 - `MART-03` (declared LOW)
 - `MBC-01` (declared MEDIUM)
@@ -133,6 +132,7 @@ These emit only WARN/INFO/PASS in the suite. Where the declared severity is abov
 | `LF-02` | HIGH | PASS |
 | `LMB-02` | LOW | WARN |
 | `LMB-05` | LOW | WARN |
+| `LSAIL-01` | HIGH | PASS |
 | `MCP-04` | LOW | WARN |
 | `OSR-02` | HIGH | PASS |
 | `OSR-03` | MEDIUM | PASS |
