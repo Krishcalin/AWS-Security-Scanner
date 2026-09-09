@@ -398,6 +398,29 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "read StorageEncrypted on manual snapshots -- an unencrypted snapshot is a "
              "plaintext copy of the graph that outlives the cluster it came from"),
     ),
+    # AUR-07/08 and ELC-07/08 read fields already present in responses the scanner
+    # fetches for AUR-01..03 and ELC-01..04, so they cost NO new call and NO new grant.
+    # Listed anyway, because the ledger's job is to say what each check reads.
+    "AUR-07": (
+        _req("rds:DescribeDBClusters",
+             "read BackupRetentionPeriod from the CLUSTER -- for Aurora this is where "
+             "it lives, and a Serverless v1 cluster has no instance to read instead"),
+    ),
+    "AUR-08": (
+        _req("rds:DescribeDBClusters",
+             "read IAMDatabaseAuthenticationEnabled from the CLUSTER -- whether "
+             "applications hold a static DB password or a 15-minute IAM token"),
+    ),
+    "ELC-07": (
+        _req("elasticache:DescribeReplicationGroups",
+             "read SnapshotRetentionLimit -- whether anything exists to restore a "
+             "flushed or corrupted Redis dataset from"),
+    ),
+    "ELC-08": (
+        _req("elasticache:DescribeReplicationGroups",
+             "read MultiAZ -- whether an availability-zone failure removes the whole "
+             "cache, which also decides whether ELC-04's failover has anywhere to go"),
+    ),
     # ── TLS enforcement (CIS AWS Database Services v2.0.0) ───────────────────
     # The first checks in the product to read a DB parameter group. Two NEW actions on
     # the scanning role, and they are the whole cost of covering a control that spans

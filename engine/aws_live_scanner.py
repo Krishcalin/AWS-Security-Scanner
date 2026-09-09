@@ -689,6 +689,12 @@ CHECK_SEVERITY = {
     # credentials and rows, and unlike encryption at rest the attacker needs only a
     # position on the network rather than access to AWS storage.
     "RDS-14": "HIGH", "AUR-06": "HIGH", "DOCDB-06": "HIGH", "NEP-05": "HIGH",
+    # Cluster-level backup retention and IAM auth. MEDIUM, matching the instance-level
+    # RDS-03/RDS-08 they split from -- same control, read from the plane that actually
+    # owns it for Aurora. ELC-07/08 are availability-and-recovery controls, which is
+    # what MEDIUM is for: real, worth reporting, not a breach.
+    "AUR-07": "MEDIUM", "AUR-08": "MEDIUM",
+    "ELC-07": "MEDIUM", "ELC-08": "MEDIUM",
     "IMGB-01": "HIGH",
     "XFER-01": "HIGH", "XFER-02": "MEDIUM", "XFER-03": "INFO",
     "MART-01": "CRITICAL",
@@ -1085,6 +1091,14 @@ COMPLIANCE_MAP = {
     "AUR-06": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "DOCDB-06": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "NEP-05": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "AUR-07": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "AUR-08": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
+    "ELC-07": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    # CP-9 rather than the CP-10 this would otherwise map to: the NIST axis is a FROZEN
+    # 38-control universe (compliance/crosswalk.json) from which 34 further frameworks
+    # are derived, so adding a control means supplying its row in every one of them.
+    # CP-9 is that universe's representative for the contingency-planning family.
+    "ELC-08": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(C)", "SOC2": "A1.2", "NIST": "CP-9"},
     "IMGB-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "XFER-01": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "XFER-02": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
@@ -1555,6 +1569,10 @@ REMEDIATION_MAP = {
     "AUR-06": "Require TLS in the CLUSTER parameter group — rds.force_ssl=1 for Aurora PostgreSQL, require_secure_transport=ON for Aurora MySQL: aws rds modify-db-cluster-parameter-group --db-cluster-parameter-group-name <PG> --parameters ParameterName=rds.force_ssl,ParameterValue=1,ApplyMethod=pending-reboot. Move every client to TLS first — this rejects cleartext connections once applied",
     "DOCDB-06": "Turn TLS back on in the cluster parameter group: aws docdb modify-db-cluster-parameter-group --db-cluster-parameter-group-name <PG> --parameters ParameterName=tls,ParameterValue=enabled,ApplyMethod=pending-reboot, then reboot the instances. DocumentDB ships with tls=enabled, so this being off is a deliberate change worth understanding before reverting",
     "NEP-05": "Require TLS on the cluster parameter group: aws neptune modify-db-cluster-parameter-group --db-cluster-parameter-group-name <PG> --parameters ParameterName=neptune_enforce_ssl,ParameterValue=1,ApplyMethod=pending-reboot, then reboot. Neptune engine 1.0.4.0 and later require TLS regardless, so an upgrade is the more durable fix",
+    "AUR-07": "Raise the cluster's backup retention so a problem found next week is still recoverable: aws rds modify-db-cluster --db-cluster-identifier <CLUSTER> --backup-retention-period 7 --apply-immediately. This is a cluster setting; changing it on an instance does nothing for Aurora",
+    "AUR-08": "Enable IAM database authentication on the CLUSTER so applications use short-lived tokens instead of a static password: aws rds modify-db-cluster --db-cluster-identifier <CLUSTER> --enable-iam-database-authentication --apply-immediately. Then grant rds-db:connect to the role and create the DB user with the IAM auth plugin",
+    "ELC-07": "Turn on automatic snapshots so a flushed or corrupted cache is recoverable: aws elasticache modify-replication-group --replication-group-id <RG_ID> --snapshot-retention-limit 7 --apply-immediately. Set a snapshot window that misses your peak, since snapshotting adds load to the node it runs on",
+    "ELC-08": "Enable Multi-AZ so the group survives an availability-zone failure: aws elasticache modify-replication-group --replication-group-id <RG_ID> --multi-az-enabled --automatic-failover-enabled --apply-immediately. It needs at least one replica in another AZ, so add one first if there is none: aws elasticache increase-replica-count --replication-group-id <RG_ID> --new-replica-count 1 --apply-immediately",
     "IMGB-01": "Remove the wildcard principal from the Image Builder resource policy so the image and everything baked into it stops being shared beyond your account: aws imagebuilder put-image-policy --image-arn <ARN> --policy file://scoped-policy.json . Then audit the image for embedded credentials, since anyone could have pulled it",
     "XFER-01": "Stop accepting plain FTP -- credentials and file contents cross the network in the clear. Move the server to FTPS or SFTP, which carry the same workflow encrypted: aws transfer update-server --server-id <SERVER_ID> --protocols SFTP FTPS. Coordinate with clients before removing FTP",
     "XFER-02": "Attach a logging role so there is a record of who connected and which files moved: aws transfer update-server --server-id <SERVER_ID> --logging-role <ROLE_ARN>",
@@ -5601,6 +5619,34 @@ class AWSLiveScanner:
                     engine=engine, group=cl.get("DBClusterParameterGroup", ""),
                     service="rds", cluster=True,
                     action="rds:DescribeDBClusterParameters")
+                # AUR-07 — CLUSTER backup retention. RDS-03 reads this from
+                # describe_db_instances, where for an Aurora cluster it is not the
+                # authoritative value and for a Serverless v1 cluster there is no
+                # instance to read at all. The threshold is <7 rather than ==0 because a
+                # cluster's minimum is 1 day: "backups off" is unreachable here, and the
+                # real gap is the DEFAULT of one day, which loses anything discovered
+                # more than a day late.
+                retention = cl.get("BackupRetentionPeriod")
+                if isinstance(retention, int) and retention < 7:
+                    self._add("FAIL", "AUR-07", "RDS", cid,
+                              f"Cluster backup retention={retention}d (recommend >=7) "
+                              f"| {cid} — a problem found later than that is "
+                              f"unrecoverable")
+                elif isinstance(retention, int):
+                    self._add("PASS", "AUR-07", "RDS", cid,
+                              f"Cluster backup retention={retention}d | {cid}")
+                # AUR-08 — CLUSTER IAM database authentication. Same split as AUR-07:
+                # RDS-08 reads the instance field, and the cluster owns this for Aurora.
+                if engine and not any(e in engine for e in
+                                      ("mysql", "postgres", "mariadb", "aurora")):
+                    pass                      # IAM auth is not offered on this engine
+                elif cl.get("IAMDatabaseAuthenticationEnabled") is True:
+                    self._add("PASS", "AUR-08", "RDS", cid,
+                              f"Cluster IAM DB authentication=ON | {cid} ({engine})")
+                elif cl.get("IAMDatabaseAuthenticationEnabled") is False:
+                    self._add("FAIL", "AUR-08", "RDS", cid,
+                              f"Cluster IAM DB authentication=OFF — relies on static DB "
+                              f"passwords | {cid} ({engine})")
 
         # AUR-04/05 — Aurora CLUSTER snapshots: public visibility + encryption at rest.
         # Distinct API + id-namespace from instance snapshots (RDS-06/11) — zero overlap.
@@ -8701,6 +8747,31 @@ class AWSLiveScanner:
                     self._add("FAIL", "ELC-06", "ELASTICACHE", rgid,
                               f"No RBAC user group — no per-user access control "
                               f"(relies on AUTH token / network isolation) | {rgid}")
+            # ELC-07 — automatic backups. A retention of 0 means ElastiCache takes no
+            # snapshots at all, so a flushed or corrupted cache is gone: for the many
+            # deployments that treat Redis as a datastore rather than a cache, that is
+            # data loss and not just a cold start. Replication groups are Redis/Valkey
+            # only, which is what keeps this off Memcached — where the field exists but
+            # means nothing, because Memcached cannot be snapshotted.
+            retention = rg.get("SnapshotRetentionLimit")
+            if isinstance(retention, int) and retention <= 0:
+                self._add("FAIL", "ELC-07", "ELASTICACHE", rgid,
+                          f"Automatic backups DISABLED (SnapshotRetentionLimit=0) "
+                          f"| {rgid} — nothing to restore from")
+            elif isinstance(retention, int):
+                self._add("PASS", "ELC-07", "ELASTICACHE", rgid,
+                          f"Snapshot retention={retention}d | {rgid}")
+            # ELC-08 — Multi-AZ. NOTE the shape: MultiAZ is a STRING enum
+            # ('enabled'/'disabled'), not a boolean, so a truthiness test would read
+            # 'disabled' as True and pass every unprotected group.
+            multi_az = str(rg.get("MultiAZ") or "").lower()
+            if multi_az == "enabled":
+                self._add("PASS", "ELC-08", "ELASTICACHE", rgid,
+                          f"Multi-AZ=ON | {rgid}")
+            elif multi_az == "disabled":
+                self._add("FAIL", "ELC-08", "ELASTICACHE", rgid,
+                          f"Multi-AZ=OFF | {rgid} — an AZ failure takes the cache with "
+                          f"it, and ELC-04's failover has nowhere to fail over to")
 
         # ELC-05 — Engine end-of-life. describe_replication_groups carries NO EngineVersion
         # (verified), so this uses describe_cache_clusters. Dedup by replication group so an

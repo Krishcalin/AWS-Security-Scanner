@@ -183,8 +183,13 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: Every RDS engine accepts TLS and almost none require it; the difference lives in a
 #: parameter group, and nothing in the product read one before this. All four are proven
 #: failing, which is why this moves by exactly four. See tests/test_cis_db_tls.py.
+#: 423 -> 427: AUR-07/08 read backup retention and IAM auth from the CLUSTER, which is
+#: where Aurora holds them — RDS-03/RDS-08 read the instance fields, and a Serverless v1
+#: cluster has no instances at all. ELC-07/08 read two fields that were already arriving
+#: in a response the ElastiCache section paginated and never looked at. No new API call
+#: and no new IAM grant between the four of them.
 MAX_NEVER_OBSERVED = 28
-MIN_PROVEN_FAILING = 423
+MIN_PROVEN_FAILING = 427
 
 
 def doc_text() -> str:

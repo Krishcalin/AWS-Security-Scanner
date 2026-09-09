@@ -33,16 +33,32 @@ __all__ = [
     "tls_parameter_for",
     "tls_enforcement",
     "NOT_DETERMINABLE",
+    "DECLINED_AS_NOT_A_FINDING",
 ]
 
 
-#: Recommendations declined, with the reason. Populated as the mapping tranche verifies
-#: each section against the source document; kept as DATA rather than prose so the
-#: coverage doc and the coverage test read the same list. A claim about what is out of
-#: scope is worth exactly as much as its reason — the precedent is the identically-named
-#: dict in ``aws_cis_compute.py``, which declined 5 of 82 Compute recommendations rather
-#: than registering checks that could never fire.
+#: Recommendations that no agentless control-plane read can DECIDE, and why. Populated as
+#: the mapping tranche verifies each section against the source document; kept as DATA
+#: rather than prose so the coverage doc and the coverage test read the same list. A
+#: claim about what is out of scope is worth exactly as much as its reason — the
+#: precedent is the identically-named dict in ``aws_cis_compute.py``, which declined 5 of
+#: 82 Compute recommendations rather than registering checks that could never fire.
 NOT_DETERMINABLE: Dict[str, str] = {}
+
+#: A DIFFERENT KIND OF DECLINE, and the distinction is worth keeping. These are readable
+#: from the control plane and deliberately not reported, because a benchmark
+#: recommendation is not automatically a security defect and a check that fires on a
+#: legitimate design choice is noise that makes the real findings harder to see. Recorded
+#: so the decision is visible and reversible rather than looking like an oversight
+#: somebody should "fix".
+DECLINED_AS_NOT_A_FINDING: Dict[str, str] = {
+    "elasticache-cluster-mode": (
+        "whether Redis cluster mode (sharding) is enabled is an architecture choice, not "
+        "a posture setting -- a single-shard replication group is a legitimate and very "
+        "common design, so reporting it would flag correct systems. The availability "
+        "properties the recommendation is reaching for are covered by ELC-04 (automatic "
+        "failover) and ELC-08 (Multi-AZ), which are settings rather than architecture"),
+}
 
 
 # ── encryption in transit ────────────────────────────────────────────────────

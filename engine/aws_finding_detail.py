@@ -3903,6 +3903,50 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Own the cluster parameter group in IaC so the setting survives the next apply.",
         ],
     },
+    "AUR-07": {
+        "risk": "This Aurora cluster's backup retention is shorter than a week, which sets a hard limit on how late a problem can be discovered and still be recoverable. Backup retention is not really a backup control; it is a detection-latency control. A cluster retaining one day -- which is the Aurora default, and therefore what a cluster nobody configured is running -- can only recover from something noticed within twenty-four hours. Corruption introduced by a bad deployment, a mistaken bulk UPDATE, or a compromise that quietly altered rows is routinely found days later, and at that point the restore window has already closed and the only remaining copies are whatever manual snapshots happen to exist. This is read from the CLUSTER rather than from its instances deliberately: for Aurora the cluster owns the setting, and a Serverless v1 cluster has no instances to read it from at all -- which is why the instance-level check cannot answer this and reports nothing rather than reporting wrongly.",
+        "impact": "Anything discovered later than the retention window cannot be restored, and for a cluster left at the default that window is one day.",
+        "steps": [
+            "Raise it on the CLUSTER -- doing this on an instance has no effect for Aurora: aws rds modify-db-cluster --db-cluster-identifier <CLUSTER> --backup-retention-period 7 --apply-immediately",
+            "Pick the number from how long a problem realistically takes to surface in this system, not from the benchmark -- 7 is a floor, not a target.",
+            "Confirm: aws rds describe-db-clusters --db-cluster-identifier <CLUSTER> --query 'DBClusters[0].BackupRetentionPeriod'",
+            "Take manual snapshots before risky changes as well; automated retention is a rolling window and does not preserve a specific known-good point.",
+            "Set backup_retention_period in the IaC module that owns the cluster, or the next apply reverts it to the default.",
+        ],
+    },
+    "AUR-08": {
+        "risk": "This Aurora cluster does not have IAM database authentication enabled, so applications connect with static database passwords. A static DB password is a long-lived secret that has to exist somewhere an application can read it -- an environment variable, a config file, a parameter store entry, a CI secret -- and every one of those places is a copy that can leak, be logged, or be read by anything sharing the process or the task role. It also does not rotate: the practical rotation rate for an embedded DB password is close to never, because rotating it means a coordinated restart of everything that holds it. IAM authentication replaces this with a token generated on demand and valid for fifteen minutes, tied to the caller's IAM role -- so there is no durable credential to steal, access can be revoked by changing a policy rather than by rotating a password, and every connection is attributable to a role rather than to a shared account. Read from the cluster because that is where Aurora holds it.",
+        "impact": "Access depends on long-lived static passwords that are copied into application configuration, rarely rotated, and revocable only by rotating them everywhere.",
+        "steps": [
+            "Enable it on the cluster: aws rds modify-db-cluster --db-cluster-identifier <CLUSTER> --enable-iam-database-authentication --apply-immediately",
+            "Grant the application role permission to connect: an IAM policy allowing rds-db:connect on arn:aws:rds-db:<REGION>:<ACCOUNT>:dbuser:<CLUSTER_RESOURCE_ID>/<DB_USER>",
+            "Create the database user for IAM auth -- on PostgreSQL, GRANT rds_iam TO <DB_USER>; on MySQL, IDENTIFIED WITH AWSAuthenticationPlugin AS 'RDS'.",
+            "Move applications over one at a time, generating tokens with: aws rds generate-db-auth-token --hostname <ENDPOINT> --port 5432 --username <DB_USER>",
+            "Only once nothing uses them, remove the static passwords from wherever they are stored -- and treat them as exposed, because they have been.",
+        ],
+    },
+    "ELC-07": {
+        "risk": "This ElastiCache replication group has automatic snapshots disabled, so nothing is being backed up and there is nothing to restore from. The usual objection is that a cache does not need backups because it can be repopulated from the source of truth -- and where that is genuinely so, this is a low-consequence finding. It very often is not. Redis is routinely used as a datastore rather than a cache: session state, rate-limiter counters, job queues, leaderboards, feature flags and short-lived operational data frequently live only in Redis and exist nowhere else. For those, an accidental FLUSHALL, a node failure without a replica, or a corrupted dataset is permanent data loss, and the first time anyone discovers which category their deployment is in is during the incident. Snapshots also matter for the ordinary case: restoring a warm dataset takes minutes where repopulating a cold cache from the origin can take hours of degraded service and a thundering-herd load on the very database the cache exists to protect.",
+        "impact": "A flushed, corrupted or lost cache cannot be restored -- and where Redis holds data that exists nowhere else, that is permanent loss.",
+        "steps": [
+            "Decide first whether this group holds anything that exists nowhere else -- session state, queues and counters usually do, and that decides how urgent this is.",
+            "Enable snapshots: aws elasticache modify-replication-group --replication-group-id <RG_ID> --snapshot-retention-limit 7 --apply-immediately",
+            "Set a snapshot window outside your peak, because snapshotting adds load to the node that performs it: --snapshot-window 03:00-05:00",
+            "Confirm one has actually been taken rather than trusting the setting: aws elasticache describe-snapshots --replication-group-id <RG_ID>",
+            "Test a restore into a throwaway group -- a backup nobody has restored is a hypothesis.",
+        ],
+    },
+    "ELC-08": {
+        "risk": "This ElastiCache replication group does not have Multi-AZ enabled, so every node sits in a single availability zone and an AZ-level failure takes the whole cache with it. Multi-AZ and automatic failover are frequently confused, and having only one of them is the common mis-configuration: failover with no replica in another AZ has nowhere to fail over to, which means a group can report automatic failover as enabled and still be entirely lost with its zone. The consequence is rarely just cache unavailability. When a cache holding session state disappears, users are logged out; when a cache absorbing read load disappears, the full uncached load arrives at the origin database at once, and that thundering herd frequently takes the database down as well -- so a cache outage becomes an application outage with a slower recovery than the cache failure alone would suggest. For groups holding data that exists nowhere else, an AZ failure without a cross-AZ replica is data loss rather than downtime.",
+        "impact": "An availability-zone failure removes the entire cache, and the uncached load then arrives at the origin database at once.",
+        "steps": [
+            "Check whether a replica exists at all -- Multi-AZ needs one in another AZ: aws elasticache describe-replication-groups --replication-group-id <RG_ID> --query 'ReplicationGroups[0].MemberClusters'",
+            "Add a replica if there is none: aws elasticache increase-replica-count --replication-group-id <RG_ID> --new-replica-count 1 --apply-immediately",
+            "Enable both settings together, because either alone is incomplete: aws elasticache modify-replication-group --replication-group-id <RG_ID> --multi-az-enabled --automatic-failover-enabled --apply-immediately",
+            "Confirm the replica landed in a different AZ rather than assuming it did.",
+            "Make sure the client library reconnects on failover and that the application degrades gracefully when the cache is briefly unavailable.",
+        ],
+    },
     "IMGB-01": {
         "risk": "This EC2 Image Builder resource has a resource policy granting a wildcard principal, which shares the image -- and everything baked into it -- beyond your account. A golden image is not merely an operating system: it is the OS plus your agents, your configuration, your base packages, and frequently your bootstrap credentials. Image pipelines routinely embed things during the build that nobody intends to publish: a package-repository token, a monitoring agent key, an internal CA bundle, hard-coded configuration pointing at internal endpoints. Sharing the image publishes all of it, and unlike a running instance an image can be copied silently and inspected offline at leisure. The wider intelligence value matters too: your golden image reveals your standard build, your agent versions, and therefore which vulnerabilities your entire fleet is carrying.",
         "impact": "The image and everything baked into it -- agents, configuration, any embedded credential -- is shared beyond your account and can be copied and inspected offline.",
