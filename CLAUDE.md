@@ -12,7 +12,7 @@ remediation, and code-to-cloud mapping. It ships as the live scanner + its
 gold `#f5b53d`, critical red `#ff3b5c`. Python module names stay `aws_*`/`cnapp_*` —
 no code rename.) The repo also includes a separate pre-deploy IaC static scanner.
 - **IaC Scanner** (`aws_offline_scanner.py` v1.1.0) -- static analysis of CloudFormation + Terraform files (100+ checks, 25+ services)
-- **OverWatch — Live CNAPP** (`aws_live_scanner.py` v2.39.0) -- live AWS account audit via boto3 (**535 severity-mapped checks across 97 sections**, **all 535 carrying a full risk/impact/step-by-step remediation write-up**, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure + L7 reachability engine**, **deep-plane ingestion + flagship attack paths**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing + least-privilege policy generation**, **non-human-identity posture** (NHI-01..05 — machine-vs-human classification off structural evidence only, console passwords on service accounts, unrotated machine credentials, unowned identities, third-party trust without `sts:ExternalId`, federated trust without a `:sub` condition; reads the principals and credential report the IAM section already fetches, so no new call and no new grant), **agentless side-scan CWPP** (Linux OS-pkg + language-dep + container-image + Lambda + managed-engine-EOL + Windows-via-SSM), **agentless KSPM/KIEM** (CIS-EKS + K8s RBAC + IRSA cross-plane) + **Fargate task fusion** + **VPC Flow-Log micro-segmentation**, **tag-based DSPM** (12 datastore kinds) + **AWS-resident secrets posture**, **AI-SPM** (AI execution-role blast radius fused into the graph), **CDR-lite streaming detection ingest → reachability-ranked incidents** + **cloud-forensics timeline**, a **grounded-RAG copilot** (answers only from the scan's own corpus), **external-vuln ingest** (SARIF/CycloneDX/SPDX → reachability re-rank), **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**, **hosted multi-account onboarding + live Postgres backend**, **multi-tenancy / workspaces + workspace-scoped RBAC + usage metering (MSSP)**, **air-gapped / zero-telemetry packaging + a Terraform onboarding module + an AWS Marketplace listing**, **an interactive product tour + shareable URL deep links** in the web console, **supply-chain ingest** — SBOM snapshot/diff + license policy + standalone OpenVEX/CSAF-VEX + a shell-only CI/CD image-scan GitHub Action + a below-admin `ingest` RBAC tier), **agentless ECR registry enumeration + opt-in layer-pull** (Tier-A native scan findings across all tagged images + Tier-B own-SBOM CVEs behind a two-key `CnappImageLayerPull` grant, converging on one ECRImage node, persisting as diffable snapshots; the hardened `aws_layer_fetch` egress seam), **non-AWS OCI registry connectors** (GHCR / Docker Hub / Harbor / ACR — one Docker Registry v2 Bearer-dance adapter reusing the SAME allowlisted egress file under a per-call host allowlist + SSRF-guarded blob redirect; secret-ref-only creds; display-only results; `aws_registry_oci.py` + `aws_registry_connectors.py`), plus **hub hardening** — a pooled psycopg3 Postgres backend (real concurrency) + **workspace-scoped connectors** (MSSP tenant isolation: a `connector_workspace` binding, a `connector_gate`, and delivery-path scoping). The full 8-phase vuln/misconfig detection roadmap (`docs/OVERWATCH_VULN_ROADMAP.md`) is COMPLETE; per-release history is in `CHANGELOG.md`. (Note: `aws_live_scanner.VERSION` tracks the whole platform, incl. hosted-backend + packaging releases; the scanner engine itself is unchanged by the multi-tenancy / packaging slices. **Zero-telemetry** — every egress is AWS or an operator-opt-in seam, enforced by `tests/test_zero_telemetry.py`; see `NETWORK.md` + `docs/AIRGAP_RUNBOOK.md`. Offline packaging = pinned `requirements*.txt` + a `--no-index` `Dockerfile` + `scripts/build_offline_bundle.sh`; the fail-closed ASGI launcher is `cnapp_server.py`. Onboarding via CFN **or** the parity-tested `deploy/terraform/scanner-role/`; distributed as a self-hosted Marketplace container (`deploy/marketplace/`) priced on accounts-under-management.)
+- **OverWatch — Live CNAPP** (`aws_live_scanner.py` v2.39.0) -- live AWS account audit via boto3 (**554 severity-mapped checks across 98 sections**, **all 554 carrying a full risk/impact/step-by-step remediation write-up**, 5 compliance frameworks, risk scoring, **multi-account/region**, **security graph**, **internet-exposure + L7 reachability engine**, **deep-plane ingestion + flagship attack paths**, **attack-path correlation + choke points**, **effective-permissions ceiling (boundary∩SCP)**, **persistent state/drift/waivers**, **CIEM right-sizing + least-privilege policy generation**, **non-human-identity posture** (NHI-01..05 — machine-vs-human classification off structural evidence only, console passwords on service accounts, unrotated machine credentials, unowned identities, third-party trust without `sts:ExternalId`, federated trust without a `:sub` condition; reads the principals and credential report the IAM section already fetches, so no new call and no new grant), **agentless side-scan CWPP** (Linux OS-pkg + language-dep + container-image + Lambda + managed-engine-EOL + Windows-via-SSM), **agentless KSPM/KIEM** (CIS-EKS + K8s RBAC + IRSA cross-plane) + **Fargate task fusion** + **VPC Flow-Log micro-segmentation**, **tag-based DSPM** (12 datastore kinds) + **AWS-resident secrets posture**, **AI-SPM** (AI execution-role blast radius fused into the graph), **CDR-lite streaming detection ingest → reachability-ranked incidents** + **cloud-forensics timeline**, a **grounded-RAG copilot** (answers only from the scan's own corpus), **external-vuln ingest** (SARIF/CycloneDX/SPDX → reachability re-rank), **Postgres/Neptune export**, **remediation engine + remediation-as-code**, **code-to-cloud IaC mapping**, **hosted multi-account onboarding + live Postgres backend**, **multi-tenancy / workspaces + workspace-scoped RBAC + usage metering (MSSP)**, **air-gapped / zero-telemetry packaging + a Terraform onboarding module + an AWS Marketplace listing**, **an interactive product tour + shareable URL deep links** in the web console, **supply-chain ingest** — SBOM snapshot/diff + license policy + standalone OpenVEX/CSAF-VEX + a shell-only CI/CD image-scan GitHub Action + a below-admin `ingest` RBAC tier), **agentless ECR registry enumeration + opt-in layer-pull** (Tier-A native scan findings across all tagged images + Tier-B own-SBOM CVEs behind a two-key `CnappImageLayerPull` grant, converging on one ECRImage node, persisting as diffable snapshots; the hardened `aws_layer_fetch` egress seam), **non-AWS OCI registry connectors** (GHCR / Docker Hub / Harbor / ACR — one Docker Registry v2 Bearer-dance adapter reusing the SAME allowlisted egress file under a per-call host allowlist + SSRF-guarded blob redirect; secret-ref-only creds; display-only results; `aws_registry_oci.py` + `aws_registry_connectors.py`), plus **hub hardening** — a pooled psycopg3 Postgres backend (real concurrency) + **workspace-scoped connectors** (MSSP tenant isolation: a `connector_workspace` binding, a `connector_gate`, and delivery-path scoping). The full 8-phase vuln/misconfig detection roadmap (`docs/OVERWATCH_VULN_ROADMAP.md`) is COMPLETE; per-release history is in `CHANGELOG.md`. (Note: `aws_live_scanner.VERSION` tracks the whole platform, incl. hosted-backend + packaging releases; the scanner engine itself is unchanged by the multi-tenancy / packaging slices. **Zero-telemetry** — every egress is AWS or an operator-opt-in seam, enforced by `tests/test_zero_telemetry.py`; see `NETWORK.md` + `docs/AIRGAP_RUNBOOK.md`. Offline packaging = pinned `requirements*.txt` + a `--no-index` `Dockerfile` + `scripts/build_offline_bundle.sh`; the fail-closed ASGI launcher is `cnapp_server.py`. Onboarding via CFN **or** the parity-tested `deploy/terraform/scanner-role/`; distributed as a self-hosted Marketplace container (`deploy/marketplace/`) priced on accounts-under-management.)
 - **Security Graph** (`aws_graph.py`) -- dependency-free ARN-keyed property graph the live scanner projects findings onto (Neptune migration seed)
 - **Exposure Oracle** (`aws_exposure.py`) -- pure, dependency-free internet-reachability core (SG ∩ stateless NACL ∩ IGW route ∩ public-IP)
 - **Deep-Plane Core** (`aws_deepplane.py`) -- pure Inspector/Macie/GuardDuty/Access-Analyzer parsers + the CAN_READ_DATA object-probe matcher
@@ -24,7 +24,7 @@ no code rename.) The repo also includes a separate pre-deploy IaC static scanner
 - **Persistence Backends** (`aws_state_dialect.py` + `aws_graph_neptune.py` + `aws_graph_neptune_loader.py`) -- pure Postgres DDL/upsert/dialect generators + Neptune Gremlin-CSV / openCypher graph export + live bulk-load/openCypher runners
 - **Remediation Engine** (`aws_remediate.py`) -- pure prioritized fix plan (reuses `aws_correlate.minimal_cut`/`ChokePoint`) + remediation-as-code (Terraform/CFN/CLI) + runbook/JSON/issue/PR exports; read-only, never applies
 - **Code-to-Cloud** (`aws_codetocloud.py`) -- pure IaC index (Terraform block extractor + CFN parse) + tiered T1–T5 matcher mapping a live finding to its source IaC resource
-- **Finding Detail** (`aws_finding_detail.py`) -- pure offline data module: `FINDING_DETAIL={check_id:{risk, impact, steps[...]}}` for all 535 check IDs (100% of `REMEDIATION_MAP`); the detailed risk / business-impact / step-by-step remediation the JSON (`finding_catalog`) and HTML (per-finding cards) reports render. Falls back to the one-line `REMEDIATION_MAP` CLI for any uncatalogued check
+- **Finding Detail** (`aws_finding_detail.py`) -- pure offline data module: `FINDING_DETAIL={check_id:{risk, impact, steps[...]}}` for all 554 check IDs (100% of `REMEDIATION_MAP`); the detailed risk / business-impact / step-by-step remediation the JSON (`finding_catalog`) and HTML (per-finding cards) reports render. Falls back to the one-line `REMEDIATION_MAP` CLI for any uncatalogued check
 - **Managed-Engine EOL / Windows Vuln** (`aws_engine_eol.py` + `aws_winvuln.py`) -- pure offline signals: managed-service end-of-life (honest `EOL-*` date facts, not speculative CVEs) and agentless Windows OS-vuln via `ssm:DescribeInstancePatches` real MSRC `CVEIds` (+ synthetic `WINEOL-*`)
 - **Container/Lambda Side-Scan** (`aws_sidescan_image.py` + `aws_sidescan_lambda.py`) -- pure `DictExtractor` subclasses: OCI/Docker layer overlay + Lambda artifact merge → the Phase-3 OSV/SBOM pipeline verbatim (Inspector-independent image/Lambda CVEs)
 - **Agentless KSPM/KIEM** (`aws_kube.py`) -- pure CIS-EKS + K8s RBAC analysis over an injected read-only Kubernetes-API seam; cross-plane ServiceAccount → AWS-role (IRSA/Pod-Identity) paths. Fail-open when the cluster API is unreachable
@@ -155,9 +155,11 @@ AWS-Security-Scanner/
 │   ├── aws_guardrail.py            # CI/CD gate verdicts — unavailable gate follows its strictest configured mode; degraded allow / break-glass both exit 2, never a pass, pure
 │   ├── aws_trend.py                # Time-series + sufficiency in USABLE periods; refuses to project below 3 points; accuracy tracking refuses on its own terms, pure
 │   ├── aws_ingest_credexp.py       # Vendor-neutral breach-corpus ingest — allowlist-built records, salted digests, no network, a hit is never a compromise, pure
+│   ├── aws_cis_foundations.py      # CIS AWS Foundations v7.0.0 — the 19 controls the catalogue did not already hold (ORG-01..06, ACCT-01/02, IAM-11..15, EC2-18, S3-11, LOG-11/12, VPC-07/08), pure
+│   ├── aws_cis_foundations_map.py  # The v7.0.0 mapping AS DATA — all 70 recommendations, the v3.0→v7.0.0 renumbering, and the registers of citations removed and re-pointed
 │   ├── aws_remediate.py            # Remediation engine — prioritized plan (reuses minimal_cut/ChokePoint) + remediation-as-code + exports, pure
 │   ├── aws_codetocloud.py          # Code-to-cloud — IaC index (TF block extractor + CFN parse) + tiered T1–T5 matcher, pure
-│   ├── aws_finding_detail.py       # Finding detail — risk/impact/step-by-step remediation for all 535 checks, pure offline data (GENERATED)
+│   ├── aws_finding_detail.py       # Finding detail — risk/impact/step-by-step remediation for all 554 checks, pure offline data (GENERATED)
 │   ├── aws_engine_eol.py           # Managed-service EOL — honest EOL-* date signals for RDS/Aurora/ElastiCache/OpenSearch/Redshift, pure
 │   ├── aws_winvuln.py              # Windows OS-vuln — SSM DescribeInstancePatches real MSRC CVEs + WINEOL-* lifecycle, pure
 │   ├── aws_sidescan_lambda.py      # Lambda artifact side-scan — zip/layer merge → OSV pipeline (DictExtractor subclass), pure
@@ -265,7 +267,7 @@ python -m engine.aws_offline_scanner <target> [--severity SEV] [--json FILE] [--
 - **Lines**: ~12,300
 - **Dependencies**: `boto3` (required); bundled stdlib engine modules `aws_graph.py`, `aws_exposure.py`, `aws_deepplane.py`, `aws_correlate.py`, `aws_effperm.py`, `aws_state.py`, `aws_unused.py`, `aws_sidescan*.py`, `aws_state_dialect.py`, `aws_graph_neptune*.py`, `aws_remediate.py`, `aws_codetocloud.py`, `aws_engine_eol.py`, `aws_winvuln.py`, `aws_finding_detail.py`, `aws_kube.py`, `aws_flowlog.py`, `aws_secrets.py`, `aws_leastpriv.py`, `aws_ingest.py`, `aws_copilot.py`, `aws_aispm.py`, `aws_cdr.py`, `aws_forensics.py`, `aws_license.py`, `aws_vex.py`, `aws_sbom_diff.py`, `aws_registry_oci.py`, `aws_registry_connectors.py`; Python 3.10+
 - **IAM permissions**: `SecurityAudit` AWS-managed policy (read-only) covers the deep-plane reads (Inspector2/Macie/GuardDuty/Access Analyzer) and the effective-permissions reads (`iam:GetAccountAuthorizationDetails` for boundaries, `organizations:Describe*/List*` for SCPs — all degrade gracefully); multi-account adds `sts:AssumeRole` into a read-only role per target account, and `organizations:ListAccounts` for `--org`. `--ciem` additionally uses `iam:GenerateServiceLastAccessedDetails` and `access-analyzer:ListFindingsV2`
-- **Compliance**: CIS AWS v3.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
+- **Compliance**: CIS AWS Foundations v7.0.0, PCI DSS v4.0, HIPAA, SOC 2, NIST 800-53 Rev 5
 
 ### CNAPP Phase 0/1 additions (v2.2.0)
 
@@ -730,7 +732,7 @@ A second, detection-depth roadmap (`docs/OVERWATCH_VULN_ROADMAP.md`) layered ~15
 checks + new pillars on top of the CNAPP-platform phases above. All 8 phases are
 merged to `main`: (1) quick-win detection sweep, (2) marquee critical misconfigs
 (public KMS/secret policies, federated-OIDC trust, CloudTrail depth, Cognito
-identity-pool, subdomain-takeover, CloudWatch CIS §4), (3) application-dependency
+identity-pool, subdomain-takeover, CloudWatch CIS §5), (3) application-dependency
 CVE engine (7 lockfile parsers + SemVer/PEP440/RubyGems comparators + CycloneDX/SPDX
 SBOM), (4) container-image + Lambda dependency scanning (Inspector-independent, via
 `DictExtractor` subclasses), (5) managed-service vuln axis (`aws_engine_eol.py`
@@ -845,7 +847,7 @@ though the scanner engine is untouched.
 
 ### Detailed finding reports (`aws_finding_detail.py`, v2.19.0)
 
-Every scan emits, for each of the 535 checks, a full write-up — the
+Every scan emits, for each of the 554 checks, a full write-up — the
 **risk** (what it is / how it's exploited / why it matters), the **business impact**,
 and **step-by-step remediation** with real AWS CLI — not just a one-line command.
 
@@ -878,7 +880,7 @@ class Result:
     resource: str
     message: str
     severity: str = ""              # CRITICAL | HIGH | MEDIUM | LOW | INFO
-    compliance: Dict = {}           # {"CIS": "1.5", "PCI-DSS": "8.3.1", ...}
+    compliance: Dict = {}           # {"CIS": "2.5", "PCI-DSS": "8.3.1", ...}
     remediation_cmd: str = ""       # AWS CLI command
 
 class AWSLiveScanner:
@@ -905,12 +907,52 @@ fails_threshold(results, severity) -> bool   # --fail-on gating
 diff_findings(current, baseline_results) -> {new, resolved}
 ```
 
-- **CHECK_MAP**: Dict mapping 97 section names -> bound check methods
-- **97 sections**: IAM, S3, VPC, LOGGING, CLOUDWATCH, KMS, EC2, AMI, ECR, BACKUP, RDS, GLACIER, SNS, SQS, CLOUDFRONT, ROUTE53, BEDROCK, BEDROCK_AGENTS, AGENTCORE, LAMBDA, EKS, ECS, SECRETS, WAF, ELASTICACHE, OPENSEARCH, DYNAMODB, STEPFUNCTIONS, APIGATEWAY, ELB, EBS, REDSHIFT, EFS, ACM, SAGEMAKER, COGNITO, APIGATEWAYV2, IAMPRIVESC, EXPOSURE, COGNITO_IDENTITY, SIDESCAN, WINVULN, VULN, THREAT, DATA, AI_THREAT, AI_LOGGING, SHADOW_AI, VECTORSTORE, IOT, EMR, CODEBUILD, DOCDB, NEPTUNE, MEMORYDB, TIMESTREAM, IMAGEBUILDER, TRANSFER, NETWORKFIREWALL, LIGHTSAIL, PRIVATECA, QUICKSIGHT, IDENTITYCENTER, GLUE, S3TABLES, VPCLATTICE, CODEARTIFACT, DIRECTORYSERVICE, PROMETHEUS, XRAY, LAKEFORMATION, WORKSPACESWEB, STORAGEGATEWAY, PAYMENTCRYPTO, MANAGEDBLOCKCHAIN, WORKMAIL, SITEWISE, IOTMANAGEDINT, MAILMANAGER, CODEGURUPROFILER, VERIFIEDPERMISSIONS, CLOUDHSM, CLOUDWAN, MANAGEDGRAFANA, AURORADSQL, FLEETWISE, CLOUDFORMATION, FIREWALLMANAGER, ECRPUBLIC, MULTIPARTYAPPROVAL, WICKR, MEDIAPACKAGE, APPRUNNER, BATCH, BEANSTALK, NHI, CORRELATE
-- **Three lockstep maps** (a check_id lands in all three when actionable): `CHECK_SEVERITY` (535 entries), `COMPLIANCE_MAP` (535), `REMEDIATION_MAP` (535). All three maps now hold the same 535 keys, so every check carries a compliance mapping, a one-line remediation and a full `aws_finding_detail.FINDING_DETAIL` write-up. "Actionable" is NOT the same as "proven to fail": `docs/CHECK_FIRING.md` records that the suite drives 445 of them to a FAIL, 62 emit only WARN/INFO/PASS, and 28 are never observed at all — measured by recording `_add` across a real run, because it cannot be read off the source. COMPLIANCE_MAP NIST values stay inside a FROZEN 38-control universe (`compliance/crosswalk.json`), asserted by `tests/test_compliance_crosswalk.py`
+- **CHECK_MAP**: Dict mapping 98 section names -> bound check methods
+- **98 sections**: ORGANIZATIONS, IAM, S3, VPC, LOGGING, CLOUDWATCH, KMS, EC2, AMI, ECR, BACKUP, RDS, GLACIER, SNS, SQS, CLOUDFRONT, ROUTE53, BEDROCK, BEDROCK_AGENTS, AGENTCORE, LAMBDA, EKS, ECS, SECRETS, WAF, ELASTICACHE, OPENSEARCH, DYNAMODB, STEPFUNCTIONS, APIGATEWAY, ELB, EBS, REDSHIFT, EFS, ACM, SAGEMAKER, COGNITO, APIGATEWAYV2, IAMPRIVESC, EXPOSURE, COGNITO_IDENTITY, SIDESCAN, WINVULN, VULN, THREAT, DATA, AI_THREAT, AI_LOGGING, SHADOW_AI, VECTORSTORE, IOT, EMR, CODEBUILD, DOCDB, NEPTUNE, MEMORYDB, TIMESTREAM, IMAGEBUILDER, TRANSFER, NETWORKFIREWALL, LIGHTSAIL, PRIVATECA, QUICKSIGHT, IDENTITYCENTER, GLUE, S3TABLES, VPCLATTICE, CODEARTIFACT, DIRECTORYSERVICE, PROMETHEUS, XRAY, LAKEFORMATION, WORKSPACESWEB, STORAGEGATEWAY, PAYMENTCRYPTO, MANAGEDBLOCKCHAIN, WORKMAIL, SITEWISE, IOTMANAGEDINT, MAILMANAGER, CODEGURUPROFILER, VERIFIEDPERMISSIONS, CLOUDHSM, CLOUDWAN, MANAGEDGRAFANA, AURORADSQL, FLEETWISE, CLOUDFORMATION, FIREWALLMANAGER, ECRPUBLIC, MULTIPARTYAPPROVAL, WICKR, MEDIAPACKAGE, APPRUNNER, BATCH, BEANSTALK, NHI, CORRELATE
+- **Three lockstep maps** (a check_id lands in all three when actionable): `CHECK_SEVERITY` (554 entries), `COMPLIANCE_MAP` (554), `REMEDIATION_MAP` (554). All three maps now hold the same 554 keys, so every check carries a compliance mapping, a one-line remediation and a full `aws_finding_detail.FINDING_DETAIL` write-up. "Actionable" is NOT the same as "proven to fail": `docs/CHECK_FIRING.md` records that the suite drives 445 of them to a FAIL, 62 emit only WARN/INFO/PASS, and 28 are never observed at all — measured by recording `_add` across a real run, because it cannot be read off the source. COMPLIANCE_MAP NIST values stay inside a FROZEN 38-control universe (`compliance/crosswalk.json`), asserted by `tests/test_compliance_crosswalk.py`
 - **Risk scoring**: Score = 100 - (CRIT×15 + HIGH×5 + MED×2 + LOW×0.5), Grade A-F
 
+### CIS AWS Foundations Benchmark v7.0.0
+
+The benchmark this product is built around, mapped in full and held as data in
+`engine/aws_cis_foundations_map.py`; `docs/CIS_FOUNDATIONS_BENCHMARK.md` is **GENERATED**
+from it by `scripts/cis_foundations_benchmark.py` and must never be hand-edited.
+
+**All 70 recommendations are decided.** 64 covered, 2 narrowed, 3 shared with a neighbour,
+1 observed-only. No gaps. 19 checks were built for it (`engine/aws_cis_foundations.py`),
+and 15 of those answer a recommendation the benchmark itself marks **Manual** — which is
+the number worth quoting, because Manual is CIS's own judgement that one API read does not
+settle the question.
+
+**The edition matters more than usual.** Citations used to read against **v3.0**, and the
+framework registry said so — honest, not stale. But v7.0.0 renumbers *every* section:
+section 1 is now the Introduction and carries no recommendations, so every `1.x` citation
+this product emitted now points at nothing. The move is not a constant offset either — two
+IAM recommendations were eliminated on the way, so 1.12 lands on 2.11 and 1.14 on 2.12.
+`RENUMBERED` holds the table.
+
+**Three registers keep the change auditable**, and they make different claims:
+`RENUMBERED` (a recommendation moved), `REPOINTED` (a *check* moved somewhere the table
+would not predict — nine of them, six onto the new 2.21), and `MISCITED` (30 citations
+that were wrong against v3.0 as well and are removed, not renumbered) plus `EKS_NUMBERED`
+(13 checks carrying CIS *Kubernetes* numbering under the Foundations key). Removing a
+provably wrong citation is right; replacing it with an unverified one would be worse,
+which is why the EKS numbers are kept as data rather than re-keyed to a `CIS-EKS`
+framework nobody here has checked against its source.
+
+**One behavioural change came out of it.** v7.0.0's 5.10 adds `ModifySecurityGroupRules`
+to the security-group metric filter, so CW-11 now requires it. An estate that passed under
+v6.0.0 can legitimately fail here: their alarm is blind to the API the console has used
+for rule edits since 2021.
+
+**The ORGANIZATIONS section runs first and is the one that is normally denied.** Six of its
+checks read APIs only the management account may call, so their usual outcome in a member
+account is an INFO naming the denied action plus a `note_denied` in the coverage ledger —
+never a PASS. A silent denial would present an organisation nobody could inspect as an
+organisation with nothing wrong with it.
+
 ### Check ID Prefixes
+Organisation-level (CIS Foundations v7.0.0 §2.1–2.3): **ORG-XX** (Organizations), **ACCT-XX** (account contact record). Both read global APIs and both degrade to a stated coverage gap outside the management account.
 Per-resource: IAM-XX, S3-XX, VPC-XX, LOG-XX, ENC-XX, EC2-XX, AMI-XX, CNT-XX, BCK-XX, RDS-XX, AUR-XX, GLC-XX, SNS-XX, SQS-XX, CFN-XX, R53-XX, BDR-XX, AGT-XX, LMB-XX, EKS-XX, ECS-XX, SEC-XX, WAF-XX, ELC-XX, OSR-XX, DDB-XX, SFN-XX, APIGW-XX, ELB-XX, CLB-XX, EBS-XX, RS-XX/RSS-XX, EFS-XX, ACM-XX, SM-XX, COG-XX, AGW2-XX, SSM-XX, LT-XX, ASG-XX, CW-XX, IAMPE-XX.
 Graph-fusion / capability: EXPOSURE-XX, EXTACCESS-XX, IDENTITY-XX, ATTACK-01/02, PATHS-XX, DSPM-XX, SECRET-XX, CIEM-XX, **AISPM-XX / AIPATH-01** (AI-SPM), THREAT-01/02 + **CDR-lite THREAT-ING** (hosted), **FORENSIC-00** (hosted), SEG-XX / FLOW-XX (micro-seg), KSPM-XX / KIEM-XX (K8s), FARGATE-XX, VULN-XX / WINVULN-XX / CWPP-XX / EOL-\* / WINEOL-\*.
 

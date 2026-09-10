@@ -97,14 +97,17 @@
         {
             "id": "CIS",
             "name": "CIS AWS Foundations Benchmark",
-            "version": "3.0",
+            "version": "7.0.0",
             "authority": "CIS",
             "family": "cloud",
             "native": true,
             "near_identity": false,
-            "description": "AWS-specific hardening benchmark; the native CIS tags on OverWatch checks.",
-            "catalog_size": 0,
-            "sources": []
+            "description": "AWS account-hardening benchmark, and the native CIS tags on OverWatch checks. 70 recommendations across five numbered sections -- section 1 is the Introduction and carries none -- covering Identity and Access Management, Storage, Logging, Monitoring and Networking. v7.0.0 renumbers every section relative to v3.0-v6.0 and adds an Organizations subsection; engine/aws_cis_foundations_map.py holds the mapping and the renumbering table.",
+            "catalog_size": 70,
+            "sources": [
+                "https://www.cisecurity.org/benchmark/amazon_web_services",
+                "https://docs.aws.amazon.com/securityhub/latest/userguide/cis-aws-foundations-benchmark.html"
+            ]
         },
         {
             "id": "CIS-COMPUTE",

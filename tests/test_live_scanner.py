@@ -190,7 +190,14 @@ class TestDataStructures(unittest.TestCase):
         # into the default scanning role. The reason is recorded in
         # aws_cis_db.NOT_DETERMINABLE rather than lost, because the checks themselves
         # were trivial and the decision was about the GRANT.
-        self.assertEqual(len(SECTIONS), 97)
+        #
+        # 98: +ORGANIZATIONS. CIS AWS Foundations v7.0.0 added a whole §2.1 asking six
+        # questions about the ORGANISATION rather than about the account. It is its own
+        # top-level section rather than an arm of IAM for the reason batch 1 established:
+        # a nested section takes its host's tests down with it, and this one is the only
+        # section whose reads are refused in a normal member account -- so it is also the
+        # section most likely to fail in the field.
+        self.assertEqual(len(SECTIONS), 98)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:
@@ -1207,7 +1214,7 @@ class TestAsffOutput(unittest.TestCase):
         scanner.account = "123456789012"
         scanner.results = [
             Result("FAIL", "IAM-01", "IAM", "root", "Root MFA missing",
-                   severity="CRITICAL", compliance={"CIS": "1.5", "NIST": "IA-2(1)"},
+                   severity="CRITICAL", compliance={"CIS": "2.5", "NIST": "IA-2(1)"},
                    remediation_cmd="aws iam enable-mfa-device ..."),
             Result("PASS", "S3-01", "S3", "bucket", "ok"),
         ]
@@ -1223,9 +1230,10 @@ class TestAsffOutput(unittest.TestCase):
             self.assertEqual(f0["Severity"]["Label"], "CRITICAL")
             self.assertEqual(f0["Compliance"]["Status"], "FAILED")
             # Citations name the document and edition, not just the number: an
-            # unqualified "CIS 1.5" cannot be looked up, because 1.5 indexes a
-            # different control in each CIS benchmark.
-            self.assertIn("CIS AWS Foundations Benchmark v3.0/1.5",
+            # unqualified "CIS 2.5" cannot be looked up, because 2.5 indexes a
+            # different control in each CIS benchmark -- and, since v7.0.0 renumbered
+            # every section, in each EDITION of this one.
+            self.assertIn("CIS AWS Foundations Benchmark v7.0.0/2.5",
                           f0["Compliance"]["RelatedRequirements"])
             self.assertTrue(f0["Remediation"]["Recommendation"]["Text"])
         finally:

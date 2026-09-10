@@ -128,6 +128,8 @@ FLOORS = {
     "test_cis_db_mapping.py": 22,
     "test_cis_db_memorydb.py": 21,
     "test_cis_db_tls.py": 24,
+    "test_cis_foundations.py": 48,
+    "test_cis_foundations_mapping.py": 29,
     "test_cnapp_api.py": 7,
     "test_cnapp_cfn.py": 5,
     "test_cnapp_connectors.py": 50,

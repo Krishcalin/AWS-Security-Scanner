@@ -2,12 +2,16 @@
 """aws_cis_compute.py — the CIS AWS Compute Services Benchmark v2.0.0 controls that
 OverWatch did not already hold.
 
-WHY A SEPARATE BENCHMARK AT ALL. The 123 checks already carrying a ``CIS`` compliance
-key are all CIS AWS **Foundations** numbering, and the Compute benchmark re-uses the same
-section numbers for entirely different controls — Foundations 2.1.2 is about CloudTrail
-log validation, Compute 2.1.2 is "AMIs are encrypted". Merging them into one ``CIS`` key
-would silently mis-cite every mapping. Compute controls therefore carry their own
-``CIS-COMPUTE`` key, a convention LMB-08/LMB-09 already established.
+WHY A SEPARATE BENCHMARK AT ALL. The 99 checks carrying a ``CIS`` compliance key are all
+CIS AWS **Foundations** numbering, and the Compute benchmark re-uses the same section
+numbers for entirely different controls — Foundations 2.1.2 is an Organizations
+authorization guardrail, Compute 2.1.2 is "AMIs are encrypted". Merging them into one
+``CIS`` key would silently mis-cite every mapping. Compute controls therefore carry their
+own ``CIS-COMPUTE`` key, a convention LMB-08/LMB-09 already established.
+
+The Foundations half of that example changed when it moved to v7.0.0, which is the
+argument for the split rather than a weakening of it: an edition bump in one document must
+not re-point citations in another.
 
 WHAT THIS MODULE IS FOR. Of the benchmark's 82 recommendations, 33 were already covered by
 existing checks and 5 cannot be reached from the AWS control plane at all (four are Lightsail

@@ -409,8 +409,11 @@ _IAM_READ = (
 )
 
 CHECKS = _cd.register(
+    # No `CIS` key: a machine identity that also holds a console password is a real
+    # finding with no CIS AWS Foundations recommendation. It used to cite 1.4, which is
+    # specifically "the ROOT user has no access keys" -- a different identity entirely.
     _C(id="NHI-01", section="NHI", severity="HIGH",
-       compliance={"CIS": "1.4", "PCI-DSS": "8.2.1", "HIPAA": "164.312(a)(2)(i)",
+       compliance={"PCI-DSS": "8.2.1", "HIPAA": "164.312(a)(2)(i)",
                    "SOC2": "CC6.1", "NIST": "AC-6"},
        permissions=_IAM_READ,
        remediation=(
@@ -448,7 +451,7 @@ CHECKS = _cd.register(
            "tagged as machine identities.")),
 
     _C(id="NHI-02", section="NHI", severity="MEDIUM",
-       compliance={"CIS": "1.14", "PCI-DSS": "8.3.9", "HIPAA": "164.308(a)(5)(ii)(D)",
+       compliance={"CIS": "2.12", "PCI-DSS": "8.3.9", "HIPAA": "164.308(a)(5)(ii)(D)",
                    "SOC2": "CC6.1", "NIST": "IA-5"},
        permissions=_IAM_READ,
        remediation=(
@@ -517,8 +520,11 @@ CHECKS = _cd.register(
            "Prevent recurrence: require the tag at creation with an SCP condition on "
            "aws:RequestTag/Owner for iam:CreateRole.")),
 
+    # 2.21, not 2.14: a role's trust policy IS a resource policy, and an external account
+    # able to assume it with no ExternalId condition is exactly the unrestricted grant
+    # that recommendation is about. 1.16 (now 2.14) is about attached "*:*" policies.
     _C(id="NHI-04", section="NHI", severity="HIGH",
-       compliance={"CIS": "1.16", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)",
+       compliance={"CIS": "2.21", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)",
                    "SOC2": "CC6.3", "NIST": "AC-3"},
        permissions=_IAM_READ,
        remediation=(
@@ -553,7 +559,7 @@ CHECKS = _cd.register(
            "external access and least privilege are different controls.")),
 
     _C(id="NHI-05", section="NHI", severity="HIGH",
-       compliance={"CIS": "1.16", "PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)",
+       compliance={"CIS": "2.21", "PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)",
                    "SOC2": "CC6.3", "NIST": "AC-3"},
        permissions=_IAM_READ,
        remediation=(

@@ -65,12 +65,16 @@ hand-edit.**
 
 ## Why `CIS-DB` and not `CIS`
 
-123 checks already carry a `CIS` key and every one of them is CIS AWS **Foundations**
-numbering. The service benchmarks reuse those section numbers for entirely unrelated
-controls — Foundations 2.2 is CloudTrail log-file validation, Compute 2.2 is EBS
-encryption, Database 2.2 is Aurora encryption at rest. Folding them into one key would
-mis-cite every mapping in both directions at once, so Database controls carry their own
-`CIS-DB` key, exactly as Compute controls carry `CIS-COMPUTE`.
+99 checks carry a `CIS` key and every one of them is CIS AWS **Foundations** numbering.
+The service benchmarks reuse those section numbers for entirely unrelated controls —
+Foundations 2.2 is the account contact record, Compute 2.2 is EBS encryption, Database 2.2
+is Aurora encryption at rest. Folding them into one key would mis-cite every mapping in
+both directions at once, so Database controls carry their own `CIS-DB` key, exactly as
+Compute controls carry `CIS-COMPUTE`.
+
+That first example changed when Foundations moved to v7.0.0 — 2.2 was CloudTrail log-file
+validation and is now something else — while Database 2.2 did not move. A shared key would
+have let an edition bump in one document silently re-point citations in another.
 """
 
 DEFECTS = """

@@ -65,8 +65,16 @@ export const RISK_CATEGORIES: RiskCategory[] = [
     // the action it calls for is rotation. Filing it under a "threat intel" card
     // would put it next to detections about attackers rather than next to the
     // accounts it names.
+    // ORG- and ACCT- arrived with CIS AWS Foundations v7.0.0, whose new section 2.1
+    // files the Organizations controls under Identity and Access Management -- and
+    // that is the right reading of them here too. Centralized root access, an
+    // account under no service-control policy and a delegated administrator are all
+    // questions about WHO MAY DO WHAT, decided one level above the account. Giving
+    // them a card of their own would separate the organisation's identity controls
+    // from the account's, which is precisely the split that lets an estate review
+    // "identity" and never look at the layer that overrides it.
     prefixes: ['IAM-', 'IAMPE-', 'IDENTITY-', 'CIEM-', 'SSO-', 'COG-', 'DIRSVC-',
-      'MPA-', 'VP-', 'NHI-', 'CREDEXP-'],
+      'MPA-', 'VP-', 'NHI-', 'CREDEXP-', 'ORG-', 'ACCT-'],
     seeAll: '/identity',
   },
   {

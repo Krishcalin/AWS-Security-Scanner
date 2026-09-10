@@ -21,11 +21,16 @@ which is a reference, and a SHORT LABEL WRITTEN FROM THE UNDERLYING AWS BEHAVIOU
 rationale, audit, impact or remediation text is copied from the benchmark; the reasons and
 descriptions here are this project's own, written from what the AWS API actually exposes.
 
-WHY `CIS-DB` AND NOT `CIS`. Exactly the reason `CIS-COMPUTE` exists. 123 checks already
-carry a `CIS` key and every one is CIS AWS *Foundations* numbering. This benchmark reuses
-the same section numbers for unrelated controls — Foundations 2.2 is about CloudTrail
-log-file validation, Database 2.2 is Aurora encryption at rest — so folding them together
-would silently mis-cite every mapping in both directions.
+WHY `CIS-DB` AND NOT `CIS`. Exactly the reason `CIS-COMPUTE` exists. 99 checks carry a
+`CIS` key and every one is CIS AWS *Foundations* numbering. This benchmark reuses the same
+section numbers for unrelated controls — Foundations 2.2 is the account contact record,
+Database 2.2 is Aurora encryption at rest — so folding them together would silently
+mis-cite every mapping in both directions.
+
+That example changed when Foundations moved to v7.0.0, and the change is itself the
+argument: 2.2 used to be CloudTrail log-file validation in Foundations and is now
+something else entirely, while Database 2.2 has not moved at all. A shared key would have
+made an edition bump in one document silently re-point citations in another.
 """
 from __future__ import annotations
 

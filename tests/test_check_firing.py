@@ -220,8 +220,17 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: CREDEXP-00 is deliberately unregistered — it is INFO-only, like AIDR-00, and
 #: `_add` reads the catalogue for no status but FAIL.
 #: See tests/test_ingest_credexp.py.
+#: 445 -> 464: the nineteen CIS AWS Foundations v7.0.0 checks, all arriving proven. The
+#: two other counts held exactly steady — 62 never-driven-to-failure and 28 never
+#: observed — which is the number to look at rather than the headline. A batch of
+#: nineteen is the classic way this product has previously grown its backlog by nineteen,
+#: so `tests/test_cis_foundations.py` drives each one to a real FAIL through the scanner
+#: rather than through its evaluator, and fifteen of them also have a "the read was
+#: refused" case, because six of these checks are denied in every member account and a
+#: silent denial reads as a clean organisation.
+#: See tests/test_cis_foundations.py and docs/CIS_FOUNDATIONS_BENCHMARK.md.
 MAX_NEVER_OBSERVED = 28
-MIN_PROVEN_FAILING = 445
+MIN_PROVEN_FAILING = 464
 
 
 def doc_text() -> str:

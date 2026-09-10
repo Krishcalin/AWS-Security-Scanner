@@ -627,7 +627,13 @@ CHECKS = _cd.register(
            "Treat data behind any dashboard that was publicly shared as disclosed for "
            "that window -- anonymous reads leave no per-viewer trail.")),
 
-    _C(id="SSO-01", section="IDENTITYCENTER", severity="HIGH", compliance=_PRIV,
+    # CIS AWS Foundations v7.0.0 2.14 asks that no policy granting Action:* on Resource:*
+    # be attached to anything. An Identity Center permission set with that inline is the
+    # same defect on a surface an audit that only reads iam: APIs never sees, so it is
+    # part of 2.14's covering set. Merged rather than added to _PRIV: that constant is
+    # shared, and editing it would silently cite 2.14 on every check that uses it.
+    _C(id="SSO-01", section="IDENTITYCENTER", severity="HIGH",
+       compliance={**_PRIV, "CIS": "2.14"},
        permissions=(
            _P("sso:ListInstances",
               "locate the IAM Identity Center instance for this organization"),

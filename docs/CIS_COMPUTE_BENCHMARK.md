@@ -12,10 +12,10 @@ naming the check that covers it.
 
 ## Why `CIS-COMPUTE` and not `CIS`
 
-123 checks already carry a `CIS` compliance key and every one of them is **CIS AWS
+99 checks carry a `CIS` compliance key and every one of them is **CIS AWS
 Foundations** numbering. The Compute benchmark re-uses the same section numbers for
-entirely different controls — Foundations 2.1.2 is about CloudTrail log-file validation,
-Compute 2.1.2 is "AMIs are encrypted" — so folding them into one key would silently
+entirely different controls — Foundations 2.1.2 is an Organizations authorization
+guardrail, Compute 2.1.2 is "AMIs are encrypted" — so folding them into one key would silently
 mis-cite every mapping in both directions. Compute controls therefore carry their own
 `CIS-COMPUTE` key, a convention LMB-08 and LMB-09 already established.
 
