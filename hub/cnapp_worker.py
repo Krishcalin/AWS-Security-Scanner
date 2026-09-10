@@ -258,6 +258,53 @@ def scheduler_tick(svc, *, spec: ScanSpec = None, limit: int = 100) -> dict:
     return {"enqueued": enqueued, "ran": ran}
 
 
+def meter_marketplace_usage(svc, *, now_epoch: Optional[int] = None,
+                            log=None) -> Optional[dict]:
+    """Emit one hourly AWS Marketplace ``MeterUsage`` record, if this deployment is a
+    metered listing. Returns ``None`` when it is not — which is the default.
+
+    WHY THE WORKER OWNS THIS. ``cnapp_marketplace_metering`` says in its own
+    docstring that "the caller schedules it hourly", and nothing scheduled it: the
+    emitter was complete, tested and documented in ``deploy/marketplace/`` while no
+    code path could reach it, so a metered listing would have billed nothing. The
+    worker is the only hourly process in the product, so it is the caller the module
+    was written for.
+
+    THREE GATES, ALL OFF BY DEFAULT. A product code, an injected client factory, and
+    a metering store. Missing any one and this returns None without importing boto3
+    or resolving a hostname — an air-gapped or contract-SKU install therefore cannot
+    emit by accident, which is what NETWORK.md promises when it lists this seam as
+    unused.
+
+    FAIL-OPEN, like the per-scan metering block in ``run_scan_job``. A billing call
+    must never break scanning: an operator whose scans stop because a metering
+    endpoint was unreachable has lost the product to protect the invoice. The
+    exception is reported through ``log`` so a silent failure is still a visible one.
+    """
+    code = getattr(svc, "marketplace_product_code", "") or ""
+    factory = getattr(svc, "marketplace_client", None)
+    metering = getattr(svc, "metering", None)
+    if not code or factory is None or metering is None:
+        return None
+
+    from hub import cnapp_marketplace_metering as mm
+
+    now = int(now_epoch if now_epoch is not None else svc.clock())
+    try:
+        return mm.meter_hourly(metering, product_code=code, now_epoch=now,
+                               mp_client=factory())
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as e:                                # noqa: BLE001
+        if log:
+            log("marketplace metering FAILED: %s: %s" % (type(e).__name__, e))
+        return {"error": "%s: %s" % (type(e).__name__, e)}
+
+
+def _hour_of(epoch: int) -> int:
+    return int(epoch) // 3600
+
+
 def make_session_factory(registry, secret_reader, *, role_name: str = "CnappScannerRole",
                          region: str = "us-east-1"):
     """Production session factory: (account_id) -> boto3.Session assumed into the
@@ -292,8 +339,9 @@ def run_forever(svc, *, spec: ScanSpec = None, interval: int = 300,
     import time
 
     sleep = sleep or time.sleep
-    totals = {"ticks": 0, "enqueued": 0, "ran": 0, "errors": 0}
+    totals = {"ticks": 0, "enqueued": 0, "ran": 0, "errors": 0, "metered": 0}
     n = 0
+    metered_hour = None
     while ticks is None or n < ticks:
         n += 1
         try:
@@ -307,6 +355,23 @@ def run_forever(svc, *, spec: ScanSpec = None, interval: int = 300,
         except Exception as e:                        # noqa: BLE001
             totals["errors"] += 1
             log("tick %d FAILED: %s: %s" % (n, type(e).__name__, e))
+        # Marketplace metering is HOURLY while the tick interval is typically five
+        # minutes, so it is rate-limited here rather than called every tick. AWS
+        # hour-buckets MeterUsage and rejects a duplicate in the same hour, so this
+        # is belt-and-braces: the local hour check saves twelve pointless API calls
+        # an hour, and AWS's own de-duplication remains the correctness guarantee
+        # across a worker restart, which resets this counter.
+        now = int(svc.clock())
+        if _hour_of(now) != metered_hour:
+            emitted = meter_marketplace_usage(svc, now_epoch=now, log=log)
+            if emitted is not None:
+                metered_hour = _hour_of(now)
+                if not emitted.get("error"):
+                    totals["metered"] += 1
+                    log("metered %s: quantity %s%s"
+                        % (emitted.get("dimension"), emitted.get("quantity"),
+                           " (duplicate hour, no-op)" if emitted.get("duplicate")
+                           else ""))
         totals["ticks"] = n
         if ticks is None or n < ticks:
             sleep(interval)
@@ -365,14 +430,23 @@ def main(argv=None) -> int:
         out = scheduler_tick(svc, limit=args.limit)
         enqueued, ran = out["enqueued"], out["ran"]
 
+    # A cron/CronJob deployment gets one tick per invocation, so the hour-rate-limit
+    # in run_forever has nothing to do here: the cron schedule IS the cadence, and
+    # AWS's own hour-bucketing makes a cron that fires more often than hourly a
+    # no-op rather than an over-bill. Returns None and costs nothing unless this is
+    # a metered listing.
+    metered = meter_marketplace_usage(svc, log=print)
+
     # Per-status counts, because "ran 12" hides twelve failures.
     by_status = {}
     for job in ran:
         by_status[job.get("status", "?")] = by_status.get(job.get("status", "?"), 0) + 1
-    print("enqueued %d, ran %d%s" % (
+    print("enqueued %d, ran %d%s%s" % (
         len(enqueued), len(ran),
         (" (" + ", ".join("%s %d" % kv for kv in sorted(by_status.items())) + ")")
-        if by_status else ""))
+        if by_status else "",
+        (", metered %s" % metered.get("quantity"))
+        if metered and not metered.get("error") else ""))
     return 0
 
 

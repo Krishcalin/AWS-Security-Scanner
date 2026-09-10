@@ -44,15 +44,21 @@ if [ -n "$OW_POLICY" ]; then
   ARGS+=(--policy "$OW_POLICY")
 fi
 
-# Run the gate. Exit 0 = clean, 1 = a finding/policy breached the gate (fail the build),
-# 2 = usage/environment error (surfaced distinctly).
+# Run the gate. Exit 0 = clean, 1 = do not proceed (a finding or policy breached the
+# gate, or a policy could not be evaluated in an enforcing environment), 2 = the build
+# was NOT verified: either a usage/environment error, or the gate proceeded without a
+# completed evaluation (an unparseable policy in audit mode, a break-glass override, or
+# a target with no IaC files and no --allow-empty). Both non-zero codes fail the step,
+# which is the point: an evaluation that did not happen is never a pass. The scanner's
+# own `[gate]` lines above say which case this was, and --gate-record writes it as JSON.
 set +e
 python3 "${ARGS[@]}"
 RC=$?
 set -e
 case "$RC" in
   0) echo "OverWatch IaC gate passed (no findings at or above ${OW_FAIL_ON})." ;;
-  1) echo "::error::OverWatch IaC gate failed — findings at or above ${OW_FAIL_ON} (or a policy fired). See SARIF annotations." ;;
+  1) echo "::error::OverWatch IaC gate failed — findings at or above ${OW_FAIL_ON}, a policy fired, or a policy could not be evaluated. See SARIF annotations and the [gate] lines above." ;;
+  2) echo "::error::OverWatch IaC gate UNVERIFIED (exit 2) — this is not a pass. Either the scan hit a usage/environment error, or it proceeded without a completed evaluation. See the [gate] lines above." ;;
   *) echo "::error::OverWatch IaC scan errored (exit ${RC})." ;;
 esac
 exit "$RC"

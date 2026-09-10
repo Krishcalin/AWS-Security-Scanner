@@ -60,8 +60,21 @@ export const RISK_CATEGORIES: RiskCategory[] = [
     // NHI- is here rather than in its own card: a non-human identity is an identity,
     // and splitting the pillar out would let a reader review "identity" and miss the
     // machine half -- which is the half that outnumbers the other and goes unrotated.
+    // CREDEXP- belongs here for the same reason NHI- does: a leaked credential
+    // joined to an IAM principal or a live access key is an identity finding, and
+    // the action it calls for is rotation. Filing it under a "threat intel" card
+    // would put it next to detections about attackers rather than next to the
+    // accounts it names.
+    // ORG- and ACCT- arrived with CIS AWS Foundations v7.0.0, whose new section 2.1
+    // files the Organizations controls under Identity and Access Management -- and
+    // that is the right reading of them here too. Centralized root access, an
+    // account under no service-control policy and a delegated administrator are all
+    // questions about WHO MAY DO WHAT, decided one level above the account. Giving
+    // them a card of their own would separate the organisation's identity controls
+    // from the account's, which is precisely the split that lets an estate review
+    // "identity" and never look at the layer that overrides it.
     prefixes: ['IAM-', 'IAMPE-', 'IDENTITY-', 'CIEM-', 'SSO-', 'COG-', 'DIRSVC-',
-      'MPA-', 'VP-', 'NHI-'],
+      'MPA-', 'VP-', 'NHI-', 'CREDEXP-', 'ORG-', 'ACCT-'],
     seeAll: '/identity',
   },
   {
@@ -118,7 +131,13 @@ export const RISK_CATEGORIES: RiskCategory[] = [
     // APRUN- (App Runner), BATCH- and EB- (Elastic Beanstalk) arrived with the CIS
     // Compute Services Benchmark. All three are managed compute, so they belong here
     // rather than under Containers: none of them is a cluster the operator runs.
-    prefixes: ['EC2-', 'AMI-', 'ASG-', 'LT-', 'SSM-', 'LMB-', 'SFN-', 'SQS-', 'SNS-',
+    // AL2- is in-guest Amazon Linux posture read through SSM Inventory — a prohibited
+    // package, a missing security package, a service that should not be listening. It
+    // belongs beside EC2- and SSM- because that is what an operator is looking at when
+    // they act on it: a host they run, not a managed service. Filing it under
+    // Vulnerabilities would put configuration findings next to CVEs, which are a
+    // different job with a different fix.
+    prefixes: ['EC2-', 'AMI-', 'ASG-', 'LT-', 'SSM-', 'AL2-', 'LMB-', 'SFN-', 'SQS-', 'SNS-',
       'ELC-', 'MM-', 'IOT-', 'MPV-', 'WM-', 'WSW-', 'CART-', 'CB-', 'CGP-', 'GRF-',
       'STACK-', 'IMGB-', 'APRUN-', 'BATCH-', 'EB-'],
     seeAll: '/findings',

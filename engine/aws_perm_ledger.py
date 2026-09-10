@@ -502,6 +502,70 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "read neptune_enforce_ssl -- whether Gremlin/SPARQL queries and their "
              "results cross the network in cleartext"),
     ),
+    # ── credential exposure joined to identity ───────────────────────────────
+    # THE ONE NEW ACTION IN THIS TRANCHE, and the reason it is worth the line in an
+    # IAM review: ListAccessKeys returns key IDs, owner, status and creation date. It
+    # does NOT return secret access keys -- those are returned exactly once, at
+    # creation, and by no API afterwards -- so this stays inside read-only-of-CONFIG,
+    # and a key id is an identifier of the same kind as a role ARN.
+    #
+    # It is NOT the credential report, which NHI-02 already reads. That report carries
+    # key AGE and rotation dates and no key IDs at all, so it cannot answer the one
+    # question this exists for: is the key in this corpus a key in this account?
+    #
+    # CREDEXP-02 and -03 need nothing new -- they match against principals already
+    # enumerated by GetAccountAuthorizationDetails.
+    "CREDEXP-01": (
+        _req("iam:ListAccessKeys",
+             "list live access key IDs so a key id found in a breach corpus can be "
+             "matched against a key that actually exists here -- without it the "
+             "highest-value join in the whole feed cannot happen, and an empty "
+             "result reads as 'clean' when it means 'not looked at'"),
+    ),
+    # ── the sibling-service gaps the CIS Database mapping exposed ────────────
+    # Five of these seven need NO new action at all: they read fields off the
+    # DescribeDBClusters response the section already fetches, so the entire cost of
+    # closing four CIS-DB recommendations is one action -- rds:DescribeDBInstances --
+    # which most scanning roles already hold for RDS itself. Recorded per check anyway,
+    # so a reviewer sees what each grant buys rather than inferring it from the service
+    # the client was built for. Neptune and DocumentDB both authorise under rds:*.
+    "NEP-06": (
+        _req("rds:DescribeDBInstances",
+             "read PubliclyAccessible on Neptune INSTANCES -- the cluster response does "
+             "not carry it, and Neptune has no database users, so on a cluster without "
+             "IAM auth the security group is the whole of access control"),
+    ),
+    "NEP-07": (
+        _req("rds:DescribeDBClusters",
+             "read BackupRetentionPeriod -- how far back a recovery can reach on a "
+             "cluster whose only other recovery path is a full re-ingest"),
+    ),
+    "NEP-08": (
+        _req("rds:DescribeDBClusters",
+             "read IAMDatabaseAuthenticationEnabled -- for Neptune this is not one "
+             "authentication option among several, it is the only one the engine has"),
+    ),
+    "NEP-09": (
+        _req("rds:DescribeDBClusters",
+             "read EnabledCloudwatchLogsExports -- whether any record of which "
+             "traversals were run survives the cluster"),
+    ),
+    "NEP-10": (
+        _req("rds:DescribeDBClusters",
+             "read MultiAZ -- Neptune storage already spans three zones, so this asks "
+             "the different question of whether an instance is left to serve it"),
+    ),
+    "DOCDB-07": (
+        _req("rds:DescribeDBInstances",
+             "read PubliclyAccessible on DocumentDB INSTANCES -- a document holds a "
+             "whole entity rather than a joinable fragment, so one authentication "
+             "against a public endpoint returns complete records"),
+    ),
+    "DOCDB-08": (
+        _req("rds:DescribeDBClusters",
+             "read BackupRetentionPeriod -- a document store has no schema to reject a "
+             "bad write, so the window has to outlast a slow discovery"),
+    ),
     "IMGB-01": (
         _req("imagebuilder:ListImages",
          "enumerate golden images this account owns and builds"),
@@ -847,6 +911,9 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
 # import of this module, so it builds Requirements through the factory passed in.
 from engine import aws_checkdef          # noqa: E402
 from engine import aws_cis_compute
+from engine import aws_cis_al2           # noqa: E402,F401  (CIS Amazon Linux 2)
+from engine import aws_cis_db2           # noqa: E402,F401  (CIS-DB tranche 2)
+from engine import aws_cis_foundations   # noqa: E402,F401  (CIS Foundations v7.0.0)
 from engine import aws_nhi
 from engine import aws_extsvc2
 from engine import aws_extsvc3

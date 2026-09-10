@@ -3,7 +3,7 @@
 AWS Live Security Scanner v2.2.0
 Read-only live audit of AWS environments via boto3, evolving toward a CNAPP.
 
-Aligned to: CIS AWS Foundations Benchmark v3.0
+Aligned to: CIS AWS Foundations Benchmark v7.0.0
             AWS Well-Architected Framework — Security Pillar
             PCI DSS v4.0 · HIPAA · SOC 2 · NIST 800-53 Rev 5
 
@@ -53,7 +53,7 @@ from collections import defaultdict
 from datetime import datetime, timezone, date, timedelta
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set
 
 try:
     import boto3
@@ -79,6 +79,7 @@ from engine import aws_toxicflow
 from engine import aws_toolpoison
 from engine import aws_agentmemory
 from engine import aws_ingest_aidr
+from engine import aws_ingest_credexp
 from engine import aws_ingest_pentest
 from engine import aws_aiprotect
 from engine import aws_cbom
@@ -93,7 +94,10 @@ from engine import aws_nitro
 from engine import aws_perimeter
 from engine import aws_checkdef
 from engine import aws_cis_compute
+from engine import aws_cis_al2
 from engine import aws_cis_db
+from engine import aws_cis_db2
+from engine import aws_cis_foundations
 from engine import aws_extsvc
 from engine import aws_extsvc2
 from engine import aws_extsvc3
@@ -235,6 +239,11 @@ CRED_REPORT_RETRY_SECONDS = 5      # one retry: get_credential_report can be InP
 
 # ─── Section registry ─────────────────────────────────────────────────────────
 SECTIONS = [
+    # ORGANIZATIONS runs FIRST, and before IAM, because it is the only section whose
+    # reads are refused in a normal member account. Putting it first means the coverage
+    # statement it emits ("not evaluated here, and why") is the first thing an operator
+    # reads, rather than something they find after 500 findings that did work.
+    "ORGANIZATIONS",
     "IAM", "S3", "VPC", "LOGGING", "CLOUDWATCH", "KMS", "EC2",
     "AMI", "ECR", "BACKUP", "RDS", "GLACIER", "SNS", "SQS",
     "CLOUDFRONT", "ROUTE53", "BEDROCK", "BEDROCK_AGENTS", "AGENTCORE",
@@ -251,6 +260,10 @@ SECTIONS = [
     # free: its first statement returns unless the flag is set, exactly like the
     # ECR registry and Lambda artifact paths.
     "SIDESCAN", "WINVULN",
+    # AMAZONLINUX sits beside WINVULN because it is the same kind of thing: an in-guest
+    # OS assessment made agentlessly through SSM, whose normal outcome on a host nobody
+    # has inventoried is a stated coverage gap rather than a pass.
+    "AMAZONLINUX",
     "VULN", "THREAT", "DATA", "AI_THREAT",
     # THE AI-POSTURE SECTIONS. Each already had a check method, a dispatch-table
     # entry and a SECTION_LABELS entry, and was missing from THIS list — which is
@@ -305,11 +318,15 @@ SECTIONS = [
 ]
 
 SECTION_LABELS = {
+    "ORGANIZATIONS":  "AWS ORGANIZATIONS (CIS §2.1)",
     "IAM":            "IDENTITY & ACCESS MANAGEMENT",
+    "AMAZONLINUX":    "AMAZON LINUX (CIS AL2 v4.0.0)",
     "S3":             "S3 SECURITY",
     "VPC":            "NETWORK SECURITY",
     "LOGGING":        "LOGGING & MONITORING",
-    "CLOUDWATCH":     "CLOUDWATCH ALARMS (CIS §4)",
+    # §5 in v7.0.0, not §4: the edition inserted an Introduction as section 1 and every
+    # numbered section moved down one. See engine/aws_cis_foundations_map.RENUMBERED.
+    "CLOUDWATCH":     "CLOUDWATCH ALARMS (CIS §5)",
     "KMS":            "ENCRYPTION & KMS",
     "EC2":            "COMPUTE SECURITY",
     "AMI":            "MACHINE IMAGES (AMI)",
@@ -654,6 +671,19 @@ CHECK_SEVERITY = {
     # a BLOCKED detection -- that is a control working, and scoring it would teach a
     # team to switch the detector off rather than to keep it.
     "AIDR-01": "HIGH",
+    # Credential exposure, joined to identity. The three are graded by the STRENGTH OF
+    # THE JOIN rather than by how alarming the words are, which is the only defensible
+    # way to rank an observation of somebody else's corpus.
+    # CREDEXP-01 is CRITICAL because the identifier is not a guess: the leaked access
+    # key id is live in this account right now. Nothing else in the corpus is that
+    # specific -- an AKIA is unique, unlike an email address that may belong to anyone.
+    # CREDEXP-02 is HIGH: an exact email/username match to an IAM principal, which is
+    # strong but not conclusive -- the credential in the corpus may never have been
+    # this account's.
+    # CREDEXP-03 is MEDIUM and would be wrong at anything higher: a domain match with
+    # no principal is a signal about the ORGANISATION, and the person may hold no IAM
+    # identity here at all.
+    "CREDEXP-01": "CRITICAL", "CREDEXP-02": "HIGH", "CREDEXP-03": "MEDIUM",
     # Slice 5.3 -- platform traffic encryption. Both LOW, and deliberately: neither
     # is a misconfiguration. An instance type that does not automatically encrypt
     # east-west traffic is a PLATFORM property the operator chose implicitly when they
@@ -705,6 +735,19 @@ CHECK_SEVERITY = {
     # not plaintext, and calling that HIGH is how a risk score stops meaning anything.
     "MDB-01": "HIGH", "MDB-02": "CRITICAL", "MDB-03": "MEDIUM",
     "MDB-04": "LOW", "MDB-05": "MEDIUM", "MDB-06": "MEDIUM",
+    # The seven ids that let the RDS INSTANCE loop finally filter foreign engines. Until
+    # they existed, a Neptune or DocumentDB instance was scored by RDS-01/02/03/04 -- so
+    # filtering alone would have deleted the only coverage Neptune's public accessibility
+    # and backups had. NEP-06 and DOCDB-07 inherit RDS-02's CRITICAL because they are the
+    # same finding on the same field, read from the service that owns it; NEP-07 and
+    # DOCDB-08 inherit RDS-03's MEDIUM for the same reason.
+    "NEP-06": "CRITICAL", "NEP-07": "MEDIUM", "NEP-10": "MEDIUM",
+    # NEP-08 is HIGH where AUR-08 is MEDIUM, and the difference is not an inconsistency:
+    # Aurora without IAM auth still has database users and passwords, so the finding is
+    # credential hygiene. Neptune has no user store at all, so IAM auth off means the
+    # security group is the entire authorisation model.
+    "NEP-08": "HIGH", "NEP-09": "MEDIUM",
+    "DOCDB-07": "CRITICAL", "DOCDB-08": "MEDIUM",
     # Timestream, which had no posture coverage. TS-01 is LOW for the same reason
     # MDB-04 is: the data IS encrypted, and the finding is key ownership.
     "TS-01": "LOW", "TS-02": "MEDIUM",
@@ -813,11 +856,11 @@ CHECK_SEVERITY = {
 COMPLIANCE_MAP = {
 
     # ── depth pass 2: checks that scored while mapping to no framework ──
-    "CFN-04": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "CFN-04": {"CIS": "4.10", "PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "FARGATE-01": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(1)", "SOC2": "CC7.1", "NIST": "CM-8"},
     "GLC-03": {"PCI-DSS": "10.6", "HIPAA": "164.308(a)(1)(ii)(D)", "SOC2": "CC7.2", "NIST": "SI-4"},
     "R53-04": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC7.2", "NIST": "CM-6"},
-    "RDS-05": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
+    "RDS-05": {"CIS-DB": "3.9", "PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
     "SFN-02": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
     "SQS-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(1)", "SOC2": "CC7.2", "NIST": "CM-6"},
     # Agentless side-scan (CWPP, Phase 6)
@@ -833,98 +876,98 @@ COMPLIANCE_MAP = {
     "WINVULN-03": {"PCI-DSS": "6.3.1", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5"},
     "WINVULN-04": {"PCI-DSS": "6.3.3", "SOC2": "CC7.1", "NIST": "SI-2"},
     # IAM
-    "IAM-01": {"CIS": "1.5", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
-    "IAM-02": {"CIS": "1.4", "PCI-DSS": "8.2.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "IA-2"},
-    "IAM-04": {"CIS": "1.10", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
-    "IAM-05": {"CIS": "1.8", "PCI-DSS": "8.3.6", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "IA-5(1)"},
-    "IAM-06": {"CIS": "1.14", "PCI-DSS": "8.6.3", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.2", "NIST": "IA-5(1)"},
-    "IAM-07": {"CIS": "1.7", "SOC2": "CC6.1", "NIST": "AC-6(5)"},
-    "IAM-08": {"CIS": "1.12", "PCI-DSS": "8.2.6", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "AC-2(3)"},
-    "IAM-10": {"CIS": "1.20", "PCI-DSS": "11.5", "HIPAA": "164.312(b)", "SOC2": "CC7.1", "NIST": "AC-6"},
+    "IAM-01": {"CIS": "2.5", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
+    "IAM-02": {"CIS": "2.4", "PCI-DSS": "8.2.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "IA-2"},
+    "IAM-04": {"CIS": "2.10", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
+    "IAM-05": {"CIS": "2.8", "PCI-DSS": "8.3.6", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "IA-5(1)"},
+    "IAM-06": {"CIS": "2.12", "PCI-DSS": "8.6.3", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.2", "NIST": "IA-5(1)"},
+    "IAM-07": {"CIS": "2.7", "SOC2": "CC6.1", "NIST": "AC-6(5)"},
+    "IAM-08": {"CIS": "2.11", "PCI-DSS": "8.2.6", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "AC-2(3)"},
+    "IAM-10": {"CIS": "2.18", "PCI-DSS": "11.5", "HIPAA": "164.312(b)", "SOC2": "CC7.1", "NIST": "AC-6"},
     # S3
-    "S3-01": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
-    "S3-03": {"CIS": "2.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
-    "S3-05": {"CIS": "3.6", "PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
-    "S3-07": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
-    "S3-08": {"CIS": "2.1.3", "PCI-DSS": "10.5.3", "HIPAA": "164.312(c)(1)", "SOC2": "A1.2", "NIST": "CP-9"},
-    "S3-09": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "S3-01": {"CIS": "3.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "S3-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "S3-05": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "S3-07": {"CIS": "3.1.1", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "S3-08": {"PCI-DSS": "10.5.3", "HIPAA": "164.312(c)(1)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "S3-09": {"CIS": "3.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "S3-10": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     # VPC
-    "VPC-01": {"CIS": "5.2", "PCI-DSS": "1.3.2", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
-    "VPC-03": {"CIS": "3.7", "PCI-DSS": "10.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
-    "VPC-04": {"CIS": "5.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
-    "VPC-05": {"CIS": "5.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "VPC-01": {"CIS": "6.3", "PCI-DSS": "1.3.2", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "VPC-03": {"CIS": "4.7", "PCI-DSS": "10.6", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
+    "VPC-04": {"CIS": "6.5", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "VPC-05": {"CIS": "6.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "VPC-06": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     # Logging
-    "LOG-01": {"CIS": "3.1", "PCI-DSS": "10.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
-    "LOG-03": {"CIS": "3.5", "PCI-DSS": "10.5.3", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "CM-8"},
-    "LOG-04": {"CIS": "4.15", "PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
-    "LOG-06": {"CIS": "4.16", "PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
-    "LOG-05": {"CIS": "4.16", "PCI-DSS": "11.5", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
-    "LOG-07": {"CIS": "3.7", "PCI-DSS": "10.3.2", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "AU-9"},
-    "LOG-08": {"CIS": "3.10", "PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
-    "LOG-09": {"CIS": "3.3", "PCI-DSS": "10.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AU-9"},
-    "LOG-10": {"PCI-DSS": "10.7", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-5"},
-    "CW-01": {"CIS": "4.1", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6(1)"},
-    "CW-02": {"CIS": "4.1", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SI-4"},
-    "CW-03": {"CIS": "4.2", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SI-4"},
-    "CW-04": {"CIS": "4.3", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AC-6(9)"},
-    "CW-05": {"CIS": "4.4", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
-    "CW-06": {"CIS": "4.5", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
-    "CW-07": {"CIS": "4.6", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SI-4"},
-    "CW-08": {"CIS": "4.7", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
-    "CW-09": {"CIS": "4.8", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
-    "CW-10": {"CIS": "4.9", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
-    "CW-11": {"CIS": "4.10", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
-    "CW-12": {"CIS": "4.11", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
-    "CW-13": {"CIS": "4.12", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
-    "CW-14": {"CIS": "4.13", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
-    "CW-15": {"CIS": "4.14", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
-    "CW-16": {"CIS": "4.15", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "LOG-01": {"CIS": "4.1", "PCI-DSS": "10.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "LOG-03": {"CIS": "4.3", "PCI-DSS": "10.5.3", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "CM-8"},
+    "LOG-04": {"PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
+    "LOG-06": {"PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
+    "LOG-05": {"CIS": "5.16", "PCI-DSS": "11.5", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
+    "LOG-07": {"CIS": "4.5", "PCI-DSS": "10.3.2", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "AU-9"},
+    "LOG-08": {"CIS": "4.8", "PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "LOG-09": {"PCI-DSS": "10.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AU-9"},
+    "LOG-10": {"CIS": "4.1", "PCI-DSS": "10.7", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-5"},
+    "CW-01": {"CIS": "5.1", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6(1)"},
+    "CW-02": {"CIS": "5.1", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SI-4"},
+    "CW-03": {"CIS": "5.2", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SI-4"},
+    "CW-04": {"CIS": "5.3", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AC-6(9)"},
+    "CW-05": {"CIS": "5.4", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-06": {"CIS": "5.5", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-07": {"CIS": "5.6", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "SI-4"},
+    "CW-08": {"CIS": "5.7", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-09": {"CIS": "5.8", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-10": {"CIS": "5.9", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-11": {"CIS": "5.10", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-12": {"CIS": "5.11", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-13": {"CIS": "5.12", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-14": {"CIS": "5.13", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-15": {"CIS": "5.14", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
+    "CW-16": {"CIS": "5.15", "PCI-DSS": "10.4.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
     # KMS
-    "ENC-03": {"CIS": "3.8", "PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
+    "ENC-03": {"CIS": "4.6", "PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
     "KMS-03": {"NIST": "SC-12", "SOC2": "CC6.1", "HIPAA": "164.312(a)(2)(iv)"},
-    "KMS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "KMS-02": {"CIS": "2.21", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "KMS-04": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     # EC2
-    "EC2-04": {"CIS": "5.6", "PCI-DSS": "2.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.1", "NIST": "CM-6"},
-    "EC2-05": {"CIS": "5.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
-    "EC2-08": {"CIS": "5.6", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EC2-04": {"CIS": "6.7", "PCI-DSS": "2.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.1", "NIST": "CM-6"},
+    "EC2-05": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EC2-08": {"CIS": "6.7", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "SSM-01": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "CM-8"},
     "SSM-02": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
-    "LT-01": {"CIS": "5.6", "PCI-DSS": "2.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.1", "NIST": "CM-6"},
-    "ASG-01": {"CIS": "5.6", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
-    "EC2-06": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "LT-01": {"CIS": "6.7", "PCI-DSS": "2.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.1", "NIST": "CM-6"},
+    "ASG-01": {"CIS": "6.7", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EC2-06": {"CIS": "6.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "EC2-07": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "IA-5"},
-    "AMI-01": {"CIS": "2.3.3", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
-    "AMI-02": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "AMI-01": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "AMI-02": {"CIS": "6.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "AMI-03": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     # RDS
-    "RDS-01": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
-    "RDS-02": {"CIS": "2.3.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
-    "RDS-03": {"CIS": "2.3.3", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
-    "RDS-04": {"CIS": "2.3.3", "PCI-DSS": "2.2.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CM-6"},
-    "RDS-06": {"CIS": "2.3.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
-    "RDS-08": {"PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2"},
-    "RDS-11": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
-    "RDS-12": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
-    "AUR-01": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
-    "AUR-02": {"PCI-DSS": "10.5.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.1", "NIST": "CP-9"},
+    "RDS-01": {"CIS-DB": "3.5", "CIS": "3.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "RDS-02": {"CIS-DB": "3.12", "CIS": "3.2.3", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "RDS-03": {"CIS-DB": "3.10", "CIS": "3.2.2", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "RDS-04": {"CIS-DB": "3.14", "PCI-DSS": "2.2.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CM-6"},
+    "RDS-06": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "RDS-08": {"CIS-DB": "3.13", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2"},
+    "RDS-11": {"CIS-DB": "3.5", "CIS": "3.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "RDS-12": {"CIS-DB": "3.8", "PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "AUR-01": {"CIS-DB": "2.2", "CIS": "3.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "AUR-02": {"CIS-DB": "2.11", "PCI-DSS": "10.5.1", "HIPAA": "164.312(c)(1)", "SOC2": "CC6.1", "NIST": "CP-9"},
     "AUR-03": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
-    "AUR-04": {"CIS": "2.3.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
-    "AUR-05": {"CIS": "2.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "AUR-04": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "AUR-05": {"CIS-DB": "2.2", "CIS": "3.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     # CloudFront
-    "CFN-01": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
-    "CFN-02": {"CIS": "2.1.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
+    "CFN-01": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "CFN-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
     "CFN-03": {"PCI-DSS": "6.6", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "CFN-05": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "CFN-06": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
     # New sections
-    "LMB-01": {"CIS": "2.7.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
-    "LMB-02": {"CIS": "2.7.2", "PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "LMB-01": {"CIS": "2.21", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "LMB-02": {"PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "LMB-03": {"PCI-DSS": "6.5.3", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "LMB-04": {"PCI-DSS": "6.3.2", "SOC2": "CC7.1", "NIST": "SI-2"},
-    "EKS-01": {"CIS": "5.4.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EKS-01": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EKS-02": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "EKS-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "ECS-01": {"PCI-DSS": "2.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "CM-7"},
@@ -934,34 +977,34 @@ COMPLIANCE_MAP = {
     "SEC-02": {"PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12(1)"},
     "WAF-01": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "WAF-02": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
-    "ELC-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
-    "ELC-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
-    "ELC-03": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
+    "ELC-01": {"CIS-DB": "5.3", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "ELC-02": {"CIS-DB": "5.3", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "ELC-03": {"CIS-DB": "5.1", "PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
     "OSR-01": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "OSR-02": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "OSR-04": {"PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "OSR-05": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "OSR-06": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "OSR-07": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
-    "DDB-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
-    "DDB-02": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "DDB-01": {"CIS-DB": "4.3", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "DDB-02": {"CIS-DB": "4.9", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
     # API Gateway
-    "APIGW-01": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "APIGW-01": {"CIS": "4.10", "PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "APIGW-02": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "APIGW-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     # Elastic Load Balancing
-    "ELB-01": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
-    "ELB-02": {"CIS": "4.10", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "ELB-01": {"CIS": "4.10", "PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "ELB-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "ELB-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8(1)"},
     "ELB-05": {"PCI-DSS": "6.6", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "ELB-07": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "CLB-01": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "CLB-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     # EBS
-    "EBS-01": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
-    "EBS-02": {"CIS": "2.2.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "EBS-01": {"CIS": "6.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "EBS-02": {"CIS": "6.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "EBS-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
-    "EBS-04": {"CIS": "2.2.1", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "EBS-04": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     # Redshift
     "RS-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "RS-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
@@ -969,16 +1012,16 @@ COMPLIANCE_MAP = {
     "RS-04": {"PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "RS-06": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "RS-07": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
-    "RSS-01": {"CIS": "2.3.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "RSS-01": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "RSS-02": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "RSS-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "RSS-04": {"PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     # EFS
-    "EFS-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "EFS-01": {"CIS": "3.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "EFS-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "EFS-03": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
     # ACM
-    "ACM-01": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
+    "ACM-01": {"CIS": "2.17", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-12"},
     "ACM-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-13"},
     # SageMaker
     "SM-01": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
@@ -1079,6 +1122,23 @@ COMPLIANCE_MAP = {
     "SM-27": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
     "SM-28": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
     "AIDR-01": {"PCI-DSS": "10.6.1", "HIPAA": "164.308(a)(1)(ii)(D)", "SOC2": "CC7.2", "NIST": "SI-4"},
+    # Credential exposure. IA-5 (authenticator management) is the spine for all three:
+    # a credential known outside the organisation has to be replaced, whatever the
+    # corpus does or does not prove about its current validity. CREDEXP-02 cites the
+    # password-based enhancement IA-5(1) instead, because the mechanism that turns an
+    # unrelated forum breach into a cloud incident is password REUSE specifically.
+    # AC-2 was the first choice for CREDEXP-01 -- a live access key is an account to
+    # manage and not only an authenticator -- and it is NOT in the frozen 38-control
+    # universe, which only carries the AC-2(3) "disable inactive accounts"
+    # enhancement. That enhancement is about dormancy, not compromise, so it would be
+    # a worse citation rather than a narrower one; IA-5 is the honest answer.
+    # CIS Foundations 1.14 is the access-key-rotation control CREDEXP-01 lands on.
+    "CREDEXP-01": {"CIS": "2.12", "PCI-DSS": "8.3.9", "HIPAA": "164.308(a)(5)(ii)(D)",
+                   "SOC2": "CC6.1", "NIST": "IA-5"},
+    "CREDEXP-02": {"PCI-DSS": "8.3.9", "HIPAA": "164.308(a)(5)(ii)(D)", "SOC2": "CC6.1",
+                   "NIST": "IA-5(1)"},
+    "CREDEXP-03": {"PCI-DSS": "12.10.5", "HIPAA": "164.308(a)(6)(ii)", "SOC2": "CC7.3",
+                   "NIST": "IA-5"},
     "SEGREC-01": {"PCI-DSS": "1.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "IOT-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "IOT-02": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
@@ -1088,39 +1148,50 @@ COMPLIANCE_MAP = {
     "CB-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "CB-02": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "DOCDB-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
-    "DOCDB-02": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
-    "DOCDB-03": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
-    "DOCDB-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
-    "DOCDB-05": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
-    "NEP-01": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
-    "NEP-02": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "DOCDB-02": {"CIS-DB": "7.3", "PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "DOCDB-03": {"CIS-DB": "7.6", "PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "DOCDB-04": {"CIS-DB": "7.12", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "DOCDB-05": {"CIS-DB": "7.3", "PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "NEP-01": {"CIS-DB": "9.2", "PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "NEP-02": {"CIS-DB": "9.10", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
     "NEP-03": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
-    "NEP-04": {"PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "NEP-04": {"CIS-DB": "9.2", "PCI-DSS": "3.5.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     # TLS in transit — PCI-DSS 4.2.1 is the "strong cryptography during transmission"
     # requirement, and SC-8 is NIST's transmission-confidentiality control. Distinct from
     # the SC-28 at-rest mappings above, which is the point: these four checks close a
     # control that no at-rest check speaks to.
-    "RDS-14": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
-    "AUR-06": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
-    "DOCDB-06": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
-    "NEP-05": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
-    "AUR-07": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
-    "AUR-08": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
-    "ELC-07": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
-    "MDB-01": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
-    "MDB-02": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2"},
-    "MDB-03": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
-    "MDB-04": {"PCI-DSS": "3.6.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
+    "RDS-14": {"CIS-DB": "3.6", "PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "AUR-06": {"CIS-DB": "2.3", "PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "DOCDB-06": {"CIS-DB": "7.4", "PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "NEP-05": {"CIS-DB": "9.3", "PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "AUR-07": {"CIS-DB": "2.8", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "AUR-08": {"CIS-DB": "2.10", "PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
+    "ELC-07": {"CIS-DB": "5.13", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "MDB-01": {"CIS-DB": "6.2", "PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "MDB-02": {"CIS-DB": "6.3", "PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2"},
+    "MDB-03": {"CIS-DB": "6.7", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "MDB-04": {"CIS-DB": "6.2", "PCI-DSS": "3.6.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
     "MDB-05": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "MDB-06": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(C)", "SOC2": "A1.2", "NIST": "CP-9"},
-    "TS-01": {"PCI-DSS": "3.6.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
-    "TS-02": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
+    "NEP-06": {"CIS-DB": "9.8", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "NEP-07": {"CIS-DB": "9.9", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "NEP-08": {"CIS-DB": "9.4", "PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2"},
+    "NEP-09": {"CIS-DB": "9.5", "PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "NEP-10": {"CIS-DB": "9.11", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(C)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "DOCDB-08": {"CIS-DB": "7.9", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    # DOCDB-07 carries NO CIS-DB key on purpose: section 7 has no public-accessibility
+    # control, though sections 2, 3 and 9 all do. Inventing a number to fill the column
+    # would mis-cite the benchmark, so the mapping records it as coverage the document
+    # does not ask for -- the same treatment DOCDB-01 and NEP-03 already get.
+    "DOCDB-07": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "TS-01": {"CIS-DB": "10.1", "PCI-DSS": "3.6.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
+    "TS-02": {"CIS-DB": "10.1", "PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
     # CP-9 rather than the CP-10 this would otherwise map to: the NIST axis is a FROZEN
     # 38-control universe (compliance/crosswalk.json) from which 34 further frameworks
     # are derived, so adding a control means supplying its row in every one of them.
     # CP-9 is that universe's representative for the contingency-planning family.
-    "ELC-08": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(C)", "SOC2": "A1.2", "NIST": "CP-9"},
-    "IMGB-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "ELC-08": {"CIS-DB": "5.12", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(C)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "IMGB-01": {"CIS": "2.21", "PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "XFER-01": {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "XFER-02": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "XFER-03": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
@@ -1162,32 +1233,47 @@ COMPLIANCE_MAP = {
     "AITHR-01": {"PCI-DSS": "10.6", "HIPAA": "164.308(a)(1)(ii)(D)", "SOC2": "CC7.2", "NIST": "SI-4"},
     "AITHR-02": {"PCI-DSS": "10.5", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-9"},
     # Cognito
-    "COG-01": {"CIS": "1.5", "PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
+    "COG-01": {"PCI-DSS": "8.3.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2(1)"},
     "COG-02": {"PCI-DSS": "8.3.6", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.1", "NIST": "IA-5(1)"},
     "COG-03": {"PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.1", "NIST": "SI-4"},
     # API Gateway v2 (HTTP APIs)
-    "AGW2-01": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "AGW2-01": {"CIS": "4.10", "PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "AGW2-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
-    # IAM privilege escalation — all map to least-privilege / separation-of-duties controls
-    **{f"IAMPE-{n:02d}": {"CIS": "1.16", "PCI-DSS": "7.1.1",
-                          "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6(1)"}
-       for n in (1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16, 18, 19, 20, 21, 22)},
+    # IAM privilege escalation — all map to least-privilege / separation-of-duties
+    # controls. THE `CIS` KEY IS NOT SHARED ACROSS THE FAMILY, and used to be: every one
+    # of these carried Foundations 1.16, the "*:*" administrative-privileges control.
+    # Exactly two of them belong to a Foundations recommendation. The rest fire on a
+    # principal that can BECOME an administrator, which is a different finding and one
+    # the benchmark has no control for — citing 2.14 on "may call iam:CreateAccessKey"
+    # sends an auditor looking for an attached wildcard policy that is not there.
+    # See engine/aws_cis_foundations_map.MISCITED.
+    **{f"IAMPE-{n:02d}": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)",
+                          "SOC2": "CC6.3", "NIST": "AC-6(1)"}
+       for n in (1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16, 18, 20, 21)},
+    #: IAMPE-19 IS the "*:*" control: it fires on a principal that already holds
+    #: Action:* on Resource:*, which is what v7.0.0 2.14 asks about.
+    "IAMPE-19": {"CIS": "2.14", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)",
+                 "SOC2": "CC6.3", "NIST": "AC-6(1)"},
+    #: A role trust policy IS a resource policy, so a trust policy naming Principal '*'
+    #: is 2.21 rather than 2.14.
+    "IAMPE-22": {"CIS": "2.21", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)",
+                 "SOC2": "CC6.3", "NIST": "AC-6(1)"},
     # Phase 2 exposure / attack path
-    "EXPOSURE-01": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
-    "EXPOSURE-02": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
-    "ATTACK-01":   {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
-    "EXPOSURE-03": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
-    "IDENTITY-01": {"CIS": "1.14", "PCI-DSS": "8.6.3", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.2", "NIST": "IA-5(1)"},
+    "EXPOSURE-01": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EXPOSURE-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "ATTACK-01":   {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "EXPOSURE-03": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "IDENTITY-01": {"CIS": "2.14", "PCI-DSS": "8.6.3", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.2", "NIST": "IA-5(1)"},
     # Phase 3 deep-plane
     "VULN-01": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "VULN-02": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5(2)"},
     "VULN-03": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "VULN-04": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SI-2"},
-    "DATA-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
-    "DATA-02": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
-    "DATA-03": {"CIS": "2.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "DATA-01": {"CIS": "3.1.3", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "DATA-02": {"CIS": "3.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "DATA-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     # Phase 7 DSPM: DSPM-01 data-sensitivity (mirrors DATA-01, no single CIS control);
-    # DSPM-02 network-exposure keys (NOT CIS 2.1.1 — that is the S3-only BPA control)
+    # DSPM-02 network-exposure keys (NOT CIS 3.1.4 — that is the S3-only BPA control)
     "DSPM-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "DSPM-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     # DSPM-03 (crown store with a public/cross-account RESOURCE policy) — AC-3 tuple copied
@@ -1197,13 +1283,13 @@ COMPLIANCE_MAP = {
     "SECRET-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SECRET-02": {"PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12(1)"},
     "SECRET-05": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
-    "EXTACCESS-01": {"CIS": "2.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "AC-3"},
+    "EXTACCESS-01": {"CIS": "3.1.4", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "AC-3"},
     "EXTACCESS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "EXTACCESS-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
-    "THREAT-01": {"CIS": "4.15", "PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
+    "THREAT-01": {"PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
     "THREAT-02": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
-    "ATTACK-02": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
-    "CHOKEPOINT-01": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "CA-8"},
+    "ATTACK-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "CHOKEPOINT-01": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "CA-8"},
     # ── Backfill: FAIL-capable checks previously missing a compliance mapping ──
     "CNT-01": {"PCI-DSS": "6.3.2", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5"},
     "CNT-02": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "RA-5"},
@@ -1215,11 +1301,11 @@ COMPLIANCE_MAP = {
     "BCK-02": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
     "BCK-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "SNS-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
-    "SNS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "SNS-02": {"CIS": "2.21", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "SNS-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "SNS-04": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "SQS-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
-    "SQS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "SQS-02": {"CIS": "2.21", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "SQS-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "GLC-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "GLC-02": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
@@ -1229,8 +1315,8 @@ COMPLIANCE_MAP = {
     "R53-05": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "R53-06": {"PCI-DSS": "2.4", "HIPAA": "164.308(a)(1)(ii)(A)", "SOC2": "CC7.1", "NIST": "SC-20"},
     "DDB-03": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
-    "DDB-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
-    "DDB-05": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "DDB-04": {"CIS-DB": "4.8", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "DDB-05": {"CIS-DB": "4.1", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "EKS-04": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "EKS-05": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EKS-06": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
@@ -1242,37 +1328,37 @@ COMPLIANCE_MAP = {
     "FARGATE-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "EKS-07": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     # Phase 3 KSPM/KIEM — CIS Amazon EKS Benchmark + NIST 800-53
-    "EKS-08": {"CIS": "3.1", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "IA-2"},
-    "KIEM-01": {"CIS": "4.1.1", "PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6(1)"},
-    "KIEM-02": {"CIS": "4.1.3", "PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
-    "KIEM-03": {"CIS": "4.1.2", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-6"},
-    "KIEM-04": {"CIS": "4.1.1", "PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
-    "KSPM-01": {"CIS": "4.1.7", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
-    "KSPM-02": {"CIS": "4.1.3", "PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
-    "KSPM-03": {"CIS": "4.1.1", "PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6(1)"},
-    "KSPM-04": {"CIS": "4.1.5", "PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
-    "KSPM-05": {"CIS": "4.2.1", "PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
-    "KSPM-06": {"CIS": "4.3.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
-    "KSPM-07": {"CIS": "4.2.1", "PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
-    # Phase 3 Layer-A static SG micro-segmentation — CIS AWS 5.2 + NIST 800-53 (in-universe
+    "EKS-08": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "IA-2"},
+    "KIEM-01": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6(1)"},
+    "KIEM-02": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "KIEM-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-6"},
+    "KIEM-04": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "KSPM-01": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "KSPM-02": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "KSPM-03": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6(1)"},
+    "KSPM-04": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "KSPM-05": {"PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
+    "KSPM-06": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "KSPM-07": {"PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
+    # Phase 3 Layer-A static SG micro-segmentation — CIS AWS 6.3 + NIST 800-53 (in-universe
     # controls only: SC-7 boundary protection, CM-7 least functionality — NOT AC-4/SC-7(5))
-    "SEG-01": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
-    "SEG-02": {"CIS": "5.2", "PCI-DSS": "1.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
-    "SEG-05": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SEG-01": {"CIS": "6.3", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SEG-02": {"CIS": "6.3", "PCI-DSS": "1.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "SEG-05": {"CIS": "6.3", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "SEG-06": {"PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     # Phase 3 Layer-B observed-flow tightening (SC-7 boundary, CM-7 least functionality)
-    "FLOW-01": {"CIS": "5.2", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "FLOW-01": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "FLOW-02": {"PCI-DSS": "2.2.6", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "CM-7"},
     "SEC-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SEC-04": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
-    "SEC-05": {"CIS": "1.16", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
-    "IAMPE-23": {"CIS": "1.16", "PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "SEC-05": {"CIS": "2.21", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
+    "IAMPE-23": {"CIS": "2.21", "PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(2)(i)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "WAF-03": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "WAF-04": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "WAF-05": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
-    "ELC-04": {"PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
-    "ELC-05": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
-    "ELC-06": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "ELC-04": {"CIS-DB": "5.12", "PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-5"},
+    "ELC-05": {"CIS-DB": "5.4", "PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "ELC-06": {"CIS-DB": "5.1", "PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "OSR-03": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "SFN-01": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "SFN-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
@@ -1386,7 +1472,7 @@ REMEDIATION_MAP = {
     "S3-10": "Scope the bucket policy to your own account or an aws:PrincipalOrgID condition (remove the external-account principal): aws s3api put-bucket-policy --bucket <BUCKET> --policy file://scoped-policy.json",
     "VPC-01": "Revoke risky SG rule: aws ec2 revoke-security-group-ingress --group-id <SG_ID> --protocol tcp --port <PORT> --cidr 0.0.0.0/0",
     "VPC-03": "Enable VPC Flow Logs: aws ec2 create-flow-logs --resource-type VPC --resource-ids <VPC_ID> --traffic-type ALL --log-destination-type cloud-watch-logs --log-group-name vpc-flow-logs",
-    "VPC-04": "Strip all rules from each default SG so it denies all traffic (CIS 5.4): aws ec2 revoke-security-group-ingress --group-id <SG_ID> --ip-permissions ... and aws ec2 revoke-security-group-egress --group-id <SG_ID> --ip-permissions ... ; migrate workloads to purpose-built SGs",
+    "VPC-04": "Strip all rules from each default SG so it denies all traffic (CIS 6.5): aws ec2 revoke-security-group-ingress --group-id <SG_ID> --ip-permissions ... and aws ec2 revoke-security-group-egress --group-id <SG_ID> --ip-permissions ... ; migrate workloads to purpose-built SGs",
     "VPC-05": "Deny (or delete) the world-open admin-port NACL rule: aws ec2 replace-network-acl-entry --network-acl-id <NACL_ID> --rule-number <RULE_NUM> --protocol tcp --port-range From=3389,To=3389 --cidr-block 0.0.0.0/0 --rule-action deny --ingress",
     "VPC-06": "Remove the unauthorized cross-account peer (or tighten route tables to least-privilege CIDRs): aws ec2 delete-vpc-peering-connection --vpc-peering-connection-id <PCX_ID>",
     "LOG-01": "Create multi-region trail: aws cloudtrail create-trail --name org-trail --s3-bucket-name <BUCKET> --is-multi-region-trail --enable-log-file-validation && aws cloudtrail start-logging --name org-trail",
@@ -1399,21 +1485,21 @@ REMEDIATION_MAP = {
     "LOG-09": "Block public access on the trail bucket and strip public policy/ACL grants: aws s3api put-public-access-block --bucket <TRAIL_BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
     "LOG-10": "Inspect and repair the delivery failure: aws cloudtrail get-trail-status --name <TRAIL> (read LatestDeliveryError), fix the bucket policy / re-enable the KMS key, then aws cloudtrail start-logging --name <TRAIL>",
     "CW-01": "Wire a multi-region trail to CloudWatch Logs so CIS section-4 metric filters can exist: aws cloudtrail update-trail --name <TRAIL> --is-multi-region-trail --cloud-watch-logs-log-group-arn <LOG_GROUP_ARN> --cloud-watch-logs-role-arn <ROLE_ARN> ; aws cloudtrail start-logging --name <TRAIL>",
-    "CW-02": "Add the CIS 4.1 (unauthorized API calls) metric filter + alarm + subscription: aws logs put-metric-filter --log-group-name <LG> --filter-name unauthorized-api-calls --filter-pattern '{($.errorCode=\"*UnauthorizedOperation\")||($.errorCode=\"AccessDenied*\")}' --metric-transformations metricName=UnauthorizedAPICalls,metricNamespace=CISBenchmark,metricValue=1 ; aws cloudwatch put-metric-alarm --alarm-name unauthorized-api-calls --metric-name UnauthorizedAPICalls --namespace CISBenchmark --statistic Sum --period 300 --threshold 1 --comparison-operator GreaterThanOrEqualToThreshold --evaluation-periods 1 --alarm-actions <SNS_TOPIC_ARN> ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
-    "CW-03": "Add the CIS 4.2 (console sign-in without MFA) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
-    "CW-04": "Add the CIS 4.3 (root account usage) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
-    "CW-05": "Add the CIS 4.4 (IAM policy changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
-    "CW-06": "Add the CIS 4.5 (CloudTrail config changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
-    "CW-07": "Add the CIS 4.6 (console auth failures) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
-    "CW-08": "Add the CIS 4.7 (CMK disable/deletion) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
-    "CW-09": "Add the CIS 4.8 (S3 bucket policy changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
-    "CW-10": "Add the CIS 4.9 (AWS Config changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
-    "CW-11": "Add the CIS 4.10 (security group changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
-    "CW-12": "Add the CIS 4.11 (network ACL changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
-    "CW-13": "Add the CIS 4.12 (network gateway changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
-    "CW-14": "Add the CIS 4.13 (route table changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
-    "CW-15": "Add the CIS 4.14 (VPC changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
-    "CW-16": "Add the CIS 4.15 (organization changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-02": "Add the CIS 5.1 (unauthorized API calls) metric filter + alarm + subscription: aws logs put-metric-filter --log-group-name <LG> --filter-name unauthorized-api-calls --filter-pattern '{($.errorCode=\"*UnauthorizedOperation\")||($.errorCode=\"AccessDenied*\")}' --metric-transformations metricName=UnauthorizedAPICalls,metricNamespace=CISBenchmark,metricValue=1 ; aws cloudwatch put-metric-alarm --alarm-name unauthorized-api-calls --metric-name UnauthorizedAPICalls --namespace CISBenchmark --statistic Sum --period 300 --threshold 1 --comparison-operator GreaterThanOrEqualToThreshold --evaluation-periods 1 --alarm-actions <SNS_TOPIC_ARN> ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-03": "Add the CIS 5.2 (console sign-in without MFA) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-04": "Add the CIS 5.3 (root account usage) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-05": "Add the CIS 5.4 (IAM policy changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-06": "Add the CIS 5.5 (CloudTrail config changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-07": "Add the CIS 5.6 (console auth failures) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-08": "Add the CIS 5.7 (CMK disable/deletion) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-09": "Add the CIS 5.8 (S3 bucket policy changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-10": "Add the CIS 5.9 (AWS Config changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-11": "Add the CIS 5.10 (security group changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-12": "Add the CIS 5.11 (network ACL changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-13": "Add the CIS 5.12 (network gateway changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-14": "Add the CIS 5.13 (route table changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-15": "Add the CIS 5.14 (VPC changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
+    "CW-16": "Add the CIS 5.15 (organization changes) metric filter + alarm + SNS subscription: aws logs put-metric-filter ... ; aws cloudwatch put-metric-alarm ... ; aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL>",
     "ENC-03": "Enable key rotation: aws kms enable-key-rotation --key-id <KEY_ID>",
     "KMS-03": "Cancel deletion if the CMK is still in use, or re-enable a disabled key: aws kms cancel-key-deletion --key-id <KEY_ID> ; aws kms enable-key --key-id <KEY_ID>",
     "KMS-02": "Remove the wildcard '*' principal from the KMS key policy (or gate it with a kms:CallerAccount / aws:PrincipalOrgID condition), then re-apply: aws kms put-key-policy --key-id <KEY_ID> --policy-name default --policy file://scoped-key-policy.json",
@@ -1570,6 +1656,9 @@ REMEDIATION_MAP = {
     "SM-27": "Tag the app image configuration so it can be attributed and governed: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Tags with the aws: prefix are system tags and do not satisfy the control. Never put personally identifiable or sensitive information in a tag -- tags are readable from many AWS services",
     "SM-28": "Tag the image: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Same caveats as SM-27 -- system aws: tags do not count, and tags are not a place for sensitive values",
     "AIDR-01": "Your own detector recognised this and the request reached the model anyway, so treat the detector as reporting rather than enforcing: check whether it is deployed in blocking mode, and put an AWS-side control behind it -- aws bedrock get-guardrail --guardrail-identifier <ID> --guardrail-version DRAFT to confirm a PROMPT_ATTACK filter is set to BLOCK rather than NONE (AIGRD-01), and aws bedrock-agent update-agent to attach the guardrail if the agent has none. Then bound what a successful injection reaches with AISPM-01/02",
+    "CREDEXP-01": "Rotate the key on the assumption it is compromised, then find out whether it was used. Create a replacement first so nothing breaks: aws iam create-access-key --user-name <USER>, deploy it, then aws iam update-access-key --user-name <USER> --access-key-id <LEAKED> --status Inactive and, once nothing has broken, aws iam delete-access-key --user-name <USER> --access-key-id <LEAKED>. Then read the usage rather than assuming there was none: aws cloudtrail lookup-events --lookup-attributes AttributeKey=AccessKeyId,AttributeValue=<LEAKED> --start-time <BEFORE_THE_BREACH>, and aws iam get-access-key-last-used --access-key-id <LEAKED> for the last call it made. If this user needs no programmatic access at all, the durable fix is deleting the key and moving the workload to a role",
+    "CREDEXP-02": "Treat the principal's credentials as needing replacement, not the account as breached. Rotate the console password (aws iam update-login-profile --user-name <USER> --password <NEW> --password-reset-required) and any access keys the user holds (aws iam list-access-keys --user-name <USER>, then rotate as in CREDEXP-01). Confirm MFA is enrolled, since a reused password is only decisive without it: aws iam list-mfa-devices --user-name <USER>. The durable fix is removing the long-lived human credential entirely -- federate through IAM Identity Center so there is no password in a corpus to match next time",
+    "CREDEXP-03": "Nothing to rotate in AWS: this matched an estate domain and no IAM principal, so the exposed account is probably a third-party service rather than this one. Confirm that -- aws iam list-users --query 'Users[].UserName' and check whether the address belongs to anyone who holds an identity here under another name. Then treat it as the identity-team signal it is: force a password reset in your IdP for that person, and check whether the leaked password was reused for anything that does reach AWS. If your IdP is the front door to this account, an exposure there is one step from it",
     "IOT-01": "Replace the wildcard IoT policy with one scoped to the topics each device actually needs. Inspect it first: aws iot get-policy --policy-name <POLICY>. Then publish a scoped version and make it the default: aws iot create-policy-version --policy-name <POLICY> --policy-document file://scoped.json --set-as-default. IoT policies attach to certificates, so this is every device carrying one -- stage the change and watch for connection failures before deleting the old version",
     "IOT-02": "Turn IoT logging back on so device activity leaves a record: aws iot set-v2-logging-options --role-arn <ROLE_ARN> --default-log-level WARN --no-disable-all-logs. Use INFO or DEBUG only for targeted investigation; WARN is the sustainable default",
     "IOT-03": "Disable auto-registration on the CA so a certificate it signs cannot join the fleet unreviewed: aws iot update-ca-certificate --certificate-id <CA_ID> --new-auto-registration-status DISABLE. If devices genuinely need to self-register, pair it with a registration config and a provisioning template rather than leaving the gate open",
@@ -1595,6 +1684,13 @@ REMEDIATION_MAP = {
     "ELC-07": "Turn on automatic snapshots so a flushed or corrupted cache is recoverable: aws elasticache modify-replication-group --replication-group-id <RG_ID> --snapshot-retention-limit 7 --apply-immediately. Set a snapshot window that misses your peak, since snapshotting adds load to the node it runs on",
     "TS-01": "Point the rejected-data location at a KMS key rather than SSE-S3, so the customer records that land there sit under a key you control: aws timestream-write update-table --database-name <DB> --table-name <TABLE> --magnetic-store-write-properties 'EnableMagneticStoreWrites=true,MagneticStoreRejectedDataLocation={S3Configuration={BucketName=<BUCKET>,EncryptionOption=SSE_KMS,KmsKeyId=<KEY_ARN>}}'",
     "TS-02": "Give rejected magnetic-store writes somewhere to go, or you will never know what was dropped: aws timestream-write update-table --database-name <DB> --table-name <TABLE> --magnetic-store-write-properties 'EnableMagneticStoreWrites=true,MagneticStoreRejectedDataLocation={S3Configuration={BucketName=<BUCKET>,EncryptionOption=SSE_KMS,KmsKeyId=<KEY_ARN>}}'",
+    "NEP-06": "Take the Neptune instance off the public internet: aws neptune modify-db-instance --db-instance-identifier <INSTANCE> --no-publicly-accessible --apply-immediately. Then check the security group as well -- assume the endpoint has been reachable by whatever it allows, for as long as it has allowed it",
+    "NEP-07": "Give the cluster a recovery window worth having: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --backup-retention-period 7 --preferred-backup-window 03:00-04:00 --apply-immediately",
+    "NEP-08": "Neptune has no database users of its own, so IAM auth is the whole authorisation model: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --enable-iam-database-authentication --apply-immediately, then grant neptune-db:connect to the principals that should reach it and to nothing else",
+    "NEP-09": "Export audit logs so the record outlives the cluster: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --cloudwatch-logs-export-configuration EnableLogTypes=audit --apply-immediately. The neptune_enable_audit_log cluster parameter must also be 1, or the export carries nothing",
+    "NEP-10": "Multi-AZ follows from having a replica in another zone, so add one rather than flipping a flag: aws neptune create-db-instance --db-instance-identifier <CLUSTER>-reader --db-cluster-identifier <CLUSTER> --engine neptune --db-instance-class <CLASS> --availability-zone <OTHER_AZ>",
+    "DOCDB-07": "Take the DocumentDB instance off the public internet: aws docdb modify-db-instance --db-instance-identifier <INSTANCE> --no-publicly-accessible --apply-immediately, then review the security group on the assumption the endpoint has already been reached",
+    "DOCDB-08": "Set a retention window long enough to find a problem inside: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --backup-retention-period 7 --preferred-backup-window 03:00-04:00 --apply-immediately",
     "MDB-01": "TLS cannot be enabled on an existing MemoryDB cluster, so this needs a rebuild: snapshot it with aws memorydb create-snapshot --cluster-name <CLUSTER> --snapshot-name <SNAP>, then aws memorydb create-cluster --cluster-name <NEW> --tls-enabled --snapshot-name <SNAP> --node-type <TYPE> --acl-name <ACL> and cut over",
     "MDB-02": "Stop the cluster accepting unauthenticated connections. Create users with real authentication and an ACL containing only those: aws memorydb create-user --user-name <USER> --authentication-mode Type=iam --access-string 'on ~* &* +@all', then aws memorydb create-acl --acl-name <ACL> --user-names <USER>, then aws memorydb update-cluster --cluster-name <CLUSTER> --acl-name <ACL>",
     "MDB-03": "Turn on automatic snapshots -- MemoryDB is a durable datastore, so this is data loss and not a cold cache: aws memorydb update-cluster --cluster-name <CLUSTER> --snapshot-retention-limit 7",
@@ -2581,7 +2677,16 @@ class AWSLiveScanner:
                        "CLOUDWATCH", "AI_THREAT", "SHADOW_AI",
                        # IAM is global, so NHI reads the same principals in every
                        # region. Regional would emit each finding once per region.
-                       "NHI"}
+                       "NHI",
+                       # ORGANIZATIONS is global for NHI's reason and more strongly:
+                       # every client it builds is pinned to us-east-1, because
+                       # Organizations and the account contact APIs have no regional
+                       # endpoints. Left regional, --all-regions would re-run the same
+                       # us-east-1 reads once per enabled region and emit every ORG-*
+                       # and ACCT-* finding N times over — including the "not evaluated"
+                       # coverage statements, which is the worst version of it: a member
+                       # account would report the same denial thirty times.
+                       "ORGANIZATIONS"}
 
     def __init__(
         self,
@@ -2623,6 +2728,10 @@ class AWSLiveScanner:
         self._cred_report_ok: bool = False
         self._all_regions:  Optional[List[str]]  = None
         self._iam_principals: Optional[List[Dict]] = None
+        # Live access key ids, lazily collected by `_access_key_ids`. None means NOT
+        # COLLECTED (denied, or never asked for) as opposed to an empty list, which
+        # means this account genuinely has none — see that method.
+        self._access_keys: Optional[List[str]] = None
         self._managed_policy_cache: Dict[str, tuple] = {}
         # ── Phase 5: effective-permissions ceiling refinement ────────────────
         self._scp_context: Optional[List] = None    # ordered SCP levels root->acct
@@ -2755,6 +2864,9 @@ class AWSLiveScanner:
         # Slice 4.7 -- the operator's own AI runtime detections, vendor
         # neutral. OverWatch produces none of these itself.
         self._ai_detections = {}
+        # An operator-supplied breach corpus, normalised by aws_ingest_credexp before
+        # it reaches here. Empty = the flag was not given, and CREDEXP emits nothing.
+        self._cred_exposures = {}
         # Slice 3.3: one entry per gateway, compared against the state DB AFTER the
         # scan. The scan path stays stateless -- a DB is a --state opt-in, and a check
         # that needs one to run at all would make the config half hostage to it.
@@ -2971,6 +3083,395 @@ class AWSLiveScanner:
         return self._all_regions
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 0: AWS ORGANIZATIONS — CIS AWS Foundations v7.0.0 §2.1, 2.2, 2.3
+    # ══════════════════════════════════════════════════════════════════════════
+    def _org_not_evaluated(self, check_id: str, resource: str, reason: str,
+                           action: str = "") -> None:
+        """A read that did not happen, reported as a coverage statement.
+
+        NOT A PASS, and the distinction is the entire reason this helper exists. Six of
+        the eight checks in this section are refused in an ordinary member account, and a
+        section that answered a refusal with silence would present an organisation nobody
+        could inspect as an organisation with nothing wrong with it. Every refusal names
+        the action, and `note_denied` shrinks the evidence pack's denominator rather than
+        letting its numerator grow."""
+        if action:
+            self._coverage.note_denied(check_id, action)
+        self._add("INFO", check_id, "ORGANIZATIONS", resource,
+                  f"NOT EVALUATED — {reason}")
+
+    def _org_ancestors(self, org, account_id: str,
+                       cache: Dict[str, List[str]]) -> Optional[List[str]]:
+        """``account_id`` plus every OU and root above it, nearest first.
+
+        WHY THE WALK IS NECESSARY. ``ListPoliciesForTarget`` returns the policies attached
+        DIRECTLY to a target, and service-control policies are inherited down the tree. An
+        account with no policy of its own can therefore be perfectly well governed by one
+        attached to its OU, and checking the account alone would report every properly
+        structured organisation as ungoverned. The cache matters because accounts share
+        ancestors: an organisation of 200 accounts in 8 OUs walks 8 chains, not 200."""
+        chain: List[str] = [account_id]
+        node = account_id
+        for _ in range(8):                      # AWS caps OU nesting at five levels
+            if node in cache:
+                chain.extend(cache[node])
+                break
+            try:
+                parents = org.list_parents(ChildId=node).get("Parents") or []
+            except Exception:
+                return None
+            if not parents:
+                break
+            pid = parents[0].get("Id")
+            if not pid:
+                break
+            chain.append(pid)
+            node = pid
+            if str(pid).startswith("r-"):
+                break
+        cache[account_id] = chain[1:]
+        return chain
+
+    def _check_organizations(self):
+        """ORG-01..06 and ACCT-01/02 — CIS Foundations v7.0.0 2.1.1–2.1.6, 2.2 and 2.3.
+
+        v7.0.0's new §2.1 asks six questions about the ORGANISATION rather than about the
+        account, and every one of them is readable only from the management account. That
+        makes this the one section whose normal outcome in a member account is "not
+        evaluated", so it runs first and says so plainly — see `_org_not_evaluated`.
+
+        The two contact checks are here rather than in IAM because they share that
+        property of being account-global and read through the `account` API, and because
+        the benchmark files them alongside the organisation controls."""
+        self._section_header("ORGANIZATIONS")
+
+        org = None
+        org_meta: Dict = {}
+        org_available = False
+        try:
+            org = self._client("organizations", region="us-east-1")
+            org_meta = org.describe_organization().get("Organization") or {}
+            org_available = bool(org_meta)
+        except Exception as e:
+            denied = self._is_access_denied(e)
+            reason = ("organizations:DescribeOrganization is denied here, which is normal "
+                      "outside the management account"
+                      if denied else
+                      "this account is not a member of an AWS Organization")
+            for cid in ("ORG-01", "ORG-02", "ORG-03", "ORG-04", "ORG-05", "ORG-06"):
+                self._org_not_evaluated(
+                    cid, "organizations", reason,
+                    action="organizations:DescribeOrganization" if denied else "")
+
+        if org_available:
+            self._org_root_access()
+            self._org_guardrails(org)
+            self._org_management_workloads(org_meta)
+            self._org_structure(org)
+            self._org_delegation(org)
+        self._account_contacts()
+
+    def _org_root_access(self) -> None:
+        """ORG-01 / 2.1.1 — centralized root access. Read through IAM, not Organizations."""
+        self._log("ORG-01: centralized root access")
+        try:
+            iam = self._client("iam", region="us-east-1")
+            feats = iam.list_organizations_features().get("EnabledFeatures")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._org_not_evaluated(
+                    "ORG-01", "root-credentials",
+                    "iam:ListOrganizationsFeatures is denied here, which is normal "
+                    "outside the management account",
+                    action="iam:ListOrganizationsFeatures")
+            else:
+                self._org_not_evaluated(
+                    "ORG-01", "root-credentials",
+                    "iam:ListOrganizationsFeatures is unavailable in this partition or "
+                    "SDK version, so central root management could not be read")
+            return
+        r = aws_cis_foundations.central_root_access(feats)
+        if r.get("failed"):
+            self._add("FAIL", "ORG-01", "ORGANIZATIONS", "root-credentials",
+                      r["statement"])
+        elif r.get("unknown"):
+            self._org_not_evaluated("ORG-01", "root-credentials", r["reason"])
+        else:
+            self._add("PASS", "ORG-01", "ORGANIZATIONS", "root-credentials",
+                      "Root credentials are centrally managed and privileged root "
+                      "sessions are available")
+
+    def _org_guardrails(self, org) -> None:
+        """ORG-02 / 2.1.2 — every account inherits something other than FullAWSAccess."""
+        self._log("ORG-02: authorization guardrails")
+        try:
+            accounts = self._paginate_strict(org, "list_accounts", "Accounts")
+        except Exception as e:
+            self._org_not_evaluated(
+                "ORG-02", "organizations",
+                "organizations:ListAccounts is denied here, which is normal outside the "
+                "management account" if self._is_access_denied(e)
+                else f"the organisation's accounts could not be listed ({e})",
+                action="organizations:ListAccounts" if self._is_access_denied(e) else "")
+            return
+
+        cache: Dict[str, List[str]] = {}
+        reach: Dict[str, List[str]] = {}
+        for acct in accounts:
+            aid = str(acct.get("Id") or "")
+            if not aid or str(acct.get("Status")) != "ACTIVE":
+                continue
+            chain = self._org_ancestors(org, aid, cache)
+            if chain is None:
+                self._org_not_evaluated(
+                    "ORG-02", aid,
+                    "organizations:ListParents is denied, so inherited policies could "
+                    "not be resolved and an attached-only reading would be wrong",
+                    action="organizations:ListParents")
+                return
+            pols: List[str] = []
+            for node in chain:
+                # RESOURCE_CONTROL_POLICY raises when the type is not enabled in the
+                # organisation, which is not a failure and must not abort the SCP read.
+                for filt in ("SERVICE_CONTROL_POLICY", "RESOURCE_CONTROL_POLICY"):
+                    try:
+                        for p in self._paginate_strict(
+                                org, "list_policies_for_target", "Policies",
+                                TargetId=node, Filter=filt):
+                            pols.append(str(p.get("Id") or ""))
+                    except Exception:
+                        continue
+            reach[aid] = pols
+
+        if not reach:
+            self._org_not_evaluated("ORG-02", "organizations",
+                                    "no active accounts were returned for this "
+                                    "organisation")
+            return
+        r = aws_cis_foundations.authorization_guardrails(reach)
+        if r.get("failed"):
+            for aid in r["accounts"]:
+                self._add("FAIL", "ORG-02", "ORGANIZATIONS", aid, r["statement"])
+        else:
+            self._add("PASS", "ORG-02", "ORGANIZATIONS", "organizations",
+                      f"All {len(reach)} active account(s) inherit at least one "
+                      f"authorization policy beyond the FullAWSAccess default")
+
+    def _org_management_workloads(self, org_meta: Dict) -> None:
+        """ORG-03 / 2.1.3 — workloads in the management account.
+
+        SCOPED TO THE SCANNED REGION, and the message says so. A full answer would sweep
+        every region, which is a different and much more expensive scan; reporting a
+        region-scoped finding as if it were estate-wide would be the more common mistake
+        and the worse one."""
+        self._log("ORG-03: management account workloads")
+        mgmt = str(org_meta.get("MasterAccountId") or "")
+        is_mgmt = (mgmt == str(self.account)) if mgmt else None
+        if not is_mgmt:
+            r = aws_cis_foundations.management_account_workloads(is_mgmt)
+            self._org_not_evaluated("ORG-03", mgmt or "organizations", r["reason"])
+            return
+
+        counts: Dict[str, int] = {}
+        probes = (
+            ("EC2 instance(s)", "ec2", "describe_instances", "Reservations"),
+            ("Lambda function(s)", "lambda", "list_functions", "Functions"),
+            ("RDS instance(s)", "rds", "describe_db_instances", "DBInstances"),
+        )
+        for label, svc, method, key in probes:
+            try:
+                items = self._paginate_strict(self._client(svc), method, key)
+            except Exception:
+                continue                       # a denied probe is not evidence of absence
+            if key == "Reservations":
+                n = sum(len(rv.get("Instances") or []) for rv in items)
+            else:
+                n = len(items)
+            if n:
+                counts[label] = n
+
+        r = aws_cis_foundations.management_account_workloads(True, counts)
+        if r.get("failed"):
+            self._add("FAIL", "ORG-03", "ORGANIZATIONS", mgmt,
+                      r["statement"] + f" (counted in {self.region} only)")
+        else:
+            self._add("PASS", "ORG-03", "ORGANIZATIONS", mgmt,
+                      f"No EC2, Lambda or RDS workloads found in the management account "
+                      f"in {self.region}")
+
+    def _org_structure(self, org) -> None:
+        """ORG-04 / 2.1.4 — accounts parented directly to the organisation root."""
+        self._log("ORG-04: organizational unit structure")
+        try:
+            roots = self._paginate_strict(org, "list_roots", "Roots")
+        except Exception as e:
+            self._org_not_evaluated(
+                "ORG-04", "organizations",
+                "organizations:ListRoots is denied here, which is normal outside the "
+                "management account" if self._is_access_denied(e)
+                else f"the organisation root could not be read ({e})",
+                action="organizations:ListRoots" if self._is_access_denied(e) else "")
+            return
+        stray: List[str] = []
+        ous = 0
+        for root in roots:
+            rid = root.get("Id")
+            if not rid:
+                continue
+            try:
+                stray.extend(
+                    str(a.get("Id")) for a in self._paginate_strict(
+                        org, "list_accounts_for_parent", "Accounts", ParentId=rid))
+                ous += len(self._paginate_strict(
+                    org, "list_organizational_units_for_parent",
+                    "OrganizationalUnits", ParentId=rid))
+            except Exception as e:
+                self._org_not_evaluated(
+                    "ORG-04", str(rid),
+                    "the accounts and organizational units under the root could not be "
+                    "listed, so accounts outside an OU could not be identified",
+                    action="organizations:ListAccountsForParent"
+                    if self._is_access_denied(e) else "")
+                return
+        r = aws_cis_foundations.accounts_outside_an_ou(stray, ou_count=ous)
+        if r.get("failed"):
+            for aid in r["accounts"]:
+                self._add("FAIL", "ORG-04", "ORGANIZATIONS", aid, r["statement"])
+        else:
+            self._add("PASS", "ORG-04", "ORGANIZATIONS", "organizations",
+                      f"Every account sits inside an organizational unit ({ous} OU(s) "
+                      f"at the root)")
+
+    def _org_delegation(self, org) -> None:
+        """ORG-05 / 2.1.5 and ORG-06 / 2.1.6 — delegated administration."""
+        self._log("ORG-05/06: delegated administration")
+        try:
+            delegated = self._paginate_strict(
+                org, "list_delegated_administrators", "DelegatedAdministrators")
+        except Exception as e:
+            delegated = None
+            if self._is_access_denied(e):
+                self._coverage.note_denied("ORG-05",
+                                           "organizations:ListDelegatedAdministrators")
+        policy = None
+        try:
+            rp = (org.describe_resource_policy().get("ResourcePolicy") or {})
+            policy = (rp.get("Content") or "") or None
+        except Exception as e:
+            # No resource policy at all raises ResourcePolicyNotFoundException, which IS
+            # the finding — an access denial is not. Only the second is unknown.
+            if self._is_access_denied(e):
+                self._org_not_evaluated(
+                    "ORG-05", "organizations",
+                    "organizations:DescribeResourcePolicy is denied here, so whether "
+                    "policy administration is delegated could not be read",
+                    action="organizations:DescribeResourcePolicy")
+                delegated = None
+
+        if delegated is not None or policy is not None:
+            r = aws_cis_foundations.delegated_policy_admin(delegated, policy)
+            if r.get("failed"):
+                self._add("FAIL", "ORG-05", "ORGANIZATIONS", "organizations",
+                          r["statement"])
+            elif not r.get("unknown"):
+                self._add("PASS", "ORG-05", "ORGANIZATIONS", "organizations",
+                          "An Organizations resource policy delegates policy "
+                          "administration off the management account")
+
+        try:
+            trusted = [str(s.get("ServicePrincipal")) for s in self._paginate_strict(
+                org, "list_aws_service_access_for_organization",
+                "EnabledServicePrincipals")]
+        except Exception as e:
+            self._org_not_evaluated(
+                "ORG-06", "organizations",
+                "organizations:ListAWSServiceAccessForOrganization is denied here, which "
+                "is normal outside the management account" if self._is_access_denied(e)
+                else "the organisation's trusted services could not be listed",
+                action="organizations:ListAWSServiceAccessForOrganization"
+                if self._is_access_denied(e) else "")
+            return
+        have: List[str] = []
+        for d in (delegated or []):
+            aid = d.get("Id")
+            if not aid:
+                continue
+            try:
+                have.extend(str(s.get("ServicePrincipal")) for s in
+                            self._paginate_strict(
+                                org, "list_delegated_services_for_account",
+                                "DelegatedServices", AccountId=aid))
+            except Exception:
+                continue
+        r = aws_cis_foundations.delegated_service_admins(trusted, have)
+        if r.get("failed"):
+            self._add("FAIL", "ORG-06", "ORGANIZATIONS", "organizations", r["statement"])
+        else:
+            self._add("PASS", "ORG-06", "ORGANIZATIONS", "organizations",
+                      f"Every one of the {len(trusted)} service(s) with trusted access "
+                      f"has a delegated administrator")
+
+    def _account_contacts(self) -> None:
+        """ACCT-01 / 2.2 and ACCT-02 / 2.3 — the contact record, and the security contact.
+
+        These run for every account, member or management, because they are properties of
+        the account rather than of the organisation."""
+        self._log("ACCT-01/02: account contact information")
+        try:
+            acct = self._client("account", region="us-east-1")
+        except Exception:
+            self._org_not_evaluated("ACCT-01", "account",
+                                    "the account API is unavailable in this SDK version")
+            self._org_not_evaluated("ACCT-02", "account",
+                                    "the account API is unavailable in this SDK version")
+            return
+
+        try:
+            info = acct.get_contact_information().get("ContactInformation") or {}
+        except Exception as e:
+            info = None
+            self._org_not_evaluated(
+                "ACCT-01", "account",
+                "account:GetContactInformation is denied, so whether the contact record "
+                "is complete could not be read",
+                action="account:GetContactInformation" if self._is_access_denied(e)
+                else "")
+        if info is not None:
+            r = aws_cis_foundations.contact_details(info)
+            if r.get("failed"):
+                self._add("FAIL", "ACCT-01", "ORGANIZATIONS", "primary-contact",
+                          r["statement"])
+            else:
+                self._add("PASS", "ACCT-01", "ORGANIZATIONS", "primary-contact",
+                          "The account's primary contact record is fully populated "
+                          "(currency is not readable and is not claimed)")
+
+        readable = True
+        contact = None
+        try:
+            contact = (acct.get_alternate_contact(AlternateContactType="SECURITY")
+                       .get("AlternateContact") or {})
+        except Exception as e:
+            # ResourceNotFoundException means there is no security contact, which IS the
+            # finding. Only a denial makes the answer unknown.
+            if self._is_access_denied(e):
+                readable = False
+        if not readable:
+            self._org_not_evaluated(
+                "ACCT-02", "account",
+                "account:GetAlternateContact is denied, so whether a security contact is "
+                "registered could not be read",
+                action="account:GetAlternateContact")
+            return
+        r = aws_cis_foundations.security_contact(contact, readable=True)
+        if r.get("failed"):
+            self._add("FAIL", "ACCT-02", "ORGANIZATIONS", "security-contact",
+                      r["statement"])
+        else:
+            self._add("PASS", "ACCT-02", "ORGANIZATIONS", "security-contact",
+                      "A SECURITY alternate contact is registered")
+
+    # ══════════════════════════════════════════════════════════════════════════
     # SECTION 1: IDENTITY & ACCESS MANAGEMENT
     # ══════════════════════════════════════════════════════════════════════════
     def _check_iam(self):
@@ -3076,7 +3577,7 @@ class AWSLiveScanner:
                                       f"{user}/{k}",
                                       f"{user} {k} age={age}d OK")
 
-        # IAM-07 — Root account recent use (CIS 1.7); zero new API (cached report)
+        # IAM-07 — Root account recent use (CIS 2.7); zero new API (cached report)
         self._log("IAM-07: Root account recent use")
         report = self._get_credential_report()
         root = next((r for r in report if r.get("user") == "<root_account>"), None)
@@ -3090,7 +3591,7 @@ class AWSLiveScanner:
             if recent:
                 self._add("FAIL", "IAM-07", "IAM", "root",
                           f"Root account used within 30 days ({', '.join(recent)}) — "
-                          f"CIS 1.7: use IAM roles, not root, for daily tasks")
+                          f"CIS 2.7: use IAM roles, not root, for daily tasks")
             else:
                 self._add("PASS", "IAM-07", "IAM", "root",
                           "No root credential use in the last 30 days")
@@ -3100,7 +3601,7 @@ class AWSLiveScanner:
                       "Credential report unavailable — IAM-07/08 root & unused-credential "
                       "audit could not be evaluated (retry the scan)")
 
-        # IAM-08 — Credentials unused for 45+ days (CIS 1.12); zero new API
+        # IAM-08 — Credentials unused for 45+ days (CIS 2.11); zero new API
         self._log("IAM-08: Credentials unused for 45+ days")
         for row in self._get_credential_report():
             user = row.get("user", "")
@@ -3137,6 +3638,276 @@ class AWSLiveScanner:
             except Exception as e:
                 self._add("WARN", "IAM-10", "IAM", rgn,
                           f"Could not check Access Analyzer in {rgn}: {e}")
+
+        self._check_iam_foundations()
+        self._emit_credential_exposures()
+
+    def _iam_partition(self) -> str:
+        """The ARN partition for AWS-managed policy ARNs in this region.
+
+        Hard-coding ``arn:aws:`` would make IAM-13 and IAM-15 silently unable to fire in
+        China and GovCloud — the read would raise NoSuchEntity, be swallowed as "no
+        entities hold it", and IAM-13 would then report the support role as ABSENT in
+        every account in those partitions. A wrong ARN producing a confident FAIL is
+        worse than one producing an error."""
+        r = str(self.region or "")
+        if r.startswith("cn-"):
+            return "aws-cn"
+        if r.startswith("us-gov-"):
+            return "aws-us-gov"
+        if r.startswith("us-iso"):
+            return "aws-iso-b" if r.startswith("us-isob-") else "aws-iso"
+        return "aws"
+
+    def _managed_policy_entities(self, check_id: str, policy: str) -> Optional[Dict]:
+        """Who holds an AWS-managed policy, or None if the read did not happen."""
+        arn = f"arn:{self._iam_partition()}:iam::aws:policy/{policy}"
+        try:
+            iam = self._client("iam", region="us-east-1")
+            out = {"PolicyRoles": [], "PolicyUsers": [], "PolicyGroups": []}
+            for page in iam.get_paginator("list_entities_for_policy").paginate(
+                    PolicyArn=arn):
+                for k in out:
+                    out[k].extend(page.get(k) or [])
+            return out
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied(check_id, "iam:ListEntitiesForPolicy")
+                self._add("INFO", check_id, "IAM", policy,
+                          f"NOT EVALUATED — iam:ListEntitiesForPolicy is denied, so who "
+                          f"holds {policy} could not be read")
+            else:
+                self._add("INFO", check_id, "IAM", policy,
+                          f"NOT EVALUATED — {policy} could not be resolved in this "
+                          f"partition ({e})")
+            return None
+
+    def _check_iam_foundations(self):
+        """IAM-11..15 — CIS Foundations v7.0.0 2.6, 2.13, 2.15, 2.19 and 2.20.
+
+        Grouped in one method because they share the credential report this section has
+        already fetched and cached, and because four of the five are single reads that do
+        not warrant a section of their own."""
+        iam = None
+        try:
+            iam = self._client("iam", region="us-east-1")
+        except Exception:
+            return
+        report = self._get_credential_report()
+
+        # ── IAM-11 / 2.6 — root MFA is virtual rather than hardware ──────────────
+        self._log("IAM-11: root MFA is a hardware device")
+        root_row = next((r for r in report if r.get("user") == "<root_account>"), {})
+        root_mfa_on = str(root_row.get("mfa_active", "")).lower() == "true"
+        if not root_mfa_on:
+            # IAM-01 already reports "no MFA on root", which is the more serious
+            # finding. Repeating it here as a weaker one would double-count it.
+            self._add("INFO", "IAM-11", "IAM", "root",
+                      "NOT EVALUATED — root has no MFA device at all; IAM-01 reports "
+                      "that, and it is the more serious finding")
+        else:
+            serial = None
+            try:
+                for page in iam.get_paginator("list_virtual_mfa_devices").paginate(
+                        AssignmentStatus="Assigned"):
+                    for d in page.get("VirtualMFADevices") or []:
+                        if str((d.get("User") or {}).get("Arn", "")).endswith(":root"):
+                            serial = d.get("SerialNumber")
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("IAM-11", "iam:ListVirtualMFADevices")
+                self._add("INFO", "IAM-11", "IAM", "root",
+                          "NOT EVALUATED — iam:ListVirtualMFADevices could not be read, "
+                          "so virtual and hardware MFA could not be told apart")
+                serial = False                 # sentinel: read failed, do not decide
+            if serial is not False:
+                # A root user with MFA that appears in NO virtual-device listing is
+                # holding a hardware device, which is the passing state.
+                r = aws_cis_foundations.root_mfa_is_virtual(serial or "", mfa_enabled=True)
+                if r.get("failed"):
+                    self._add("FAIL", "IAM-11", "IAM", "root", r["statement"])
+                elif not r.get("unknown"):
+                    self._add("PASS", "IAM-11", "IAM", "root",
+                              "Root MFA is a hardware device")
+
+        # ── IAM-12 / 2.13 — permissions attached straight to a user ──────────────
+        self._log("IAM-12: IAM users receive permissions only through groups")
+        users = [r.get("user", "") for r in report
+                 if r.get("user") and r.get("user") != "<root_account>"]
+        checked = 0
+        for user in users:
+            try:
+                att = [p.get("PolicyName") for p in iam.list_attached_user_policies(
+                    UserName=user).get("AttachedPolicies") or []]
+                inl = list(iam.list_user_policies(UserName=user).get("PolicyNames") or [])
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("IAM-12", "iam:ListAttachedUserPolicies")
+                continue
+            checked += 1
+            r = aws_cis_foundations.user_attached_policies(user, att, inl)
+            if r.get("failed"):
+                self._add("FAIL", "IAM-12", "IAM", user, r["statement"])
+        if checked and not any(x.check_id == "IAM-12" and x.status == "FAIL"
+                               for x in self.results):
+            self._add("PASS", "IAM-12", "IAM", "all-users",
+                      f"All {checked} IAM user(s) receive permissions only through groups")
+
+        # ── IAM-13 / 2.15 — a support role exists ────────────────────────────────
+        self._log("IAM-13: a role can raise AWS Support cases")
+        ents = self._managed_policy_entities("IAM-13", "AWSSupportAccess")
+        if ents is not None:
+            r = aws_cis_foundations.support_role(ents)
+            if r.get("failed"):
+                self._add("FAIL", "IAM-13", "IAM", "AWSSupportAccess", r["statement"])
+            else:
+                self._add("PASS", "IAM-13", "IAM", "AWSSupportAccess",
+                          "A principal holds AWSSupportAccess and can raise a case "
+                          "without administrator rights")
+
+        # ── IAM-14 / 2.19 — human sign-in goes through federation ────────────────
+        self._log("IAM-14: human access is federated")
+        console = [r.get("user", "") for r in report
+                   if r.get("user") != "<root_account>"
+                   and str(r.get("password_enabled", "")).lower() == "true"]
+        sources: List[str] = []
+        try:
+            if iam.list_saml_providers().get("SAMLProviderList"):
+                sources.append("SAML")
+        except Exception:
+            pass
+        try:
+            if iam.list_open_id_connect_providers().get(
+                    "OpenIDConnectProviderList"):
+                sources.append("OIDC")
+        except Exception:
+            pass
+        try:
+            if self._client("sso-admin", region=self.region).list_instances().get(
+                    "Instances"):
+                sources.append("IAM Identity Center")
+        except Exception:
+            pass
+        r = aws_cis_foundations.federated_human_access(console, sources)
+        if r.get("failed"):
+            self._add("FAIL", "IAM-14", "IAM", "console-users", r["statement"])
+        elif r.get("unknown"):
+            self._add("INFO", "IAM-14", "IAM", "console-users",
+                      f"NOT EVALUATED — {r['reason']}")
+        else:
+            self._add("PASS", "IAM-14", "IAM", "console-users",
+                      "No IAM user has a console password; human sign-in does not use "
+                      "local credentials")
+
+        # ── IAM-15 / 2.20 — CloudShell full access is not broadly granted ────────
+        self._log("IAM-15: AWSCloudShellFullAccess is restricted")
+        ents = self._managed_policy_entities("IAM-15", "AWSCloudShellFullAccess")
+        if ents is not None:
+            r = aws_cis_foundations.cloudshell_access(ents)
+            if r.get("failed"):
+                self._add("FAIL", "IAM-15", "IAM", "AWSCloudShellFullAccess",
+                          r["statement"])
+            else:
+                self._add("PASS", "IAM-15", "IAM", "AWSCloudShellFullAccess",
+                          "No principal holds AWSCloudShellFullAccess")
+
+    def _emit_credential_exposures(self):
+        """CREDEXP-00..03 — leaked credentials the operator supplied, joined to identity.
+
+        Reported in the IAM section rather than a section of its own, because that is
+        what these findings are ABOUT: an IAM user whose credential is in a breach
+        corpus, and an access key id that is both leaked and live. IAM is also
+        already a GLOBAL section, so the join happens once per scan rather than once
+        per region.
+
+        A HIT IS AN OBSERVATION OF A CORPUS, NEVER A COMPROMISE. Somebody genuinely
+        saw this data in a compilation; that does not establish that the credential
+        still works, that it was ever used against this account, or that this account
+        was breached. The wording of every message below is deliberate about that
+        distinction, because "leaked credential found" is exactly the phrase that
+        gets read as "we were hacked" — and the corpus cannot support it.
+
+        NO CREDENTIAL MATERIAL ENTERS THE PRODUCT. `aws_ingest_credexp.normalize`
+        builds each record from an allowlist and stores a salted digest, so the
+        plaintext never reaches a finding, a report or the state store.
+        """
+        parsed = self._cred_exposures
+        if not parsed or not parsed.get("exposures"):
+            return
+
+        exposures = parsed["exposures"]
+        domains = parsed.get("estate_domains") or ()
+        keys = self._access_key_ids()
+
+        principals = []
+        for p in self._get_iam_principals():
+            # An `email` tag is the only place an IAM user carries one, and the tags
+            # arrive on the GetAccountAuthorizationDetails page already read, so
+            # matching on it costs no call and no grant.
+            tags = p.get("tags") or {}
+            principals.append({
+                "name": p.get("name") or "",
+                "email": tags.get("email") or tags.get("Email") or "",
+                "type": p.get("type") or "",
+                "arn": p.get("arn") or ""})
+
+        joined = aws_ingest_credexp.correlate(
+            exposures, principals, estate_domains=domains,
+            known_key_ids=keys or ())
+
+        cov = aws_ingest_credexp.coverage(
+            exposures, known_key_ids=keys or (), estate_domains=domains,
+            salt=parsed.get("salt") or "")
+
+        # The coverage statement is emitted whether or not anything matched, and that
+        # is the point of it: with no key inventory an empty result means "we could
+        # not look", and an operator who reads it as "nothing was exposed" has drawn
+        # the opposite conclusion from the evidence.
+        notes = "; ".join(cov.get("not_evaluated") or []) or "no gaps recorded"
+        self._add("INFO", "CREDEXP-00", "IAM", "credential-exposure",
+                  f"Ingested {cov['total_exposures']} credential exposure(s): "
+                  f"{cov['with_credential']} carry a credential digest, "
+                  f"{cov['with_access_key']} carry an AWS access key id; "
+                  f"{len(joined)} joined to this estate. "
+                  f"{cov['provenance_note']} "
+                  f"NOT EVALUATED: {notes} | credential-exposure")
+
+        if keys is None:
+            # Named as a denial rather than left as an empty join, so the coverage
+            # manifest carries it too.
+            self._coverage.note_denied("CREDEXP-01", "iam:ListAccessKeys")
+
+        for hit in joined:
+            exp = hit["exposure"]
+            src = exp.get("source") or exp.get("kind") or "an unnamed corpus"
+            who = ", ".join(sorted(
+                p.get("name") or "?" for p in hit.get("principals") or [])) or "-"
+
+            if hit.get("matched_on") == "access_key_id":
+                kid = exp.get("access_key_id")
+                self._add("FAIL", "CREDEXP-01", "IAM", kid,
+                          f"Access key {kid} is LIVE in this account and appears in "
+                          f"{src}. This is the strongest join a breach corpus "
+                          f"supports: the identifier is not a guess and the key is "
+                          f"not retired. It does NOT establish that the secret half "
+                          f"is still valid or that it was used here — rotate it and "
+                          f"read CloudTrail for its usage | {kid}")
+            elif hit.get("domain_match_only"):
+                self._add("FAIL", "CREDEXP-03", "IAM", exp.get("domain") or "estate",
+                          f"An exposure in {src} carries an address at "
+                          f"{exp.get('domain')}, one of this estate's domains, but "
+                          f"matches no IAM principal. It is a signal about the "
+                          f"organisation rather than about this account: the person "
+                          f"may hold no IAM identity, or hold one under another "
+                          f"name | {exp.get('domain')}")
+            else:
+                self._add("FAIL", "CREDEXP-02", "IAM", who,
+                          f"IAM principal '{who}' matches an exposure in {src} on "
+                          f"its {hit.get('matched_on')}. The corpus says this "
+                          f"identifier appeared with a credential; it says nothing "
+                          f"about whether that credential was ever this account's, "
+                          f"so treat it as a prompt to rotate and to check for MFA "
+                          f"rather than as evidence of a breach | {who}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 2: S3 SECURITY
@@ -3277,8 +4048,12 @@ class AWSLiveScanner:
                 self._check_bucket_policy_exposure(bname, stmts, cfg, bpa)
 
             # S3-08 — Versioning (rollback protection vs overwrite/ransomware)
+            # S3-11 — MFA Delete (CIS Foundations v7.0.0 3.1.2). ONE call answers both:
+            # GetBucketVersioning returns Status and MFADelete together, and MFA Delete is
+            # a property OF versioning rather than a separate setting.
             try:
-                ver = s3.get_bucket_versioning(Bucket=bname).get("Status")
+                vcfg = s3.get_bucket_versioning(Bucket=bname)
+                ver = vcfg.get("Status")
                 if ver == "Enabled":
                     self._add("PASS", "S3-08", "S3", bname,
                               f"Versioning enabled | {bname}")
@@ -3286,6 +4061,12 @@ class AWSLiveScanner:
                     self._add("FAIL", "S3-08", "S3", bname,
                               f"Versioning not enabled — no rollback from object "
                               f"overwrite/ransomware | {bname}")
+                r = aws_cis_foundations.bucket_mfa_delete(bname, vcfg)
+                if r.get("failed"):
+                    self._add("FAIL", "S3-11", "S3", bname, r["statement"])
+                elif not r.get("unknown"):
+                    self._add("PASS", "S3-11", "S3", bname,
+                              f"MFA Delete enabled | {bname}")
             except Exception:
                 pass
 
@@ -3396,7 +4177,7 @@ class AWSLiveScanner:
         }
 
         # VPC-01 — Security groups with risky ports open to 0.0.0.0/0 or ::/0
-        # VPC-04 — default Security Group must restrict all traffic (CIS 5.4)
+        # VPC-04 — default Security Group must restrict all traffic (CIS 6.5)
         self._log("VPC-01: Security Groups — risky ports open to 0.0.0.0/0 or ::/0")
         found_any = False
         default_seen = False
@@ -3445,7 +4226,7 @@ class AWSLiveScanner:
 
         for res, ni, no in default_sg_issues:
             self._add("FAIL", "VPC-04", "VPC", res,
-                      f"Default SG has {ni} inbound / {no} outbound rule(s) — CIS 5.4 "
+                      f"Default SG has {ni} inbound / {no} outbound rule(s) — CIS 6.5 "
                       f"requires it to restrict ALL traffic | {res}")
         if default_seen and not default_sg_issues:
             self._add("PASS", "VPC-04", "VPC", "default-sgs",
@@ -3548,6 +4329,92 @@ class AWSLiveScanner:
                               f"(verify authorized) | {pid}")
                 else:
                     self._add("PASS", "VPC-06", "VPC", pid, f"Intra-account peering {pid}")
+
+        self._check_vpc_foundations(ec2, pcxs)
+
+    def _check_vpc_foundations(self, ec2, pcxs) -> None:
+        """VPC-07 / 6.6 and VPC-08 / 6.8 — peering route scope, and VPC endpoint usage.
+
+        Both read route tables, so they share the one call. VPC-08 needs them for a second
+        reason: an endpoint-less VPC is only a finding when it HAS a path to the internet,
+        and the route tables are where that is decided."""
+        try:
+            rtbs = self._paginate_strict(ec2, "describe_route_tables", "RouteTables")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("VPC-07", "ec2:DescribeRouteTables")
+                self._coverage.note_denied("VPC-08", "ec2:DescribeRouteTables")
+            self._add("INFO", "VPC-07", "VPC", "route-tables",
+                      f"NOT EVALUATED — ec2:DescribeRouteTables could not be read ({e})")
+            self._add("INFO", "VPC-08", "VPC", "route-tables",
+                      f"NOT EVALUATED — ec2:DescribeRouteTables could not be read ({e})")
+            return
+
+        # ── VPC-07 / 6.6 — peering routes carrying a whole peer CIDR ─────────────
+        self._log("VPC-07: VPC peering routes are least-access")
+        peer_cidrs = {}
+        for p in (pcxs or []):
+            pid = p.get("VpcPeeringConnectionId")
+            info = p.get("AccepterVpcInfo") or {}
+            if pid and info.get("CidrBlock"):
+                peer_cidrs[str(pid)] = str(info["CidrBlock"])
+        wide = 0
+        peering_seen = False
+        for rtb in rtbs:
+            if any(r.get("VpcPeeringConnectionId") for r in (rtb.get("Routes") or [])):
+                peering_seen = True
+            r = aws_cis_foundations.peering_route_scope(rtb, peer_cidrs)
+            if r.get("failed"):
+                wide += 1
+                self._add("FAIL", "VPC-07", "VPC",
+                          str(rtb.get("RouteTableId") or "?"), r["statement"])
+        if peering_seen and not wide:
+            self._add("PASS", "VPC-07", "VPC", "route-tables",
+                      "Every peering route names a specific subnet rather than a whole "
+                      "peer VPC")
+        elif not peering_seen:
+            self._add("INFO", "VPC-07", "VPC", "route-tables",
+                      "No VPC peering routes exist, so there is nothing to scope")
+
+        # ── VPC-08 / 6.8 — VPC endpoints for AWS service traffic ─────────────────
+        self._log("VPC-08: VPC endpoints are used for AWS service access")
+        try:
+            eps = self._paginate_strict(ec2, "describe_vpc_endpoints", "VpcEndpoints")
+            vpcs = self._paginate_strict(ec2, "describe_vpcs", "Vpcs")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("VPC-08", "ec2:DescribeVpcEndpoints")
+            self._add("INFO", "VPC-08", "VPC", "vpc-endpoints",
+                      f"NOT EVALUATED — the VPC endpoint inventory could not be read ({e})")
+            return
+        per_vpc: Dict[str, int] = {}
+        for ep in eps:
+            v = str(ep.get("VpcId") or "")
+            if v and str(ep.get("State", "available")) in ("available", "pendingAcceptance"):
+                per_vpc[v] = per_vpc.get(v, 0) + 1
+        # A VPC has a path to the internet when some route table in it targets an
+        # internet gateway or a NAT. Egress-only gateways count: they carry IPv6 traffic
+        # to the same public endpoints.
+        outbound: Set[str] = set()
+        for rtb in rtbs:
+            v = str(rtb.get("VpcId") or "")
+            for r in (rtb.get("Routes") or []):
+                if (r.get("GatewayId", "").startswith("igw-")
+                        or r.get("NatGatewayId")
+                        or r.get("EgressOnlyInternetGatewayId")):
+                    outbound.add(v)
+        bad = 0
+        for vpc in vpcs:
+            vid = str(vpc.get("VpcId") or "?")
+            r = aws_cis_foundations.vpc_endpoint_usage(
+                vid, per_vpc.get(vid, 0), vid in outbound)
+            if r.get("failed"):
+                bad += 1
+                self._add("FAIL", "VPC-08", "VPC", vid, r["statement"])
+        if vpcs and not bad:
+            self._add("PASS", "VPC-08", "VPC", "vpc-endpoints",
+                      f"Every internet-connected VPC of {len(vpcs)} has at least one "
+                      f"VPC endpoint")
 
     @staticmethod
     def _nacl_covers_port(entry, port):
@@ -3724,6 +4591,36 @@ class AWSLiveScanner:
                 self._add("INFO", "LOG-08", "LOGGING", name, f"could not read event selectors: {e}")
             # LOG-09 — trail S3 bucket not public
             self._check_trail_bucket(t, name)
+
+            # LOG-11 — log file validation (CIS Foundations v7.0.0 4.2). The flag is
+            # already on the trail description; no additional call.
+            r = aws_cis_foundations.trail_log_validation(t)
+            if r.get("failed"):
+                self._add("FAIL", "LOG-11", "LOGGING", name, r["statement"])
+            else:
+                self._add("PASS", "LOG-11", "LOGGING", name,
+                          f"Trail '{name}' writes signed digest files")
+
+            # LOG-12 — server access logging on the trail's OWN bucket (4.4). S3-05 asks
+            # the same question of every bucket and only WARNs; this one fails, because
+            # this is the bucket whose readers are worth recording.
+            bkt = t.get("S3BucketName")
+            try:
+                lg = (self._client("s3").get_bucket_logging(Bucket=bkt)
+                      if bkt else None)
+            except Exception as e:
+                lg = None
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("LOG-12", "s3:GetBucketLogging")
+            r = aws_cis_foundations.trail_bucket_access_logging(name, bkt, lg)
+            if r.get("failed"):
+                self._add("FAIL", "LOG-12", "LOGGING", str(bkt), r["statement"])
+            elif r.get("unknown"):
+                self._add("INFO", "LOG-12", "LOGGING", str(bkt or name),
+                          f"NOT EVALUATED — {r['reason']}")
+            else:
+                self._add("PASS", "LOG-12", "LOGGING", str(bkt),
+                          f"CloudTrail bucket {bkt} records server access logs")
             # LOG-10 — delivery health
             try:
                 st = ct.get_trail_status(Name=arn)
@@ -3963,26 +4860,37 @@ class AWSLiveScanner:
                           f"GuardDuty {label} DISABLED — reduced threat coverage | {did}")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SECTION: CLOUDWATCH ALARMS (CIS AWS Foundations Benchmark v3 §4)
+    # SECTION: CLOUDWATCH ALARMS (CIS AWS Foundations Benchmark v7.0.0 §5)
     # ══════════════════════════════════════════════════════════════════════════
     # (check_id, CIS §, human name, required lowercased tokens a matching filter must
-    #  contain). CW-02..CW-16 == CIS 4.1..4.15 (4.16 = Security Hub == LOG-05).
-    _CIS4_CONTROLS = [
-        ("CW-02", "4.1",  "unauthorized API calls",          ["unauthorizedoperation", "accessdenied"]),
-        ("CW-03", "4.2",  "console sign-in without MFA",      ["consolelogin", "mfaused"]),
-        ("CW-04", "4.3",  "root account usage",              ["useridentity.type", "root"]),
-        ("CW-05", "4.4",  "IAM policy changes",              ["deleterolepolicy", "putrolepolicy"]),
-        ("CW-06", "4.5",  "CloudTrail configuration changes", ["createtrail", "deletetrail"]),
-        ("CW-07", "4.6",  "console authentication failures",  ["consolelogin", "failedauthentication"]),
-        ("CW-08", "4.7",  "CMK disable/scheduled deletion",   ["disablekey", "schedulekeydeletion"]),
-        ("CW-09", "4.8",  "S3 bucket policy changes",         ["putbucketpolicy", "deletebucketpolicy"]),
-        ("CW-10", "4.9",  "AWS Config changes",              ["stopconfigurationrecorder"]),
-        ("CW-11", "4.10", "security group changes",          ["authorizesecuritygroupingress", "revokesecuritygroupingress"]),
-        ("CW-12", "4.11", "network ACL changes",             ["createnetworkaclentry", "deletenetworkaclentry"]),
-        ("CW-13", "4.12", "network gateway changes",         ["createinternetgateway", "deleteinternetgateway"]),
-        ("CW-14", "4.13", "route table changes",             ["createroute", "deleteroutetable"]),
-        ("CW-15", "4.14", "VPC changes",                     ["createvpc", "deletevpc"]),
-        ("CW-16", "4.15", "organization changes",            ["organizations.amazonaws.com"]),
+    #  contain). CW-02..CW-16 == CIS 5.1..5.15 (5.16 = Security Hub == LOG-05).
+    #
+    # THE SECTION NUMBER MOVED FROM 4 TO 5 in v7.0.0, which inserted the Introduction as
+    # section 1. The numbers here are shown to operators in every message this section
+    # emits, so leaving them at §4 would have had the product citing a control number
+    # that no longer describes what it just reported.
+    _CIS5_CONTROLS = [
+        ("CW-02", "5.1",  "unauthorized API calls",          ["unauthorizedoperation", "accessdenied"]),
+        ("CW-03", "5.2",  "console sign-in without MFA",      ["consolelogin", "mfaused"]),
+        ("CW-04", "5.3",  "root account usage",              ["useridentity.type", "root"]),
+        ("CW-05", "5.4",  "IAM policy changes",              ["deleterolepolicy", "putrolepolicy"]),
+        ("CW-06", "5.5",  "CloudTrail configuration changes", ["createtrail", "deletetrail"]),
+        ("CW-07", "5.6",  "console authentication failures",  ["consolelogin", "failedauthentication"]),
+        ("CW-08", "5.7",  "CMK disable/scheduled deletion",   ["disablekey", "schedulekeydeletion"]),
+        ("CW-09", "5.8",  "S3 bucket policy changes",         ["putbucketpolicy", "deletebucketpolicy"]),
+        ("CW-10", "5.9",  "AWS Config changes",              ["stopconfigurationrecorder"]),
+        # `modifysecuritygrouprules` is REQUIRED as of v7.0.0, and it is the one token
+        # change in this table that alters a verdict. ModifySecurityGroupRules is the API
+        # the console has used for rule edits since 2021, so a filter written to the older
+        # two-token pattern is blind to the way most security-group changes are actually
+        # made. An estate that passed 4.10 under v6.0.0 can legitimately fail 5.10 here,
+        # and that is the finding rather than a false positive: their alarm does not fire.
+        ("CW-11", "5.10", "security group changes",          ["authorizesecuritygroupingress", "revokesecuritygroupingress", "modifysecuritygrouprules"]),
+        ("CW-12", "5.11", "network ACL changes",             ["createnetworkaclentry", "deletenetworkaclentry"]),
+        ("CW-13", "5.12", "network gateway changes",         ["createinternetgateway", "deleteinternetgateway"]),
+        ("CW-14", "5.13", "route table changes",             ["createroute", "deleteroutetable"]),
+        ("CW-15", "5.14", "VPC changes",                     ["createvpc", "deletevpc"]),
+        ("CW-16", "5.15", "organization changes",            ["organizations.amazonaws.com"]),
     ]
 
     @staticmethod
@@ -3994,7 +4902,7 @@ class AWSLiveScanner:
 
     def _check_cloudwatch(self):
         self._section_header("CLOUDWATCH")
-        self._log("CW-01..16: CloudWatch CIS v3 §4 metric-filter + alarm coverage")
+        self._log("CW-01..16: CloudWatch CIS v7.0.0 §5 metric-filter + alarm coverage")
         try:
             ct = self._client("cloudtrail")
             trails = ct.describe_trails(includeShadowTrails=True).get("trailList", [])
@@ -4022,7 +4930,7 @@ class AWSLiveScanner:
                 log_groups.append((parts[3], parts[6], parts[4]))
         if not log_groups:
             self._add("FAIL", "CW-01", "CLOUDWATCH", "cloudwatch",
-                      "No multi-region CloudTrail delivering to CloudWatch Logs — CIS §4 "
+                      "No multi-region CloudTrail delivering to CloudWatch Logs — CIS §5 "
                       "metric-filter alarms cannot exist")
             return
         # collect the union of metric filters across owner-account log groups
@@ -4045,15 +4953,15 @@ class AWSLiveScanner:
         if not owner_group_seen:
             self._add("INFO", "CW-01", "CLOUDWATCH", "cloudwatch",
                       "CloudTrail→CW-Logs monitoring is owned by the org/management account; "
-                      "CIS §4 metric filters are evaluated in the resource-owner account")
+                      "CIS §5 metric filters are evaluated in the resource-owner account")
             return
         self._add("PASS", "CW-01", "CLOUDWATCH", "cloudwatch",
                   f"CloudTrail→CloudWatch Logs present ({len(filters)} metric filters found)")
-        for cid, cis, name, tokens in self._CIS4_CONTROLS:
+        for cid, cis, name, tokens in self._CIS5_CONTROLS:
             self._eval_cis4_control(cid, cis, name, tokens, filters)
 
     def _eval_cis4_control(self, cid, cis, name, tokens, filters) -> None:
-        """3-state CIS §4 control: FAIL (no matching filter, or filter without an
+        """3-state CIS §5 control: FAIL (no matching filter, or filter without an
         alarm/SNS action), WARN (alarm+SNS but no confirmed subscription), PASS
         (filter + alarm + ≥1 confirmed subscription)."""
         # Boundary-aware: a token must not be immediately followed by another
@@ -4378,7 +5286,12 @@ class AWSLiveScanner:
     # CIS AWS Compute Services Benchmark v2.0.0 — EC2 estate hygiene
     # ══════════════════════════════════════════════════════════════════════════
     def _check_ec2_hygiene(self):
-        """EC2-12..EC2-17 (CIS-Compute 2.5, 2.6, 2.7, 2.10, 2.11, 2.12) + ASG-02 (2.14).
+        """EC2-12..EC2-18 (CIS-Compute 2.5, 2.6, 2.7, 2.10, 2.11, 2.12) + ASG-02 (2.14).
+
+        EC2-18 (CIS Foundations v7.0.0 2.16 — an instance with no IAM instance profile)
+        rides the same describe_instances page rather than making a seventh call, and is
+        scoped to RUNNING instances: a stopped instance is making no API calls, so it is
+        not currently reaching AWS with a static key and the finding would be noise.
 
         ONE describe_instances page covers five of the six. Age, monitoring state,
         default-group membership, stop time and block-device mappings all arrive on the
@@ -4412,7 +5325,8 @@ class AWSLiveScanner:
             return
 
         now = self._today_dt()
-        counts = {"EC2-12": 0, "EC2-13": 0, "EC2-14": 0, "EC2-16": 0, "EC2-17": 0}
+        counts = {"EC2-12": 0, "EC2-13": 0, "EC2-14": 0, "EC2-16": 0, "EC2-17": 0,
+                  "EC2-18": 0}
         running = [i for i in instances
                    if str((i.get("State") or {}).get("Name")) == "running"]
         for inst in instances:
@@ -4427,6 +5341,13 @@ class AWSLiveScanner:
                 if not mon["detailed"]:
                     counts["EC2-13"] += 1
                     self._add("FAIL", "EC2-13", "EC2", iid, f"{mon['statement']} | {iid}")
+                # EC2-18 / CIS Foundations v7.0.0 2.16 — running instances only. A
+                # stopped instance is making no API calls, so it is not currently
+                # reaching AWS with a static key and the finding would be noise.
+                role = aws_cis_foundations.instance_without_role(inst)
+                if role.get("failed"):
+                    counts["EC2-18"] += 1
+                    self._add("FAIL", "EC2-18", "EC2", iid, role["statement"])
             sg = aws_cis_compute.instance_default_sg(inst, default_sgs)
             if sg["uses_default"]:
                 counts["EC2-14"] += 1
@@ -4453,6 +5374,10 @@ class AWSLiveScanner:
         if instances and not counts["EC2-17"]:
             self._add("PASS", "EC2-17", "EC2", "ec2",
                       f"All attached volumes are deleted on instance termination")
+        if running and not counts["EC2-18"]:
+            self._add("PASS", "EC2-18", "EC2", "ec2",
+                      f"All {len(running)} running instance(s) carry an IAM instance "
+                      f"profile")
 
         # EC2-15 — detached ENIs. Its own call and its own guard: a denied
         # DescribeNetworkInterfaces must not discard the five findings above.
@@ -4572,6 +5497,126 @@ class AWSLiveScanner:
             return None
         md = (vers[0].get("LaunchTemplateData") or {}).get("MetadataOptions") or {}
         return md.get("HttpTokens", "optional")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION: AMAZON LINUX — CIS Amazon Linux 2 Benchmark v4.0.0, via SSM Inventory
+    # ══════════════════════════════════════════════════════════════════════════
+    def _al2_inventory(self, ssm, iid: str, type_name: str) -> Optional[List[Dict]]:
+        """One instance's inventory of one type, or None if it could not be read.
+
+        None and [] are DIFFERENT ANSWERS and the checks treat them differently: [] means
+        the type was collected and is empty, None means nobody collected it. Conflating
+        them would let a host nobody has inventoried report as having no prohibited
+        packages."""
+        try:
+            out: List[Dict] = []
+            token = None
+            for _ in range(20):                      # bounded: inventory is not huge
+                kw = {"InstanceId": iid, "TypeName": type_name, "MaxResults": 50}
+                if token:
+                    kw["NextToken"] = token
+                resp = ssm.list_inventory_entries(**kw)
+                out.extend(resp.get("Entries") or [])
+                token = resp.get("NextToken")
+                if not token:
+                    break
+            return out
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("AL2-01", "ssm:ListInventoryEntries")
+            return None
+
+    def _check_amazonlinux(self):
+        """AL2-01..03 — CIS Amazon Linux 2 Benchmark v4.0.0, the part that is reachable.
+
+        THE BENCHMARK IS 287 RECOMMENDATIONS AND THIS SECTION DECIDES 44 OF THEM. The rest
+        read file content, file modes and kernel state, which needs a filesystem the
+        agentless side-scan cannot parse yet -- see engine/aws_cis_al2_map.py, which
+        records every one of them and what would unblock it. Registering checks for those
+        would put 250 registered-but-unreachable ids in the catalogue, which is the exact
+        failure docs/CHECK_FIRING.md exists to measure.
+
+        SSM INVENTORY IS THE ONLY READ-ONLY PATH TO IN-GUEST STATE. Reading a file would
+        need ssm:SendCommand, which executes code on the host and is a write -- outside
+        the read-only-of-CONFIG charter this product's role is built on."""
+        self._section_header("AMAZONLINUX")
+        try:
+            ssm = self._client("ssm")
+            ec2 = self._client("ec2")
+        except Exception:
+            return
+
+        # Which running instances are Linux and SSM-managed. PlatformType is what SSM
+        # reports; an instance it has never reached carries none, which is why the
+        # unmanaged case is answered from the EC2 listing rather than from SSM's.
+        try:
+            running = {}
+            for page in ec2.get_paginator("describe_instances").paginate(
+                    Filters=[{"Name": "instance-state-name", "Values": ["running"]}]):
+                for res in page.get("Reservations", []):
+                    for i in res.get("Instances", []):
+                        running[i["InstanceId"]] = i
+        except Exception as e:
+            self._add("INFO", "AL2-00", "AMAZONLINUX", "ec2",
+                      f"NOT EVALUATED — the instance list could not be read ({e})")
+            return
+        if not running:
+            self._add("INFO", "AL2-00", "AMAZONLINUX", "ec2",
+                      "No running EC2 instances in this region")
+            return
+
+        managed: Dict[str, Dict] = {}
+        try:
+            for page in ssm.get_paginator("describe_instance_information").paginate():
+                for info in page.get("InstanceInformationList", []) or []:
+                    if info.get("ResourceType") == "EC2Instance":
+                        managed[str(info.get("InstanceId"))] = info
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("AL2-01",
+                                           "ssm:DescribeInstanceInformation")
+            self._add("INFO", "AL2-00", "AMAZONLINUX", "ssm",
+                      f"NOT EVALUATED — SSM instance information could not be read "
+                      f"({e}), so no host could be assessed against the Amazon Linux "
+                      f"benchmark")
+            return
+
+        assessed = 0
+        for iid in sorted(running):
+            info = managed.get(iid) or {}
+            platform = str(info.get("PlatformType") or "")
+            # Windows hosts are WINVULN's business, not this benchmark's.
+            if platform and platform.lower() != "linux":
+                continue
+            is_managed = bool(info) and info.get("PingStatus") == "Online"
+            apps = (self._al2_inventory(ssm, iid, aws_cis_al2.APPLICATION_TYPE)
+                    if is_managed else None)
+            svcs = (self._al2_inventory(ssm, iid, aws_cis_al2.SERVICE_TYPE)
+                    if is_managed else None)
+
+            cov = aws_cis_al2.assessability(
+                iid, ssm_managed=is_managed, platform=platform or None,
+                app_entries=apps, svc_entries=svcs)
+            self._add("INFO", "AL2-00", "AMAZONLINUX", iid, cov["statement"])
+            if not cov["assessed"]:
+                continue
+            assessed += 1
+
+            for hit in aws_cis_al2.prohibited_packages(iid, apps):
+                self._add("FAIL", "AL2-01", "AMAZONLINUX", f"{iid}/{hit['package']}",
+                          f"{hit['statement']} (CIS-AL2 {hit['recommendation']})")
+            for hit in aws_cis_al2.missing_required_packages(iid, apps):
+                self._add("FAIL", "AL2-02", "AMAZONLINUX", f"{iid}/{hit['package']}",
+                          f"{hit['statement']} (CIS-AL2 {hit['recommendation']})")
+            for hit in aws_cis_al2.prohibited_units(iid, svcs):
+                self._add("FAIL", "AL2-03", "AMAZONLINUX", f"{iid}/{hit['unit']}",
+                          f"{hit['statement']} (CIS-AL2 {hit['recommendation']})")
+
+        if assessed and not [r for r in self.results
+                             if r.check_id == "AL2-01" and r.status == "FAIL"]:
+            self._add("PASS", "AL2-01", "AMAZONLINUX", "amazonlinux",
+                      f"None of the {assessed} assessed host(s) carries a package the "
+                      f"benchmark prohibits")
 
     def _check_ssm(self):
         """SSM-01 unmanaged running instances (patch blind spot) + SSM-02 patch compliance.
@@ -5379,10 +6424,35 @@ class AWSLiveScanner:
         rds = self._client("rds")
 
         def _rds_instances():
+            """Genuine RDS instances only.
+
+            THE SAME DEFECT THE AURORA CLUSTER FILTER FIXED, one level down, and it stood
+            for as long as it did because nothing looked. Neptune and DocumentDB share the
+            RDS control plane, so rds:DescribeDBInstances returns their instances too, and
+            this generator used to yield them unfiltered. A single Neptune instance
+            produced four findings -- RDS-01, RDS-02, RDS-03, RDS-04 -- none of which said
+            Neptune anywhere, two of which duplicated NEP-01/NEP-02 with contradictory
+            remediation, and two of which were the only coverage Neptune's public
+            accessibility and backups had.
+
+            That last part is why the filter could not ship alone: dropping these
+            instances without NEP-06/07 and DOCDB-07/08 would have deleted real coverage
+            rather than relabelled it, which is exactly the trap the cluster fix avoided
+            by growing from zero new checks to six.
+
+            DENY-list, not allow-list, and for the same reason as
+            NON_AURORA_CLUSTER_ENGINES: a new RDS engine must keep being scored by
+            default. Only an engine that POSITIVELY declares itself as another service is
+            dropped; an absent Engine is kept.
+            """
             try:
                 paginator = rds.get_paginator("describe_db_instances")
                 for page in paginator.paginate():
-                    yield from page["DBInstances"]
+                    for db in page["DBInstances"]:
+                        engine = ((db or {}).get("Engine") or "").lower()
+                        if engine in NON_AURORA_CLUSTER_ENGINES:
+                            continue
+                        yield db
             except Exception:
                 return
 
@@ -8736,6 +9806,14 @@ class AWSLiveScanner:
 
         for rg in (clusters or []):
             rgid = rg.get("ReplicationGroupId", "unknown")
+            # ELC-09 (CIS-DB 5.6) — log delivery. Reads a field this same
+            # describe_replication_groups response already carried, so no extra call.
+            _r = aws_cis_db2.elasticache_log_delivery(rg)
+            if _r.get("failed"):
+                self._add("FAIL", "ELC-09", "ELASTICACHE", rgid, _r["statement"])
+            elif not _r.get("unknown"):
+                self._add("PASS", "ELC-09", "ELASTICACHE", rgid,
+                          f"Log delivery configured | {rgid}")
             # ELC-01 — Encryption at rest
             if rg.get("AtRestEncryptionEnabled", False):
                 self._add("PASS", "ELC-01", "ELASTICACHE", rgid,
@@ -8953,6 +10031,169 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 24: AMAZON DYNAMODB
     # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
+    # CIS AWS Database Services Benchmark v2.0.0 — tranche 2 (the recorded gaps)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _fgac_principals(self, check_id: str, rule, section: str) -> None:
+        """DDB-06 / TS-03 — unscoped item-level data grants, per principal.
+
+        Both recommendations ask the same question of two services, and both are decided
+        from the IAM principal set this scan has already built and cached. `rule` is the
+        pure function from aws_cis_db2 that knows which actions and condition keys the
+        service uses."""
+        try:
+            principals = self._get_iam_principals()
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied(check_id, "iam:GetPolicyVersion")
+            self._add("INFO", check_id, section, "iam",
+                      f"NOT EVALUATED — the IAM principal set could not be read ({e})")
+            return
+        if not principals:
+            self._add("INFO", check_id, section, "iam",
+                      "NOT EVALUATED — no IAM principals were resolved, so policy "
+                      "conditions could not be inspected")
+            return
+        hits = 0
+        for p in principals:
+            r = rule(p)
+            if r.get("failed"):
+                hits += 1
+                self._add("FAIL", check_id, section,
+                          str(p.get("name") or p.get("arn") or "?"), r["statement"])
+        if not hits:
+            self._add("PASS", check_id, section, "iam",
+                      f"No principal of {len(principals)} holds unscoped item-level "
+                      f"access across every table")
+
+    def _check_dynamodb_access_and_endpoints(self, has_tables: bool) -> None:
+        """DDB-06 (CIS-DB 4.2) and DDB-07 (4.5)."""
+        self._log("DDB-06: DynamoDB fine-grained access control")
+        self._fgac_principals("DDB-06", aws_cis_db2.dynamodb_fine_grained_access,
+                              "DYNAMODB")
+
+        self._log("DDB-07: DynamoDB VPC endpoints")
+        ec2 = self._client("ec2")
+        try:
+            eps = self._paginate_strict(ec2, "describe_vpc_endpoints", "VpcEndpoints")
+            rtbs = self._paginate_strict(ec2, "describe_route_tables", "RouteTables")
+            vpcs = self._paginate_strict(ec2, "describe_vpcs", "Vpcs")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("DDB-07", "ec2:DescribeVpcEndpoints")
+            self._add("INFO", "DDB-07", "DYNAMODB", "vpc-endpoints",
+                      f"NOT EVALUATED — the VPC endpoint inventory could not be read ({e})")
+            return
+
+        by_vpc: Dict[str, List[str]] = {}
+        for ep in eps:
+            v = str(ep.get("VpcId") or "")
+            if v and str(ep.get("State", "available")) in ("available", "pendingAcceptance"):
+                by_vpc.setdefault(v, []).append(str(ep.get("ServiceName") or ""))
+        outbound: Set[str] = set()
+        for rtb in rtbs:
+            v = str(rtb.get("VpcId") or "")
+            for r in (rtb.get("Routes") or []):
+                if (str(r.get("GatewayId") or "").startswith("igw-")
+                        or r.get("NatGatewayId")
+                        or r.get("EgressOnlyInternetGatewayId")):
+                    outbound.add(v)
+        bad = 0
+        for vpc in vpcs:
+            vid = str(vpc.get("VpcId") or "?")
+            r = aws_cis_db2.dynamodb_vpc_endpoint(
+                vid, has_tables, vid in outbound, by_vpc.get(vid, []))
+            if r.get("failed"):
+                bad += 1
+                self._add("FAIL", "DDB-07", "DYNAMODB", vid, r["statement"])
+        if vpcs and not bad:
+            self._add("PASS", "DDB-07", "DYNAMODB", "vpc-endpoints",
+                      "Every internet-connected VPC reaches DynamoDB through a gateway "
+                      "endpoint (or the account holds no tables)")
+
+    def _cluster_event_subs(self, client, check_id: str, section: str, service: str,
+                            cluster_ids: List[str]) -> None:
+        """DOCDB-10 (CIS-DB 7.8) and NEP-11 (9.7) — one shape, two services."""
+        if not cluster_ids:
+            return
+        try:
+            subs = self._paginate_strict(client, "describe_event_subscriptions",
+                                         "EventSubscriptionsList")
+        except Exception as e:
+            subs = None
+            if self._is_access_denied(e):
+                # rds:, not docdb:/neptune:. Both services are authorised under the RDS
+                # IAM namespace they share a control plane with, so naming the client's
+                # own prefix here would tell an operator to grant an action that does
+                # not exist.
+                self._coverage.note_denied(
+                    check_id, "rds:DescribeEventSubscriptions")
+        for cid in cluster_ids:
+            r = aws_cis_db2.cluster_event_subscription(cid, service, subs)
+            if r.get("failed"):
+                self._add("FAIL", check_id, section, cid, r["statement"])
+            elif r.get("unknown"):
+                self._add("INFO", check_id, section, cid,
+                          f"NOT EVALUATED — {r['reason']}")
+            else:
+                self._add("PASS", check_id, section, cid,
+                          f"{service} cluster {cid} is covered by an event subscription")
+
+    def _check_docdb_maintenance(self, docdb, cluster_ids: List[str]) -> None:
+        """DOCDB-09 (CIS-DB 7.7) — engine updates AWS has queued and the cluster has not
+        taken. The closest the control plane comes to answering 'is this engine patched'."""
+        if not cluster_ids:
+            return
+        try:
+            actions = self._paginate_strict(
+                docdb, "describe_pending_maintenance_actions",
+                "PendingMaintenanceActions")
+        except Exception as e:
+            actions = None
+            if self._is_access_denied(e):
+                self._coverage.note_denied(
+                    "DOCDB-09", "rds:DescribePendingMaintenanceActions")
+        for cid in cluster_ids:
+            mine = None if actions is None else [
+                a for a in actions
+                if cid in str(a.get("ResourceIdentifier") or "")]
+            r = aws_cis_db2.docdb_pending_maintenance(cid, mine)
+            if r.get("failed"):
+                self._add("FAIL", "DOCDB-09", "DOCDB", cid, r["statement"])
+            elif r.get("unknown"):
+                self._add("INFO", "DOCDB-09", "DOCDB", cid,
+                          f"NOT EVALUATED — {r['reason']}")
+            else:
+                self._add("PASS", "DOCDB-09", "DOCDB", cid,
+                          f"No pending maintenance actions on {cid}")
+
+    def _check_timestream_cis_db2(self, table_arns: List[str]) -> None:
+        """TS-03 (CIS-DB 10.5) and TS-04 (10.10)."""
+        self._log("TS-03: Timestream fine-grained access control")
+        self._fgac_principals("TS-03", aws_cis_db2.timestream_fine_grained_access,
+                              "TIMESTREAM")
+
+        if not table_arns:
+            return
+        self._log("TS-04: Timestream tables covered by AWS Backup")
+        try:
+            protected = [str(p.get("ResourceArn") or "") for p in self._paginate_strict(
+                self._client("backup"), "list_protected_resources", "Results")]
+        except Exception as e:
+            protected = None
+            if self._is_access_denied(e):
+                self._coverage.note_denied("TS-04", "backup:ListProtectedResources")
+        for arn in table_arns:
+            r = aws_cis_db2.timestream_backup_coverage(arn, protected)
+            if r.get("failed"):
+                self._add("FAIL", "TS-04", "TIMESTREAM", arn, r["statement"])
+            elif r.get("unknown"):
+                self._add("INFO", "TS-04", "TIMESTREAM", arn,
+                          f"NOT EVALUATED — {r['reason']}")
+            else:
+                self._add("PASS", "TS-04", "TIMESTREAM", arn,
+                          f"An AWS Backup plan protects {arn}")
+
     def _check_dynamodb(self):
         self._section_header("DYNAMODB")
         ddb = self._client("dynamodb")
@@ -8965,6 +10206,12 @@ class AWSLiveScanner:
         except Exception as e:
             self._read_failed("DDB-01", "DYNAMODB", "dynamodb", "dynamodb:ListTables", e)
             return
+        # DDB-06/07 (CIS-DB 4.2, 4.5) run BEFORE the empty-table early return, and
+        # deliberately: DDB-06 is about IAM grants, which exist whether or not a table
+        # does — a role holding item-level access to every table in an account with no
+        # tables today is still a grant that reaches every table created tomorrow.
+        self._check_dynamodb_access_and_endpoints(bool(tables))
+
         if not tables:
             self._add("INFO", "DDB-01", "DYNAMODB", "dynamodb",
                       "No DynamoDB tables found")
@@ -11957,8 +13204,69 @@ class AWSLiveScanner:
                 service="docdb", cluster=True,
                 action="rds:DescribeDBClusterParameters")
 
+            # DOCDB-08 — automated backups. The most substantive gap the CIS Database
+            # mapping found (recommendation 7.9): BackupRetentionPeriod is right there on
+            # the cluster and, until the RDS instance filter landed, the only thing
+            # reading it for DocumentDB was RDS-03 reaching in by accident. Threshold and
+            # reasoning match AUR-07 and NEP-07 -- a cluster minimum of 1 makes 0
+            # unreachable, so the decidable question is whether the window is long enough
+            # to find a problem inside.
+            retention = (c or {}).get("BackupRetentionPeriod")
+            if isinstance(retention, int) and retention < 7:
+                self._add("FAIL", "DOCDB-08", "DOCDB", cid_,
+                          f"DocumentDB cluster backup retention={retention}d "
+                          f"(recommend >=7) | {cid_} — anything discovered later than "
+                          f"that window cannot be restored")
+            elif isinstance(retention, int):
+                self._add("PASS", "DOCDB-08", "DOCDB", cid_,
+                          f"DocumentDB cluster backup retention={retention}d | {cid_}")
+
+        # ── DOCDB-07 — instance public accessibility ─────────────────────────────
+        # The DocumentDB half of what makes the RDS instance filter safe. Note that this
+        # answers NO recommendation in the CIS Database benchmark: section 7 has no
+        # "not publicly accessible" control, though sections 2, 3 and 9 all do. That is a
+        # gap in the document, not a reason to leave a public document database
+        # unreported.
+        try:
+            instances = []
+            for page in docdb.get_paginator("describe_db_instances").paginate():
+                instances.extend(page.get("DBInstances", []))
+        except Exception as e:
+            self._read_failed("DOCDB-07", "DOCDB", "docdb",
+                              "rds:DescribeDBInstances", e)
+            instances = None
+
+        if instances is not None:
+            instances = [i for i in instances
+                         if ((i or {}).get("Engine") or "docdb").lower() == "docdb"]
+            if not instances:
+                self._add("INFO", "DOCDB-07", "DOCDB", "docdb",
+                          "No DocumentDB instances found in this region")
+            for inst in instances:
+                iid = (inst or {}).get("DBInstanceIdentifier", "unknown")
+                pub = inst.get("PubliclyAccessible")
+                if pub is True:
+                    self._add("FAIL", "DOCDB-07", "DOCDB", iid,
+                              f"DocumentDB instance PUBLICLY ACCESSIBLE | {iid} — the "
+                              f"endpoint resolves to a public address, leaving a "
+                              f"document store holding whole records reachable from "
+                              f"outside the VPC")
+                elif pub is False:
+                    self._add("PASS", "DOCDB-07", "DOCDB", iid,
+                              f"DocumentDB instance not publicly accessible | {iid}")
+
+        # DOCDB-09/10 (CIS-DB 7.7, 7.8) — pending engine updates, and whether anyone is
+        # told when something happens to the cluster. Both are cluster-scoped, so they
+        # reuse the cluster list already fetched above.
+        _docdb_ids = [str((c or {}).get("DBClusterIdentifier") or "")
+                      for c in (clusters or [])
+                      if str(((c or {}).get("Engine") or "docdb")).lower() == "docdb"
+                      and (c or {}).get("DBClusterIdentifier")]
+        self._check_docdb_maintenance(docdb, _docdb_ids)
+        self._cluster_event_subs(docdb, "DOCDB-10", "DOCDB", "DocumentDB", _docdb_ids)
+
     def _check_neptune(self):
-        """NEP-01..04 — Amazon Neptune clusters and manual cluster snapshots.
+        """NEP-01..10 — Amazon Neptune clusters, instances and manual cluster snapshots.
 
         Neptune is a separate service sharing the RDS control plane, so
         rds:DescribeDBClusters returns Neptune clusters. Until NON_AURORA_CLUSTER_ENGINES
@@ -12018,6 +13326,101 @@ class AWSLiveScanner:
                     service="neptune", cluster=True,
                     action="rds:DescribeDBClusterParameters")
 
+                # ── NEP-07/08/09/10 — four more fields off the call already made ──
+                # No extra API read and no extra permission: DescribeDBClusters returns
+                # all four. They are separate ids rather than one composite because a
+                # single finding that means four different things cannot be triaged,
+                # closed, or waived independently.
+
+                # NEP-07 — automated backups. Neptune's minimum retention is 1, so 0 is
+                # unreachable and a check for it would never fire; the decidable question
+                # is whether the window is long enough to find a problem inside, and
+                # AUR-07 already fixed 7 days as this product's answer.
+                retention = cl.get("BackupRetentionPeriod")
+                if isinstance(retention, int) and retention < 7:
+                    self._add("FAIL", "NEP-07", "NEPTUNE", cid,
+                              f"Neptune cluster backup retention={retention}d "
+                              f"(recommend >=7) | {cid} — a bad load discovered later "
+                              f"than that cannot be rolled back, and recovering a graph "
+                              f"without a restore means a full re-ingest")
+                elif isinstance(retention, int):
+                    self._add("PASS", "NEP-07", "NEPTUNE", cid,
+                              f"Neptune cluster backup retention={retention}d | {cid}")
+
+                # NEP-08 — IAM authentication. Neptune has no in-database user store at
+                # all: without IAM auth, authorisation is whatever the security group
+                # says, so this is closer to an access-control finding than to the
+                # credential-hygiene one AUR-08 reports on Aurora.
+                iam_auth = cl.get("IAMDatabaseAuthenticationEnabled")
+                if iam_auth is False:
+                    self._add("FAIL", "NEP-08", "NEPTUNE", cid,
+                              f"Neptune IAM database authentication=OFF | {cid} — "
+                              f"Neptune has no database users of its own, so anything "
+                              f"that reaches the endpoint is authorised by the security "
+                              f"group and nothing else")
+                elif iam_auth is True:
+                    self._add("PASS", "NEP-08", "NEPTUNE", cid,
+                              f"Neptune IAM database authentication=ON | {cid}")
+
+                # NEP-09 — audit logging. A list of exported log types, so the decidable
+                # question is whether 'audit' is among them; an empty list means nothing
+                # is exported and the logs die with the cluster.
+                exports = cl.get("EnabledCloudwatchLogsExports")
+                if isinstance(exports, list):
+                    if "audit" not in [str(x).lower() for x in exports]:
+                        self._add("FAIL", "NEP-09", "NEPTUNE", cid,
+                                  f"Neptune audit log export DISABLED | {cid} — no "
+                                  f"record of queries or connections leaves the cluster, "
+                                  f"so an incident cannot be scoped to what was actually "
+                                  f"traversed")
+                    else:
+                        self._add("PASS", "NEP-09", "NEPTUNE", cid,
+                                  f"Neptune audit log export enabled | {cid}")
+
+                # NEP-10 — availability. A boolean here, unlike ElastiCache's string enum.
+                multi_az = cl.get("MultiAZ")
+                if multi_az is False:
+                    self._add("FAIL", "NEP-10", "NEPTUNE", cid,
+                              f"Neptune cluster Multi-AZ=OFF | {cid} — an "
+                              f"availability-zone failure takes the graph with it, and "
+                              f"recovery depends entirely on NEP-07's retention window")
+                elif multi_az is True:
+                    self._add("PASS", "NEP-10", "NEPTUNE", cid,
+                              f"Neptune cluster Multi-AZ=ON | {cid}")
+
+        # ── NEP-06 — instance public accessibility ───────────────────────────────
+        # This is the id that makes the RDS instance filter safe to ship. Until it
+        # existed, a publicly reachable Neptune instance was reported by RDS-02, under an
+        # RDS label with `aws rds modify-db-instance` remediation. Filtering the RDS loop
+        # without this would have removed the finding rather than corrected it.
+        try:
+            instances = []
+            for page in nep.get_paginator("describe_db_instances").paginate():
+                instances.extend(page.get("DBInstances", []))
+        except Exception as e:
+            self._read_failed("NEP-06", "NEPTUNE", "neptune",
+                              "neptune:DescribeDBInstances", e)
+            instances = None
+
+        if instances is not None:
+            instances = [i for i in instances
+                         if ((i or {}).get("Engine") or "neptune").lower() == "neptune"]
+            if not instances:
+                self._add("INFO", "NEP-06", "NEPTUNE", "neptune",
+                          "No Neptune DB instances found in this region")
+            for inst in instances:
+                iid = (inst or {}).get("DBInstanceIdentifier", "unknown")
+                pub = inst.get("PubliclyAccessible")
+                if pub is True:
+                    self._add("FAIL", "NEP-06", "NEPTUNE", iid,
+                              f"Neptune DB instance PUBLICLY ACCESSIBLE | {iid} — the "
+                              f"graph endpoint resolves to a public address, and with "
+                              f"IAM auth off (NEP-08) the security group is the only "
+                              f"thing in the way")
+                elif pub is False:
+                    self._add("PASS", "NEP-06", "NEPTUNE", iid,
+                              f"Neptune DB instance not publicly accessible | {iid}")
+
         # ── NEP-03 snapshot public visibility, NEP-04 snapshot encryption ────────
         try:
             snaps = []
@@ -12069,6 +13472,14 @@ class AWSLiveScanner:
                     self._add("PASS", "NEP-03", "NEPTUNE", sid,
                               f"Neptune cluster snapshot {sid} is not shared publicly "
                               f"| {sid}")
+
+        # NEP-11 (CIS-DB 9.7) — whether anyone is told when something happens to the
+        # cluster. Distinct from NEP-09, which asks whether the cluster records what
+        # happened INSIDE it; a cluster can log perfectly and notify nobody.
+        self._cluster_event_subs(
+            nep, "NEP-11", "NEPTUNE", "Neptune",
+            [str((c or {}).get("DBClusterIdentifier") or "")
+             for c in (clusters or []) if (c or {}).get("DBClusterIdentifier")])
 
     def _check_memorydb(self):
         """MDB-01..06 — Amazon MemoryDB.
@@ -12124,6 +13535,15 @@ class AWSLiveScanner:
 
         for c in clusters:
             name = (c or {}).get("Name") or "unknown"
+            # MDB-07 (CIS-DB 6.6) — SNS notifications. The member is SnsTopicArn, NOT
+            # SNSTopicArn; reading the shipped botocore model rather than assuming the
+            # obvious spelling is what caught that before it shipped.
+            _r = aws_cis_db2.memorydb_notifications(c)
+            if _r.get("failed"):
+                self._add("FAIL", "MDB-07", "MEMORYDB", name, _r["statement"])
+            elif not _r.get("unknown"):
+                self._add("PASS", "MDB-07", "MEMORYDB", name,
+                          f"SNS notification topic active | {name}")
             # MDB-01 — TLS. MemoryDB enables it at creation and it cannot be changed
             # afterwards, so False here means the cluster was created that way.
             tls = c.get("TLSEnabled")
@@ -12228,6 +13648,13 @@ class AWSLiveScanner:
             except Exception as e:
                 self._read_failed("TS-01", "TIMESTREAM", dname,
                                   "timestream:ListTables", e)
+
+        # TS-03/04 (CIS-DB 10.5, 10.10) run BEFORE the empty-table early return for the
+        # reason DDB-06 does: TS-03 is about IAM grants, which reach tables that do not
+        # exist yet. TS-04 needs the table ARNs and no-ops on an empty list.
+        self._check_timestream_cis_db2(
+            [str((t or {}).get("Arn") or "") for t in (tables or [])
+             if (t or {}).get("Arn")])
 
         if not tables:
             self._add("INFO", "TS-01", "TIMESTREAM", "timestream",
@@ -14053,6 +15480,56 @@ class AWSLiveScanner:
 
         self._iam_principals = principals
         return principals
+
+    def _access_key_ids(self):
+        """Live access key ids for every IAM user, or ``None`` if they could not be read.
+
+        THE GRANT THIS BUYS, AND WHY IT IS WORTH ASKING FOR. A breach corpus that
+        carries an AWS access key id is the single most actionable thing in it, and
+        without a live inventory that key id cannot be matched against anything —
+        `aws_ingest_credexp.coverage()` names it as its highest-value gap in those
+        words. This is the read that closes it.
+
+        IT IS CONFIG, NOT CREDENTIAL. ``ListAccessKeys`` returns key IDs, their
+        owner, status and creation date. It does NOT return secret access keys —
+        those exist exactly once, at creation, and no API returns them afterwards.
+        So this stays inside the read-only-of-CONFIG charter, and a key id is an
+        identifier of the same kind as a role ARN.
+
+        NOT the credential report, which is what NHI-02 reads. The report carries
+        key AGE and rotation dates but no key IDs at all, so it cannot answer the
+        question this exists for.
+
+        ``None`` rather than ``[]`` on failure, and the distinction is the point: an
+        empty list means "this account has no keys", which would make a leaked key
+        look unmatched-and-therefore-fine. None means "not collected", which is what
+        `coverage()` turns into a stated gap.
+        """
+        if self._access_keys is not None:
+            return self._access_keys
+
+        iam = self._client("iam")
+        users = [p["name"] for p in self._get_iam_principals()
+                 if p.get("type") == "user" and p.get("name")]
+        keys, failed = [], False
+        for name in users:
+            try:
+                for page in iam.get_paginator("list_access_keys").paginate(UserName=name):
+                    for meta in page.get("AccessKeyMetadata", []):
+                        kid = (meta or {}).get("AccessKeyId")
+                        if kid:
+                            keys.append(str(kid))
+            except Exception:
+                # One denied user must not discard the whole inventory, but it must
+                # not be silently treated as "no keys" either: a partial inventory
+                # can only fail to match, never falsely match, so the keys collected
+                # are kept and the shortfall is recorded.
+                failed = True
+        if failed and not keys:
+            self._access_keys = None
+            return None
+        self._access_keys = keys
+        return keys
 
     def _admin_cap_id(self) -> str:
         return f"capability:admin:{self.account or 'account'}"
@@ -18485,7 +19962,9 @@ class AWSLiveScanner:
         print("=" * 70)
 
         CHECK_MAP = {
+            "ORGANIZATIONS":  self._check_organizations,
             "IAM":            self._check_iam,
+            "AMAZONLINUX":    self._check_amazonlinux,
             "S3":             self._check_s3,
             "VPC":            self._check_vpc,
             "LOGGING":        self._check_logging,
@@ -19023,10 +20502,10 @@ class AWSLiveScanner:
         for r in self.results:
             if r.status not in ("FAIL", "WARN"):
                 continue
-            # Name the document, not just the number. "CIS 2.3.2" is unresolvable
+            # Name the document, not just the number. "CIS 3.2.3" is unresolvable
             # without knowing which CIS benchmark and edition indexes it; Security
             # Hub's own RelatedRequirements convention is "Name vVersion/control".
-            # Degrades to the bare "CIS 2.3.2" if the framework registry is
+            # Degrades to the bare "CIS 3.2.3" if the framework registry is
             # unreadable, so a missing reference file cannot break the export.
             related = [_framework_citation(fw, ctrl)
                        for fw, ctrl in (r.compliance or {}).items()]
@@ -19690,6 +21169,56 @@ def _load_ai_detections(path) -> dict:
     return parsed
 
 
+def _load_cred_exposures(path, *, salt: str = "", domains: str = "") -> dict:
+    """Read an operator-supplied breach corpus and strip the credentials out of it.
+
+    NO NETWORK. OverWatch subscribes to no breach feed and names no vendor — the
+    same choice `aws_ingest_aidr` made, and for the same reason (D13). The operator
+    exports from whatever they already pay for; a list of records, or an object with
+    a ``records``/``exposures``/``data`` list.
+
+    NORMALISATION HAPPENS HERE, BEFORE ANYTHING ELSE SEES IT.
+    `aws_ingest_credexp.normalize_many` rebuilds each record from an allowlist and
+    replaces credential material with a salted digest, so the plaintext exists only
+    inside this function's locals and falls out of scope with them. A filter that
+    deleted known-bad fields instead would leak the next vendor's
+    ``password_plaintext_v2`` by virtue of not recognising it.
+    """
+    if not path:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8-sig") as fh:
+            doc = json.load(fh)
+    except OSError as exc:
+        print(f"{YELLOW}[WARN]{RESET} credential exposures not read: {exc}")
+        return {}
+    except ValueError as exc:
+        print(f"{YELLOW}[WARN]{RESET} credential exposures not parsed: {exc}")
+        return {}
+
+    if isinstance(doc, list):
+        records = doc
+    elif isinstance(doc, dict):
+        records = (doc.get("records") or doc.get("exposures")
+                   or doc.get("data") or [])
+    else:
+        records = []
+    if not isinstance(records, list):
+        print(f"{YELLOW}[WARN]{RESET} credential exposures: expected a list of "
+              f"records, got {type(records).__name__}")
+        return {}
+
+    exposures = aws_ingest_credexp.normalize_many(records, salt=salt)
+    dropped = len(records) - len(exposures)
+    estate = tuple(d.strip().lstrip("@").lower()
+                   for d in (domains or "").split(",") if d.strip())
+    print(f"{BLUE}[*]{RESET} Credential exposures: {len(exposures)} ingested"
+          + (f", {dropped} unattributable record(s) dropped" if dropped else "")
+          + (f", {len(estate)} estate domain(s)" if estate else "")
+          + ("" if salt else ", NO SALT (digests are rainbow-table reversible)"))
+    return {"exposures": exposures, "estate_domains": estate, "salt": salt}
+
+
 def _load_pentest_results(path) -> dict:
     """Read an adversarial-test result file (slice 3.5).
 
@@ -19746,6 +21275,10 @@ def _apply_phase6_config(sc, args) -> None:
     # never has to parse a CLI string.
     sc._scan_model_artifacts = bool(getattr(args, "scan_model_artifacts", False))
     sc._ai_detections = _load_ai_detections(getattr(args, "ai_detections", None))
+    sc._cred_exposures = _load_cred_exposures(
+        getattr(args, "cred_exposures", None),
+        salt=getattr(args, "cred_exposure_salt", "") or "",
+        domains=getattr(args, "estate_domains", "") or "")
     sc._ai_owners = tuple(o.strip() for o in
                           (getattr(args, "ai_owners", "") or "").split(",")
                           if o.strip())
@@ -19948,6 +21481,27 @@ examples:
              "these and is tied to no product. Verdicts only: the schema has no field "
              "for a prompt, and content fields present in the file are counted and "
              "left unread.")
+    parser.add_argument(
+        "--cred-exposures", metavar="FILE", dest="cred_exposures",
+        help="A breach / stealer-log corpus YOU already hold, joined to this "
+             "account's IAM principals and live access keys (CREDEXP-01..03). "
+             "OverWatch subscribes to no feed and names no vendor: export a list of "
+             "records from whatever you pay for. Credential material is replaced "
+             "with a salted digest before anything else sees it, and a hit is "
+             "recorded as an observation of a CORPUS -- never as a compromise of "
+             "this estate.")
+    parser.add_argument(
+        "--cred-exposure-salt", metavar="STR", dest="cred_exposure_salt", default="",
+        help="Salt for credential digests. Without one, a digest of a common "
+             "password is reversible by rainbow table, so the redaction is weaker "
+             "than it looks -- CREDEXP-00 says so in the report rather than letting "
+             "it pass silently.")
+    parser.add_argument(
+        "--estate-domains", metavar="LIST", dest="estate_domains", default="",
+        help="Comma-separated email domains belonging to this organisation. "
+             "Without them --cred-exposures can only match an exposure by an exact "
+             "email or username against a known IAM principal, so an employee "
+             "credential under any other address is invisible (CREDEXP-03).")
     parser.add_argument(
         "--scan-model-artifacts", action="store_true", dest="scan_model_artifacts",
         help="Fetch SageMaker model artifacts and statically scan their pickle opcode "

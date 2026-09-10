@@ -199,8 +199,57 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: Only two, not four: KS-01/KS-02 were written and WITHDRAWN because Keyspaces'
 #: control-plane reads are authorised by cassandra:Select, which also reads table rows.
 #: See tests/test_cis_db_keyspaces_timestream.py.
+#: 435 -> 442: NEP-06..10, DOCDB-07/08 — the sibling-service checks the CIS Database
+#: mapping identified, shipped together with the RDS instance-loop engine filter because
+#: neither was safe alone. RDS-02 and RDS-03 were the ONLY coverage of Neptune public
+#: accessibility and backup retention while the loop was unfiltered, so filtering first
+#: would have deleted real findings; adding the checks first would have left every
+#: Neptune instance reported twice. Six of the seven close a CIS-DB recommendation
+#: (9.8, 9.9, 9.4, 9.5, 9.11, 7.9); DOCDB-07 closes none, because section 7 has no
+#: public-accessibility control — which is a gap in the benchmark rather than a reason
+#: to leave a public document database unreported.
+#: See tests/test_db_engine_routing.py and tests/test_cis_db_mapping.py.
+#: 442 -> 445: CREDEXP-01/02/03 — credential exposure joined to identity. Not new
+#: capability so much as capability that could not be reached: `aws_ingest_credexp`
+#: had been library-only for two versions, with no CLI flag, no API route and no
+#: console surface, so a module that normalises a breach corpus and joins it to IAM
+#: principals could not put a single finding in a report. Wiring it took the ingest
+#: surface AND `iam:ListAccessKeys` together, which docs/PRODUCTION.md had already
+#: recorded as one decision rather than two: without a live key inventory the key
+#: join cannot happen, and it is the highest-value join the corpus offers.
+#: CREDEXP-00 is deliberately unregistered — it is INFO-only, like AIDR-00, and
+#: `_add` reads the catalogue for no status but FAIL.
+#: See tests/test_ingest_credexp.py.
+#: 445 -> 464: the nineteen CIS AWS Foundations v7.0.0 checks, all arriving proven. The
+#: two other counts held exactly steady — 62 never-driven-to-failure and 28 never
+#: observed — which is the number to look at rather than the headline. A batch of
+#: nineteen is the classic way this product has previously grown its backlog by nineteen,
+#: so `tests/test_cis_foundations.py` drives each one to a real FAIL through the scanner
+#: rather than through its evaluator, and fifteen of them also have a "the read was
+#: refused" case, because six of these checks are denied in every member account and a
+#: silent denial reads as a clean organisation.
+#: See tests/test_cis_foundations.py and docs/CIS_FOUNDATIONS_BENCHMARK.md.
+#: 464 -> 473: the nine CIS AWS Database Services tranche-2 checks, closing the last of
+#: the thirteen gaps tranche 1 recorded. The other four gaps did not become checks and
+#: are not in this number: they turned out not to be buildable at all -- two are misfiled
+#: in the benchmark and audit a service this product declines to read, one is absent from
+#: the SDK, and one is a process control. Never-observed (28) and never-driven-to-failure
+#: (62) both held exactly steady for the second batch running, which is the pair worth
+#: watching: a batch of nine is the classic way this product has previously grown its
+#: backlog by nine.
+#: See tests/test_cis_db_tranche2.py and docs/CIS_DATABASE_BENCHMARK.md.
+#: 473 -> 476: AL2-01/02/03, the CIS Amazon Linux 2 controls SSM Inventory can decide.
+#: THREE, FROM A 287-RECOMMENDATION BENCHMARK, and the ratio is the point rather than an
+#: embarrassment. 252 of those recommendations read file content, file modes or running
+#: kernel state, which an agentless control-plane scanner cannot see; they are recorded in
+#: engine/aws_cis_al2_map.py against the capability each waits on. Registering them would
+#: have added 252 checks to the catalogue that this file would then have counted as
+#: never-observed forever -- which is the number below, and the reason it did not move.
+#: Never-observed (28) and never-driven-to-failure (62) held steady for the third batch
+#: running.
+#: See tests/test_cis_al2.py and docs/CIS_AL2_BENCHMARK.md.
 MAX_NEVER_OBSERVED = 28
-MIN_PROVEN_FAILING = 435
+MIN_PROVEN_FAILING = 476
 
 
 def doc_text() -> str:

@@ -149,7 +149,9 @@ def test_segrec_does_not_collide_with_the_existing_seg_checks():
     assert A.CHECK_SEVERITY["SEG-01"] == "MEDIUM"
     assert A.CHECK_SEVERITY["SEGREC-01"] == "INFO"
     assert A.REMEDIATION_MAP["SEG-01"].startswith("Restrict the security group")
-    assert A.COMPLIANCE_MAP["SEG-01"]["CIS"] == "5.2"
+    # 6.3 in CIS AWS Foundations v7.0.0 — the same control SEG-01 always answered, at the
+    # number the current edition of the document gives it (5.2 through v6.0.0).
+    assert A.COMPLIANCE_MAP["SEG-01"]["CIS"] == "6.3"
 
 
 def _dup_map(filename, targets):

@@ -324,7 +324,7 @@ class TestComplianceScorecard(unittest.TestCase):
                            severity="CRITICAL", compliance=COMPLIANCE_MAP["IAM-01"])]
         card = compliance_scorecard(results)
         cis = card["CIS"]
-        self.assertIn("1.5", cis["failed_controls"])     # IAM-01 -> CIS 1.5
+        self.assertIn("2.5", cis["failed_controls"])     # IAM-01 -> CIS v7.0.0 2.5
         self.assertGreater(cis["controls_total"], 20)
         self.assertEqual(cis["controls_passed"],
                          cis["controls_total"] - cis["controls_failed"])
@@ -337,8 +337,13 @@ class TestComplianceScorecard(unittest.TestCase):
             self.assertEqual(card[f]["controls_failed"], 0)
 
     def test_warn_counts_as_failed_control(self):
-        results = [Result("WARN", "S3-05", "S3", "b", "m",
-                           severity="LOW", compliance=COMPLIANCE_MAP["S3-05"])]
+        # S3-07, not S3-05. S3-05 warns about access logging on every bucket and no
+        # longer carries a Foundations citation: v7.0.0's 4.4 is specifically the
+        # CloudTrail bucket, which LOG-12 decides and can FAIL on. S3-07 is the same
+        # SHAPE of case this test needs -- a check that reaches WARN and does carry a
+        # CIS key -- so the property under test is unchanged.
+        results = [Result("WARN", "S3-07", "S3", "b", "m",
+                           severity="LOW", compliance=COMPLIANCE_MAP["S3-07"])]
         card = compliance_scorecard(results)
         self.assertGreater(card["CIS"]["controls_failed"], 0)
 

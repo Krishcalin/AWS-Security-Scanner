@@ -895,7 +895,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
     },
     "CFN-01": {
         "risk": "The CloudFront distribution's default cache behavior (or a specific path pattern) uses ViewerProtocolPolicy 'allow-all', so clients can reach the site over plaintext HTTP. Traffic between browsers and the edge -- cookies, auth tokens, form data -- can be intercepted or modified by an on-path attacker, and users can be SSL-stripped onto the HTTP endpoint. Even a redirect-to-https is weaker than https-only because the first request still leaves the client in cleartext.",
-        "impact": "Cleartext interception of user sessions and credentials at the CDN edge, and encryption-in-transit compliance failure (PCI-DSS 4.1, CIS 2.1.2, NIST SC-8).",
+        "impact": "Cleartext interception of user sessions and credentials at the CDN edge, and encryption-in-transit compliance failure (PCI-DSS 4.1, NIST SC-8).",
         "steps": [
             "Export the current config and record the ETag: aws cloudfront get-distribution-config --id <DIST_ID>",
             "Edit the saved config JSON, setting DefaultCacheBehavior.ViewerProtocolPolicy and every CacheBehaviors.Items[].ViewerProtocolPolicy to https-only (or at minimum redirect-to-https)",
@@ -1101,8 +1101,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "CW-02": {
-        "risk": "This CIS 4.1 control alarms on API calls returning UnauthorizedOperation or AccessDenied, the classic fingerprint of an attacker or compromised credential probing the boundaries of its permissions; the check fails when no matching metric filter exists or the filter has no alarm/SNS action. A burst of such errors from a single principal usually means someone is enumerating what a stolen role can do before finding a path that works. Without the filter, alarm and a confirmed SNS subscriber, that privilege reconnaissance is buried in raw logs and nobody is paged.",
-        "impact": "Credential-abuse reconnaissance and privilege-escalation probing proceed unnoticed, delaying response to an active intrusion (CIS 4.1).",
+        "risk": "This CIS 5.1 control alarms on API calls returning UnauthorizedOperation or AccessDenied, the classic fingerprint of an attacker or compromised credential probing the boundaries of its permissions; the check fails when no matching metric filter exists or the filter has no alarm/SNS action. A burst of such errors from a single principal usually means someone is enumerating what a stolen role can do before finding a path that works. Without the filter, alarm and a confirmed SNS subscriber, that privilege reconnaissance is buried in raw logs and nobody is paged.",
+        "impact": "Credential-abuse reconnaissance and privilege-escalation probing proceed unnoticed, delaying response to an active intrusion (CIS 5.1).",
         "steps": [
             "Confirm the filter is absent and the alarm topic has a confirmed subscriber: aws logs describe-metric-filters --log-group-name <LG> and aws sns list-subscriptions-by-topic --topic-arn <SNS_TOPIC_ARN>",
             "If needed, create the topic and a confirmed subscription: aws sns create-topic --name cis-alarms then aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL> and click the confirmation link",
@@ -1112,8 +1112,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "CW-03": {
-        "risk": "This CIS 4.2 control alarms on a successful AWS console login where MFA was not used, and the check fails when no matching filter exists or the filter has no alarm/SNS action. A password-only console sign-in means a single factor unlocked the account, either a non-compliant legitimate user or, more dangerously, an attacker using phished or leaked credentials. Because MFA is the most effective control against credential theft, a non-MFA login (especially for a privileged IAM user) is a high-value account-takeover signal that goes unseen without this alarm.",
-        "impact": "Password-only account takeover via stolen credentials goes undetected, granting console access to everything the identity can reach (CIS 4.2).",
+        "risk": "This CIS 5.2 control alarms on a successful AWS console login where MFA was not used, and the check fails when no matching filter exists or the filter has no alarm/SNS action. A password-only console sign-in means a single factor unlocked the account, either a non-compliant legitimate user or, more dangerously, an attacker using phished or leaked credentials. Because MFA is the most effective control against credential theft, a non-MFA login (especially for a privileged IAM user) is a high-value account-takeover signal that goes unseen without this alarm.",
+        "impact": "Password-only account takeover via stolen credentials goes undetected, granting console access to everything the identity can reach (CIS 5.2).",
         "steps": [
             "Confirm the filter is absent and the alarm topic has a confirmed subscriber: aws logs describe-metric-filters --log-group-name <LG> and aws sns list-subscriptions-by-topic --topic-arn <SNS_TOPIC_ARN>",
             "If needed, create the topic and a confirmed subscription: aws sns create-topic --name cis-alarms then aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL> and confirm via the emailed link",
@@ -1123,8 +1123,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "CW-04": {
-        "risk": "This CIS 4.3 control alarms on use of the root user, and the check fails when no matching filter exists or the filter has no alarm/SNS action. The root user has unrestricted, unconditional control of the account and cannot be constrained by IAM policies or SCPs, so it should essentially never be used for routine operations; any root API call or login outside the rare root-only tasks is a red flag for account takeover. Attackers prize root because it bypasses every guardrail and can delete other administrators, so an un-alarmed root event lets a full-account compromise proceed unseen.",
-        "impact": "Undetected root usage signals potential full-account compromise with the most powerful identity in AWS, capable of disabling all other controls (CIS 4.3).",
+        "risk": "This CIS 5.3 control alarms on use of the root user, and the check fails when no matching filter exists or the filter has no alarm/SNS action. The root user has unrestricted, unconditional control of the account and cannot be constrained by IAM policies or SCPs, so it should essentially never be used for routine operations; any root API call or login outside the rare root-only tasks is a red flag for account takeover. Attackers prize root because it bypasses every guardrail and can delete other administrators, so an un-alarmed root event lets a full-account compromise proceed unseen.",
+        "impact": "Undetected root usage signals potential full-account compromise with the most powerful identity in AWS, capable of disabling all other controls (CIS 5.3).",
         "steps": [
             "Confirm the filter is absent and the alarm topic has a confirmed subscriber: aws logs describe-metric-filters --log-group-name <LG> and aws sns list-subscriptions-by-topic --topic-arn <SNS_TOPIC_ARN>",
             "If needed, create the topic and a confirmed subscription: aws sns create-topic --name cis-alarms then aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL> and confirm via the emailed link",
@@ -1134,8 +1134,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "CW-05": {
-        "risk": "This CIS 4.4 control alarms on IAM policy changes such as PutRolePolicy and DeleteRolePolicy, and the check fails when no matching filter exists or the filter has no alarm/SNS action. IAM policy edits determine who can do what in the account and are the exact mechanism by which an attacker escalates privilege or establishes persistence, for example attaching AdministratorAccess to a foothold role or adding an inline policy granting iam:PassRole. Legitimate policy changes happen, but an unexpected PutRolePolicy or AttachUserPolicy on a sensitive principal is a strong escalation signal that blends into normal activity without an alarm.",
-        "impact": "Silent privilege escalation and persistence via policy edits let an attacker expand a foothold into account-wide administrator access undetected (CIS 4.4).",
+        "risk": "This CIS 5.4 control alarms on IAM policy changes such as PutRolePolicy and DeleteRolePolicy, and the check fails when no matching filter exists or the filter has no alarm/SNS action. IAM policy edits determine who can do what in the account and are the exact mechanism by which an attacker escalates privilege or establishes persistence, for example attaching AdministratorAccess to a foothold role or adding an inline policy granting iam:PassRole. Legitimate policy changes happen, but an unexpected PutRolePolicy or AttachUserPolicy on a sensitive principal is a strong escalation signal that blends into normal activity without an alarm.",
+        "impact": "Silent privilege escalation and persistence via policy edits let an attacker expand a foothold into account-wide administrator access undetected (CIS 5.4).",
         "steps": [
             "Confirm the filter is absent and the alarm topic has a confirmed subscriber: aws logs describe-metric-filters --log-group-name <LG> and aws sns list-subscriptions-by-topic --topic-arn <SNS_TOPIC_ARN>",
             "If needed, create the topic and a confirmed subscription: aws sns create-topic --name cis-alarms then aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL> and confirm via the emailed link",
@@ -1145,8 +1145,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "CW-06": {
-        "risk": "This CIS 4.5 control alarms on CloudTrail configuration changes such as CreateTrail, UpdateTrail, DeleteTrail, StartLogging and StopLogging, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Modifying, stopping or deleting a trail is the primary anti-forensics move an intruder makes to blind defenders before doing damage, so an unexpected StopLogging, DeleteTrail or UpdateTrail (for example redirecting logs or dropping a region) almost always signals malicious tampering with the audit pipeline. Without this alarm, disabling the very logging everything else depends on goes unnoticed.",
-        "impact": "Undetected tampering with CloudTrail lets an attacker erase or redirect the audit trail and operate blind, defeating all downstream logging controls (CIS 4.5).",
+        "risk": "This CIS 5.5 control alarms on CloudTrail configuration changes such as CreateTrail, UpdateTrail, DeleteTrail, StartLogging and StopLogging, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Modifying, stopping or deleting a trail is the primary anti-forensics move an intruder makes to blind defenders before doing damage, so an unexpected StopLogging, DeleteTrail or UpdateTrail (for example redirecting logs or dropping a region) almost always signals malicious tampering with the audit pipeline. Without this alarm, disabling the very logging everything else depends on goes unnoticed.",
+        "impact": "Undetected tampering with CloudTrail lets an attacker erase or redirect the audit trail and operate blind, defeating all downstream logging controls (CIS 5.5).",
         "steps": [
             "Confirm the filter is absent and the alarm topic has a confirmed subscriber: aws logs describe-metric-filters --log-group-name <LG> and aws sns list-subscriptions-by-topic --topic-arn <SNS_TOPIC_ARN>",
             "If needed, create the topic and a confirmed subscription: aws sns create-topic --name cis-alarms then aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL> and confirm via the emailed link",
@@ -1156,8 +1156,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "CW-07": {
-        "risk": "This CIS 4.6 control alarms on failed console authentications, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Repeated failed console logins are the signature of a password-guessing or credential-stuffing attack against the account's IAM users or root, and a spike against one identity indicates an active brute-force attempt while a failure immediately followed by success can indicate a cracked password. Without this alarm, brute-force campaigns against the console run with no visibility until one eventually succeeds.",
-        "impact": "Undetected brute-force and credential-stuffing against the console can culminate in account takeover once a password is guessed (CIS 4.6).",
+        "risk": "This CIS 5.6 control alarms on failed console authentications, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Repeated failed console logins are the signature of a password-guessing or credential-stuffing attack against the account's IAM users or root, and a spike against one identity indicates an active brute-force attempt while a failure immediately followed by success can indicate a cracked password. Without this alarm, brute-force campaigns against the console run with no visibility until one eventually succeeds.",
+        "impact": "Undetected brute-force and credential-stuffing against the console can culminate in account takeover once a password is guessed (CIS 5.6).",
         "steps": [
             "Confirm the filter is absent and the alarm topic has a confirmed subscriber: aws logs describe-metric-filters --log-group-name <LG> and aws sns list-subscriptions-by-topic --topic-arn <SNS_TOPIC_ARN>",
             "If needed, create the topic and a confirmed subscription: aws sns create-topic --name cis-alarms then aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL> and confirm via the emailed link",
@@ -1167,8 +1167,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "CW-08": {
-        "risk": "This CIS 4.7 control alarms on disabling or scheduling deletion of a customer-managed KMS key, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Disabling or scheduling deletion of a CMK renders every ciphertext protected by that key undecryptable, an availability and ransom vector, and can also be a stealth attack on logging because a disabled trail key silently breaks log delivery. An attacker who cannot exfiltrate data may instead render it permanently inaccessible, so catching DisableKey and ScheduleKeyDeletion within the pending-deletion window is critical.",
-        "impact": "Undetected CMK disable or scheduled deletion can cause irreversible data loss or a silent logging outage, a destructive-impact or anti-forensics action (CIS 4.7).",
+        "risk": "This CIS 5.7 control alarms on disabling or scheduling deletion of a customer-managed KMS key, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Disabling or scheduling deletion of a CMK renders every ciphertext protected by that key undecryptable, an availability and ransom vector, and can also be a stealth attack on logging because a disabled trail key silently breaks log delivery. An attacker who cannot exfiltrate data may instead render it permanently inaccessible, so catching DisableKey and ScheduleKeyDeletion within the pending-deletion window is critical.",
+        "impact": "Undetected CMK disable or scheduled deletion can cause irreversible data loss or a silent logging outage, a destructive-impact or anti-forensics action (CIS 5.7).",
         "steps": [
             "Confirm the filter is absent and the alarm topic has a confirmed subscriber: aws logs describe-metric-filters --log-group-name <LG> and aws sns list-subscriptions-by-topic --topic-arn <SNS_TOPIC_ARN>",
             "If needed, create the topic and a confirmed subscription: aws sns create-topic --name cis-alarms then aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL> and confirm via the emailed link",
@@ -1178,8 +1178,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "CW-09": {
-        "risk": "This CIS 4.8 control alarms on S3 bucket policy and ACL changes such as PutBucketPolicy and DeleteBucketPolicy, and the check fails when no matching filter exists or the filter has no alarm/SNS action. A change to a bucket policy or ACL can instantly make a private bucket world-readable or grant a foreign account access, the exact action behind countless data-leak incidents. An attacker who lands in the account, or a malicious insider, may run PutBucketPolicy to open a data bucket for exfiltration or DeleteBucketPolicy to strip protective conditions, and alarming on these events catches exposure changes before the data is scraped.",
-        "impact": "Undetected bucket-policy changes can expose or exfiltrate large volumes of stored data to the public or an attacker-controlled account (CIS 4.8).",
+        "risk": "This CIS 5.8 control alarms on S3 bucket policy and ACL changes such as PutBucketPolicy and DeleteBucketPolicy, and the check fails when no matching filter exists or the filter has no alarm/SNS action. A change to a bucket policy or ACL can instantly make a private bucket world-readable or grant a foreign account access, the exact action behind countless data-leak incidents. An attacker who lands in the account, or a malicious insider, may run PutBucketPolicy to open a data bucket for exfiltration or DeleteBucketPolicy to strip protective conditions, and alarming on these events catches exposure changes before the data is scraped.",
+        "impact": "Undetected bucket-policy changes can expose or exfiltrate large volumes of stored data to the public or an attacker-controlled account (CIS 5.8).",
         "steps": [
             "Confirm the filter is absent and the alarm topic has a confirmed subscriber: aws logs describe-metric-filters --log-group-name <LG> and aws sns list-subscriptions-by-topic --topic-arn <SNS_TOPIC_ARN>",
             "If needed, create the topic and a confirmed subscription: aws sns create-topic --name cis-alarms then aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL> and confirm via the emailed link",
@@ -1189,8 +1189,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "CW-10": {
-        "risk": "This CIS 4.9 control alarms on AWS Config changes, most importantly StopConfigurationRecorder, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Stopping the Config recorder or deleting its delivery channel blinds the account's configuration-change history and compliance evaluation, another anti-forensics and evasion move. An attacker who wants to make changes without leaving a configuration timeline calls StopConfigurationRecorder first, so an alarm on tampering with the configuration-recording pipeline itself is essential to detect that pre-attack blinding.",
-        "impact": "Undetected disabling of AWS Config removes resource change history and compliance monitoring, letting subsequent malicious changes go unrecorded (CIS 4.9).",
+        "risk": "This CIS 5.9 control alarms on AWS Config changes, most importantly StopConfigurationRecorder, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Stopping the Config recorder or deleting its delivery channel blinds the account's configuration-change history and compliance evaluation, another anti-forensics and evasion move. An attacker who wants to make changes without leaving a configuration timeline calls StopConfigurationRecorder first, so an alarm on tampering with the configuration-recording pipeline itself is essential to detect that pre-attack blinding.",
+        "impact": "Undetected disabling of AWS Config removes resource change history and compliance monitoring, letting subsequent malicious changes go unrecorded (CIS 5.9).",
         "steps": [
             "Confirm the filter is absent and the alarm topic has a confirmed subscriber: aws logs describe-metric-filters --log-group-name <LG> and aws sns list-subscriptions-by-topic --topic-arn <SNS_TOPIC_ARN>",
             "If needed, create the topic and a confirmed subscription: aws sns create-topic --name cis-alarms then aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL> and confirm via the emailed link",
@@ -1200,8 +1200,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "CW-11": {
-        "risk": "This CIS 4.10 control alarms on security-group changes such as AuthorizeSecurityGroupIngress and RevokeSecurityGroupIngress, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Security groups are the primary stateful firewall for EC2, RDS and ENIs, so a change that authorizes ingress, for example opening 0.0.0.0/0 to port 22 or 3389, directly exposes workloads to the internet. Attackers routinely add an ingress rule to reach an instance they have credentials for or to create a management backdoor, and this alarm flags rule additions and removals so an unexpected opening can be investigated immediately.",
-        "impact": "Undetected security-group changes can expose sensitive services such as SSH, RDP or databases to the internet, enabling direct attacker access or lateral movement (CIS 4.10).",
+        "risk": "This CIS 5.10 control alarms on security-group changes such as AuthorizeSecurityGroupIngress and RevokeSecurityGroupIngress, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Security groups are the primary stateful firewall for EC2, RDS and ENIs, so a change that authorizes ingress, for example opening 0.0.0.0/0 to port 22 or 3389, directly exposes workloads to the internet. Attackers routinely add an ingress rule to reach an instance they have credentials for or to create a management backdoor, and this alarm flags rule additions and removals so an unexpected opening can be investigated immediately.",
+        "impact": "Undetected security-group changes can expose sensitive services such as SSH, RDP or databases to the internet, enabling direct attacker access or lateral movement (CIS 5.10).",
         "steps": [
             "Confirm the filter is absent and the alarm topic has a confirmed subscriber: aws logs describe-metric-filters --log-group-name <LG> and aws sns list-subscriptions-by-topic --topic-arn <SNS_TOPIC_ARN>",
             "If needed, create the topic and a confirmed subscription: aws sns create-topic --name cis-alarms then aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL> and confirm via the emailed link",
@@ -1211,8 +1211,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "CW-12": {
-        "risk": "This CIS 4.11 control alarms on network ACL changes such as CreateNetworkAclEntry and DeleteNetworkAclEntry, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Network ACLs are the subnet-level stateless firewall, so changing an entry can allow traffic that security groups were relied upon to block, or remove a deny rule that was containing a compromised subnet. An attacker manipulating NACLs can broaden network reachability or punch a hole for exfiltration while operating below the more commonly-watched security-group layer, and this alarm surfaces those lower-level boundary changes.",
-        "impact": "Undetected NACL changes can silently widen subnet exposure and defeat the network segmentation used to contain an intrusion (CIS 4.11).",
+        "risk": "This CIS 5.11 control alarms on network ACL changes such as CreateNetworkAclEntry and DeleteNetworkAclEntry, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Network ACLs are the subnet-level stateless firewall, so changing an entry can allow traffic that security groups were relied upon to block, or remove a deny rule that was containing a compromised subnet. An attacker manipulating NACLs can broaden network reachability or punch a hole for exfiltration while operating below the more commonly-watched security-group layer, and this alarm surfaces those lower-level boundary changes.",
+        "impact": "Undetected NACL changes can silently widen subnet exposure and defeat the network segmentation used to contain an intrusion (CIS 5.11).",
         "steps": [
             "Confirm the filter is absent and the alarm topic has a confirmed subscriber: aws logs describe-metric-filters --log-group-name <LG> and aws sns list-subscriptions-by-topic --topic-arn <SNS_TOPIC_ARN>",
             "If needed, create the topic and a confirmed subscription: aws sns create-topic --name cis-alarms then aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL> and confirm via the emailed link",
@@ -1222,8 +1222,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "CW-13": {
-        "risk": "This CIS 4.12 control alarms on network gateway changes such as CreateInternetGateway and DeleteInternetGateway, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Internet, VPN and customer gateways are the doors between a VPC and outside networks, so attaching a new internet gateway or customer gateway can create an unmonitored egress path for data exfiltration or a new ingress route to previously isolated subnets. Because gateway changes are infrequent in steady state, any Create or Attach event is a strong signal, and this alarm catches manipulation of a VPC's external connectivity.",
-        "impact": "Undetected gateway changes can open new internet ingress or egress paths, enabling exfiltration or exposure of formerly private resources (CIS 4.12).",
+        "risk": "This CIS 5.12 control alarms on network gateway changes such as CreateInternetGateway and DeleteInternetGateway, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Internet, VPN and customer gateways are the doors between a VPC and outside networks, so attaching a new internet gateway or customer gateway can create an unmonitored egress path for data exfiltration or a new ingress route to previously isolated subnets. Because gateway changes are infrequent in steady state, any Create or Attach event is a strong signal, and this alarm catches manipulation of a VPC's external connectivity.",
+        "impact": "Undetected gateway changes can open new internet ingress or egress paths, enabling exfiltration or exposure of formerly private resources (CIS 5.12).",
         "steps": [
             "Confirm the filter is absent and the alarm topic has a confirmed subscriber: aws logs describe-metric-filters --log-group-name <LG> and aws sns list-subscriptions-by-topic --topic-arn <SNS_TOPIC_ARN>",
             "If needed, create the topic and a confirmed subscription: aws sns create-topic --name cis-alarms then aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL> and confirm via the emailed link",
@@ -1233,8 +1233,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "CW-14": {
-        "risk": "This CIS 4.13 control alarms on route table changes such as CreateRoute and DeleteRouteTable, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Route tables determine where subnet traffic flows, so modifying a route can silently redirect traffic, for example sending egress through an attacker-controlled NAT or instance for interception, or adding a route that exposes an internal subnet to an internet gateway. Route changes are a subtle way to reroute or exfiltrate traffic without touching security groups, and this alarm flags Create, Replace and Delete route events for review.",
-        "impact": "Undetected route-table changes can reroute or expose network traffic, enabling interception, exfiltration, or unexpected internet exposure of internal subnets (CIS 4.13).",
+        "risk": "This CIS 5.13 control alarms on route table changes such as CreateRoute and DeleteRouteTable, and the check fails when no matching filter exists or the filter has no alarm/SNS action. Route tables determine where subnet traffic flows, so modifying a route can silently redirect traffic, for example sending egress through an attacker-controlled NAT or instance for interception, or adding a route that exposes an internal subnet to an internet gateway. Route changes are a subtle way to reroute or exfiltrate traffic without touching security groups, and this alarm flags Create, Replace and Delete route events for review.",
+        "impact": "Undetected route-table changes can reroute or expose network traffic, enabling interception, exfiltration, or unexpected internet exposure of internal subnets (CIS 5.13).",
         "steps": [
             "Confirm the filter is absent and the alarm topic has a confirmed subscriber: aws logs describe-metric-filters --log-group-name <LG> and aws sns list-subscriptions-by-topic --topic-arn <SNS_TOPIC_ARN>",
             "If needed, create the topic and a confirmed subscription: aws sns create-topic --name cis-alarms then aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL> and confirm via the emailed link",
@@ -1244,8 +1244,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "CW-15": {
-        "risk": "This CIS 4.14 control alarms on VPC changes such as CreateVpc and DeleteVpc, and the check fails when no matching filter exists or the filter has no alarm/SNS action. VPC-level changes, especially establishing VPC peering connections, reshape the network topology and trust boundaries of the account; an attacker who peers a victim VPC with an account they control, or enables ClassicLink, can bridge into otherwise isolated networks for lateral movement or data egress. Because these are rare, high-impact events, any occurrence deserves scrutiny, and this alarm surfaces topology and peering changes.",
-        "impact": "Undetected VPC or peering changes can bridge isolated networks and create attacker-controlled lateral-movement or exfiltration paths (CIS 4.14).",
+        "risk": "This CIS 5.14 control alarms on VPC changes such as CreateVpc and DeleteVpc, and the check fails when no matching filter exists or the filter has no alarm/SNS action. VPC-level changes, especially establishing VPC peering connections, reshape the network topology and trust boundaries of the account; an attacker who peers a victim VPC with an account they control, or enables ClassicLink, can bridge into otherwise isolated networks for lateral movement or data egress. Because these are rare, high-impact events, any occurrence deserves scrutiny, and this alarm surfaces topology and peering changes.",
+        "impact": "Undetected VPC or peering changes can bridge isolated networks and create attacker-controlled lateral-movement or exfiltration paths (CIS 5.14).",
         "steps": [
             "Confirm the filter is absent and the alarm topic has a confirmed subscriber: aws logs describe-metric-filters --log-group-name <LG> and aws sns list-subscriptions-by-topic --topic-arn <SNS_TOPIC_ARN>",
             "If needed, create the topic and a confirmed subscription: aws sns create-topic --name cis-alarms then aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL> and confirm via the emailed link",
@@ -1255,8 +1255,8 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "CW-16": {
-        "risk": "This CIS 4.15 control alarms on AWS Organizations management-plane changes (eventSource organizations.amazonaws.com), and the check fails when no matching filter exists or the filter has no alarm/SNS action. Organizations controls the entire multi-account structure, including the Service Control Policies that set the permission ceiling for every member account, so detaching an SCP, disabling a policy type, moving an account out of a restrictive OU, or removing an account can strip guardrails across the whole environment at once. An attacker in the management account uses these calls to dismantle org-wide controls before pivoting, and without this alarm that teardown is invisible.",
-        "impact": "Undetected Organizations changes can remove SCP guardrails or restructure accounts org-wide, escalating a management-account compromise into control over every member account (CIS 4.15).",
+        "risk": "This CIS 5.15 control alarms on AWS Organizations management-plane changes (eventSource organizations.amazonaws.com), and the check fails when no matching filter exists or the filter has no alarm/SNS action. Organizations controls the entire multi-account structure, including the Service Control Policies that set the permission ceiling for every member account, so detaching an SCP, disabling a policy type, moving an account out of a restrictive OU, or removing an account can strip guardrails across the whole environment at once. An attacker in the management account uses these calls to dismantle org-wide controls before pivoting, and without this alarm that teardown is invisible.",
+        "impact": "Undetected Organizations changes can remove SCP guardrails or restructure accounts org-wide, escalating a management-account compromise into control over every member account (CIS 5.15).",
         "steps": [
             "Confirm the filter is absent and the alarm topic has a confirmed subscriber: aws logs describe-metric-filters --log-group-name <LG> and aws sns list-subscriptions-by-topic --topic-arn <SNS_TOPIC_ARN>",
             "If needed, create the topic and a confirmed subscription: aws sns create-topic --name cis-alarms then aws sns subscribe --topic-arn <SNS_TOPIC_ARN> --protocol email --notification-endpoint <EMAIL> and confirm via the emailed link",
@@ -1835,7 +1835,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
     },
     "ELB-02": {
         "risk": "The ALB exposes a plaintext HTTP (port 80) listener whose default action serves the application directly instead of issuing an HTTP 301 redirect to HTTPS. Any client, or an on-path attacker on the same network segment, can read and modify traffic in cleartext to harvest session cookies, credentials, or API tokens, and can SSL-strip users to keep them on HTTP. Without a redirect, anyone typing the bare hostname stays on the unencrypted endpoint indefinitely.",
-        "impact": "Session hijacking and credential theft via cleartext interception, and failure of encryption-in-transit controls (PCI-DSS 4.1, CIS 4.10, NIST SC-8).",
+        "impact": "Session hijacking and credential theft via cleartext interception, and failure of encryption-in-transit controls (PCI-DSS 4.1, NIST SC-8).",
         "steps": [
             "Identify the plaintext HTTP listener: aws elbv2 describe-listeners --load-balancer-arn <LB_ARN> --query \"Listeners[?Protocol=='HTTP'].[ListenerArn,Port]\"",
             "Ensure an HTTPS listener with an ACM certificate and strong policy exists; if not, create one: aws elbv2 create-listener --load-balancer-arn <LB_ARN> --protocol HTTPS --port 443 --certificates CertificateArn=<ACM_CERT_ARN> --ssl-policy ELBSecurityPolicy-TLS13-1-2-2021-06 --default-actions Type=forward,TargetGroupArn=<TG_ARN>",
@@ -1926,7 +1926,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
     },
     "ENC-03": {
         "risk": "An enabled customer-managed CMK has automatic key rotation turned off, so the same cryptographic key material protects data indefinitely. Rotation limits the volume of data and the time span protected by any single key version, so if a key version's material is ever exposed or cryptographically weakened, the blast radius is bounded to that period rather than the key's entire lifetime. Without rotation, a compromise of the key material exposes all data ever encrypted under it. Rotation is a low-cost, transparent control (old versions are retained to decrypt old ciphertext) and a baseline CIS/PCI expectation.",
-        "impact": "The entire historical corpus of data protected by the key shares one key version, so any key-material compromise exposes all of it at once, and the account fails CIS 3.8 / PCI-DSS 3.6.4 rotation requirements.",
+        "impact": "The entire historical corpus of data protected by the key shares one key version, so any key-material compromise exposes all of it at once, and the account fails CIS 4.6 / PCI-DSS 3.6.4 rotation requirements.",
         "steps": [
             "Confirm rotation is disabled: aws kms get-key-rotation-status --key-id <KEY_ID>  (KeyRotationEnabled=false).",
             "Enable automatic rotation (transparent; prior key versions are kept for decrypting old ciphertext): aws kms enable-key-rotation --key-id <KEY_ID>",
@@ -2021,7 +2021,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "IAM-01": {
-        "risk": "The AWS account root user has unrestricted, unconditional control over every resource, service, and billing setting, and this check flags that root has no multi-factor authentication (get-account-summary returns AccountMFAEnabled=0). Root cannot be constrained by IAM policies, permission boundaries, or SCPs, so its single password is the account's ultimate point of failure. An attacker who phishes, guesses, or finds the leaked root email and password can sign in with the password alone and seize full control. CIS 1.5 requires MFA on the root account.",
+        "risk": "The AWS account root user has unrestricted, unconditional control over every resource, service, and billing setting, and this check flags that root has no multi-factor authentication (get-account-summary returns AccountMFAEnabled=0). Root cannot be constrained by IAM policies, permission boundaries, or SCPs, so its single password is the account's ultimate point of failure. An attacker who phishes, guesses, or finds the leaked root email and password can sign in with the password alone and seize full control. CIS 2.5 requires MFA on the root account.",
         "impact": "A single compromised root password yields irrevocable, full account takeover: the attacker can delete every resource, exfiltrate all data, and lock out legitimate administrators.",
         "steps": [
             "Confirm the gap by signing in as root and checking status: aws iam get-account-summary --query 'SummaryMap.AccountMFAEnabled' (0 means MFA is off).",
@@ -2032,7 +2032,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "IAM-02": {
-        "risk": "This check flags that programmatic access keys exist for the root user (get-account-summary returns AccountAccessKeysPresent=1). Root access keys are long-lived static credentials that grant the same unrestricted power as the root password but with no login prompt and no MFA challenge. If such a key leaks into a git repo, CI log, backup, or an SSRF-reachable location, an attacker gains instant, permanent, unconditional administrator control. CIS 1.4 requires the root account to have zero access keys.",
+        "risk": "This check flags that programmatic access keys exist for the root user (get-account-summary returns AccountAccessKeysPresent=1). Root access keys are long-lived static credentials that grant the same unrestricted power as the root password but with no login prompt and no MFA challenge. If such a key leaks into a git repo, CI log, backup, or an SSRF-reachable location, an attacker gains instant, permanent, unconditional administrator control. CIS 2.4 requires the root account to have zero access keys.",
         "impact": "A single leaked root key string equals immediate, total account compromise that no MFA or policy can stop.",
         "steps": [
             "Confirm presence: aws iam get-account-summary --query 'SummaryMap.AccountAccessKeysPresent' (1 = root keys exist); list them from the root console under My Security Credentials.",
@@ -2054,7 +2054,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "IAM-05": {
-        "risk": "This check flags an account password policy that is weaker than CIS 1.8 or absent entirely: minimum length under 14, missing symbol/number/uppercase requirements, maximum age over 90 days, or password-reuse prevention under 24. Weak policies let users choose short, simple, or recycled passwords that fall quickly to dictionary, brute-force, and credential-stuffing attacks, and a long max-age keeps a compromised password valid for months.",
+        "risk": "This check flags an account password policy that is weaker than CIS 2.8 or absent entirely: minimum length under 14, missing symbol/number/uppercase requirements, maximum age over 90 days, or password-reuse prevention under 24. Weak policies let users choose short, simple, or recycled passwords that fall quickly to dictionary, brute-force, and credential-stuffing attacks, and a long max-age keeps a compromised password valid for months.",
         "impact": "Elevated likelihood of console credential compromise across all IAM users, plus a direct compliance failure against CIS, PCI-DSS, and NIST password controls.",
         "steps": [
             "Review the current policy: aws iam get-account-password-policy (a NoSuchEntity error means no policy is set).",
@@ -2065,7 +2065,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "IAM-06": {
-        "risk": "This check flags active IAM access keys that have not been rotated in more than 90 days (credential report last_rotated age > 90). The longer a static credential lives, the larger the undetected window in which it may have leaked into a repo, laptop, log, or backup, and the more copies of it likely exist. Aged keys are frequently orphaned from their original owner and forgotten. CIS 1.14 requires rotation at least every 90 days.",
+        "risk": "This check flags active IAM access keys that have not been rotated in more than 90 days (credential report last_rotated age > 90). The longer a static credential lives, the larger the undetected window in which it may have leaked into a repo, laptop, log, or backup, and the more copies of it likely exist. Aged keys are frequently orphaned from their original owner and forgotten. CIS 2.12 requires rotation at least every 90 days.",
         "impact": "A long-lived, possibly-leaked credential gives an attacker persistent access as that user, and it is hard to detect because the key looks like normal activity.",
         "steps": [
             "Confirm age and recent use before touching it: aws iam list-access-keys --user-name <USER> and aws iam get-access-key-last-used --access-key-id <KEY_ID>.",
@@ -2083,12 +2083,12 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Investigate the activity in CloudTrail to confirm it was authorized: aws cloudtrail lookup-events --lookup-attributes AttributeKey=Username,AttributeValue=root --max-results 25.",
             "Move whatever required root onto a scoped IAM role or an IAM Identity Center permission set so root is no longer needed for routine work.",
             "Ensure root is otherwise hardened: MFA enabled (IAM-01) and no access keys (IAM-02).",
-            "Add a detective control tied to the CIS 4.3 metric filter: aws cloudwatch put-metric-alarm --alarm-name root-account-usage --metric-name RootAccountUsage --namespace CISBenchmark --statistic Sum --period 300 --threshold 1 --comparison-operator GreaterThanOrEqualToThreshold --evaluation-periods 1 --alarm-actions <SNS_TOPIC_ARN>.",
+            "Add a detective control tied to the CIS 5.3 metric filter: aws cloudwatch put-metric-alarm --alarm-name root-account-usage --metric-name RootAccountUsage --namespace CISBenchmark --statistic Sum --period 300 --threshold 1 --comparison-operator GreaterThanOrEqualToThreshold --evaluation-periods 1 --alarm-actions <SNS_TOPIC_ARN>.",
             "Prevent recurrence: alert on every root sign-in through EventBridge to SNS, and where feasible apply an Organizations SCP that denies sensitive root actions.",
         ],
     },
     "IAM-08": {
-        "risk": "This check flags IAM credentials that are still active but have gone unused for more than 45 days: a console password unused >45 days, or an access key unused >45 days (credential report idle-days computation). Dormant-but-enabled credentials expand the attack surface for no benefit; nobody is watching them, yet they still work if stolen, and they commonly belong to departed employees or decommissioned scripts. CIS 1.12 requires disabling credentials unused for 45 or more days.",
+        "risk": "This check flags IAM credentials that are still active but have gone unused for more than 45 days: a console password unused >45 days, or an access key unused >45 days (credential report idle-days computation). Dormant-but-enabled credentials expand the attack surface for no benefit; nobody is watching them, yet they still work if stolen, and they commonly belong to departed employees or decommissioned scripts. CIS 2.11 requires disabling credentials unused for 45 or more days.",
         "impact": "Forgotten live credentials become a stealthy, unmonitored backdoor for attackers or former staff -- each one an unwatched path into the account.",
         "steps": [
             "Identify idle credentials: aws iam generate-credential-report then decode aws iam get-credential-report and review last-used dates beyond 45 days.",
@@ -2100,7 +2100,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "IAM-10": {
-        "risk": "This check flags any region where IAM Access Analyzer is not enabled (list_analyzers returns zero analyzers). Access Analyzer uses automated reasoning to surface resources -- S3 buckets, IAM roles, KMS keys, Lambda functions, SQS queues, secrets -- that are shared with an external account, the public internet, or an AWS organization. Without it, unintended cross-account and public grants are easy to create and very hard to spot by hand. CIS 1.20 requires an analyzer in every region.",
+        "risk": "This check flags any region where IAM Access Analyzer is not enabled (list_analyzers returns zero analyzers). Access Analyzer uses automated reasoning to surface resources -- S3 buckets, IAM roles, KMS keys, Lambda functions, SQS queues, secrets -- that are shared with an external account, the public internet, or an AWS organization. Without it, unintended cross-account and public grants are easy to create and very hard to spot by hand. CIS 2.18 requires an analyzer in every region.",
         "impact": "Unintended external or public exposure of resources goes undetected, enabling data leakage and cross-account compromise, and leaves a CIS compliance gap.",
         "steps": [
             "Confirm which regions lack coverage: aws accessanalyzer list-analyzers --region <REGION> (an empty analyzers list means none).",
@@ -2386,7 +2386,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
     },
     "LOG-01": {
         "risk": "CloudTrail is the authoritative record of every API call made in the account, and this check fails when no trail exists or a trail is single-region, has log-file validation disabled, or has stopped logging. Without a validated, multi-region, actively-logging trail, an attacker's actions (minting access keys, disabling security tooling, exfiltrating data) leave no reliable forensic record, and validation-off logs can be silently altered or deleted. Adversaries who land in an account routinely run StopLogging or DeleteTrail to blind defenders, and activity in any un-covered region goes completely unrecorded.",
-        "impact": "No trustworthy audit trail means intrusions go undetected and are non-investigable, and the account fails CIS 3.1 / PCI-DSS 10.1 / HIPAA / SOC2 logging requirements.",
+        "impact": "No trustworthy audit trail means intrusions go undetected and are non-investigable, and the account fails CIS 4.1 / PCI-DSS 10.1 / HIPAA / SOC2 logging requirements.",
         "steps": [
             "Enumerate trails and their state: aws cloudtrail describe-trails --query \"trailList[].{Name:Name,Multi:IsMultiRegionTrail,Validation:LogFileValidationEnabled}\" and aws cloudtrail get-trail-status --name <TRAIL> to read IsLogging",
             "If no trail exists, create a validated multi-region trail: aws cloudtrail create-trail --name org-trail --s3-bucket-name <BUCKET> --is-multi-region-trail --enable-log-file-validation",
@@ -2398,7 +2398,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
     },
     "LOG-03": {
         "risk": "AWS Config continuously records the configuration state of every supported resource, providing the change history and point-in-time snapshots that both compliance auditing and incident forensics depend on; this check fails when no recorder exists or the recorder is not recording. With Config off, there is no record of when a security group was opened, an IAM policy was widened, or a resource was created then deleted, so an attacker's changes cannot be reconstructed and Config-rule/drift alarms cannot fire. Privileged attackers also call StopConfigurationRecorder specifically to erase this configuration timeline before acting.",
-        "impact": "Loss of resource change history blocks forensic reconstruction and continuous-compliance evaluation, violating CIS 3.5 and NIST CM-8 configuration-management requirements.",
+        "impact": "Loss of resource change history blocks forensic reconstruction and continuous-compliance evaluation, violating CIS 4.3 and NIST CM-8 configuration-management requirements.",
         "steps": [
             "Check recorder status: aws configservice describe-configuration-recorder-status --query \"ConfigurationRecordersStatus[].{Name:name,Recording:recording,LastStatus:lastStatus}\"",
             "If none exists, create a recorder that captures all resources: aws configservice put-configuration-recorder --configuration-recorder name=default,roleARN=<CONFIG_ROLE_ARN>,recordingGroup={allSupported=true,includeGlobalResourceTypes=true}",
@@ -2422,7 +2422,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
     },
     "LOG-05": {
         "risk": "AWS Security Hub aggregates and continuously scores findings from GuardDuty, Config and Inspector and runs its own compliance standards (CIS, AWS FSBP, PCI) into a single prioritized posture view; this check fails when Security Hub is not enabled in the region or is enabled with no standards subscribed. Without it there is no centralized dashboard and no automated benchmark control evaluation, so misconfigurations a standard would flag persist unnoticed. This is a monitoring-coverage gap rather than a directly exploitable flaw, but it lets other real risks go undetected.",
-        "impact": "Fragmented, un-prioritized findings and no automated CIS/FSBP scoring mean genuine misconfigurations are missed, and the account fails CIS 4.16 continuous-monitoring expectations.",
+        "impact": "Fragmented, un-prioritized findings and no automated CIS/FSBP scoring mean genuine misconfigurations are missed, and the account fails CIS 5.16 continuous-monitoring expectations.",
         "steps": [
             "Check whether Security Hub is on and which standards are subscribed: aws securityhub get-enabled-standards",
             "If not enabled, turn it on with default standards: aws securityhub enable-security-hub --enable-default-standards",
@@ -2446,7 +2446,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
     },
     "LOG-07": {
         "risk": "By default CloudTrail log files are stored in S3 with only SSE-S3 encryption, where AWS transparently decrypts objects for any principal holding s3:GetObject on the bucket; this check fails when a trail has no KMS CMK (KmsKeyId) set. Encrypting the trail with a customer-managed KMS key adds a second authorization gate, so a reader must also hold kms:Decrypt on the key policy and a principal who gains only bucket read access still cannot open the audit logs. Without a CMK, an attacker or over-broad IAM role that can read the log bucket can harvest the full API history to map the environment and mine log fields for secrets.",
-        "impact": "Audit logs are readable by anyone with bucket-read access, weakening confidentiality of the security record and failing CIS 3.7 / NIST AU-9 protection-of-audit-information controls.",
+        "impact": "Audit logs are readable by anyone with bucket-read access, weakening confidentiality of the security record and failing CIS 4.5 / NIST AU-9 protection-of-audit-information controls.",
         "steps": [
             "Identify trails lacking a CMK: aws cloudtrail describe-trails --query \"trailList[?KmsKeyId==null].Name\"",
             "Create or choose a KMS CMK whose key policy allows the CloudTrail service principal cloudtrail.amazonaws.com the kms:GenerateDataKey* action scoped to your account and trail ARN",
@@ -2458,7 +2458,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
     },
     "LOG-08": {
         "risk": "By default a trail records only management-plane events (control operations like RunInstances or PutBucketPolicy) and not data-plane events, and this check warns when a trail logs management events only with no S3/Lambda/DynamoDB data-event visibility. Without data-event logging there is no record of who read or copied which S3 objects, so bulk data theft via stolen credentials produces no audit evidence. Investigators are then unable to answer the single most important post-compromise question, namely exactly what data was accessed.",
-        "impact": "Data exfiltration and object-level tampering are invisible to the audit trail, crippling breach scoping and failing CIS 3.10 data-event logging guidance.",
+        "impact": "Data exfiltration and object-level tampering are invisible to the audit trail, crippling breach scoping and failing CIS 4.8 data-event logging guidance.",
         "steps": [
             "Check current selectors: aws cloudtrail get-event-selectors --trail-name <TRAIL>",
             "Add S3 object-level data events: aws cloudtrail put-event-selectors --trail-name <TRAIL> --advanced-event-selectors '[{\"Name\":\"S3 data events\",\"FieldSelectors\":[{\"Field\":\"eventCategory\",\"Equals\":[\"Data\"]},{\"Field\":\"resources.type\",\"Equals\":[\"AWS::S3::Object\"]}]}]'",
@@ -2470,7 +2470,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
     },
     "LOG-09": {
         "risk": "The S3 bucket holding CloudTrail logs must never be publicly accessible, and this check fails when its bucket policy grants an unconditioned public principal (with Block Public Access not fully neutralizing it) or when the configured bucket does not exist. A public trail bucket lets anyone on the internet read the account's entire API history, a reconnaissance goldmine, and if write is exposed, tamper with or delete logs to erase evidence of an intrusion; a missing bucket means logs are silently not being stored at all. This is a direct, internet-facing exposure of the most sensitive security data in the account.",
-        "impact": "Public exposure of audit logs enables full-environment reconnaissance and anti-forensic log tampering by anonymous attackers, a critical confidentiality and integrity breach failing CIS 3.3.",
+        "impact": "Public exposure of audit logs enables full-environment reconnaissance and anti-forensic log tampering by anonymous attackers, a critical confidentiality and integrity breach. CIS AWS Foundations v7.0.0 eliminated its dedicated 'CloudTrail bucket is not public' recommendation once Block Public Access made that state hard to reach; the general control is now 3.1.4, and this check remains because the bucket is worth naming.",
         "steps": [
             "Identify the trail bucket and confirm it exists: aws cloudtrail describe-trails --query \"trailList[].S3BucketName\"",
             "Enable all four Block Public Access settings: aws s3api put-public-access-block --bucket <TRAIL_BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
@@ -4037,6 +4037,117 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Check the client library reconnects on failover rather than holding a dead connection.",
         ],
     },
+    "CREDEXP-01": {
+        "risk": "An access key id that is live in this account also appears in a breach corpus or stealer log you supplied. This is the strongest join a credential-exposure feed can produce, and it is worth being precise about why: an AWS access key id is globally unique and structurally recognisable, so unlike an email address it cannot belong to somebody else by coincidence. The key was real, it is still active, and its identifier circulated outside your organisation. What this does NOT establish is equally important. A corpus carries what a third party observed in a compilation; it does not show that the secret half of the key was captured intact, that anyone attempted to use it, or that this account was ever accessed. Those are questions CloudTrail can answer and the corpus cannot. The reason to act immediately anyway is asymmetry: rotating a key costs an afternoon, while a live long-lived credential in circulation is the single most common root cause of cloud account compromise, and stealer logs are traded and re-traded for years after the theft.",
+        "impact": "A currently-active AWS credential's identifier is circulating outside your organisation, and whether the secret half went with it cannot be determined from the corpus.",
+        "steps": [
+            "Create a replacement before disabling anything, so nothing breaks mid-rotation: aws iam create-access-key --user-name <USER>",
+            "Deploy the new key, then disable the old one rather than deleting it -- an inactive key still shows in CloudTrail and still answers get-access-key-last-used: aws iam update-access-key --user-name <USER> --access-key-id <LEAKED> --status Inactive",
+            "Find out whether it was used, rather than assuming: aws cloudtrail lookup-events --lookup-attributes AttributeKey=AccessKeyId,AttributeValue=<LEAKED> --start-time <BEFORE_THE_BREACH_DATE>",
+            "Check what it last did and when: aws iam get-access-key-last-used --access-key-id <LEAKED>",
+            "Delete it once nothing has broken: aws iam delete-access-key --user-name <USER> --access-key-id <LEAKED>",
+            "Ask whether this user needs a long-lived key at all -- the durable fix is a role assumed with short-lived credentials, which cannot appear in next year's corpus.",
+        ],
+    },
+    "CREDEXP-02": {
+        "risk": "An IAM principal in this account matches an exposure in a breach corpus by exact email address or username. The match is exact rather than fuzzy -- this product will not attribute somebody else's breach to your estate on a near-miss -- but an identifier match is weaker evidence than a key match, and the difference matters for how you respond. What the corpus supports is that this identifier appeared alongside a credential in a compilation somebody observed. It does not say the credential was ever this account's: people reuse usernames across dozens of services, and the exposure may be from a forum breach with no relationship to AWS. What makes it actionable regardless is password reuse, which is the mechanism that turns an unrelated breach into a cloud incident. If this principal has a console password and no MFA, a reused password from any corpus is sufficient on its own. If MFA is enrolled, the same exposure is a prompt rather than an emergency -- which is why the MFA check belongs in the response and not in a separate ticket.",
+        "impact": "A credential associated with this IAM identity is in third-party circulation, and without MFA a reused password would be sufficient to use it.",
+        "steps": [
+            "Establish whether MFA is enrolled first -- it decides how urgent the rest of this is: aws iam list-mfa-devices --user-name <USER>",
+            "Rotate the console password: aws iam update-login-profile --user-name <USER> --password <NEW> --password-reset-required",
+            "Rotate every access key the user holds: aws iam list-access-keys --user-name <USER>, then follow CREDEXP-01's create/disable/delete sequence for each.",
+            "Look for use you did not expect around the exposure date: aws cloudtrail lookup-events --lookup-attributes AttributeKey=Username,AttributeValue=<USER>",
+            "Remove the long-lived human credential entirely where you can -- federating through IAM Identity Center leaves no account password for a corpus to carry.",
+        ],
+    },
+    "CREDEXP-03": {
+        "risk": "An exposure carries an email address at one of your organisation's domains but matches no IAM principal in this account. This is a signal about the organisation rather than about this account, and the honest reading is narrower than the words suggest. The person may hold no AWS identity at all; they may hold one under a different name; or the exposed account may be an unrelated third-party service they signed up for with a work address. None of those is an AWS finding on its own, and treating it as one produces exactly the alert fatigue that gets a whole feed switched off. The reason it is reported rather than dropped is the identity provider. If this account is entered through federation -- IAM Identity Center, Okta, Entra -- then the credential that matters is held in the IdP, not in IAM, and an exposure of a work address is one password-reuse away from the front door. So the finding exists to reach the identity team, whose systems this product cannot see, rather than to prompt a change in AWS.",
+        "impact": "A work credential is in third-party circulation for someone with no IAM identity here, which matters most where this account is entered through a federated identity provider.",
+        "steps": [
+            "Confirm the person really holds no identity here under another name: aws iam list-users --query 'Users[].UserName'",
+            "Check the federation path, because that is where the credential that matters lives: aws sso-admin list-instances and aws iam list-saml-providers / list-open-id-connect-providers",
+            "Hand it to whoever owns the identity provider and force a password reset there -- this product cannot see or fix that system.",
+            "Ask specifically whether the leaked password was reused anywhere that does reach AWS; reuse is the mechanism that makes this matter at all.",
+            "If nothing here federates and the address belongs to no AWS user, record the finding as accepted rather than leaving it open -- an alert nobody can action is one that trains people to ignore the next one.",
+        ],
+    },
+    "NEP-06": {
+        "risk": "This Neptune DB instance is publicly accessible, so its endpoint resolves to a routable public address and anything on the internet that can reach the port can attempt to connect. What makes this worse than the same finding on a relational database is Neptune's authorisation model: Neptune has no database users of its own. There is no username, no password, no in-engine grant system. Authorisation is IAM database authentication or nothing at all, so on a cluster where IAM auth is off -- which NEP-08 reports separately -- the security group is the entire access control, and a security group is the control most likely to be wrong. A VPC-wide CIDR, a shared application subnet, or a peering arrangement made for an unrelated purpose all produce reachability nobody intended. Graph databases also concentrate exactly the data that is most damaging in aggregate: the edges between people, accounts and transactions are the fraud-detection and identity-resolution logic itself, and traversing them reveals relationships that no single record would.",
+        "impact": "The graph endpoint is reachable from the internet, and with IAM authentication off the security group is the only thing standing between an attacker and a full traversal.",
+        "steps": [
+            "Take it off the public internet: aws neptune modify-db-instance --db-instance-identifier <INSTANCE> --no-publicly-accessible --apply-immediately",
+            "Confirm: aws neptune describe-db-instances --db-instance-identifier <INSTANCE> --query 'DBInstances[0].PubliclyAccessible'",
+            "Read what the security group actually allowed, and treat the endpoint as having been reachable by all of it for as long as it has been public: aws ec2 describe-security-groups --group-ids <SG>",
+            "Enable IAM database authentication if it is off (NEP-08) -- with public access removed it is still the only authorisation Neptune has.",
+            "Confirm the DB subnet group uses private subnets, or the next instance created in it inherits the same exposure.",
+        ],
+    },
+    "NEP-07": {
+        "risk": "This Neptune cluster's automated backup retention is shorter than a week, which sets how far back any recovery can reach. Neptune's minimum is one day and its default is one day, so what this reports is not an absence of backups but a recovery window too short to be useful. The reason a graph needs a longer window than a relational database is the shape of its failure mode: bad data in a graph propagates through traversals rather than sitting in a row, so a malformed bulk load or an inverted edge-direction mapping produces answers that are subtly wrong rather than obviously broken. Subtle wrongness is discovered by someone questioning a result days or weeks later, and by then a one-day window is long gone. Recovery without a restore is not a fallback either: it means re-deriving the graph from its upstream sources and re-running the load, which for a knowledge graph or an identity graph is a project rather than an afternoon.",
+        "impact": "Anything discovered later than the retention window cannot be rolled back, and rebuilding a graph without a restore means a full re-ingest from source.",
+        "steps": [
+            "Extend the window: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --backup-retention-period 7 --apply-immediately",
+            "Set a backup window clear of your bulk-load jobs: --preferred-backup-window 03:00-04:00",
+            "Confirm: aws neptune describe-db-clusters --db-cluster-identifier <CLUSTER> --query 'DBClusters[0].BackupRetentionPeriod'",
+            "Restore to a point in time into a scratch cluster once, so the recovery path is something you have done rather than something you assume: aws neptune restore-db-cluster-to-point-in-time",
+            "Set backup_retention_period in whatever provisions the cluster, so new ones do not arrive at the one-day default.",
+        ],
+    },
+    "NEP-08": {
+        "risk": "This Neptune cluster has IAM database authentication disabled, and for Neptune that is a more serious statement than it would be for Aurora or RDS. Neptune does not have database users. There is no CREATE USER, no password, no in-engine role system -- authorisation is IAM database authentication or it is nothing at all. With it off, every request that reaches the endpoint is served, and the only thing deciding what reaches the endpoint is the security group. That collapses authentication and network reachability into a single control, which means one over-broad security-group rule is not a defence-in-depth weakness but a total loss of access control. It also removes identity from the audit trail: with IAM auth on, CloudTrail and the audit log attribute a connection to a principal; without it every query looks alike and an investigation cannot say who ran what. This is why it is rated above the equivalent Aurora finding, where the same failure still leaves passwords in the way.",
+        "impact": "Anything that can reach the endpoint is authorised, and no connection can be attributed to a principal.",
+        "steps": [
+            "Enable it: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --enable-iam-database-authentication --apply-immediately",
+            "Grant neptune-db:connect narrowly -- to the roles that should reach the graph and to nothing else. The resource is arn:aws:neptune-db:<REGION>:<ACCOUNT>:<CLUSTER_RESOURCE_ID>/database",
+            "Move clients to SigV4-signed requests; most Gremlin and SPARQL drivers need an explicit signing plugin rather than a configuration flag, so stage this before enforcing.",
+            "Confirm: aws neptune describe-db-clusters --db-cluster-identifier <CLUSTER> --query 'DBClusters[0].IAMDatabaseAuthenticationEnabled'",
+            "Review the security group afterwards as well -- it stops being the only control, but it is still the first one.",
+        ],
+    },
+    "NEP-09": {
+        "risk": "This Neptune cluster exports no audit logs, so no record of connections or queries leaves it. Neptune's audit log is the only place that records which traversals were run, and log data held inside a cluster shares that cluster's lifetime: delete the cluster, or lose it with an availability zone, and the evidence goes with it. The consequence is specific to graphs, and is why this is worth checking rather than assuming. When a relational database is compromised, scoping the incident means asking which tables and rows were read. When a graph database is compromised, the damaging action is often a single legitimate-looking traversal that walks from one known entity across an entire neighbourhood -- and the difference between an attacker who found one customer and an attacker who enumerated the whole social or transaction graph is visible only in the query text. Without the audit log there is no way to tell those apart, and the incident has to be assessed on the assumption that everything was taken.",
+        "impact": "No record of queries or connections survives the cluster, so an incident cannot be scoped to what was actually traversed.",
+        "steps": [
+            "Export the audit log: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --cloudwatch-logs-export-configuration EnableLogTypes=audit --apply-immediately",
+            "Enable the log itself -- the export carries nothing without it. Set neptune_enable_audit_log=1 in the cluster parameter group: aws neptune modify-db-cluster-parameter-group --db-cluster-parameter-group-name <GROUP> --parameters ParameterName=neptune_enable_audit_log,ParameterValue=1,ApplyMethod=pending-reboot, then reboot the instances.",
+            "Confirm both halves, because either alone is silent: the cluster's EnabledCloudwatchLogsExports and the parameter group's value.",
+            "Set a retention period on the destination log group; CloudWatch keeps logs indefinitely by default, which is its own cost and privacy problem.",
+            "Alarm on something in it -- a log group nobody reads restores the silence this fixes.",
+        ],
+    },
+    "NEP-10": {
+        "risk": "This Neptune cluster runs in a single availability zone, so an AZ-level failure takes the graph with it and recovery falls back on the backup retention window that NEP-07 checks. Neptune's storage layer already replicates across three availability zones, which is what makes this finding easy to dismiss and worth stating precisely: the DATA survives an AZ failure, but the cluster has no instance left to serve it. With no replica in another zone there is nothing to fail over to, so the outage lasts as long as it takes someone to notice and provision a new instance -- and for a graph backing fraud checks or identity resolution in a request path, that is an outage of the application rather than of a database. A reader also changes the failure mode of ordinary maintenance: with no replica, every engine patch and every instance resize is downtime, which is a strong practical reason teams postpone patching.",
+        "impact": "An availability-zone failure leaves the graph with no instance to serve it, and recovery is bounded by the backup window rather than by failover.",
+        "steps": [
+            "Add a reader in a different zone -- Multi-AZ is a consequence of having one, not a switch: aws neptune create-db-instance --db-instance-identifier <CLUSTER>-reader --db-cluster-identifier <CLUSTER> --engine neptune --db-instance-class <CLASS> --availability-zone <OTHER_AZ>",
+            "Confirm the subnet group actually spans zones first, or the replica lands in the same one: aws neptune describe-db-subnet-groups --db-subnet-group-name <SUBNET_GROUP>",
+            "Verify: aws neptune describe-db-clusters --db-cluster-identifier <CLUSTER> --query 'DBClusters[0].MultiAZ'",
+            "Point read-only workloads at the reader endpoint so the replica earns its cost rather than idling.",
+            "Test a failover once, in a maintenance window: aws neptune failover-db-cluster --db-cluster-identifier <CLUSTER>",
+        ],
+    },
+    "DOCDB-07": {
+        "risk": "This DocumentDB instance is publicly accessible, so its endpoint resolves to a routable public address and anything that can reach the port can attempt to authenticate. DocumentDB does have its own users and passwords, which is a real difference from Neptune -- but it turns the exposure into an online password-guessing surface rather than an open door, and the credential in question is frequently the master password created during setup and never rotated since. What raises the consequence is what a document store holds. Unlike a normalised relational schema where a single table is a fragment, a document is designed to be self-contained, so one collection typically holds whole customer or order records with their nested detail. A single successful authentication returns complete entities rather than joinable pieces. DocumentDB also has no IAM database authentication to fall back on, so that password is the authentication story in full.",
+        "impact": "A document store holding complete records is reachable from the internet, with a static database password as the only authentication.",
+        "steps": [
+            "Take it off the public internet: aws docdb modify-db-instance --db-instance-identifier <INSTANCE> --no-publicly-accessible --apply-immediately",
+            "Confirm: aws docdb describe-db-instances --db-instance-identifier <INSTANCE> --query 'DBInstances[0].PubliclyAccessible'",
+            "Rotate the master password on the assumption it has been exposed to whatever the security group allowed: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --master-user-password <NEW>",
+            "Review the security group and the subnet group, and confirm the subnets are private so the next instance does not inherit this.",
+            "Read the audit log (DOCDB-03) for authentication attempts from outside your own ranges -- and if audit logging is off, that gap is now part of this finding.",
+        ],
+    },
+    "DOCDB-08": {
+        "risk": "This DocumentDB cluster's automated backup retention is shorter than a week. The minimum is one day and the default is one day, so what this reports is a recovery window too short to be useful rather than an absence of backups. The reason a week is the threshold is that the failures backups exist for are rarely noticed the same day: a migration that writes a wrong field name, a release that stores dates in a different format, a bulk update with an inverted filter. In a document store those go unnoticed for longer than in a relational one, because there is no schema to reject them -- a document with an unexpected shape is a valid document, and the damage surfaces only when something tries to read it, which may be days later in a report or a downstream job. A one-day window means the last correct copies expired before anyone knew they were needed. Retention is a property of the CLUSTER, which is why this is read there and not from its instances.",
+        "impact": "Anything discovered more than a day late cannot be restored, and a document store gives no schema errors to make bad writes surface early.",
+        "steps": [
+            "Extend the window: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --backup-retention-period 7 --apply-immediately",
+            "Set a backup window outside your batch jobs: --preferred-backup-window 03:00-04:00",
+            "Confirm: aws docdb describe-db-clusters --db-cluster-identifier <CLUSTER> --query 'DBClusters[0].BackupRetentionPeriod'",
+            "Restore to a point in time into a scratch cluster once, to prove the path works before you need it: aws docdb restore-db-cluster-to-point-in-time --source-db-cluster-identifier <CLUSTER> --db-cluster-identifier <SCRATCH> --restore-to-time <TIMESTAMP>",
+            "Take a manual snapshot before risky migrations as well -- automated retention is a rolling window and preserves no specific known-good point.",
+        ],
+    },
     "IMGB-01": {
         "risk": "This EC2 Image Builder resource has a resource policy granting a wildcard principal, which shares the image -- and everything baked into it -- beyond your account. A golden image is not merely an operating system: it is the OS plus your agents, your configuration, your base packages, and frequently your bootstrap credentials. Image pipelines routinely embed things during the build that nobody intends to publish: a package-repository token, a monitoring agent key, an internal CA bundle, hard-coded configuration pointing at internal endpoints. Sharing the image publishes all of it, and unlike a running instance an image can be copied silently and inspected offline at leisure. The wider intelligence value matters too: your golden image reveals your standard build, your agent versions, and therefore which vulnerabilities your entire fleet is carrying.",
         "impact": "The image and everything baked into it -- agents, configuration, any embedded credential -- is shared beyond your account and can be copied and inspected offline.",
@@ -4686,7 +4797,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         ],
     },
     "VPC-04": {
-        "risk": "A default security group still has inbound and/or outbound rules, violating CIS 5.4, which requires the default SG to restrict all traffic. Any ENI or instance launched without an explicitly assigned security group silently inherits the default SG, so leftover permissive rules grant network access to resources whose owners never intended to expose them. Because the default SG is easy to forget and applies implicitly, it becomes an invisible allow-path that quietly widens the attack surface.",
+        "risk": "A default security group still has inbound and/or outbound rules, violating CIS 6.5, which requires the default SG to restrict all traffic. Any ENI or instance launched without an explicitly assigned security group silently inherits the default SG, so leftover permissive rules grant network access to resources whose owners never intended to expose them. Because the default SG is easy to forget and applies implicitly, it becomes an invisible allow-path that quietly widens the attack surface.",
         "impact": "Resources accidentally attached to a permissive default security group gain unintended network reachability, creating unmanaged exposure and a CIS benchmark failure.",
         "steps": [
             "Inspect the default SG's remaining rules: aws ec2 describe-security-groups --filters Name=group-name,Values=default --query \"SecurityGroups[].{Id:GroupId,Vpc:VpcId,In:IpPermissions,Out:IpPermissionsEgress}\"",
@@ -4856,6 +4967,9 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
 # other. merge_detail refuses to shadow an id already present above.
 from engine import aws_checkdef          # noqa: E402
 from engine import aws_cis_compute
+from engine import aws_cis_al2           # noqa: E402,F401  (CIS Amazon Linux 2)
+from engine import aws_cis_db2           # noqa: E402,F401  (CIS-DB tranche 2)
+from engine import aws_cis_foundations   # noqa: E402,F401  (CIS Foundations v7.0.0)
 from engine import aws_nhi
 from engine import aws_extsvc2
 from engine import aws_extsvc3

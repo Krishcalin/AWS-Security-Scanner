@@ -108,16 +108,28 @@ Deliberate, and named rather than left to be discovered:
 
 - **Auto-fix execution is withheld** (decision D11). The governance is built; no
   execution role is deployed. OverWatch mutates only resources it created.
-- **`aws_trend` and `aws_guardrail` are not wired** into the pipeline.
+- ~~**`aws_trend` and `aws_guardrail` are not wired** into the pipeline.~~ **Closed.**
+  `aws_trend` backs `GET /accounts/{id}/forecast`; `aws_guardrail` decides the IaC
+  gate's exit code (`aws_offline_scanner --policy`), where it replaced a silent
+  `except PolicyError: continue` that let an unparseable policy exit 0.
 - **Inbound ticket sync is not built** (`OW2-CC-021`). ServiceDesk Plus ticket
   creation is outbound only; a ticket closed while the finding persists does not
   reopen — `OW2-AR-030` says the finding wins.
-- **`iam:ListAccessKeys` is not collected**, so no live access-key inventory exists.
-  This does **not** affect `NHI-02`, which measures key *age* and reads it from the
-  credential report — `NHI-02` is proven to fire (`docs/CHECK_FIRING.md`). What is
-  missing is the leaked-key join in
-  `aws_ingest_credexp.correlate(known_key_ids=...)`: without an inventory, a leaked AWS
-  key id found in a breach corpus cannot be matched against a live key in this account,
-  which that module's own `coverage()` names as the highest-value gap. `aws_ingest_credexp`
-  has no caller either, so the grant would currently buy nothing — wiring the ingest and
-  collecting the keys are one decision, not two.
+- ~~**`iam:ListAccessKeys` is not collected**, so no live access-key inventory exists.~~
+  **Closed, as one decision rather than two — which is how this entry said it had to
+  be done.** `iam:ListAccessKeys` is now collected (see the permission ledger, where
+  it is the only new action in the tranche) *and* `aws_ingest_credexp` has a caller:
+  `--cred-exposures` on the scanner, emitting `CREDEXP-00..03` in the IAM section.
+  Either half alone would have bought nothing — a grant with no consumer, or an
+  ingest whose best join cannot run.
+
+  Two properties worth knowing about the grant: `ListAccessKeys` returns key IDs,
+  owner, status and creation date and **not** secret access keys (those are returned
+  exactly once, at creation, by no API afterwards), so it stays inside
+  read-only-of-CONFIG. And it is **not** the credential report `NHI-02` reads — that
+  report carries key age and rotation dates but no key IDs at all, so it could never
+  have answered this question.
+
+  Where a scan cannot read the keys, `CREDEXP-01` does not fire and `CREDEXP-00`
+  states the gap in the module's own words: *"no live key inventory was supplied … it
+  is not a finding that the keys are unused"*.

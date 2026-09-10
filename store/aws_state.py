@@ -904,6 +904,26 @@ class StateStore:
             out.append(d)
         return out
 
+    def coverage_counts(self, account: str) -> Dict[str, int]:
+        """``{scan_id: distinct check_ids that executed}`` for ``account``.
+
+        The denominator half of a trend point's honesty. ``scan_coverage`` records
+        one row per (account, region, check_id) a scan inspected, and a check that
+        ran emits at least one result, so a distinct count is the number of checks
+        that actually executed. A scan that reached half the estate — throttled,
+        AccessDenied across a region, a section that raised — lands materially
+        below its neighbours, which is what lets `aws_trend` exclude it rather than
+        fit a line through it.
+
+        Returned per scan rather than as a ratio because the denominator is a
+        judgement the caller has to make and defend; see
+        ``cnapp_service.get_forecast``.
+        """
+        rows = self._be.query_all(
+            "SELECT scan_id, COUNT(DISTINCT check_id) AS n FROM scan_coverage "
+            "WHERE account=? GROUP BY scan_id", (account,))
+        return {r["scan_id"]: int(r["n"]) for r in rows}
+
     def open_findings(self, account: str) -> List[Dict]:
         rows = self._be.query_all(
             "SELECT * FROM findings WHERE account=? AND status='open' "

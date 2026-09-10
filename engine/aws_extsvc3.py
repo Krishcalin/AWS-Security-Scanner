@@ -316,7 +316,10 @@ _TLS = {"PCI-DSS": "4.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "
 _LOG = {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"}
 
 CHECKS = _cd.register(
-    _C(id="S3T-01", section="S3TABLES", severity="HIGH", compliance=_ACC,
+    # CIS AWS Foundations v7.0.0 2.21 -- a resource policy granting Principal "*" with no
+    # restricting condition. Merged rather than added to _ACC, which is shared.
+    _C(id="S3T-01", section="S3TABLES", severity="HIGH",
+       compliance={**_ACC, "CIS": "2.21"},
        permissions=(
            _P("s3tables:ListTableBuckets",
               "enumerate S3 Tables buckets, which are separate resources from S3 "

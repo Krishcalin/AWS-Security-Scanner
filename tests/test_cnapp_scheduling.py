@@ -172,6 +172,123 @@ def test_lifecycle_populates_drift_and_is_idempotent():
     assert svc.get_drift("123456789012")["resolved_count"] == 1
 
 
+# ── forecast wiring (FR-4 / defect D6) ──────────────────────────────────────────
+# `aws_trend` was library-only for two versions -- real, tested, documented code that
+# nothing called. These tests are the wiring, exercised through the real service and
+# the real store rather than by asserting the import exists, because an import is not
+# a caller (see tests/test_unreached_modules.py).
+import datetime  # noqa: E402
+
+
+def _month(year, month, day=15):
+    return int(datetime.datetime(year, month, day,
+                                 tzinfo=datetime.timezone.utc).timestamp())
+
+
+def _months_of_scans(svc, reg, clk, months, aid="123456789012"):
+    """One completed scan per named month, through the real scheduler."""
+    _active(reg, aid, "daily")
+    for y, m in months:
+        clk["t"] = _month(y, m)
+        scheduler_tick(svc)
+
+
+def test_a_short_history_refuses_to_project_rather_than_labelling_one():
+    """D6's rule, reached through the product. Two months of scans cannot
+    distinguish a trend from a pair of readings, so there is no number at all --
+    not a number wearing a caveat that will be dropped on its way to a slide."""
+    box = [[_R("FAIL", "S3-01")]]
+    post, _ = _poster()
+    svc, reg, store, state, clk = _svc(box, http_post=post)
+    _months_of_scans(svc, reg, clk, [(2025, 1), (2025, 2)])
+    out = svc.get_forecast("123456789012")
+    assert out["value"] is None
+    assert out["sufficiency"] == "insufficient"
+    assert not out["kra_eligible"]
+    assert "no projection" in out["headline"]
+
+
+def test_six_clean_months_produce_a_kra_eligible_projection():
+    box = [[_R("FAIL", "S3-01")]]
+    post, _ = _poster()
+    svc, reg, store, state, clk = _svc(box, http_post=post)
+    _months_of_scans(svc, reg, clk, [(2025, m) for m in range(1, 7)])
+    out = svc.get_forecast("123456789012")
+    assert out["sufficiency"] == "production"
+    assert out["value"] is not None
+    assert out["kra_eligible"]
+    assert out["drivers"], "OW2-PA-003 forbids a projection with no drivers"
+
+
+def test_a_hole_in_the_history_is_counted_in_the_denominator():
+    """Three scans, a five-month silence, three more. The forecast may still be
+    produced -- six usable months is six usable months -- but the response has to
+    SAY that eleven months elapsed to produce them, or a reader concludes the
+    estate was watched continuously."""
+    box = [[_R("FAIL", "S3-01")]]
+    post, _ = _poster()
+    svc, reg, store, state, clk = _svc(box, http_post=post)
+    _months_of_scans(svc, reg, clk,
+                     [(2025, 1), (2025, 2), (2025, 3),
+                      (2025, 9), (2025, 10), (2025, 11)])
+    out = svc.get_forecast("123456789012")
+    assert out["series"]["periods"] == 11
+    assert out["series"]["usable"] == 6
+    assert len(out["series"]["gaps"]) == 5
+    assert "6 of 11 periods usable" in out["series"]["describe"]
+
+
+def test_a_degraded_scan_demotes_the_forecast():
+    """THE D3 RULE REACHING INTO D6, and the reason these two defects share a fix.
+    Six months of scans, one of which ran a fraction of the checks -- a throttled
+    run, a region denied, a section that raised. That month measures what was
+    reachable, not the estate, so it cannot count toward AD-04's six."""
+    box = [[_R("FAIL", "S3-%02d" % i) for i in range(20)]]
+    post, _ = _poster()
+    svc, reg, store, state, clk = _svc(box, http_post=post)
+    _active(reg, "123456789012", "daily")
+    for m in range(1, 7):
+        box[0] = ([_R("FAIL", "S3-01")] if m == 4        # 1 check of the usual 20
+                  else [_R("FAIL", "S3-%02d" % i) for i in range(20)])
+        clk["t"] = _month(2025, m)
+        scheduler_tick(svc)
+    out = svc.get_forecast("123456789012")
+    assert out["series"]["usable"] == 5, out["series"]["describe"]
+    assert out["sufficiency"] == "indicative"
+    assert not out["kra_eligible"], (
+        "a forecast resting on a month that reached 5% of the estate was offered "
+        "as a KRA input")
+    assert any("coverage" in g["reason"] for g in out["series"]["gaps"])
+
+
+def test_the_coverage_basis_is_published_rather_than_implied():
+    """The denominator is the arguable part of this feature, so it travels with the
+    answer instead of living only in a docstring."""
+    box = [[_R("FAIL", "S3-01")]]
+    post, _ = _poster()
+    svc, reg, store, state, clk = _svc(box, http_post=post)
+    _months_of_scans(svc, reg, clk, [(2025, 1), (2025, 2), (2025, 3)])
+    basis = svc.get_forecast("123456789012")["series"]["coverage_basis"]
+    assert "most this account has executed" in basis
+
+
+def test_a_forecast_without_a_state_store_is_empty_not_a_crash():
+    """Same fail-open contract as get_trend and get_mttr: no state store is a
+    deployment shape, not an error."""
+    box = [[_R("FAIL", "S3-01")]]
+    post, _ = _poster()
+    svc, reg, *_ = _svc(box, http_post=post, with_state=False)
+    assert svc.get_forecast("123456789012") == {}
+
+
+def test_an_unknown_account_refuses_rather_than_inventing_a_trend():
+    box = [[_R("FAIL", "S3-01")]]
+    post, _ = _poster()
+    svc, reg, *_ = _svc(box, http_post=post)
+    out = svc.get_forecast("999988887777")
+    assert out["value"] is None and out["series"]["periods"] == 0
+
+
 def test_lifecycle_fail_open_without_state():
     box = [[_R("FAIL", "S3-01")]]
     post, _ = _poster()

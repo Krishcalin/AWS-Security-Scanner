@@ -20,6 +20,21 @@ fix for mislabelling them. So the four facts that only reached a report via an A
 now have their own: DOCDB-04, DOCDB-05, NEP-01..04. These tests hold BOTH halves: the
 Aurora ids no longer fire on foreign engines, AND the same estate still produces the same
 findings under the right ones.
+
+THEN THE SAME DEFECT WAS FOUND ONE LEVEL DOWN. Mapping the CIS Database benchmark row by
+row turned up the instance loop, which had no engine filter either: `rds:DescribeDBInstances`
+returns Neptune and DocumentDB instances too, so a single Neptune instance produced RDS-01,
+RDS-02, RDS-03 and RDS-04 -- none of which said Neptune anywhere. It was found by RUNNING
+the section rather than reading it; the first attempt read the source for a filter and was
+fooled, because `_check_rds` mentions `Engine` and NON_AURORA_CLUSTER_ENGINES for reasons
+that have nothing to do with instances.
+
+It had the same shape as the cluster defect and needed the same answer. RDS-01 and RDS-04
+merely double-reported, but RDS-02 and RDS-03 were the ONLY coverage of Neptune public
+accessibility and backup retention, so filtering alone would again have deleted real
+findings. Filter and replacements shipped together: `_rds_instances()` drops foreign
+engines, and NEP-06..10 and DOCDB-07/08 report the facts under ids that name the service.
+The instance-plane tests at the bottom of this file hold both halves the same way.
 """
 from __future__ import annotations
 
@@ -152,7 +167,7 @@ def test_a_real_aurora_snapshot_still_fails():
 # ══════════════════════════════════════════════════════════════════════════════
 # DocumentDB — the two facts that used to arrive only via an Aurora id
 # ══════════════════════════════════════════════════════════════════════════════
-def _docdb_scanner(clusters=(), snapshots=(), attrs=()):
+def _docdb_scanner(clusters=(), snapshots=(), attrs=(), instances=()):
     s = make_scanner(sections=["DOCDB"])
     s.account = OWN
     docdb = MagicMock()
@@ -162,6 +177,14 @@ def _docdb_scanner(clusters=(), snapshots=(), attrs=()):
         "DBClusterSnapshotAttributesResult": {
             "DBClusterSnapshotAttributes": list(attrs)}}
     docdb.describe_db_clusters.return_value = {"DBClusters": list(clusters)}
+
+    def _pager(op):
+        p = MagicMock()
+        p.paginate.return_value = ([{"DBInstances": list(instances)}]
+                                   if op == "describe_db_instances" else [{}])
+        return p
+
+    docdb.get_paginator.side_effect = _pager
     s._clients[f"docdb:{REGION}"] = docdb
     s._check_docdb()
     return s
@@ -214,7 +237,7 @@ def test_docdb_ignores_a_cluster_that_declares_another_engine():
 # Neptune — a section that did not exist, for findings that were already being made
 # ══════════════════════════════════════════════════════════════════════════════
 def _neptune_scanner(clusters=(), snapshots=(), attrs=(), cluster_error=None,
-                     attr_error=None):
+                     attr_error=None, instances=()):
     s = make_scanner(sections=["NEPTUNE"])
     s.account = OWN
     nep = MagicMock()
@@ -228,6 +251,8 @@ def _neptune_scanner(clusters=(), snapshots=(), attrs=(), cluster_error=None,
                 p.paginate.return_value = [{"DBClusters": list(clusters)}]
         elif op == "describe_db_cluster_snapshots":
             p.paginate.return_value = [{"DBClusterSnapshots": list(snapshots)}]
+        elif op == "describe_db_instances":
+            p.paginate.return_value = [{"DBInstances": list(instances)}]
         else:
             p.paginate.return_value = [{}]
         return p
@@ -319,3 +344,224 @@ def test_the_same_estate_produces_the_same_number_of_findings_under_new_ids():
            | {r.check_id for r in nept.results if r.status == "FAIL"})
     assert {"DOCDB-02", "DOCDB-04", "NEP-01", "NEP-02"} <= got, (
         f"coverage was lost, not moved: {sorted(got)}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# The INSTANCE plane — the same defect one level down
+# ══════════════════════════════════════════════════════════════════════════════
+def _instance(iid, engine, **over):
+    """A maximally non-compliant instance, so any check that CAN fire on it does."""
+    inst = {"DBInstanceIdentifier": iid, "Engine": engine,
+            "DBInstanceArn": f"arn:aws:rds:{REGION}:{OWN}:db:{iid}",
+            "EngineVersion": "5.7.0", "DBInstanceStatus": "available",
+            "StorageEncrypted": False, "PubliclyAccessible": True,
+            "BackupRetentionPeriod": 0, "DeletionProtection": False,
+            "MultiAZ": False, "AutoMinorVersionUpgrade": False,
+            "IAMDatabaseAuthenticationEnabled": False}
+    inst.update(over)
+    return inst
+
+
+def _rds_instance_scanner(instances):
+    s = make_scanner(sections=["RDS"])
+    s.account = OWN
+    rds = MagicMock()
+
+    def _pager(op):
+        p = MagicMock()
+        p.paginate.return_value = ([{"DBInstances": list(instances)}]
+                                   if op == "describe_db_instances" else [{}])
+        return p
+
+    rds.get_paginator.side_effect = _pager
+    rds.describe_db_snapshots.return_value = {"DBSnapshots": []}
+    rds.describe_db_clusters.return_value = {"DBClusters": []}
+    s._clients[f"rds:{REGION}"] = rds
+    s._check_rds()
+    return {r.check_id for r in s.results if r.status == "FAIL"}
+
+
+def test_a_neptune_instance_produces_no_rds_finding():
+    """THE DEFECT, one level down. Before the filter this produced RDS-01, RDS-02, RDS-03
+    and RDS-04 on a resource that is not an RDS database, with RDS remediation."""
+    leaked = {c for c in _rds_instance_scanner([_instance("graph-1", "neptune")])
+              if c.startswith("RDS-")}
+    assert not leaked, f"a Neptune instance was scored as RDS: {sorted(leaked)}"
+
+
+def test_a_documentdb_instance_produces_no_rds_finding():
+    leaked = {c for c in _rds_instance_scanner([_instance("docs-1", "docdb")])
+              if c.startswith("RDS-")}
+    assert not leaked, f"a DocumentDB instance was scored as RDS: {sorted(leaked)}"
+
+
+def test_a_real_rds_instance_still_fails_everything_it_should():
+    """The other half of the ratchet, and the reason the filter is not just a delete."""
+    fails = _rds_instance_scanner([_instance("prod-mysql", "mysql")])
+    assert {"RDS-01", "RDS-02", "RDS-03", "RDS-04"} <= fails, sorted(fails)
+
+
+def test_an_unknown_engine_is_still_scored_at_the_instance_level():
+    """PERMISSIVE BY DESIGN, exactly as at the cluster level. An allow-list would silently
+    stop scoring every RDS engine AWS ships after the day it was written -- the failure
+    mode hardest to notice, because the output is simply quieter."""
+    for engine in ("some-engine-aws-ships-in-2029", ""):
+        fails = _rds_instance_scanner([_instance("mystery", engine)])
+        assert {"RDS-01", "RDS-02"} <= fails, (
+            f"an instance with Engine={engine!r} was silently dropped: {sorted(fails)}")
+
+
+def test_an_instance_with_no_engine_field_at_all_is_still_scored():
+    inst = _instance("mystery", "mysql")
+    del inst["Engine"]
+    assert {"RDS-01", "RDS-02"} <= _rds_instance_scanner([inst]), (
+        "an instance with no Engine key was silently dropped")
+
+
+def test_a_mixed_response_splits_correctly():
+    """The realistic shape: one DescribeDBInstances response holding all three services.
+    The RDS instance must still be scored while its neighbours are not."""
+    fails = _rds_instance_scanner([_instance("prod-mysql", "mysql"),
+                                   _instance("graph-1", "neptune"),
+                                   _instance("docs-1", "docdb")])
+    assert {"RDS-01", "RDS-02", "RDS-03", "RDS-04"} <= fails, sorted(fails)
+
+
+# ── the replacements, without which the filter above deletes coverage ────────
+def test_nep06_public_instance_fails():
+    """RDS-02's replacement for Neptune, and the more serious finding of the two: Neptune
+    has no database users, so on a cluster without IAM auth the security group is the
+    entire access control."""
+    s = _neptune_scanner(instances=[{"DBInstanceIdentifier": "graph-1",
+                                     "PubliclyAccessible": True}])
+    _renders(s, "NEP-06", "CRITICAL", contains="graph-1")
+
+
+def test_nep06_passes_on_a_private_instance():
+    s = _neptune_scanner(instances=[{"DBInstanceIdentifier": "graph-1",
+                                     "PubliclyAccessible": False}])
+    assert not _ids(s, "NEP-06", "FAIL")
+    assert _ids(s, "NEP-06", "PASS")
+
+
+def test_nep07_short_retention_fails_and_seven_days_passes():
+    """RDS-03's replacement, read from the CLUSTER because that is where Neptune holds it.
+    Neptune's minimum retention is 1, so a check for 0 would never fire -- the decidable
+    question is whether the window is long enough to find a problem inside."""
+    bad = _neptune_scanner([_cluster("graph", "neptune", encrypted=True,
+                                     deletion_protection=True)
+                            | {"BackupRetentionPeriod": 1}])
+    _renders(bad, "NEP-07", "MEDIUM", contains="graph")
+    good = _neptune_scanner([_cluster("graph", "neptune", encrypted=True,
+                                      deletion_protection=True)
+                             | {"BackupRetentionPeriod": 7}])
+    assert not _ids(good, "NEP-07", "FAIL")
+    assert _ids(good, "NEP-07", "PASS")
+
+
+def test_nep08_iam_auth_off_fails():
+    s = _neptune_scanner([_cluster("graph", "neptune")
+                          | {"IAMDatabaseAuthenticationEnabled": False}])
+    _renders(s, "NEP-08", "HIGH", contains="graph")
+
+
+def test_nep08_is_rated_above_the_aurora_equivalent():
+    """Not a style preference. On Aurora, IAM auth off means static passwords -- a
+    credential-hygiene problem. On Neptune it means no authentication exists at all,
+    because the engine has no database users to have passwords."""
+    from engine.aws_live_scanner import CHECK_SEVERITY
+    order = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    assert order.index(CHECK_SEVERITY["NEP-08"]) > order.index(CHECK_SEVERITY["AUR-08"])
+
+
+def test_nep09_audit_export_missing_fails_and_present_passes():
+    off = _neptune_scanner([_cluster("graph", "neptune")
+                            | {"EnabledCloudwatchLogsExports": []}])
+    _renders(off, "NEP-09", "MEDIUM", contains="graph")
+    on = _neptune_scanner([_cluster("graph", "neptune")
+                           | {"EnabledCloudwatchLogsExports": ["audit"]}])
+    assert not _ids(on, "NEP-09", "FAIL")
+    assert _ids(on, "NEP-09", "PASS")
+
+
+def test_nep09_says_nothing_when_the_field_is_absent():
+    """An absent list is not an empty one. AWS omitting the key would otherwise be read
+    as 'no logs exported' and produce a finding from a fact we do not have."""
+    s = _neptune_scanner([_cluster("graph", "neptune")])
+    assert not _ids(s, "NEP-09", "FAIL"), (
+        "a missing EnabledCloudwatchLogsExports was treated as an empty one")
+
+
+def test_nep10_single_az_fails():
+    s = _neptune_scanner([_cluster("graph", "neptune") | {"MultiAZ": False}])
+    _renders(s, "NEP-10", "MEDIUM", contains="graph")
+
+
+def test_docdb07_public_instance_fails():
+    s = _docdb_scanner(instances=[{"DBInstanceIdentifier": "docs-1",
+                                   "PubliclyAccessible": True}])
+    _renders(s, "DOCDB-07", "CRITICAL", contains="docs-1")
+
+
+def test_docdb08_short_retention_fails_and_seven_days_passes():
+    bad = _docdb_scanner([_cluster("docs", "docdb") | {"BackupRetentionPeriod": 1}])
+    _renders(bad, "DOCDB-08", "MEDIUM", contains="docs")
+    good = _docdb_scanner([_cluster("docs", "docdb") | {"BackupRetentionPeriod": 7}])
+    assert not _ids(good, "DOCDB-08", "FAIL")
+    assert _ids(good, "DOCDB-08", "PASS")
+
+
+def test_the_instance_replacements_cover_what_the_filter_removed():
+    """THE ANTI-REGRESSION TEST for the instance plane, matching the cluster one above.
+    A public, short-retention Neptune instance used to produce RDS-02 and RDS-03. It still
+    produces two findings -- NEP-06 and NEP-07 -- so the filter moved them rather than
+    deleting them. The DocumentDB half is DOCDB-07 and DOCDB-08.
+    """
+    nept = _neptune_scanner([_cluster("graph", "neptune")
+                             | {"BackupRetentionPeriod": 1}],
+                            instances=[{"DBInstanceIdentifier": "graph-1",
+                                        "PubliclyAccessible": True}])
+    docdb = _docdb_scanner([_cluster("docs", "docdb") | {"BackupRetentionPeriod": 1}],
+                           instances=[{"DBInstanceIdentifier": "docs-1",
+                                       "PubliclyAccessible": True}])
+    got = ({r.check_id for r in nept.results if r.status == "FAIL"}
+           | {r.check_id for r in docdb.results if r.status == "FAIL"})
+    assert {"NEP-06", "NEP-07", "DOCDB-07", "DOCDB-08"} <= got, (
+        f"coverage was lost, not moved: {sorted(got)}")
+
+
+def test_the_sibling_sections_filter_their_own_instances_too():
+    """The mirror of the RDS filter. The neptune and docdb endpoints are forks of the same
+    control plane, so scoring whatever they return has the same failure mode in reverse."""
+    nept = _neptune_scanner(instances=[{"DBInstanceIdentifier": "prod-mysql",
+                                        "Engine": "mysql",
+                                        "PubliclyAccessible": True}])
+    assert not _ids(nept, "NEP-06", "FAIL"), "an RDS instance was scored as Neptune"
+    docdb = _docdb_scanner(instances=[{"DBInstanceIdentifier": "prod-mysql",
+                                       "Engine": "mysql",
+                                       "PubliclyAccessible": True}])
+    assert not _ids(docdb, "DOCDB-07", "FAIL"), "an RDS instance was scored as DocumentDB"
+
+
+def test_a_failed_instance_read_is_a_warning_not_a_finding():
+    """Same rule as the cluster read: a read we could not make is not a security finding.
+    NEP-06 is CRITICAL, so reporting an AccessDenied as one would be a critical finding
+    manufactured from an absence of information."""
+    s = make_scanner(sections=["NEPTUNE"])
+    s.account = OWN
+    nep = MagicMock()
+
+    def _pager(op):
+        p = MagicMock()
+        if op == "describe_db_instances":
+            p.paginate.side_effect = RuntimeError("AccessDenied")
+        else:
+            p.paginate.return_value = [{}]
+        return p
+
+    nep.get_paginator.side_effect = _pager
+    s._clients[f"neptune:{REGION}"] = nep
+    s._check_neptune()
+    assert not _ids(s, "NEP-06", "FAIL"), "a failed read was reported as a finding"
+    warns = _ids(s, "NEP-06", "WARN")
+    assert warns and "NOT EVALUATED" in warns[0].message

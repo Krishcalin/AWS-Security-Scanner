@@ -46,7 +46,8 @@ _CONF_RANK = {"low": 0, "medium": 1, "high": 2}
 #: this loader, which is a pure function over ANY document: fixtures and customer
 #: overlays legitimately declare only some natives, so an equality check here would
 #: reject them. Adding a sixth native framework means editing both places.
-_NATIVE_IDS = frozenset({"CIS", "CIS-COMPUTE", "PCI-DSS", "HIPAA", "SOC2", "NIST"})
+_NATIVE_IDS = frozenset({"CIS", "CIS-COMPUTE", "CIS-DB", "CIS-AL2", "PCI-DSS", "HIPAA",
+                         "SOC2", "NIST"})
 
 # compliance/ sits at the REPO ROOT and this module lives in engine/, so the
 # anchor climbs out of the package first. Before the engine/hub/store split it
@@ -172,11 +173,13 @@ def framework_citation(framework_id: str, control: str,
     """A compliance citation that names the DOCUMENT, not just the number.
 
     WHY THIS EXISTS. A finding carries ``{"CIS": "2.3.2"}`` and the exports render it
-    as ``CIS 2.3.2``. That number only means something once you know which CIS
-    document and which edition it indexes: "2.3" is an RDS control in the AWS
-    Foundations Benchmark and "Ensure Tag Policies are Enabled" in the AWS Compute
-    Services Benchmark. The registry has carried the name and version all along
-    (``CIS`` -> "CIS AWS Foundations Benchmark" v3.0); only the exports never asked.
+    as ``CIS 3.2.3``. That number only means something once you know which CIS
+    document and which edition it indexes: "3.2" is an RDS subsection in the AWS
+    Foundations Benchmark and an ECS control in the AWS Compute Services Benchmark.
+    THE EDITION IS NOT DECORATION EITHER — the AWS Foundations Benchmark renumbered
+    every one of its sections at v7.0.0, so the same finding cited 2.3.2 under v3.0 and
+    cites 3.2.3 now. The registry has carried the name and version all along
+    (``CIS`` -> "CIS AWS Foundations Benchmark" v7.0.0); only the exports never asked.
     An auditor reading a Security Hub finding cannot look up an unqualified number.
 
     The rendered form is ``Name vVersion/control`` — AWS Security Hub's own

@@ -43,7 +43,16 @@ DETAIL_MAP = aws_finding_detail.FINDING_DETAIL
 
 # Frameworks a compliance mapping may key on. A stray key here silently drops a
 # control from the crosswalk, which derives 34 further frameworks from the NIST spine.
-ALLOWED_FRAMEWORKS = {"CIS", "CIS-COMPUTE", "PCI-DSS", "HIPAA", "SOC2", "NIST"}
+# CIS-DB joins CIS-COMPUTE for the same reason CIS-COMPUTE exists at all: the service
+# benchmarks reuse the Foundations section numbers for unrelated controls. Foundations 2.2
+# is CloudTrail log-file validation, Compute 2.2 is EBS, Database 2.2 is Aurora encryption
+# at rest. One shared key would mis-cite every mapping in every direction at once.
+#: CIS-AL2 is the CIS Amazon Linux 2 Benchmark — an OPERATING SYSTEM benchmark, not an
+#: AWS-service one, and it reuses section numbers for entirely unrelated controls: AL2 2.2
+#: is "special purpose services", Foundations 2.2 is the account contact record. Same
+#: reasoning that gave CIS-COMPUTE and CIS-DB their own keys.
+ALLOWED_FRAMEWORKS = {"CIS", "CIS-COMPUTE", "CIS-DB", "CIS-AL2",
+                      "PCI-DSS", "HIPAA", "SOC2", "NIST"}
 
 # ── the frozen backlog — now EMPTY, and it can only stay that way ───────────
 # Depth pass 2 filled the last of it. These stay as (empty) frozensets rather than

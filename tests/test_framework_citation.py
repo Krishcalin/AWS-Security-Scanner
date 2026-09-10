@@ -34,8 +34,16 @@ def registry():
 # ── the citation itself ─────────────────────────────────────────────────────
 
 def test_a_citation_names_the_document_and_edition():
-    assert (cc.framework_citation("CIS", "1.5")
-            == "CIS AWS Foundations Benchmark v3.0/1.5")
+    """The EDITION is half the citation, and this test is the reason that matters.
+
+    It read `v3.0/1.5` for as long as the registry said v3.0, and it was correct then.
+    v7.0.0 renumbers every section — 1.5 is root MFA in v3.0 and does not exist at all in
+    v7.0.0, where section 1 is the Introduction — so a citation that named only the
+    control would have gone from right to wrong with nothing failing anywhere. Naming the
+    document and its edition is what makes a stale mapping visible instead of plausible.
+    """
+    assert (cc.framework_citation("CIS", "2.5")
+            == "CIS AWS Foundations Benchmark v7.0.0/2.5")
 
 
 def test_an_edition_already_in_the_name_is_not_repeated():
@@ -102,8 +110,12 @@ def test_asff_related_requirements_name_the_document():
     to the wrong document as easily as the right one."""
     asff, _ = exported()
     related = asff[0]["Compliance"]["RelatedRequirements"]
-    assert "CIS AWS Foundations Benchmark v3.0/2.3.2" in related, related
-    assert "CIS 2.3.2" not in related, related
+    assert "CIS AWS Foundations Benchmark v7.0.0/3.2.3" in related, related
+    assert "CIS 3.2.3" not in related, related
+    # RDS-02 carries BOTH benchmarks, and the two numbers are unrelated: Foundations
+    # 3.2.3 and Database 3.12. Rendering either as a bare "CIS 3.x" would make them
+    # look like the same control seen twice.
+    assert "CIS AWS Database Services Benchmark v2.0.0/3.12" in related, related
 
 
 def test_sarif_help_carries_citations_but_tags_stay_machine_stable():
@@ -111,8 +123,8 @@ def test_sarif_help_carries_citations_but_tags_stay_machine_stable():
     the qualified citation goes in the help a person reads."""
     _, sarif = exported()
     rule = sarif["runs"][0]["tool"]["driver"]["rules"][0]
-    assert "CIS:2.3.2" in rule["properties"]["tags"], rule["properties"]["tags"]
-    assert "CIS AWS Foundations Benchmark v3.0/2.3.2" in rule["help"]["text"]
+    assert "CIS:3.2.3" in rule["properties"]["tags"], rule["properties"]["tags"]
+    assert "CIS AWS Foundations Benchmark v7.0.0/3.2.3" in rule["help"]["text"]
     assert "**Compliance:**" in rule["help"]["markdown"]
 
 

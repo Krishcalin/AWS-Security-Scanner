@@ -59,10 +59,15 @@ def test_load_shipped_file_is_valid():
     assert digest.startswith("cw-")
     natives = [k for k, v in fw.items() if v["native"]]
     derived = [k for k, v in fw.items() if not v["native"]]
-    # CIS-COMPUTE is a SIXTH native, not a synonym for CIS: the Compute Services
-    # Benchmark numbers its controls independently of Foundations, so a citation has
-    # to name the document (2.3 is RDS in Foundations and a tag policy here).
-    assert set(natives) == {"CIS", "CIS-COMPUTE", "PCI-DSS", "HIPAA", "SOC2", "NIST"}
+    # CIS-COMPUTE is a SIXTH native, CIS-DB a SEVENTH and CIS-AL2 an EIGHTH, none a
+    # synonym for CIS: each benchmark numbers its controls independently of the others, so
+    # a citation has to name the document. 2.2 is the account contact record in
+    # Foundations v7.0.0, EBS encryption in Compute, Aurora encryption at rest in
+    # Database, and special-purpose services in Amazon Linux 2 -- four unrelated controls
+    # behind one number. CIS-AL2 is also the first native that is not an AWS-service
+    # benchmark at all: it describes an operating system, which is why its family is "os".
+    assert set(natives) == {"CIS", "CIS-COMPUTE", "CIS-DB", "CIS-AL2",
+                            "PCI-DSS", "HIPAA", "SOC2", "NIST"}
     assert len(derived) >= 30                       # the breadth goal
     # every mapped NIST control is one of the 38 the product actually tags
     assert set(xw.keys()) <= set(_universe())
