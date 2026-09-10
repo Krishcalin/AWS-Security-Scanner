@@ -4761,18 +4761,6 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Prevent recurrence: enable GuardDuty org auto-enable (aws guardduty update-organization-configuration --detector-id <DETECTOR_ID> --auto-enable-organization-members ALL) and wire high-severity findings to an EventBridge auto-response/notification rule",
         ],
     },
-    "THREAT-02": {
-        "risk": "This finding concerns a sensitive control-plane (management-plane) API event that needs confirmation it was authorized, and whether continuous threat detection is fully in place to catch such events automatically. Attackers who obtain credentials frequently make control-plane changes early in an intrusion (disabling GuardDuty/CloudTrail, creating access keys, altering trust policies), and without reviewed audit trails and always-on detection these actions blend into normal activity. Unmonitored management-plane events are how account takeovers stay invisible.",
-        "impact": "An unauthorized or unreviewed control-plane change can quietly weaken defenses (disabled logging/detection) or grant persistent access, letting an attacker operate undetected and undermining forensic and compliance evidence.",
-        "steps": [
-            "Identify who made the event and whether it was authorized: aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=<EVENT> and inspect the userIdentity, sourceIPAddress, and time",
-            "If the actor or change is not recognized, treat it as an incident: disable/rotate the offending principal's credentials and revert the configuration change",
-            "Ensure continuous detection is enabled so future events are caught automatically: aws guardduty create-detector --enable (or confirm an existing detector is ENABLED)",
-            "Confirm an organization CloudTrail management-events trail is on and immutable so all control-plane activity is recorded: aws cloudtrail get-trail-status --name <TRAIL> and verify log-file validation",
-            "Route security-relevant events (guardduty, cloudtrail:StopLogging, iam:CreateAccessKey, etc.) to EventBridge alerting for real-time review",
-            "Prevent recurrence: apply an SCP that denies disabling GuardDuty/CloudTrail and require MFA/approval for high-risk control-plane actions",
-        ],
-    },
     "VPC-01": {
         "risk": "A security group ingress rule allows a high-risk service port (SSH 22, RDP 3389, or a database/cache port such as MSSQL 1433, MySQL 3306, PostgreSQL 5432, MongoDB 27017, Redis 6379, Elasticsearch 9200/9300, SMB 445, or HTTP-alt 8080) from 0.0.0.0/0 or ::/0, so any host on the internet can attempt to connect. Attackers continuously mass-scan the entire IPv4/IPv6 space for these ports and, on a hit, launch credential brute-force, exploit unauthenticated data stores (open Redis/Elasticsearch/MongoDB), or use the host as an initial foothold. Because the security group is the primary L4 control in a VPC, one over-broad rule can directly expose the workload with no additional layer to stop the traffic.",
         "impact": "Direct internet exposure of administrative or database services enables brute-force, unauthenticated data theft, or remote code execution, leading to full workload compromise and lateral movement into the VPC.",
@@ -4889,6 +4877,18 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Associate it with each internet-facing resource: aws wafv2 associate-web-acl --web-acl-arn <ACL_ARN> --resource-arn <ALB_OR_APIGW_ARN> (for CloudFront, set WebACLId in the distribution config)",
             "Verify a malicious probe is blocked (403) and that requests appear in the Web ACL's sampled requests / CloudWatch metrics",
             "Prevent recurrence by deploying WAF through AWS Firewall Manager with an org policy that auto-attaches a baseline Web ACL to all new ALB/CloudFront/API Gateway resources",
+        ],
+    },
+    "WAF-06": {
+        "risk": "An internet-facing application load balancer has no WAFv2 Web ACL associated with it, so every request from the internet reaches the application unfiltered. This is a narrower and more actionable question than WAF-01: WAF-01 observes that a scope holds no Web ACLs, which on an estate that needs no WAF is a correct and unactionable observation, whereas this finding names a specific entry point that is reachable from the internet right now with nothing in front of it. Only application load balancers are reported — a network load balancer operates below the layer a WAF inspects and cannot carry a Web ACL — and internal load balancers are out of scope because a WAF protects the internet edge.",
+        "impact": "Requests carrying the known-bad-input classes an AWS managed rule group would drop — SQL injection, cross-site scripting, path traversal, exploit probes against common frameworks — arrive at the application intact, and the only defence is the application's own input handling. There is also no request-level record of web attacks against this entry point, because a Web ACL is what produces one.",
+        "steps": [
+            "Confirm the association is genuinely absent rather than unreadable: aws wafv2 list-resources-for-web-acl --web-acl-arn <ACL_ARN> --resource-type APPLICATION_LOAD_BALANCER (this check stays silent when the call is denied, so a finding means the list was read and the ARN was not in it)",
+            "If a suitable Web ACL already exists, associate it: aws wafv2 associate-web-acl --web-acl-arn <ACL_ARN> --resource-arn <ALB_ARN>",
+            "If none exists, create one carrying an AWS managed rule group first: aws wafv2 create-web-acl --name <ACL_NAME> --scope REGIONAL --default-action Allow={} --rules with AWSManagedRulesCommonRuleSet, then associate it",
+            "Put the ACL in COUNT mode first and read the sampled requests before switching to BLOCK, so a legitimate traffic pattern is not broken by the rule group's defaults",
+            "If this load balancer is deliberately unfiltered — an internal tool on a public address, or a service fronted by a WAF elsewhere — waive the finding with that reason recorded rather than leaving it open",
+            "Prevent recurrence by deploying WAF through AWS Firewall Manager with an org policy that auto-attaches a baseline Web ACL to new internet-facing ALBs",
         ],
     },
     "WAF-02": {

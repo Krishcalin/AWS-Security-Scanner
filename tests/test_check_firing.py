@@ -248,8 +248,29 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: Never-observed (28) and never-driven-to-failure (62) held steady for the third batch
 #: running.
 #: See tests/test_cis_al2.py and docs/CIS_AL2_BENCHMARK.md.
-MAX_NEVER_OBSERVED = 28
-MIN_PROVEN_FAILING = 476
+#:
+#: 476 -> 508, and NEVER-OBSERVED REACHES ZERO (tranche 8). Every registered check now
+#: emits something somewhere, which is the first time that has been true. The ceiling is
+#: 0 from here: a check arriving with no driving test breaks the build rather than
+#: joining a backlog, because there is no longer a backlog for it to hide in.
+#:
+#: Three of the 28 were not fixture problems and are recorded here because the numbers
+#: alone would misrepresent them:
+#:   * SM-12 was UNREACHABLE. aws_sagemaker.notebook_platform was written, exported and
+#:     unit tested with no production caller -- built-and-unreached one level below what
+#:     tests/test_unreached_modules.py can see, since it asks whether a MODULE has a
+#:     caller and aws_sagemaker plainly does. It is now wired.
+#:   * THREAT-02 was RETIRED, not driven. It was the genuinely dead check this file was
+#:     built to expose. Its control-plane-anomaly semantics live in
+#:     aws_cdr.normalize_cloudtrail_anomaly and are emitted as THREAT-ING, so nothing is
+#:     lost but a claim of coverage that did not exist.
+#:   * WAF-01 gained no FAIL path. The useful question -- an internet-facing ALB with no
+#:     Web ACL -- became WAF-06, a new id, so WAF-01 keeps its meaning for anyone already
+#:     filtering on it. WAF-01, ACM-05 and SHAI-03 were all brought down to LOW to match
+#:     what a WARN can actually render.
+#: Registered stays 566: THREAT-02 out, WAF-06 in. It is a different 566.
+MAX_NEVER_OBSERVED = 0
+MIN_PROVEN_FAILING = 508
 
 
 def doc_text() -> str:
@@ -327,15 +348,36 @@ def test_the_bounds_are_not_stale():
         % (MIN_PROVEN_FAILING, failing))
 
 
-def test_threat_02_is_still_listed_as_never_observed():
-    """The known dead check, pinned so it cannot be quietly forgotten. Either a test
-    drives it, or the check is retired from the catalogue — both are progress, and
-    both change this line deliberately."""
+def test_threat_02_stays_retired():
+    """Replaces `test_threat_02_is_still_listed_as_never_observed`, which offered two
+    ways out — drive it, or retire it — and tranche 8 took the second. It was the one
+    genuinely dead check: registered in all four maps, given a full remediation
+    write-up, counted in the published total, emitted by nothing.
+
+    Pinned in the new direction so it cannot drift back in as an unemitted id. If a
+    real emit path is ever built, re-register it AND delete this test — the point is
+    that the id never again exists in the catalogue without one."""
+    from engine import aws_finding_detail
+    from engine.aws_live_scanner import (CHECK_SEVERITY, COMPLIANCE_MAP,
+                                         REMEDIATION_MAP)
+    for name, m in (("CHECK_SEVERITY", CHECK_SEVERITY),
+                    ("COMPLIANCE_MAP", COMPLIANCE_MAP),
+                    ("REMEDIATION_MAP", REMEDIATION_MAP),
+                    ("FINDING_DETAIL", aws_finding_detail.FINDING_DETAIL)):
+        assert "THREAT-02" not in m, (
+            f"THREAT-02 is back in {name}. It was retired because nothing emitted "
+            f"it; re-registering it without an emit path recreates the exact defect "
+            f"docs/CHECK_FIRING.md exists to expose.")
+
+
+def test_the_never_observed_bucket_stays_empty():
+    """The milestone tranche 8 reached, held. Every registered check emits something
+    somewhere, so a new check without a driving test has nowhere to hide: it lands
+    here as a build failure instead of joining a backlog."""
     text = doc_text()
-    unseen = text.split("## Never observed")[1].split("## Runs, but never fails")[0]
-    assert "`THREAT-02`" in unseen, (
-        "THREAT-02 is no longer never-observed. If it now fires, delete this test; if "
-        "it was retired from the catalogue, delete it here too.")
+    unseen = text.split("## Never observed")[1].split("##")[0]
+    assert "None" in unseen, (
+        "the never-observed bucket is no longer empty:\n" + unseen.strip()[:800])
 
 
 def test_no_unregistered_check_reaches_a_failure():

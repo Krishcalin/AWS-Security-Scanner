@@ -548,8 +548,14 @@ CHECK_SEVERITY = {
     "ECS-04": "HIGH", "ECS-05": "MEDIUM",
     "SEC-01": "HIGH", "SEC-02": "HIGH", "SEC-03": "LOW", "SEC-04": "LOW",
     "SEC-05": "CRITICAL",
-    "WAF-01": "HIGH", "WAF-02": "MEDIUM", "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
-    "WAF-05": "MEDIUM",
+    # WAF-01 is LOW because it can only WARN: "no Web ACLs in this scope" is an
+    # observation, and on an estate that needs no WAF it is a correct one. Declaring
+    # it HIGH advertised a severity `_add` would never render for it. WAF-06 is the
+    # question that IS a defect -- an internet-facing ALB with nothing in front of
+    # it -- and it is a separate id so WAF-01 keeps its meaning for anyone already
+    # filtering on it.
+    "WAF-01": "LOW", "WAF-02": "MEDIUM", "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
+    "WAF-05": "MEDIUM", "WAF-06": "HIGH",
     "ELC-01": "HIGH", "ELC-02": "HIGH", "ELC-03": "HIGH", "ELC-04": "MEDIUM",
     "ELC-05": "HIGH", "ELC-06": "MEDIUM",
     "OSR-01": "HIGH", "OSR-02": "HIGH", "OSR-03": "MEDIUM",
@@ -567,7 +573,12 @@ CHECK_SEVERITY = {
     "RSS-01": "HIGH", "RSS-02": "LOW", "RSS-03": "HIGH", "RSS-04": "MEDIUM",
     "EFS-01": "HIGH", "EFS-02": "MEDIUM", "EFS-03": "LOW",
     "ACM-01": "HIGH", "ACM-02": "MEDIUM", "ACM-03": "LOW",
-    "ACM-04": "HIGH", "ACM-05": "MEDIUM",
+    # ACM-05 is LOW because it can only WARN. It reports an IMPORTED certificate, or
+    # one INELIGIBLE for managed renewal -- importing is a deliberate and legitimate
+    # choice, and the finding is the operational reminder "this one will not renew
+    # itself". `_add` forces a WARN to LOW regardless of the catalogue, so declaring
+    # it MEDIUM advertised a severity it could never render.
+    "ACM-04": "HIGH", "ACM-05": "LOW",
     "SM-01": "HIGH", "SM-02": "MEDIUM", "SM-03": "MEDIUM", "SM-04": "MEDIUM",
     "SM-05": "HIGH", "SM-06": "MEDIUM", "SM-07": "MEDIUM",
     # AI-SPM pillar: execution-role blast radius + network isolation, plus the
@@ -762,7 +773,11 @@ CHECK_SEVERITY = {
     # serialized model is present -- MART-05 carries the far commoner "this format can
     # execute at all", which is LOW because nearly every PyTorch model is in it.
     "MART-04": "CRITICAL", "MART-05": "LOW",
-    "SHAI-01": "MEDIUM", "SHAI-02": "MEDIUM", "SHAI-03": "MEDIUM",
+    # SHAI-03 is LOW for the same reason as ACM-05, and its own message says why:
+    # it ends "Not applicable if the VPC does not use Bedrock". A check that cannot
+    # establish whether its subject is in scope is an honest could-not-determine --
+    # the WINVULN-03 shape -- and it only ever WARNs, which renders LOW anyway.
+    "SHAI-01": "MEDIUM", "SHAI-02": "MEDIUM", "SHAI-03": "LOW",
     "AILOG-01": "CRITICAL", "AILOG-02": "HIGH", "AILOG-03": "MEDIUM",
     # Forensic coverage. AILOG-04 is HIGH because without AWS::Bedrock::Model data
     # events there is no record of who invoked which model -- the question AITHR-01
@@ -815,7 +830,14 @@ CHECK_SEVERITY = {
     "VULN-04": "HIGH",
     "DATA-01": "MEDIUM", "DATA-02": "HIGH", "DATA-03": "MEDIUM",
     "EXTACCESS-01": "HIGH", "EXTACCESS-02": "MEDIUM", "EXTACCESS-03": "MEDIUM",
-    "THREAT-01": "HIGH", "THREAT-02": "MEDIUM", "ATTACK-02": "CRITICAL",
+    # THREAT-02 was RETIRED in tranche 8. It was registered in all four metadata
+    # maps, carried a full remediation write-up, was counted in the published
+    # total, and was emitted by no code path anywhere -- the one genuinely dead
+    # check docs/CHECK_FIRING.md was built to expose. Its control-plane-anomaly
+    # SEMANTICS are not lost: aws_cdr.normalize_cloudtrail_anomaly implements them
+    # and the CDR path emits them as THREAT-ING / THREAT-ING-KEV. Registering an id
+    # nothing can emit reads to every consumer as coverage that does not exist.
+    "THREAT-01": "HIGH", "ATTACK-02": "CRITICAL",
     # Phase 4: correlation & choke points (HIGH — the toxic combos already carry
     # CRITICAL via ATTACK-01/02; CHOKEPOINT avoids double-weighting the same risk)
     "CHOKEPOINT-01": "HIGH",
@@ -976,6 +998,7 @@ COMPLIANCE_MAP = {
     "SEC-01": {"PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12(1)"},
     "SEC-02": {"PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12(1)"},
     "WAF-01": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "WAF-06": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
     "WAF-02": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "ELC-01": {"CIS-DB": "5.3", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "ELC-02": {"CIS-DB": "5.3", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
@@ -1287,7 +1310,6 @@ COMPLIANCE_MAP = {
     "EXTACCESS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "EXTACCESS-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "THREAT-01": {"PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
-    "THREAT-02": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
     "ATTACK-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "CHOKEPOINT-01": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "CA-8"},
     # ── Backfill: FAIL-capable checks previously missing a compliance mapping ──
@@ -1563,6 +1585,7 @@ REMEDIATION_MAP = {
     "BCK-03": "Remove the public grant (or scope cross-account with aws:PrincipalOrgID) and re-apply: aws backup put-backup-vault-access-policy --backup-vault-name <VAULT> --policy file://scoped-vault-policy.json ; or drop it: aws backup delete-backup-vault-access-policy --backup-vault-name <VAULT>",
     "WAF-01": "Associate WAF with ALB: aws wafv2 associate-web-acl --web-acl-arn <ACL_ARN> --resource-arn <ALB_ARN>",
     "WAF-02": "Enable WAF logging: aws wafv2 put-logging-configuration --logging-configuration ResourceArn=<ACL_ARN>,LogDestinationConfigs=<LOG_ARN>",
+    "WAF-06": "Put a Web ACL in front of the internet-facing load balancer: aws wafv2 associate-web-acl --web-acl-arn <ACL_ARN> --resource-arn <ALB_ARN>. If no suitable ACL exists yet, create one with an AWS managed rule group first (aws wafv2 create-web-acl --scope REGIONAL --default-action Allow={} --rules with AWSManagedRulesCommonRuleSet), then associate it. A load balancer deliberately left unfiltered should be waived rather than left as an open finding.",
     "WAF-05": "Add an AWS managed rule group (OWASP baseline): aws wafv2 update-web-acl --name <ACL_NAME> --scope <REGIONAL|CLOUDFRONT> --id <ACL_ID> --lock-token <TOKEN> --rules '[{\"Name\":\"AWS-Common\",\"Priority\":0,\"Statement\":{\"ManagedRuleGroupStatement\":{\"VendorName\":\"AWS\",\"Name\":\"AWSManagedRulesCommonRuleSet\"}},\"OverrideAction\":{\"None\":{}},\"VisibilityConfig\":{\"SampledRequestsEnabled\":true,\"CloudWatchMetricsEnabled\":true,\"MetricName\":\"AWS-Common\"}}]'",
     "SFN-01": "Enable logging: aws stepfunctions update-state-machine --state-machine-arn <ARN> --logging-configuration '{\"level\":\"ALL\",\"includeExecutionData\":true,\"destinations\":[{\"cloudWatchLogsLogGroup\":{\"logGroupArn\":\"<LOG_ARN>\"}}]}'",
     "APIGW-01": "Enable stage logging: aws apigateway update-stage --rest-api-id <API_ID> --stage-name <STAGE> --patch-operations op=replace,path=/accessLogSettings/destinationArn,value=<LOG_GROUP_ARN> op=replace,path=/*/*/logging/loglevel,value=INFO",
@@ -1826,7 +1849,6 @@ REMEDIATION_MAP = {
     "EXTACCESS-02": "Scope the bucket policy to remove the cross-account principal (or add an aws:PrincipalOrgID condition): aws s3api put-bucket-policy --bucket <BUCKET> --policy <SCOPED_POLICY_JSON>",
     "EXTACCESS-03": "Scope the role's S3 permissions to specific buckets/prefixes instead of s3:GetObject on '*' or 'bucket/*', and bound the role: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN> (identity-policy only — also verify the bucket policy / SCP).",
     "THREAT-01": "Triage the GuardDuty finding, then isolate/rotate as needed: aws guardduty get-findings --detector-id <DETECTOR_ID> --finding-ids <FINDING_ID>; if confirmed, quarantine the resource and rotate exposed credentials. Do not archive without triage.",
-    "THREAT-02": "Confirm whether the control-plane event was authorized (aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=<EVENT>), and enable continuous detection: aws guardduty create-detector --enable",
     "ATTACK-02": "Sever the flagship chain at ANY hop: patch the exploitable CVE, remove the public ingress (aws ec2 revoke-security-group-ingress --group-id <SG> --protocol tcp --port <PORT> --cidr 0.0.0.0/0), and scope the instance-profile role's data access (aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>). Fixing the choke-point node breaks the whole path.",
     "CHOKEPOINT-01": "Remediate this single node to sever multiple attack paths at once: for an over-privileged role, aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>; for an exposed host, patch the exploitable CVE or aws ec2 revoke-security-group-ingress ...; see the finding for the node kind and the count of paths/crown-jewels it severs.",
 }
@@ -9784,6 +9806,82 @@ class AWSLiveScanner:
                     self._add("WARN", "WAF-03", "WAF", aname,
                               f"could not read WebACL detail: {e}")
 
+        self._check_waf_unprotected_entry_points()
+
+    def _check_waf_unprotected_entry_points(self):
+        """WAF-06 — an internet-facing load balancer with no Web ACL in front of it.
+
+        WHY THIS IS A NEW ID AND NOT A FAIL ADDED TO WAF-01. WAF-01 warns when a
+        scope holds no Web ACLs at all, which on a correct estate that needs no WAF
+        is an unactionable finding — tranche 7 recorded that and declined to flip
+        it. The useful question is not "are there Web ACLs" but "is anything
+        reachable from the internet left unprotected", and that is a different
+        subject: it is about the load balancer, not the ACL. Giving WAF-01 this
+        logic would silently change what the id means for anyone already filtering
+        or waiving on it, so the meaning stays put and the new question gets its
+        own id.
+
+        FAIL-OPEN ON EVERY DENIAL. Either read being refused makes the comparison
+        unsound in the direction that matters: an unreadable association list looks
+        exactly like an empty one, and an empty one turns every load balancer into
+        a finding. A denial is recorded in the coverage ledger and nothing is
+        claimed.
+        """
+        protected: set = set()
+        try:
+            waf = self._client("wafv2")
+            acls = waf.list_web_acls(Scope="REGIONAL").get("WebACLs", []) or []
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("WAF-06", "wafv2:ListWebACLs")
+            return
+        for acl in acls:
+            arn = (acl or {}).get("ARN")
+            if not arn:
+                continue
+            try:
+                protected.update(
+                    waf.list_resources_for_web_acl(WebACLArn=arn).get(
+                        "ResourceArns", []) or [])
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied(
+                        "WAF-06", "wafv2:ListResourcesForWebACL")
+                return                      # a partial set would invent findings
+
+        try:
+            elb = self._client("elbv2")
+            balancers = elb.describe_load_balancers().get(
+                "LoadBalancers", []) or []
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied(
+                    "WAF-06", "elasticloadbalancing:DescribeLoadBalancers")
+            return
+
+        for lb in balancers:
+            # Only APPLICATION load balancers can carry a Web ACL at all; a
+            # network load balancer operates below the layer a WAF inspects, so
+            # reporting one would be a finding nobody can act on.
+            if (lb or {}).get("Type") != "application":
+                continue
+            if lb.get("Scheme") != "internet-facing":
+                continue
+            arn, name = lb.get("LoadBalancerArn"), lb.get("LoadBalancerName")
+            if not arn:
+                continue
+            if arn in protected:
+                self._add("PASS", "WAF-06", "WAF", name or arn,
+                          f"Internet-facing ALB {name} is associated with a Web "
+                          f"ACL | {name}")
+            else:
+                self._add("FAIL", "WAF-06", "WAF", name or arn,
+                          f"Internet-facing application load balancer {name} has "
+                          f"no WAFv2 Web ACL associated — every request reaches "
+                          f"the application unfiltered, including the "
+                          f"known-bad-input classes a managed rule group would "
+                          f"drop | {name}")
+
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 22: AMAZON ELASTICACHE
     # ══════════════════════════════════════════════════════════════════════════
@@ -14449,6 +14547,26 @@ class AWSLiveScanner:
             else:
                 self._add("FAIL", "SM-04", "SAGEMAKER", name,
                           f"Not attached to a VPC subnet | {name}")
+
+            # SM-12 — notebook platform still supported by SageMaker.
+            # `aws_sagemaker.notebook_platform` was written, exported and unit
+            # tested and had no caller, so the id was registered in all four
+            # metadata maps, counted in the published total, and unreachable.
+            # An ABSENT PlatformIdentifier stays silent: the field is optional on
+            # older instances, and failing one for a missing field would assert an
+            # end-of-support date nobody published.
+            plat = aws_sagemaker.notebook_platform(detail)
+            if plat["known"] and not plat["supported"]:
+                self._add("FAIL", "SM-12", "SAGEMAKER", name,
+                          f"Notebook '{name}' runs on platform "
+                          f"{plat['platform']}, which is not in the supported set "
+                          f"{', '.join(aws_sagemaker.SUPPORTED_NOTEBOOK_PLATFORMS)} "
+                          f"as of {aws_sagemaker.PLATFORM_SOURCE_DATE} — an "
+                          f"unsupported platform stops receiving patches | {name}")
+            elif plat["known"]:
+                self._add("PASS", "SM-12", "SAGEMAKER", name,
+                          f"Notebook '{name}' runs on supported platform "
+                          f"{plat['platform']} | {name}")
 
             # AI-SPM stash (fused post-clobber in DATA#42) — role blast radius + egress
             self._aispm_resources.append({
