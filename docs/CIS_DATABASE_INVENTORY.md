@@ -62,7 +62,7 @@ which is the distinction that whole document exists to keep.
 | `DDB-01` | LOW | runs, no FAIL | Sensitive records (PII, cardholder, PHI) sit behind a key you cannot audit, rotate, or revoke, weakening PCI-DSS 3.4 / HIPAA / SOC2 CC6.1… |
 | `DDB-02` | HIGH | yes | A single malicious or accidental write/delete event causes permanent, unrecoverable loss of production data with no rollback window, breaching PCI-DSS… |
 | `DDB-03` | LOW | runs, no FAIL | A provisioned table without auto scaling throttles under a demand spike, turning a traffic flood into an application outage rather than a cost event. |
-| `DDB-04` | MEDIUM | runs, no FAIL | One accidental or malicious API call can wipe an entire production table irreversibly, causing outage and permanent data loss (mapped to PCI-DSS 12.10.1 /… |
+| `DDB-04` | MEDIUM | yes | One accidental or malicious API call can wipe an entire production table irreversibly, causing outage and permanent data loss (mapped to PCI-DSS 12.10.1 /… |
 | `DDB-05` | CRITICAL | yes | This is a direct data-exposure path: an unauthorized external or public principal can read, tamper with, or destroy the table's contents, causing a data… |
 | `DDB-06` | MEDIUM | yes | Anything assuming this identity can read and write every row of every DynamoDB table in the account, including tables created later. |
 | `DDB-07` | LOW | yes | DynamoDB traffic crosses the public network and cannot be restricted to specific tables by an endpoint policy. |

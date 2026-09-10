@@ -88,6 +88,7 @@ from engine import aws_cdr
 from engine import aws_mcp
 from engine import aws_nhi
 from engine import aws_perm_ledger
+from engine import aws_cis_storage
 from engine import aws_sagemaker
 from engine import aws_modelartifact
 from engine import aws_nitro
@@ -308,6 +309,14 @@ SECTIONS = [
     # HERE rather than at the end because a section listed in CHECK_MAP and absent from
     # this list never runs on a default scan — the defect that hid four AI sections.
     "APPRUNNER", "BATCH", "BEANSTALK",
+    # CIS AWS Storage Services Benchmark v1.0.0. Only ONE new section came out of a
+    # 56-recommendation document, and that ratio is the finding rather than an
+    # embarrassment -- see engine/aws_cis_storage_map.py. Elastic Disaster Recovery
+    # is the one service the benchmark covers that OverWatch could not see at all,
+    # and the staging area it manages holds a continuous copy of every protected
+    # disk outside production. The other five sections map onto EBS, EFS, S3 and
+    # BACKUP, which already exist.
+    "DRS",
     # NHI reads what the IAM section already fetched (principals + credential
     # report) and makes no call of its own, so it can sit anywhere before
     # CORRELATE. `aws_nhi` had been complete and callerless since it was written;
@@ -390,6 +399,7 @@ SECTION_LABELS = {
     "APPRUNNER":      "AWS APP RUNNER",
     "BATCH":          "AWS BATCH",
     "BEANSTALK":      "AWS ELASTIC BEANSTALK",
+    "DRS":            "ELASTIC DISASTER RECOVERY (CIS STORAGE v1.0.0)",
     "WICKR":          "AWS WICKR",
     "MEDIAPACKAGE":   "AWS ELEMENTAL MEDIAPACKAGE",
     "ELASTICACHE":    "AMAZON ELASTICACHE",
@@ -548,8 +558,25 @@ CHECK_SEVERITY = {
     "ECS-04": "HIGH", "ECS-05": "MEDIUM",
     "SEC-01": "HIGH", "SEC-02": "HIGH", "SEC-03": "LOW", "SEC-04": "LOW",
     "SEC-05": "CRITICAL",
-    "WAF-01": "HIGH", "WAF-02": "MEDIUM", "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
-    "WAF-05": "MEDIUM",
+    # WAF-01 is LOW because it can only WARN: "no Web ACLs in this scope" is an
+    # observation, and on an estate that needs no WAF it is a correct one. Declaring
+    # it HIGH advertised a severity `_add` would never render for it. WAF-06 is the
+    # question that IS a defect -- an internet-facing ALB with nothing in front of
+    # it -- and it is a separate id so WAF-01 keeps its meaning for anyone already
+    # filtering on it.
+    "WAF-01": "LOW", "WAF-02": "MEDIUM", "WAF-03": "MEDIUM", "WAF-04": "MEDIUM",
+    "WAF-05": "MEDIUM", "WAF-06": "HIGH",
+    # CIS AWS Storage Services v1.0.0. DRS-01 is HIGH because the staging area holds
+    # a continuous copy of every protected disk: unencrypted there means the whole
+    # estate's data is unencrypted somewhere nobody looks. DRS-03 is HIGH because a
+    # stalled replica presents as protection and is not. DRS-02 and DRS-04 are
+    # MEDIUM -- public replication routing is a real exposure but a bounded one, and
+    # an undrilled recovery is a readiness gap rather than a live weakness.
+    "DRS-01": "HIGH", "DRS-02": "MEDIUM", "DRS-03": "HIGH", "DRS-04": "MEDIUM",
+    # BCK-04 answers no CIS recommendation: the benchmark asks that backups exist
+    # and never that they survive the region. BCK-05 is LOW because an AWS-owned key
+    # is still encryption -- the finding is key ownership, not exposure.
+    "BCK-04": "MEDIUM", "BCK-05": "LOW",
     "ELC-01": "HIGH", "ELC-02": "HIGH", "ELC-03": "HIGH", "ELC-04": "MEDIUM",
     "ELC-05": "HIGH", "ELC-06": "MEDIUM",
     "OSR-01": "HIGH", "OSR-02": "HIGH", "OSR-03": "MEDIUM",
@@ -567,7 +594,12 @@ CHECK_SEVERITY = {
     "RSS-01": "HIGH", "RSS-02": "LOW", "RSS-03": "HIGH", "RSS-04": "MEDIUM",
     "EFS-01": "HIGH", "EFS-02": "MEDIUM", "EFS-03": "LOW",
     "ACM-01": "HIGH", "ACM-02": "MEDIUM", "ACM-03": "LOW",
-    "ACM-04": "HIGH", "ACM-05": "MEDIUM",
+    # ACM-05 is LOW because it can only WARN. It reports an IMPORTED certificate, or
+    # one INELIGIBLE for managed renewal -- importing is a deliberate and legitimate
+    # choice, and the finding is the operational reminder "this one will not renew
+    # itself". `_add` forces a WARN to LOW regardless of the catalogue, so declaring
+    # it MEDIUM advertised a severity it could never render.
+    "ACM-04": "HIGH", "ACM-05": "LOW",
     "SM-01": "HIGH", "SM-02": "MEDIUM", "SM-03": "MEDIUM", "SM-04": "MEDIUM",
     "SM-05": "HIGH", "SM-06": "MEDIUM", "SM-07": "MEDIUM",
     # AI-SPM pillar: execution-role blast radius + network isolation, plus the
@@ -762,7 +794,11 @@ CHECK_SEVERITY = {
     # serialized model is present -- MART-05 carries the far commoner "this format can
     # execute at all", which is LOW because nearly every PyTorch model is in it.
     "MART-04": "CRITICAL", "MART-05": "LOW",
-    "SHAI-01": "MEDIUM", "SHAI-02": "MEDIUM", "SHAI-03": "MEDIUM",
+    # SHAI-03 is LOW for the same reason as ACM-05, and its own message says why:
+    # it ends "Not applicable if the VPC does not use Bedrock". A check that cannot
+    # establish whether its subject is in scope is an honest could-not-determine --
+    # the WINVULN-03 shape -- and it only ever WARNs, which renders LOW anyway.
+    "SHAI-01": "MEDIUM", "SHAI-02": "MEDIUM", "SHAI-03": "LOW",
     "AILOG-01": "CRITICAL", "AILOG-02": "HIGH", "AILOG-03": "MEDIUM",
     # Forensic coverage. AILOG-04 is HIGH because without AWS::Bedrock::Model data
     # events there is no record of who invoked which model -- the question AITHR-01
@@ -815,7 +851,14 @@ CHECK_SEVERITY = {
     "VULN-04": "HIGH",
     "DATA-01": "MEDIUM", "DATA-02": "HIGH", "DATA-03": "MEDIUM",
     "EXTACCESS-01": "HIGH", "EXTACCESS-02": "MEDIUM", "EXTACCESS-03": "MEDIUM",
-    "THREAT-01": "HIGH", "THREAT-02": "MEDIUM", "ATTACK-02": "CRITICAL",
+    # THREAT-02 was RETIRED in tranche 8. It was registered in all four metadata
+    # maps, carried a full remediation write-up, was counted in the published
+    # total, and was emitted by no code path anywhere -- the one genuinely dead
+    # check docs/CHECK_FIRING.md was built to expose. Its control-plane-anomaly
+    # SEMANTICS are not lost: aws_cdr.normalize_cloudtrail_anomaly implements them
+    # and the CDR path emits them as THREAT-ING / THREAT-ING-KEV. Registering an id
+    # nothing can emit reads to every consumer as coverage that does not exist.
+    "THREAT-01": "HIGH", "ATTACK-02": "CRITICAL",
     # Phase 4: correlation & choke points (HIGH — the toxic combos already carry
     # CRITICAL via ATTACK-01/02; CHOKEPOINT avoids double-weighting the same risk)
     "CHOKEPOINT-01": "HIGH",
@@ -976,6 +1019,18 @@ COMPLIANCE_MAP = {
     "SEC-01": {"PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12(1)"},
     "SEC-02": {"PCI-DSS": "3.6.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12(1)"},
     "WAF-01": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "WAF-06": {"PCI-DSS": "6.6", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7(8)"},
+    "DRS-01": {"CIS-STORAGE": "6.4", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "DRS-02": {"CIS-STORAGE": "6.4", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "DRS-03": {"CIS-STORAGE": "6.1", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+    # CP-9 rather than the precise controls: CP-4 (contingency plan TESTING) is what
+    # DRS-04 really asserts and CP-9(3) (separate storage site) is what BCK-04 really
+    # asserts, and neither is in the product's declared 38-control NIST axis. Citing
+    # a control outside that axis would widen the universe as a side effect of adding
+    # two checks, which is how a coverage denominator quietly stops meaning anything.
+    "DRS-04": {"CIS-STORAGE": "6.8", "PCI-DSS": "12.10.2", "HIPAA": "164.308(a)(7)(ii)(D)", "SOC2": "A1.3", "NIST": "CP-9"},
+    "BCK-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "BCK-05": {"PCI-DSS": "3.5", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
     "WAF-02": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
     "ELC-01": {"CIS-DB": "5.3", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "ELC-02": {"CIS-DB": "5.3", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
@@ -1002,8 +1057,8 @@ COMPLIANCE_MAP = {
     "CLB-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     # EBS
     "EBS-01": {"CIS": "6.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
-    "EBS-02": {"CIS": "6.1.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
-    "EBS-03": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "EBS-02": {"CIS": "6.1.1", "CIS-STORAGE": "2.4", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "EBS-03": {"CIS-STORAGE": "2.5", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "EBS-04": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     # Redshift
     "RS-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
@@ -1017,7 +1072,7 @@ COMPLIANCE_MAP = {
     "RSS-03": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "RSS-04": {"PCI-DSS": "1.3.4", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     # EFS
-    "EFS-01": {"CIS": "3.3.1", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    "EFS-01": {"CIS": "3.3.1", "CIS-STORAGE": "3.2", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "EFS-02": {"PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
     "EFS-03": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
     # ACM
@@ -1287,7 +1342,6 @@ COMPLIANCE_MAP = {
     "EXTACCESS-02": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "EXTACCESS-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "THREAT-01": {"PCI-DSS": "11.4", "HIPAA": "164.312(b)", "SOC2": "CC7.3", "NIST": "SI-4"},
-    "THREAT-02": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-6"},
     "ATTACK-02": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "CHOKEPOINT-01": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "CA-8"},
     # ── Backfill: FAIL-capable checks previously missing a compliance mapping ──
@@ -1297,9 +1351,9 @@ COMPLIANCE_MAP = {
     "CNT-04": {"PCI-DSS": "6.3.2", "HIPAA": "164.312(c)(1)", "SOC2": "CC7.1", "NIST": "CM-5"},
     "CNT-05": {"PCI-DSS": "6.3.2", "SOC2": "CC7.1", "NIST": "SI-2"},
     "CNT-06": {"PCI-DSS": "6.3.2", "SOC2": "CC7.1", "NIST": "SI-7"},
-    "BCK-01": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "BCK-01": {"CIS-STORAGE": "1.3", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
     "BCK-02": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
-    "BCK-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "BCK-03": {"CIS-STORAGE": "1.3", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.1", "NIST": "AC-3"},
     "SNS-01": {"PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
     "SNS-02": {"CIS": "2.21", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
     "SNS-03": {"PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-3"},
@@ -1563,6 +1617,13 @@ REMEDIATION_MAP = {
     "BCK-03": "Remove the public grant (or scope cross-account with aws:PrincipalOrgID) and re-apply: aws backup put-backup-vault-access-policy --backup-vault-name <VAULT> --policy file://scoped-vault-policy.json ; or drop it: aws backup delete-backup-vault-access-policy --backup-vault-name <VAULT>",
     "WAF-01": "Associate WAF with ALB: aws wafv2 associate-web-acl --web-acl-arn <ACL_ARN> --resource-arn <ALB_ARN>",
     "WAF-02": "Enable WAF logging: aws wafv2 put-logging-configuration --logging-configuration ResourceArn=<ACL_ARN>,LogDestinationConfigs=<LOG_ARN>",
+    "DRS-01": "Encrypt the replication staging volumes with a customer-managed key. The template is what every new source server inherits, so fix it there rather than per-server: aws drs update-replication-configuration-template --replication-configuration-template-id <TEMPLATE_ID> --ebs-encryption CUSTOM --ebs-encryption-key-arn <KMS_KEY_ARN>. Existing source servers keep their current setting until their own configuration is updated (aws drs update-replication-configuration --source-server-id <SERVER_ID> ...), so re-check after changing the template.",
+    "DRS-02": "Move replication onto private connectivity so a continuous copy of production disks stops crossing the public internet: aws drs update-replication-configuration-template --replication-configuration-template-id <TEMPLATE_ID> --data-plane-routing PRIVATE_IP. This requires the staging subnet to reach the DRS and S3 endpoints privately — add interface VPC endpoints (or a NAT/Direct Connect path) before flipping it, or replication will stall.",
+    "DRS-03": "Find out why replication stopped before assuming it can simply be restarted: aws drs describe-source-servers --filters sourceServerIDs=<SERVER_ID> and read dataReplicationInfo.dataReplicationError. Then aws drs retry-data-replication --source-server-id <SERVER_ID>. A STALLED server usually means the agent lost its route to the staging subnet or the staging volume filled; restarting without fixing that returns it to the same state.",
+    "DRS-04": "Run a recovery drill, which launches real instances in an isolated fashion and does not affect the source: aws drs start-recovery --source-servers sourceServerID=<SERVER_ID> --is-drill. Verify the launched instance boots and serves, then clean up with aws drs terminate-recovery-instances --recovery-instance-ids <RECOVERY_INSTANCE_ID>. Schedule it — a drill run once and never repeated goes stale as the workload changes.",
+    "BCK-04": "Add a copy action so the recovery point exists somewhere the original disaster cannot reach. Cross-region: aws backup update-backup-plan --backup-plan-id <PLAN_ID> --backup-plan with a CopyActions entry naming a DestinationBackupVaultArn in another region. Cross-account is stronger against ransomware and credential compromise, because deleting the copy then needs a second account's credentials — see AWS Backup cross-account copy with Organizations.",
+    "BCK-05": "Re-create the vault on a customer-managed key; the key is fixed at vault creation and cannot be changed afterwards: aws backup create-backup-vault --backup-vault-name <NEW_VAULT> --encryption-key-arn <KMS_KEY_ARN>, repoint the plan's rules at it, and let the old vault age out under its retention. Grant the Backup service principal kms:Decrypt/GenerateDataKey on the key or backups will start failing.",
+    "WAF-06": "Put a Web ACL in front of the internet-facing load balancer: aws wafv2 associate-web-acl --web-acl-arn <ACL_ARN> --resource-arn <ALB_ARN>. If no suitable ACL exists yet, create one with an AWS managed rule group first (aws wafv2 create-web-acl --scope REGIONAL --default-action Allow={} --rules with AWSManagedRulesCommonRuleSet), then associate it. A load balancer deliberately left unfiltered should be waived rather than left as an open finding.",
     "WAF-05": "Add an AWS managed rule group (OWASP baseline): aws wafv2 update-web-acl --name <ACL_NAME> --scope <REGIONAL|CLOUDFRONT> --id <ACL_ID> --lock-token <TOKEN> --rules '[{\"Name\":\"AWS-Common\",\"Priority\":0,\"Statement\":{\"ManagedRuleGroupStatement\":{\"VendorName\":\"AWS\",\"Name\":\"AWSManagedRulesCommonRuleSet\"}},\"OverrideAction\":{\"None\":{}},\"VisibilityConfig\":{\"SampledRequestsEnabled\":true,\"CloudWatchMetricsEnabled\":true,\"MetricName\":\"AWS-Common\"}}]'",
     "SFN-01": "Enable logging: aws stepfunctions update-state-machine --state-machine-arn <ARN> --logging-configuration '{\"level\":\"ALL\",\"includeExecutionData\":true,\"destinations\":[{\"cloudWatchLogsLogGroup\":{\"logGroupArn\":\"<LOG_ARN>\"}}]}'",
     "APIGW-01": "Enable stage logging: aws apigateway update-stage --rest-api-id <API_ID> --stage-name <STAGE> --patch-operations op=replace,path=/accessLogSettings/destinationArn,value=<LOG_GROUP_ARN> op=replace,path=/*/*/logging/loglevel,value=INFO",
@@ -1826,7 +1887,6 @@ REMEDIATION_MAP = {
     "EXTACCESS-02": "Scope the bucket policy to remove the cross-account principal (or add an aws:PrincipalOrgID condition): aws s3api put-bucket-policy --bucket <BUCKET> --policy <SCOPED_POLICY_JSON>",
     "EXTACCESS-03": "Scope the role's S3 permissions to specific buckets/prefixes instead of s3:GetObject on '*' or 'bucket/*', and bound the role: aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN> (identity-policy only — also verify the bucket policy / SCP).",
     "THREAT-01": "Triage the GuardDuty finding, then isolate/rotate as needed: aws guardduty get-findings --detector-id <DETECTOR_ID> --finding-ids <FINDING_ID>; if confirmed, quarantine the resource and rotate exposed credentials. Do not archive without triage.",
-    "THREAT-02": "Confirm whether the control-plane event was authorized (aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=<EVENT>), and enable continuous detection: aws guardduty create-detector --enable",
     "ATTACK-02": "Sever the flagship chain at ANY hop: patch the exploitable CVE, remove the public ingress (aws ec2 revoke-security-group-ingress --group-id <SG> --protocol tcp --port <PORT> --cidr 0.0.0.0/0), and scope the instance-profile role's data access (aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>). Fixing the choke-point node breaks the whole path.",
     "CHOKEPOINT-01": "Remediate this single node to sever multiple attack paths at once: for an over-privileged role, aws iam put-role-permissions-boundary --role-name <ROLE> --permissions-boundary <BOUNDARY_ARN>; for an exposed host, patch the exploitable CVE or aws ec2 revoke-security-group-ingress ...; see the finding for the node kind and the count of paths/crown-jewels it severs.",
 }
@@ -6344,6 +6404,72 @@ class AWSLiveScanner:
                                   f"Compliance-mode Vault Lock ACTIVE (immutable) | {name}")
                 # BCK-03 — vault access-policy exposure
                 self._check_backup_vault_policy(bk, name)
+                # BCK-05 — whose key is the vault on? Read EncryptionKeyType rather
+                # than inferring ownership from the ARN, which is populated for both
+                # kinds.
+                try:
+                    detail = bk.describe_backup_vault(BackupVaultName=name) or {}
+                except Exception as e:
+                    if self._is_access_denied(e):
+                        self._coverage.note_denied(
+                            "BCK-05", "backup:DescribeBackupVault")
+                    detail = None
+                if detail is not None:
+                    k = aws_cis_storage.backup_vault_key_posture(detail)
+                    if k["known"] and k["aws_owned"]:
+                        self._add("FAIL", "BCK-05", "BACKUP", name,
+                                  f"Backup vault {name} encrypts recovery points with "
+                                  f"an AWS-owned key, which this account cannot audit, "
+                                  f"rotate or revoke — so the copy of last resort is "
+                                  f"held under a key you have no control over "
+                                  f"| {name}")
+                    elif k["known"]:
+                        self._add("PASS", "BCK-05", "BACKUP", name,
+                                  f"Backup vault {name} uses a customer-managed key "
+                                  f"| {name}")
+
+        # BCK-04 — does any plan copy the recovery point out of this region/account?
+        # THE BENCHMARK NEVER ASKS THIS. Its whole AWS Backup section asks that
+        # backups be created and never once that they survive losing the region or
+        # the account, which is why this check carries no CIS-STORAGE key.
+        self._log("BCK-04: backup plans copy recovery points off-region/off-account")
+        try:
+            bk = self._client("backup")
+            plans = []
+            for page in bk.get_paginator("list_backup_plans").paginate():
+                plans.extend(page.get("BackupPlansList", []))
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("BCK-04", "backup:ListBackupPlans")
+            plans = None
+        for plan in (plans or []):
+            plan_id = (plan or {}).get("BackupPlanId")
+            if not plan_id:
+                continue
+            try:
+                full = bk.get_backup_plan(BackupPlanId=plan_id) or {}
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied("BCK-04", "backup:GetBackupPlan")
+                continue
+            c = aws_cis_storage.backup_plan_copy_posture(full)
+            nm = c["name"] or plan_id
+            # A plan with no rules backs nothing up at all, which is BCK-01's
+            # finding rather than this one's. Reporting it here too would say the
+            # same thing twice under different severities.
+            if not c["known"]:
+                continue
+            if not c["any_copy"]:
+                self._add("FAIL", "BCK-04", "BACKUP", nm,
+                          f"Backup plan {nm} has {c['rules']} rule(s) and none of "
+                          f"them copies the recovery point anywhere else — the "
+                          f"backup lives in the same account and region as the thing "
+                          f"it protects, so a region loss or an account compromise "
+                          f"takes the original and the copy together | {nm}")
+            else:
+                self._add("PASS", "BCK-04", "BACKUP", nm,
+                          f"Backup plan {nm} copies recovery points via rule(s) "
+                          f"{', '.join(c['with_copy'])} | {nm}")
 
     @staticmethod
     def _as_utc(ts):
@@ -9783,6 +9909,180 @@ class AWSLiveScanner:
                     # was a bare `except: pass` — surface the read error instead of vanishing
                     self._add("WARN", "WAF-03", "WAF", aname,
                               f"could not read WebACL detail: {e}")
+
+        self._check_waf_unprotected_entry_points()
+
+    def _check_drs(self):
+        """DRS-01..04 — AWS Elastic Disaster Recovery.
+
+        WHY THIS SECTION EXISTS. A DR setup keeps a continuous copy of every
+        protected disk in a staging subnet that is not production, is rarely looked
+        at, and is administered by a different template from the workloads it
+        shadows. `ebsEncryption` carries a real NONE value, so "the whole estate's
+        data, unencrypted, somewhere nobody watches" is a state the API will report
+        if you ask — and nothing in OverWatch asked until now.
+
+        The benchmark's section 6 is the only part of the document that names real,
+        readable settings; see engine/aws_cis_storage_map.py for what the other 43
+        recommendations turned out to be.
+        """
+        self._section_header("DRS")
+        try:
+            drs = self._client("drs")
+            templates = self._tokens(
+                drs.describe_replication_configuration_templates,
+                "items", token_key="nextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("DRS-01", "DRS-02"):
+                    self._coverage.note_denied(
+                        cid, "drs:DescribeReplicationConfigurationTemplates")
+            templates = None
+
+        for tpl in (templates or []):
+            p = aws_cis_storage.replication_template_posture(tpl)
+            name = p["id"] or "replication-template"
+            if p["encryption_known"] and p["unencrypted"]:
+                self._add("FAIL", "DRS-01", "DRS", name,
+                          f"Replication template {name} stages replicated disks with "
+                          f"EBS encryption set to NONE — a continuous copy of every "
+                          f"protected volume sits unencrypted in the staging subnet, "
+                          f"which is the one place production data lives outside "
+                          f"production | {name}")
+            elif p["encryption_known"]:
+                self._add("PASS", "DRS-01", "DRS", name,
+                          f"Replication template {name} encrypts staging volumes "
+                          f"({p['encryption']}) | {name}")
+
+            if p["routing_known"] and p["public_routing"]:
+                self._add("FAIL", "DRS-02", "DRS", name,
+                          f"Replication template {name} routes replication traffic "
+                          f"over PUBLIC_IP — a byte-for-byte copy of production "
+                          f"disks crosses the public internet continuously. The "
+                          f"benchmark's own guidance for this setting is to keep it "
+                          f"on private connectivity | {name}")
+            elif p["routing_known"]:
+                self._add("PASS", "DRS-02", "DRS", name,
+                          f"Replication template {name} keeps replication on "
+                          f"{p['routing']} | {name}")
+
+        try:
+            servers = self._tokens(drs.describe_source_servers, "items",
+                                   token_key="nextToken")
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("DRS-03", "DRS-04"):
+                    self._coverage.note_denied(cid, "drs:DescribeSourceServers")
+            return
+
+        for srv in (servers or []):
+            p = aws_cis_storage.source_server_posture(srv)
+            name = p["id"] or "source-server"
+            # DRS-03 — is the copy current? An in-flight state (INITIAL_SYNC,
+            # BACKLOG, RESCAN) is a server catching up rather than a broken one, so
+            # only the states in UNHEALTHY_REPLICATION_STATES fail.
+            if p["state_known"] and p["unhealthy"]:
+                lag = f", lag {p['lag']}" if p["lag"] else ""
+                self._add("FAIL", "DRS-03", "DRS", name,
+                          f"Source server {name} replication is {p['state']}{lag} — "
+                          f"the recovery point is frozen at whenever it stopped, so "
+                          f"the protection this server appears to have is stale by "
+                          f"an unknown amount | {name}")
+            elif p["state_known"]:
+                self._add("PASS", "DRS-03", "DRS", name,
+                          f"Source server {name} replication is {p['state']} | {name}")
+
+            # DRS-04 — has recovery ever been exercised? Benchmark 6.8 asks for a
+            # drill; lastLaunchResult answers it without inference.
+            if p["never_launched"]:
+                self._add("FAIL", "DRS-04", "DRS", name,
+                          f"Source server {name} has never been launched — no drill "
+                          f"and no real recovery has ever run against it, so nothing "
+                          f"has demonstrated that the replicated disks boot. An "
+                          f"untested recovery is a plan, not a capability | {name}")
+            elif p["launch_failed"]:
+                self._add("FAIL", "DRS-04", "DRS", name,
+                          f"Source server {name} last recovery launch FAILED and has "
+                          f"not succeeded since — worse than untested, because the "
+                          f"one attempt on record did not work | {name}")
+            elif p["launch_known"]:
+                self._add("PASS", "DRS-04", "DRS", name,
+                          f"Source server {name} last recovery launch: "
+                          f"{p['launch_result']} | {name}")
+
+    def _check_waf_unprotected_entry_points(self):
+        """WAF-06 — an internet-facing load balancer with no Web ACL in front of it.
+
+        WHY THIS IS A NEW ID AND NOT A FAIL ADDED TO WAF-01. WAF-01 warns when a
+        scope holds no Web ACLs at all, which on a correct estate that needs no WAF
+        is an unactionable finding — tranche 7 recorded that and declined to flip
+        it. The useful question is not "are there Web ACLs" but "is anything
+        reachable from the internet left unprotected", and that is a different
+        subject: it is about the load balancer, not the ACL. Giving WAF-01 this
+        logic would silently change what the id means for anyone already filtering
+        or waiving on it, so the meaning stays put and the new question gets its
+        own id.
+
+        FAIL-OPEN ON EVERY DENIAL. Either read being refused makes the comparison
+        unsound in the direction that matters: an unreadable association list looks
+        exactly like an empty one, and an empty one turns every load balancer into
+        a finding. A denial is recorded in the coverage ledger and nothing is
+        claimed.
+        """
+        protected: set = set()
+        try:
+            waf = self._client("wafv2")
+            acls = waf.list_web_acls(Scope="REGIONAL").get("WebACLs", []) or []
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("WAF-06", "wafv2:ListWebACLs")
+            return
+        for acl in acls:
+            arn = (acl or {}).get("ARN")
+            if not arn:
+                continue
+            try:
+                protected.update(
+                    waf.list_resources_for_web_acl(WebACLArn=arn).get(
+                        "ResourceArns", []) or [])
+            except Exception as e:
+                if self._is_access_denied(e):
+                    self._coverage.note_denied(
+                        "WAF-06", "wafv2:ListResourcesForWebACL")
+                return                      # a partial set would invent findings
+
+        try:
+            elb = self._client("elbv2")
+            balancers = elb.describe_load_balancers().get(
+                "LoadBalancers", []) or []
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied(
+                    "WAF-06", "elasticloadbalancing:DescribeLoadBalancers")
+            return
+
+        for lb in balancers:
+            # Only APPLICATION load balancers can carry a Web ACL at all; a
+            # network load balancer operates below the layer a WAF inspects, so
+            # reporting one would be a finding nobody can act on.
+            if (lb or {}).get("Type") != "application":
+                continue
+            if lb.get("Scheme") != "internet-facing":
+                continue
+            arn, name = lb.get("LoadBalancerArn"), lb.get("LoadBalancerName")
+            if not arn:
+                continue
+            if arn in protected:
+                self._add("PASS", "WAF-06", "WAF", name or arn,
+                          f"Internet-facing ALB {name} is associated with a Web "
+                          f"ACL | {name}")
+            else:
+                self._add("FAIL", "WAF-06", "WAF", name or arn,
+                          f"Internet-facing application load balancer {name} has "
+                          f"no WAFv2 Web ACL associated — every request reaches "
+                          f"the application unfiltered, including the "
+                          f"known-bad-input classes a managed rule group would "
+                          f"drop | {name}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 22: AMAZON ELASTICACHE
@@ -14449,6 +14749,26 @@ class AWSLiveScanner:
             else:
                 self._add("FAIL", "SM-04", "SAGEMAKER", name,
                           f"Not attached to a VPC subnet | {name}")
+
+            # SM-12 — notebook platform still supported by SageMaker.
+            # `aws_sagemaker.notebook_platform` was written, exported and unit
+            # tested and had no caller, so the id was registered in all four
+            # metadata maps, counted in the published total, and unreachable.
+            # An ABSENT PlatformIdentifier stays silent: the field is optional on
+            # older instances, and failing one for a missing field would assert an
+            # end-of-support date nobody published.
+            plat = aws_sagemaker.notebook_platform(detail)
+            if plat["known"] and not plat["supported"]:
+                self._add("FAIL", "SM-12", "SAGEMAKER", name,
+                          f"Notebook '{name}' runs on platform "
+                          f"{plat['platform']}, which is not in the supported set "
+                          f"{', '.join(aws_sagemaker.SUPPORTED_NOTEBOOK_PLATFORMS)} "
+                          f"as of {aws_sagemaker.PLATFORM_SOURCE_DATE} — an "
+                          f"unsupported platform stops receiving patches | {name}")
+            elif plat["known"]:
+                self._add("PASS", "SM-12", "SAGEMAKER", name,
+                          f"Notebook '{name}' runs on supported platform "
+                          f"{plat['platform']} | {name}")
 
             # AI-SPM stash (fused post-clobber in DATA#42) — role blast radius + egress
             self._aispm_resources.append({
@@ -20032,6 +20352,7 @@ class AWSLiveScanner:
             "APPRUNNER":      self._check_apprunner,
             "BATCH":          self._check_batch,
             "BEANSTALK":      self._check_beanstalk,
+            "DRS":            self._check_drs,
             "WICKR":          self._check_wickr,
             "MEDIAPACKAGE":   self._check_mediapackage,
             "ELASTICACHE":    self._check_elasticache,

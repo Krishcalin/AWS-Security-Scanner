@@ -202,7 +202,15 @@ class TestDataStructures(unittest.TestCase):
         # Inventory. It sits beside WINVULN because it is the same kind of thing — an
         # in-guest OS assessment made without an agent — and like WINVULN its normal
         # outcome on a host nobody has inventoried is a stated coverage gap, not a pass.
-        self.assertEqual(len(SECTIONS), 99)
+        #
+        # 100: +DRS. Elastic Disaster Recovery, from the CIS AWS Storage Services
+        # Benchmark. Section 6 is the only part of that document naming settings a
+        # scanner can actually read, and what it points at is a staging subnet holding a
+        # continuous copy of every protected disk -- production data living outside
+        # production, under a template nobody administers alongside the workloads it
+        # shadows. `ebsEncryption` carries a real NONE value, so "all of it,
+        # unencrypted, where nobody looks" is a state the API will report if asked.
+        self.assertEqual(len(SECTIONS), 100)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

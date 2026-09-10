@@ -148,6 +148,18 @@
             "sources": []
         },
         {
+            "id": "CIS-STORAGE",
+            "name": "CIS AWS Storage Services Benchmark",
+            "version": "1.0.0",
+            "authority": "CIS",
+            "family": "cloud",
+            "native": true,
+            "near_identity": false,
+            "description": "Per-service benchmark for AWS Backup, EBS, EFS, FSx, S3 and Elastic Disaster Recovery. The fourth sibling of Foundations, Compute and Database, and much the weakest: CIS marks all 56 of its recommendations Manual, seven carry an empty Audit section, and two would reduce security if followed (2.2 directs the reader to open SSH to the world; 3.5 restricts EFS mount targets to port 22, which EFS does not use). Section numbers collide with the siblings as usual - 2.2 is the account contact record in Foundations v7.0.0, EBS encryption in Compute, Aurora encryption at rest in Database, and security groups here. See docs/CIS_STORAGE_BENCHMARK.md for the row-by-row verdict.",
+            "catalog_size": 0,
+            "sources": []
+        },
+        {
             "id": "CIS-AWS-FOUNDATIONS-3",
             "name": "CIS Amazon Web Services Foundations Benchmark",
             "version": "3.0.0",

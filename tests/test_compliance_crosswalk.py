@@ -66,7 +66,12 @@ def test_load_shipped_file_is_valid():
     # Database, and special-purpose services in Amazon Linux 2 -- four unrelated controls
     # behind one number. CIS-AL2 is also the first native that is not an AWS-service
     # benchmark at all: it describes an operating system, which is why its family is "os".
-    assert set(natives) == {"CIS", "CIS-COMPUTE", "CIS-DB", "CIS-AL2",
+    # CIS-STORAGE is a NINTH, and makes 2.2 mean five different things: add security-group
+    # configuration to that list. It is also the first native whose own document the
+    # mapping had to argue with -- two of its recommendations would reduce security if
+    # followed, which is why engine/aws_cis_storage_map.py carries an UNSAFE verdict that
+    # none of the sibling mappings needs.
+    assert set(natives) == {"CIS", "CIS-COMPUTE", "CIS-DB", "CIS-AL2", "CIS-STORAGE",
                             "PCI-DSS", "HIPAA", "SOC2", "NIST"}
     assert len(derived) >= 30                       # the breadth goal
     # every mapped NIST control is one of the 38 the product actually tags
