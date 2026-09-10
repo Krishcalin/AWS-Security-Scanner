@@ -94,6 +94,7 @@ from engine import aws_nitro
 from engine import aws_perimeter
 from engine import aws_checkdef
 from engine import aws_cis_compute
+from engine import aws_cis_al2
 from engine import aws_cis_db
 from engine import aws_cis_db2
 from engine import aws_cis_foundations
@@ -259,6 +260,10 @@ SECTIONS = [
     # free: its first statement returns unless the flag is set, exactly like the
     # ECR registry and Lambda artifact paths.
     "SIDESCAN", "WINVULN",
+    # AMAZONLINUX sits beside WINVULN because it is the same kind of thing: an in-guest
+    # OS assessment made agentlessly through SSM, whose normal outcome on a host nobody
+    # has inventoried is a stated coverage gap rather than a pass.
+    "AMAZONLINUX",
     "VULN", "THREAT", "DATA", "AI_THREAT",
     # THE AI-POSTURE SECTIONS. Each already had a check method, a dispatch-table
     # entry and a SECTION_LABELS entry, and was missing from THIS list — which is
@@ -315,6 +320,7 @@ SECTIONS = [
 SECTION_LABELS = {
     "ORGANIZATIONS":  "AWS ORGANIZATIONS (CIS §2.1)",
     "IAM":            "IDENTITY & ACCESS MANAGEMENT",
+    "AMAZONLINUX":    "AMAZON LINUX (CIS AL2 v4.0.0)",
     "S3":             "S3 SECURITY",
     "VPC":            "NETWORK SECURITY",
     "LOGGING":        "LOGGING & MONITORING",
@@ -5491,6 +5497,126 @@ class AWSLiveScanner:
             return None
         md = (vers[0].get("LaunchTemplateData") or {}).get("MetadataOptions") or {}
         return md.get("HttpTokens", "optional")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION: AMAZON LINUX — CIS Amazon Linux 2 Benchmark v4.0.0, via SSM Inventory
+    # ══════════════════════════════════════════════════════════════════════════
+    def _al2_inventory(self, ssm, iid: str, type_name: str) -> Optional[List[Dict]]:
+        """One instance's inventory of one type, or None if it could not be read.
+
+        None and [] are DIFFERENT ANSWERS and the checks treat them differently: [] means
+        the type was collected and is empty, None means nobody collected it. Conflating
+        them would let a host nobody has inventoried report as having no prohibited
+        packages."""
+        try:
+            out: List[Dict] = []
+            token = None
+            for _ in range(20):                      # bounded: inventory is not huge
+                kw = {"InstanceId": iid, "TypeName": type_name, "MaxResults": 50}
+                if token:
+                    kw["NextToken"] = token
+                resp = ssm.list_inventory_entries(**kw)
+                out.extend(resp.get("Entries") or [])
+                token = resp.get("NextToken")
+                if not token:
+                    break
+            return out
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("AL2-01", "ssm:ListInventoryEntries")
+            return None
+
+    def _check_amazonlinux(self):
+        """AL2-01..03 — CIS Amazon Linux 2 Benchmark v4.0.0, the part that is reachable.
+
+        THE BENCHMARK IS 287 RECOMMENDATIONS AND THIS SECTION DECIDES 44 OF THEM. The rest
+        read file content, file modes and kernel state, which needs a filesystem the
+        agentless side-scan cannot parse yet -- see engine/aws_cis_al2_map.py, which
+        records every one of them and what would unblock it. Registering checks for those
+        would put 250 registered-but-unreachable ids in the catalogue, which is the exact
+        failure docs/CHECK_FIRING.md exists to measure.
+
+        SSM INVENTORY IS THE ONLY READ-ONLY PATH TO IN-GUEST STATE. Reading a file would
+        need ssm:SendCommand, which executes code on the host and is a write -- outside
+        the read-only-of-CONFIG charter this product's role is built on."""
+        self._section_header("AMAZONLINUX")
+        try:
+            ssm = self._client("ssm")
+            ec2 = self._client("ec2")
+        except Exception:
+            return
+
+        # Which running instances are Linux and SSM-managed. PlatformType is what SSM
+        # reports; an instance it has never reached carries none, which is why the
+        # unmanaged case is answered from the EC2 listing rather than from SSM's.
+        try:
+            running = {}
+            for page in ec2.get_paginator("describe_instances").paginate(
+                    Filters=[{"Name": "instance-state-name", "Values": ["running"]}]):
+                for res in page.get("Reservations", []):
+                    for i in res.get("Instances", []):
+                        running[i["InstanceId"]] = i
+        except Exception as e:
+            self._add("INFO", "AL2-00", "AMAZONLINUX", "ec2",
+                      f"NOT EVALUATED — the instance list could not be read ({e})")
+            return
+        if not running:
+            self._add("INFO", "AL2-00", "AMAZONLINUX", "ec2",
+                      "No running EC2 instances in this region")
+            return
+
+        managed: Dict[str, Dict] = {}
+        try:
+            for page in ssm.get_paginator("describe_instance_information").paginate():
+                for info in page.get("InstanceInformationList", []) or []:
+                    if info.get("ResourceType") == "EC2Instance":
+                        managed[str(info.get("InstanceId"))] = info
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("AL2-01",
+                                           "ssm:DescribeInstanceInformation")
+            self._add("INFO", "AL2-00", "AMAZONLINUX", "ssm",
+                      f"NOT EVALUATED — SSM instance information could not be read "
+                      f"({e}), so no host could be assessed against the Amazon Linux "
+                      f"benchmark")
+            return
+
+        assessed = 0
+        for iid in sorted(running):
+            info = managed.get(iid) or {}
+            platform = str(info.get("PlatformType") or "")
+            # Windows hosts are WINVULN's business, not this benchmark's.
+            if platform and platform.lower() != "linux":
+                continue
+            is_managed = bool(info) and info.get("PingStatus") == "Online"
+            apps = (self._al2_inventory(ssm, iid, aws_cis_al2.APPLICATION_TYPE)
+                    if is_managed else None)
+            svcs = (self._al2_inventory(ssm, iid, aws_cis_al2.SERVICE_TYPE)
+                    if is_managed else None)
+
+            cov = aws_cis_al2.assessability(
+                iid, ssm_managed=is_managed, platform=platform or None,
+                app_entries=apps, svc_entries=svcs)
+            self._add("INFO", "AL2-00", "AMAZONLINUX", iid, cov["statement"])
+            if not cov["assessed"]:
+                continue
+            assessed += 1
+
+            for hit in aws_cis_al2.prohibited_packages(iid, apps):
+                self._add("FAIL", "AL2-01", "AMAZONLINUX", f"{iid}/{hit['package']}",
+                          f"{hit['statement']} (CIS-AL2 {hit['recommendation']})")
+            for hit in aws_cis_al2.missing_required_packages(iid, apps):
+                self._add("FAIL", "AL2-02", "AMAZONLINUX", f"{iid}/{hit['package']}",
+                          f"{hit['statement']} (CIS-AL2 {hit['recommendation']})")
+            for hit in aws_cis_al2.prohibited_units(iid, svcs):
+                self._add("FAIL", "AL2-03", "AMAZONLINUX", f"{iid}/{hit['unit']}",
+                          f"{hit['statement']} (CIS-AL2 {hit['recommendation']})")
+
+        if assessed and not [r for r in self.results
+                             if r.check_id == "AL2-01" and r.status == "FAIL"]:
+            self._add("PASS", "AL2-01", "AMAZONLINUX", "amazonlinux",
+                      f"None of the {assessed} assessed host(s) carries a package the "
+                      f"benchmark prohibits")
 
     def _check_ssm(self):
         """SSM-01 unmanaged running instances (patch blind spot) + SSM-02 patch compliance.
@@ -19838,6 +19964,7 @@ class AWSLiveScanner:
         CHECK_MAP = {
             "ORGANIZATIONS":  self._check_organizations,
             "IAM":            self._check_iam,
+            "AMAZONLINUX":    self._check_amazonlinux,
             "S3":             self._check_s3,
             "VPC":            self._check_vpc,
             "LOGGING":        self._check_logging,

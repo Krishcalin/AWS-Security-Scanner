@@ -131,7 +131,13 @@ export const RISK_CATEGORIES: RiskCategory[] = [
     // APRUN- (App Runner), BATCH- and EB- (Elastic Beanstalk) arrived with the CIS
     // Compute Services Benchmark. All three are managed compute, so they belong here
     // rather than under Containers: none of them is a cluster the operator runs.
-    prefixes: ['EC2-', 'AMI-', 'ASG-', 'LT-', 'SSM-', 'LMB-', 'SFN-', 'SQS-', 'SNS-',
+    // AL2- is in-guest Amazon Linux posture read through SSM Inventory — a prohibited
+    // package, a missing security package, a service that should not be listening. It
+    // belongs beside EC2- and SSM- because that is what an operator is looking at when
+    // they act on it: a host they run, not a managed service. Filing it under
+    // Vulnerabilities would put configuration findings next to CVEs, which are a
+    // different job with a different fix.
+    prefixes: ['EC2-', 'AMI-', 'ASG-', 'LT-', 'SSM-', 'AL2-', 'LMB-', 'SFN-', 'SQS-', 'SNS-',
       'ELC-', 'MM-', 'IOT-', 'MPV-', 'WM-', 'WSW-', 'CART-', 'CB-', 'CGP-', 'GRF-',
       'STACK-', 'IMGB-', 'APRUN-', 'BATCH-', 'EB-'],
     seeAll: '/findings',

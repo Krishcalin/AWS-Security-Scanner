@@ -110,6 +110,20 @@
             ]
         },
         {
+            "id": "CIS-AL2",
+            "name": "CIS Amazon Linux 2 Benchmark",
+            "version": "4.0.0",
+            "authority": "CIS",
+            "family": "os",
+            "native": true,
+            "near_identity": false,
+            "description": "CIS Amazon Linux 2 Benchmark: 287 recommendations covering in-guest operating-system hardening -- filesystem and kernel module configuration, package and service inventory, network parameters, logging and auditing, access control and user accounts. An OPERATING SYSTEM benchmark rather than an AWS-service one, so its section numbers are unrelated to the Foundations, Compute and Database benchmarks: 2.2 is special-purpose services here and the account contact record in Foundations. OverWatch reads the subset that SSM Inventory exposes; engine/aws_cis_al2_map.py records the rest and what each would need.",
+            "catalog_size": 287,
+            "sources": [
+                "https://www.cisecurity.org/benchmark/amazon_linux"
+            ]
+        },
+        {
             "id": "CIS-COMPUTE",
             "name": "CIS AWS Compute Services Benchmark",
             "version": "2.0.0",

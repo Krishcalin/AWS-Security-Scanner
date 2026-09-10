@@ -238,8 +238,18 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: watching: a batch of nine is the classic way this product has previously grown its
 #: backlog by nine.
 #: See tests/test_cis_db_tranche2.py and docs/CIS_DATABASE_BENCHMARK.md.
+#: 473 -> 476: AL2-01/02/03, the CIS Amazon Linux 2 controls SSM Inventory can decide.
+#: THREE, FROM A 287-RECOMMENDATION BENCHMARK, and the ratio is the point rather than an
+#: embarrassment. 252 of those recommendations read file content, file modes or running
+#: kernel state, which an agentless control-plane scanner cannot see; they are recorded in
+#: engine/aws_cis_al2_map.py against the capability each waits on. Registering them would
+#: have added 252 checks to the catalogue that this file would then have counted as
+#: never-observed forever -- which is the number below, and the reason it did not move.
+#: Never-observed (28) and never-driven-to-failure (62) held steady for the third batch
+#: running.
+#: See tests/test_cis_al2.py and docs/CIS_AL2_BENCHMARK.md.
 MAX_NEVER_OBSERVED = 28
-MIN_PROVEN_FAILING = 473
+MIN_PROVEN_FAILING = 476
 
 
 def doc_text() -> str:

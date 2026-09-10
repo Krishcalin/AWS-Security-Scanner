@@ -217,6 +217,7 @@ BASELINE = {
             "s3vectors:ListVectorBuckets",
             "ses:GetTrafficPolicy",
             "ses:ListTrafficPolicies",
+            "ssm:ListInventoryEntries",
             "sso:GetInlinePolicyForPermissionSet",
             "sso:ListInstances",
             "sso:ListPermissionSets",
@@ -264,6 +265,9 @@ BASELINE = {
             "AILOG-04",
             "AILOG-05",
             "AILOG-06",
+            "AL2-01",
+            "AL2-02",
+            "AL2-03",
             "AMEM-02",
             "AMI-04",
             "AMI-05",
@@ -458,7 +462,7 @@ BASELINE = {
             "XFER-03",
             "XRAY-01",
         ],
-        "annotated_policy_rows": 203,
+        "annotated_policy_rows": 204,
     },
     "shipped_role": {
         "missing_actions": [
@@ -618,6 +622,7 @@ BASELINE = {
             "s3vectors:ListVectorBuckets",
             "ses:GetTrafficPolicy",
             "ses:ListTrafficPolicies",
+            "ssm:ListInventoryEntries",
             "sso:GetInlinePolicyForPermissionSet",
             "sso:ListInstances",
             "sso:ListPermissionSets",
@@ -665,6 +670,9 @@ BASELINE = {
             "AILOG-04",
             "AILOG-05",
             "AILOG-06",
+            "AL2-01",
+            "AL2-02",
+            "AL2-03",
             "AMEM-02",
             "AMP-01",
             "APRUN-01",
@@ -830,7 +838,7 @@ BASELINE = {
             "XFER-03",
             "XRAY-01",
         ],
-        "annotated_policy_rows": 180,
+        "annotated_policy_rows": 181,
     },
 }
 # ─────────────────────────────────────────────────────────────────────────────

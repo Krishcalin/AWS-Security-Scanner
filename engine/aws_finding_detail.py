@@ -4967,6 +4967,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
 # other. merge_detail refuses to shadow an id already present above.
 from engine import aws_checkdef          # noqa: E402
 from engine import aws_cis_compute
+from engine import aws_cis_al2           # noqa: E402,F401  (CIS Amazon Linux 2)
 from engine import aws_cis_db2           # noqa: E402,F401  (CIS-DB tranche 2)
 from engine import aws_cis_foundations   # noqa: E402,F401  (CIS Foundations v7.0.0)
 from engine import aws_nhi

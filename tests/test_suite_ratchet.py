@@ -121,6 +121,7 @@ FLOORS = {
     "test_check_maps_lockstep.py": 12,
     "test_checkdef.py": 23,
     "test_ci_integrations.py": 7,
+    "test_cis_al2.py": 20,
     "test_cis_compute.py": 86,
     "test_cis_db_cluster_and_cache.py": 18,
     "test_cis_db_inventory.py": 6,

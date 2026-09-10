@@ -197,7 +197,12 @@ class TestDataStructures(unittest.TestCase):
         # a nested section takes its host's tests down with it, and this one is the only
         # section whose reads are refused in a normal member account -- so it is also the
         # section most likely to fail in the field.
-        self.assertEqual(len(SECTIONS), 98)
+        #
+        # 99: +AMAZONLINUX. The CIS Amazon Linux 2 Benchmark, read agentlessly through SSM
+        # Inventory. It sits beside WINVULN because it is the same kind of thing — an
+        # in-guest OS assessment made without an agent — and like WINVULN its normal
+        # outcome on a host nobody has inventoried is a stated coverage gap, not a pass.
+        self.assertEqual(len(SECTIONS), 99)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

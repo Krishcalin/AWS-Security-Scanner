@@ -171,4 +171,7 @@ def test_the_shipped_file_still_validates():
     # 45: +CIS-DB, registered when the CIS AWS Database Services mapping landed. It is a
     # NATIVE framework -- hand-tagged per check -- so it adds a framework without adding
     # any crosswalk edge, which is why the edge assertions above are unchanged.
-    assert len(frameworks) == 45
+    # 46: +CIS-AL2, the CIS Amazon Linux 2 Benchmark. Native for the same reason, and the
+    # first native that is not an AWS-service benchmark at all -- it describes an
+    # operating system, which is why its family is "os" rather than "cloud".
+    assert len(frameworks) == 46
