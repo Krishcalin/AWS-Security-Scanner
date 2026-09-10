@@ -191,6 +191,305 @@ this scope", and a blanket FAIL would flag every account with nothing to protect
   imported.** An unused import satisfied the old ratchet, which is why `aws_nhi`
   hid in it. A module that registers CheckDefs must have a production caller.
 
+### Changed — the `CIS` key now means AWS Foundations Benchmark v7.0.0 (BREAKING for anyone reconciling citations)
+
+The framework registry said v3.0 and a test asserted the rendered citation read
+`CIS AWS Foundations Benchmark v3.0/1.5`. That was honest rather than stale — and it
+was still a problem, because **v7.0.0 renumbers every section**. Section 1 is now the
+Introduction and carries no recommendations at all, so every `1.x` citation this
+product emitted pointed at nothing, and an estate audited against the current document
+could not reconcile a single OverWatch finding with it.
+
+- **The move is not a constant offset, which is the trap.** IAM `1.x`→`2.x`, Storage
+  `2.x`→`3.x`, Logging `3.x`→`4.x`, Monitoring `4.x`→`5.x`, Networking `5.x`→`6.x` —
+  but two IAM recommendations were eliminated on the way, so `1.12` lands on `2.11` and
+  `1.14` on `2.12`. Anyone assuming `+1` mis-cites both.
+- **All 70 recommendations are mapped as data** in `engine/aws_cis_foundations_map.py`,
+  with 0 gaps. `RENUMBERED`, `REPOINTED`, `MISCITED` and `EKS_NUMBERED` record what
+  moved, what was re-pointed and what was removed. `docs/CIS_FOUNDATIONS_BENCHMARK.md`
+  is **generated** by `scripts/cis_foundations_benchmark.py` and must not be hand-edited;
+  `tests/test_cis_foundations_mapping.py` enforces the mapping in both directions.
+- **30 citations are removed rather than renumbered.** Checking the benchmark in the
+  round found citations that were wrong against v3.0 too — each rendered as a
+  well-formed reference into a real document, at a control about something else. That
+  is the argument for mapping a benchmark rather than renumbering one.
+- **19 new checks, all arriving proven**: `ACCT-01`/`ACCT-02`, `EC2-18`,
+  `IAM-11`..`IAM-15`, `LOG-11`/`LOG-12`, `ORG-01`..`ORG-06`, `S3-11`, `VPC-07`/`VPC-08`
+  (535 → 554 registered). `ACCT-01` decides POPULATED and not CURRENT, because no API
+  says whether an account's contact record is up to date.
+- **Never add a `CIS` citation by hand.** Add the row to the mapping. The sibling
+  benchmarks keep their own keys (`CIS-COMPUTE`, `CIS-DB`, `CIS-AL2`) because the
+  documents reuse section numbers for unrelated controls: `2.2` is the account contact
+  record in Foundations v7.0.0, EBS encryption in Compute, Aurora encryption at rest in
+  Database, and special-purpose services in Amazon Linux 2.
+
+### Added — CIS AWS Database Services Benchmark v1.0.0 (98 recommendations, 42 checks)
+
+`engine/aws_cis_db_map.py` holds all 98 rows and `scripts/cis_db_benchmark.py` renders
+`docs/CIS_DATABASE_BENCHMARK.md` from it. **The mapping is data, not a table.** A 98-row
+compliance mapping is exactly the artefact that ends up in front of an auditor, and a
+hand-typed one sitting beside a catalogue that moves stops being true the first time a
+check is renamed. 42 checks now carry a `CIS-DB` key; 31 recommendations are covered by
+a check that can FAIL.
+
+- **Seven verdicts, not two**: covered / observed only / decided elsewhere / gap /
+  declined / process / vacuous. The tests assert every cited check exists, every
+  recommendation appears once, the numbering is complete per section, and the keys agree
+  in **both** directions — the reverse direction being the one that actually rots.
+- **Nine gaps built** (554 → 563): `DDB-06`/`DDB-07`, `DOCDB-09`/`DOCDB-10`, `ELC-09`,
+  `MDB-07`, `NEP-11`, `TS-03`/`TS-04`.
+- **Four gaps proved unbuildable and reclassified with the reason recorded as data.** A
+  gap nobody can close is a backlog item that never leaves. `5.8` and `5.9` are misfiled
+  in the benchmark — both sit in the ElastiCache section and both walk the Amazon
+  Keyspaces console — and read as Keyspaces controls they run into a decision already
+  written down here: Keyspaces authorises `ListKeyspaces`, `ListTables` and `GetTable`
+  under `cassandra:Select`, the same action that reads table rows, so covering it would
+  put a customer-data read in the default scanning role. **Declined, not deferred.**
+  `6.4` (MemoryDB audit logging) is configurable in the console and absent from the
+  pinned botocore model entirely. `10.8` is a process control with no per-table setting
+  to inspect.
+- **`DDB-06` and `TS-03` are scoped narrowly on purpose, and the scoping is the design.**
+  The naive reading of "implement fine-grained access control" fires on any principal
+  holding item-level actions — the normal, correct shape for a service that owns its
+  table — producing a finding on nearly every application role in the estate, which
+  trains people to filter the id out, at which point the real finding is invisible too.
+  Both fire only on grants reaching **every** table with no `dynamodb:LeadingKeys` or
+  `dynamodb:Attributes` condition narrowing them. Condition keys match
+  case-insensitively because IAM does; action patterns go through `fnmatch` because
+  `dynamodb:Get*` is a real grant shape that exact-matching reads as covering nothing.
+- **Reading the shipped model rather than assuming caught two errors before they
+  shipped, and both would have been quiet.** MemoryDB's member is `SnsTopicArn`, not
+  `SNSTopicArn` — the obvious spelling reads `None` on every cluster and fails all of
+  them, a check that is always right for entirely the wrong reason. And DocumentDB and
+  Neptune are authorised under `rds:`, not under their own prefixes: the boto3 *client*
+  is named `docdb`/`neptune`, the IAM *action* is `rds:`. The first version declared
+  `docdb:DescribePendingMaintenanceActions` and `neptune:DescribeEventSubscriptions`,
+  actions that do not exist, which an operator would have pasted into a policy that then
+  granted nothing.
+
+### Added — CIS Amazon Linux 2 Benchmark v4.0.0: 287 recommendations classified, 35 decidable
+
+**The ratio is the result, not an embarrassment.** This is an *operating system*
+benchmark and OverWatch is an *agentless control-plane scanner*. Classifying all 287 by
+the state their own audit commands read settles it: file content 125, running kernel 46,
+file permissions 41, installed packages 37, account files 21, systemd units 7,
+unclassified 10. Only packages and services are visible from outside the instance,
+through **SSM Inventory** — the one read-only path to in-guest state this product has.
+Reading a file would need `ssm:SendCommand`, which executes code on the host and is a
+write, outside the read-only-of-CONFIG charter the scanning role is built on.
+
+- **Three checks (563 → 566): `AL2-01`, `AL2-02`, `AL2-03`.** `AL2-00` is an INFO-only
+  coverage statement and deliberately unregistered, like `CREDEXP-00`.
+- **No check was registered for the other 252.** Doing so would have put the largest
+  block of registered-but-unreachable checks in this product's history into the
+  catalogue — the precise failure `docs/CHECK_FIRING.md` measures and
+  `tests/test_unreached_modules.py` keeps at zero. Never-observed (28) and
+  never-driven-to-failure (62) held exactly steady.
+- **`BLOCKED` is not `gap`, and the distinction is load-bearing.** In the sibling
+  mappings a gap is a backlog item somebody could build this afternoon. Every row here
+  waits on a named capability that does not exist, so filing them as gaps would have
+  advertised a 252-item backlog that is entirely unactionable. `BLOCKERS` records what
+  would lift each one: **FILESYSTEM (199)** — reading a file inside the instance;
+  `aws_sidescan_fs.DissectExtractor` raises `SideScanUnavailable` on purpose and never
+  returns a guessed inventory, which could false-clean a vulnerable host. Pinning
+  `dissect.target`, committing golden ext4/xfs images and validating on a Linux CI runner
+  lights up all 199. **RUNTIME (46)** — the *running* kernel; a disk image shows what is
+  configured in `/etc/sysctl.d`, not what is in effect. **SERVICE_INVENTORY (7)** —
+  `AWS:Service` collects Windows services, and `AL2-03` reads what is there and states
+  what it could not decide rather than hard-coding a claim about AWS's inventory schema.
+- **`CIS-AL2` is the eighth native framework** and the first that is not an AWS-service
+  benchmark at all, which is why its family is `os`.
+- **This mapping reproduces no recommendation titles at all**, not even paraphrased — a
+  stronger position than the three sibling mappings needed to take, and the reason its
+  rows carry a data-source classification instead of a label. What appears verbatim is
+  package and unit *names*, which are facts about the operating system. CIS Benchmarks
+  may not be redistributed and the PDFs are not in this repository.
+- **The CIS Amazon Linux 2 STIG Benchmark v2.0.0 (380 further recommendations) is
+  deliberately not mapped**: same shape of problem, so it would add 380 rows that nearly
+  all read `BLOCKED`. That is length without information until the extractor exists.
+
+### Added — database services the product could not see at all
+
+- **`MEMORYDB` (section 96), `MDB-01`..`MDB-06`.** The `memorydb` client had been
+  constructed exactly once in the entire codebase, for DSPM crown-jewel discovery. An
+  account could hold a durable Redis datastore with unauthenticated access, no snapshots
+  and TLS off, and OverWatch reported nothing about any of it. **`MDB-02` is why the
+  section is worth having**: botocore's own enum for `Authentication.Type` is
+  `['password', 'no-password', 'iam']`, and a `no-password` user can be connected as by
+  anything that reaches the endpoint — a direct observation rather than an inference.
+  MemoryDB creates such a user **by default**, so the untouched cluster is the exposed
+  one and its only protection is a security group. CRITICAL, and it resolves the
+  cluster's ACL to its actual members rather than matching the default ACL's name, which
+  a rename defeats.
+- **Timestream, `TS-01`/`TS-02`.** With magnetic-store writes enabled, records that fail
+  validation are not discarded — the *service* writes them to an S3 bucket in full. That
+  is real customer telemetry accumulating in a location created by the service rather
+  than by the team. `TS-02` asks whether that bucket exists at all: with magnetic-store
+  writes on and no rejected-data location, failures are silent, and for a service that
+  frequently holds the telemetry detection relies on, a silent gap is indistinguishable
+  from a period when nothing happened.
+- **TLS is now checked for being *required*, not merely accepted** — `RDS-14` (instance
+  parameter group), `AUR-06` (cluster parameter group, because an Aurora Serverless v1
+  cluster has no instances for `RDS-14` to read a group from), `DOCDB-06` and `NEP-05`,
+  all HIGH. Every RDS engine accepts TLS; almost none require it, the setting lives in a
+  parameter group, and no check in this product had ever read one — a repo-wide search
+  for `force_ssl`, `require_secure_transport`, `describe_db_parameters` and
+  `describe_db_cluster_parameters` returned nothing at all. A database that merely
+  *accepts* TLS serves any client that does not ask for it, in cleartext, with no
+  complaint and no log entry. Unlike encryption at rest, reading that traffic needs only
+  a position on the network. The decision is a pure function in `engine/aws_cis_db.py`.
+- **Four settings now read from the plane that owns them.** `AUR-07`/`AUR-08` close a
+  split that made `RDS-03` and `RDS-08` quietly wrong for Aurora: the *cluster* owns
+  `BackupRetentionPeriod` and `IAMDatabaseAuthenticationEnabled`, and a Serverless v1
+  cluster has no instances at all. `ELC-07`/`ELC-08` read two fields already arriving in
+  a response the ElastiCache section paginated and never looked at. No new API call, no
+  new IAM grant. **`AUR-07`'s threshold is `< 7` days rather than `== 0`, deliberately**:
+  a cluster's minimum retention is 1, so "backups disabled" is unreachable and a `== 0`
+  test would be a check that can never fire. The real gap is the default — a cluster
+  nobody configured retains one day, which makes backup retention a detection-latency
+  control more than a backup control.
+- **Keyspaces was built and withdrawn**, and QLDB is declined on checkable evidence
+  rather than judgement. `docs/CIS_DATABASE_PLAN.md` records the departures from plan.
+
+### Fixed — DocumentDB and Neptune were scored as Aurora, and then as RDS
+
+They are separate services sharing one control plane, so `rds:DescribeDBClusters` and
+`rds:DescribeDBInstances` return them alongside the real thing. Neither loop applied an
+engine filter. The codebase already knew better in one place — `_dspm_rds` branches on
+`Engine` to give `docdb` and `neptune` their own crown-jewel kinds — but the check path
+never did.
+
+- **At cluster level**, `AUR-01`..`AUR-05` scored every DocumentDB and Neptune cluster in
+  an account. A DocumentDB encryption gap was reported **twice** — `AUR-01` and
+  `DOCDB-02`, same resource, same fact — with contradictory advice: `AUR-01` offers a
+  modify command, `DOCDB-02` correctly says DocumentDB encryption is creation-time only
+  and needs a migration. And Neptune posture was reported entirely under Aurora ids,
+  which made section 9 of the CIS Database benchmark look partly covered while nothing in
+  the product knew what Neptune was. That is the more damaging half: a false baseline to
+  build on.
+- **At instance level**, a single Neptune instance produced `RDS-01`..`RDS-04`, none
+  saying Neptune anywhere, all carrying RDS remediation commands that do not apply. It
+  was found by **running** the section, not reading it — the first version of the test
+  read the source for an engine filter and was fooled immediately, because `_check_rds`
+  mentions both `Engine` and `NON_AURORA_CLUSTER_ENGINES` for reasons that have nothing
+  to do with filtering instances. The text said "filtered" while the code was not.
+- **Filtering alone would have been a regression, both times.** Deleting real findings is
+  not a fix for mislabelling them. Four cluster facts and two instance facts reached a
+  report only via an Aurora or RDS id, so they get their own: `DOCDB-04`/`DOCDB-05`,
+  `NEP-01`..`NEP-04` (**`NEPTUNE` is section 95**), then `DOCDB-07`/`DOCDB-08` and
+  `NEP-06`..`NEP-10`. `RDS-02` and `RDS-03` were the only coverage of Neptune public
+  accessibility and backup retention — CIS-DB 9.8 and 9.9 — so a filter on its own would
+  have turned two honest "decided elsewhere" rows into silence while the mapping still
+  claimed they were decided.
+- **The filter is a DENY-list of exactly `{docdb, neptune}`, not an allow-list of Aurora
+  engines**, and a cluster with no `Engine` field is still scored. AWS keeps adding Aurora
+  variants; an allow-list would drop each new one out of coverage silently, which is the
+  failure mode hardest to notice.
+
+### Added — the AWS API contract is checked against the one description of it nobody here wrote
+
+`docs/CHECK_FIRING.md` proves a check can produce a finding. It cannot prove the finding
+is about anything real, because **every AWS response in the suite is a mock written by
+whoever wrote the check** — so it encodes the same understanding of the API. When that
+understanding is wrong, the check and its test agree with each other and are wrong
+together, and no amount of coverage of that shape detects it. botocore ships AWS's own
+service models: for every operation, its exact name and the exact members of its output
+shape. They were already on disk, they need no credentials, and AWS authors them.
+`tests/test_aws_api_contract.py` uses them as the oracle.
+
+- **It found two real bugs on its first proper run.** `WKR-01` read `networkSettings`
+  from `wickr:GetNetworkSettings`; the operation has no such member — it returns
+  `settings`, as a **list** of `{optionName, value, type}` pairs whose values are
+  strings, not the nested object the code assumed. The check received `{}` on every real
+  scan and could never fire, while its unit tests passed against a shape AWS has never
+  sent. And `_dspm_timestream` called `get_paginator("list_databases")`, which
+  `timestream-write` does not declare, so it raised `OperationNotPageableError` before a
+  single request — every scan, forever — and the enclosing handler emitted "Could not
+  enumerate Timestream databases", which in a report is indistinguishable from an account
+  that has no Timestream in it. Its test had supplied the paginator the API does not
+  have; it now asserts `get_paginator` is never called.
+- **Why a naive version of this test is worse than none.** The first pass flagged 77
+  sites and every one was an artefact. Deriving method names by a snake_case→PascalCase
+  guess turns `describe_db_clusters` into `DescribeDbClusters` and misses the real
+  `DescribeDBClusters`, so every AWS acronym becomes a false positive — botocore's own
+  `xform_name` is exact by construction. And unioning client variables across a module
+  conflates `elb` bound to the elbv2 client in one method and the classic client in
+  another, both correct, so the map is now built per function.
+
+### Changed — the unreached-module debt list is empty
+
+`UNREACHED` held four modules — real, tested, documented code that nothing outside its
+own tests imported. Built-and-unreached is the liability
+`tests/test_unreached_modules.py` exists to name: a module with tests and no caller
+passes CI, appears in `CLAUDE.md` as a delivered bullet, and is counted by a reader as
+working software. Wiring or deleting are the only two ways to shrink the list; describing
+it better is not. All four are wired (532 → 535 checks).
+
+- **Two of the four recorded blockers were stale**, which is the argument for auditing a
+  waiver list rather than trusting it. `aws_trend` said "needs trend materialisation"
+  when `StateStore.trend`, `scan_coverage` and the `DriftCard` render path all already
+  existed; what was missing was an adapter from scans to calendar months.
+  `monthly_series` **emits a month with no scan as an explicit gap** — skipping empty
+  months is the tempting implementation and silently reintroduces the defect the module
+  exists to fix. `aws_guardrail` said "no CI entry point"; `cnapp_marketplace_metering`
+  said "the caller schedules it hourly" in its own docstring and nothing did, so a
+  metered Marketplace listing would have billed nothing.
+- **`aws_ingest_credexp` needed an ingest surface and `iam:ListAccessKeys`**, both now
+  present. `CREDEXP-01` (CRITICAL) rests on an AWS access key id being globally unique,
+  so a match in someone else's corpus is not coincidence and the key is live; `CREDEXP-02`
+  (HIGH) is an exact email/username match, strong but not conclusive; `CREDEXP-03`
+  (MEDIUM) is weaker still. `CREDEXP-00` states what could not be determined and is
+  emitted whether or not anything matched, because a check that returns nothing when its
+  inventory is missing is otherwise indistinguishable from a clean account.
+
+### Changed — the live-validation harness covers the product, not 5% of it
+
+`scripts/validate_live.py` defaulted to five sections. That is ~5% of the scanner, and
+the other 89 had never had a single response shape checked against real AWS while the
+suite reported checks "proven" against mocks their own authors wrote. **The default is
+now every section**; `--quick` keeps the old five as a credential smoke test and says in
+its own help text that it is not a validation of the product.
+
+- **Silent sections are named.** A section that produced no results is either a service
+  the account does not use or a shape we misread, and from inside the harness those are
+  indistinguishable — hiding them is how drift stays invisible.
+- **NOT EVALUATED prints the exact grants that would close each gap.** A denied read is
+  not a clean result and the summary must not let it read as one.
+
+### Fixed — four guards had not run since the layering refactor
+
+`test_decisions_d11_d13` guards two charter properties on the ingest modules — no
+hardcoded vendor endpoint, no egress primitive — and located them with
+`os.path.join(ROOT, "aws_ingest_credexp.py")`. Those modules moved into `engine/` when
+the 109 flat modules were split, after which the path never resolved, `os.path.exists`
+was False, and all four tests **skipped** instead of running. They skipped clean and
+green for the whole of that period, which is how a guard stops guarding with nobody
+noticing: a skip is not a failure, and "4 skipped" at the foot of a run is the easiest
+line in the world to stop reading. Both modules pass on the merits — checked when this
+was found — which is luck rather than a reason to leave it. The existence check is now an
+**assertion** carrying a message telling the next person not to convert it back to a
+skip, and the suite reports **0 skipped** for the first time.
+
+### Changed — the last never-observed HIGH checks, and why a grep could not find them
+
+`CWPP-01`, `SEG-02` and `VULN-03` were the last never-observed checks declared HIGH
+(31 → 28 never observed; 410 → 413 proven to FAIL), and they were last because none is
+written as `_add("FAIL", "<ID>", ...)` — the literal every earlier tranche's static pass
+searched for.
+
+- `CWPP-01` is `fid = "CWPP-02" if m.kev else "CWPP-01"`, and the existing side-scan
+  integration test supplies a CVE that **is** on the KEV catalogue, so it had always
+  driven `CWPP-02` and never the arm beside it. Most CVEs are not on KEV, so the untested
+  arm is the common case in production.
+- `VULN-03` is one arm of a four-way dispatch on Inspector's resource type; only
+  `AWS_ECR_CONTAINER_IMAGE` produces it.
+- `SEG-02` is not written in the scanner at all — `aws_exposure.microseg_findings`
+  returns dicts carrying their own `id` and the scanner emits them by `f["id"]`.
+
+None of that is a defect; an id computed from the finding is often the clearest way to
+write it. It is the reason `docs/CHECK_FIRING.md` records `_add` **at runtime** rather
+than reading the source.
+
 ## [3.0.0] — 2026-08-28
 
 **A major version because the import surface changed, not because the product
