@@ -114,6 +114,7 @@ FLOORS = {
     "test_blast_radius.py": 12,
     "test_bucketb_driving.py": 9,
     "test_cbom.py": 29,
+    "test_ccm_matrix.py": 15,
     "test_cdr_api.py": 10,
     "test_cdr_ingest.py": 21,
     "test_cdr_state.py": 8,
