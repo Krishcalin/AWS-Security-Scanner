@@ -4879,6 +4879,70 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Prevent recurrence by deploying WAF through AWS Firewall Manager with an org policy that auto-attaches a baseline Web ACL to all new ALB/CloudFront/API Gateway resources",
         ],
     },
+    "DRS-01": {
+        "risk": "The AWS Elastic Disaster Recovery replication configuration template stages replicated disks with EBS encryption set to NONE. The staging area is where DRS keeps a continuous, block-level copy of every disk on every protected source server, and it lives in a subnet that is not production, is administered by this template rather than by the workloads it shadows, and is rarely looked at. An encryption setting of NONE therefore means a current copy of the entire protected estate's data sits unencrypted somewhere nobody watches. This is not a hypothetical value: NONE is a real member of the API's ebsEncryption enum, alongside DEFAULT (an AWS-managed key) and CUSTOM (a key this account administers).",
+        "impact": "Anyone who can reach the staging volumes or their snapshots — through a snapshot shared in error, an over-broad EC2 role, or the account's own console — reads production data without touching production, without appearing in any application log, and without needing the credentials that protect the original systems. Disaster recovery becomes the softest copy of the data it exists to protect.",
+        "steps": [
+            "Confirm the setting rather than the intent: aws drs describe-replication-configuration-templates and read ebsEncryption on each template",
+            "Fix the template first, because every newly added source server inherits from it: aws drs update-replication-configuration-template --replication-configuration-template-id <TEMPLATE_ID> --ebs-encryption CUSTOM --ebs-encryption-key-arn <KMS_KEY_ARN>",
+            "Update the servers already registered, which keep their own copy of the configuration: aws drs update-replication-configuration --source-server-id <SERVER_ID> --ebs-encryption CUSTOM --ebs-encryption-key-arn <KMS_KEY_ARN>",
+            "Grant the DRS service role kms:Encrypt, kms:Decrypt, kms:GenerateDataKey* and kms:CreateGrant on the key, or replication will fail rather than fall back",
+            "Re-run the scan and confirm the finding clears for every template AND every source server; the template alone does not retrofit existing ones",
+        ],
+    },
+    "DRS-02": {
+        "risk": "The replication configuration template routes replication traffic over PUBLIC_IP. DRS replication is continuous and block-level, so this is a byte-for-byte stream of production disk contents crossing the public internet for as long as protection is enabled. The benchmark's own guidance for this setting is to keep replication on private connectivity precisely so backups do not travel that way.",
+        "impact": "The data is in transit on a path the account does not control, exposed to anything that can observe or interfere with it between the source server and the staging subnet. It also means the staging servers need a public network path at all, which widens what an attacker who reaches them can do next.",
+        "steps": [
+            "Provide a private path before changing the setting, or replication will stall the moment it flips: add interface VPC endpoints for DRS and S3 (or a NAT gateway / Direct Connect route) reachable from the staging subnet",
+            "Switch the template: aws drs update-replication-configuration-template --replication-configuration-template-id <TEMPLATE_ID> --data-plane-routing PRIVATE_IP",
+            "Switch each already-registered source server: aws drs update-replication-configuration --source-server-id <SERVER_ID> --data-plane-routing PRIVATE_IP",
+            "Watch dataReplicationInfo.dataReplicationState afterwards — a server that cannot reach the endpoints privately goes to STALLED, which DRS-03 will then report",
+        ],
+    },
+    "DRS-03": {
+        "risk": "A source server's replication is in a state that means data is not currently being protected — STOPPED, PAUSED, STALLED or DISCONNECTED. The recovery point for that server is frozen at whatever moment replication stopped, and nothing about the DRS console's list of protected servers makes that obvious at a glance. In-flight states (INITIAL_SYNC, BACKLOG, RESCAN, CREATING_SNAPSHOT) are deliberately not reported here: a server catching up is working, not broken.",
+        "impact": "The server appears protected and is not. A recovery launched from it restores the estate to an unknown earlier point, losing every change since replication stopped — which may be days or months. This is worse than having no DR for that server, because the gap is invisible until the moment it matters.",
+        "steps": [
+            "Read the reason rather than guessing: aws drs describe-source-servers --filters sourceServerIDs=<SERVER_ID> and inspect dataReplicationInfo.dataReplicationError",
+            "The common causes are the agent losing its network route to the staging subnet, the staging volume filling, or the source server being shut down for longer than the service tolerates — fix the cause before restarting",
+            "Restart replication: aws drs retry-data-replication --source-server-id <SERVER_ID>",
+            "If the server is genuinely retired, disconnect it so it stops presenting as protected: aws drs disconnect-source-server --source-server-id <SERVER_ID>",
+            "Alarm on the state so the next stall is noticed in hours rather than at recovery time",
+        ],
+    },
+    "DRS-04": {
+        "risk": "No drill and no real recovery has ever been launched from this source server — lastLaunchResult is NOT_STARTED — or the one launch on record FAILED and nothing has succeeded since. Replication being healthy proves the bytes are arriving; it proves nothing about whether those bytes boot, whether the launch template produces a usable instance, or whether anyone in the organisation knows the procedure.",
+        "impact": "An untested recovery is a plan, not a capability. The failure modes that drills exist to find — a launch template pointing at a subnet that no longer exists, a security group that blocks the application, an instance type no longer available, a boot volume that does not come up — are all discovered during the outage instead of before it, when there is no time to fix them.",
+        "steps": [
+            "Run a drill, which launches isolated instances and does not disturb the source server: aws drs start-recovery --source-servers sourceServerID=<SERVER_ID> --is-drill",
+            "Verify the launched instance actually boots and serves its function — a successful launch status is not the same as a working system",
+            "Clean up: aws drs terminate-recovery-instances --recovery-instance-ids <RECOVERY_INSTANCE_ID>",
+            "If the launch failed, read the job log (aws drs describe-job-log-items --job-id <JOB_ID>) and fix the launch configuration template rather than retrying unchanged",
+            "Put the drill on a schedule. A drill run once and never repeated goes stale as the workload, its dependencies and the account's networking all change around it",
+        ],
+    },
+    "BCK-04": {
+        "risk": "Every rule in this AWS Backup plan writes its recovery point to a vault in the same account and the same region as the resource it protects, and none of them copies it anywhere else. That protects against an accidental deletion and against essentially nothing else. Note that the CIS AWS Storage Services benchmark does not ask for this: its AWS Backup section asks repeatedly that backups be created and never once that they survive the loss of the region or the compromise of the account.",
+        "impact": "A region-wide event takes the workload and its backups together. More commonly, an attacker who reaches credentials able to delete production is usually able to delete the vault in the same account — which is exactly the sequence modern ransomware operators follow, destroying recovery options before encrypting anything.",
+        "steps": [
+            "Add a cross-region copy action to each rule: aws backup update-backup-plan --backup-plan-id <PLAN_ID> --backup-plan with a CopyActions entry whose DestinationBackupVaultArn names a vault in another region",
+            "Prefer cross-ACCOUNT copy where the threat model includes credential compromise, since deleting that copy then requires a second account's credentials: configure AWS Backup cross-account copy through AWS Organizations",
+            "Combine it with Vault Lock in compliance mode on the destination vault (see BCK-02) so the copy cannot be deleted before its retention expires",
+            "Confirm copies are actually landing: aws backup list-recovery-points-by-backup-vault --backup-vault-name <DEST_VAULT> — a copy action that fails silently leaves the plan looking correct",
+        ],
+    },
+    "BCK-05": {
+        "risk": "The backup vault encrypts its recovery points with an AWS-owned KMS key rather than a customer-managed one. The data is encrypted, so this is not an exposure — the finding is key ownership. An AWS-owned key cannot be audited through CloudTrail as a key this account uses, cannot be rotated on this account's schedule, cannot be granted or denied through a key policy, and cannot be revoked to render the copies unreadable.",
+        "impact": "The copy of last resort is held under a key with no separately administered control over it. There is no key policy to prevent a principal who reaches the vault from reading recovery points, and no way to sever access to historical backups independently of deleting them.",
+        "steps": [
+            "Note that a vault's key is fixed at creation and cannot be changed afterwards, so this is a migration rather than a setting change",
+            "Create the replacement: aws backup create-backup-vault --backup-vault-name <NEW_VAULT> --encryption-key-arn <KMS_KEY_ARN>",
+            "Grant the AWS Backup service principal kms:Decrypt, kms:GenerateDataKey and kms:CreateGrant on the key, or new backups will start failing rather than falling back",
+            "Repoint each plan rule's TargetBackupVaultName at the new vault: aws backup update-backup-plan --backup-plan-id <PLAN_ID> --backup-plan ...",
+            "Let the old vault age out under its own retention rather than deleting it — the recovery points in it are still the only copies of what they hold",
+        ],
+    },
     "WAF-06": {
         "risk": "An internet-facing application load balancer has no WAFv2 Web ACL associated with it, so every request from the internet reaches the application unfiltered. This is a narrower and more actionable question than WAF-01: WAF-01 observes that a scope holds no Web ACLs, which on an estate that needs no WAF is a correct and unactionable observation, whereas this finding names a specific entry point that is reachable from the internet right now with nothing in front of it. Only application load balancers are reported — a network load balancer operates below the layer a WAF inspects and cannot carry a Web ACL — and internal load balancers are out of scope because a WAF protects the internet edge.",
         "impact": "Requests carrying the known-bad-input classes an AWS managed rule group would drop — SQL injection, cross-site scripting, path traversal, exploit probes against common frameworks — arrive at the application intact, and the only defence is the application's own input handling. There is also no request-level record of web attacks against this entry point, because a Web ACL is what produces one.",

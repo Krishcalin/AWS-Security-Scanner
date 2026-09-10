@@ -174,4 +174,8 @@ def test_the_shipped_file_still_validates():
     # 46: +CIS-AL2, the CIS Amazon Linux 2 Benchmark. Native for the same reason, and the
     # first native that is not an AWS-service benchmark at all -- it describes an
     # operating system, which is why its family is "os" rather than "cloud".
-    assert len(frameworks) == 46
+    # 47: +CIS-STORAGE, the CIS AWS Storage Services Benchmark. Native for the same
+    # reason. It gets its own key rather than folding into CIS because these section
+    # numbers collide with the Foundations ones -- "2.1" means a different thing in
+    # each document, and a single key would silently merge two claims.
+    assert len(frameworks) == 47

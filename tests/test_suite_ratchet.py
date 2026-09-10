@@ -132,6 +132,7 @@ FLOORS = {
     "test_cis_db_tranche2.py": 27,
     "test_cis_foundations.py": 48,
     "test_cis_foundations_mapping.py": 29,
+    "test_cis_storage_mapping.py": 37,
     "test_cnapp_api.py": 7,
     "test_cnapp_cfn.py": 5,
     "test_cnapp_connectors.py": 50,

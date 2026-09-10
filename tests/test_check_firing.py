@@ -269,8 +269,16 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #:     filtering on it. WAF-01, ACM-05 and SHAI-03 were all brought down to LOW to match
 #:     what a WARN can actually render.
 #: Registered stays 566: THREAT-02 out, WAF-06 in. It is a different 566.
+#:
+#: 508 -> 514, registered 566 -> 572 (CIS AWS Storage Services). Six new checks, six
+#: driving tests, and the +6 here is the whole point of the ceiling being 0: the six
+#: arrived WITH their fixtures rather than joining a backlog, so the two numbers moved
+#: together in one commit. DRS-01..04 read Elastic Disaster Recovery -- the staging
+#: subnet that holds a continuous copy of every protected disk -- and BCK-04/05 ask the
+#: two questions that benchmark never asks: does the backup survive the region, and is
+#: it held under a key this account can actually revoke.
 MAX_NEVER_OBSERVED = 0
-MIN_PROVEN_FAILING = 508
+MIN_PROVEN_FAILING = 514
 
 
 def doc_text() -> str:

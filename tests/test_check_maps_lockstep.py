@@ -51,7 +51,11 @@ DETAIL_MAP = aws_finding_detail.FINDING_DETAIL
 #: AWS-service one, and it reuses section numbers for entirely unrelated controls: AL2 2.2
 #: is "special purpose services", Foundations 2.2 is the account contact record. Same
 #: reasoning that gave CIS-COMPUTE and CIS-DB their own keys.
-ALLOWED_FRAMEWORKS = {"CIS", "CIS-COMPUTE", "CIS-DB", "CIS-AL2",
+#: CIS-STORAGE is the CIS AWS Storage Services Benchmark, and it makes 2.2 mean a
+#: fifth thing: security-group configuration. It is also the first of these whose own
+#: text the mapping had to refuse in places — see the UNSAFE verdict in
+#: engine/aws_cis_storage_map.py.
+ALLOWED_FRAMEWORKS = {"CIS", "CIS-COMPUTE", "CIS-DB", "CIS-AL2", "CIS-STORAGE",
                       "PCI-DSS", "HIPAA", "SOC2", "NIST"}
 
 # ── the frozen backlog — now EMPTY, and it can only stay that way ───────────
