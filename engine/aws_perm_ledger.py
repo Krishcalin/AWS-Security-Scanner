@@ -911,6 +911,7 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
 # import of this module, so it builds Requirements through the factory passed in.
 from engine import aws_checkdef          # noqa: E402
 from engine import aws_cis_compute
+from engine import aws_cis_db2           # noqa: E402,F401  (CIS-DB tranche 2)
 from engine import aws_cis_foundations   # noqa: E402,F401  (CIS Foundations v7.0.0)
 from engine import aws_nhi
 from engine import aws_extsvc2

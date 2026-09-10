@@ -218,14 +218,20 @@ def test_a_failed_cluster_read_is_a_warning_not_a_finding():
 
 def test_the_whole_default_estate_is_reported():
     """The realistic shape: a cluster created with defaults and never configured. It is
-    passwordless, and that is the point of the section."""
+    passwordless, and that is the point of the section.
+
+    SEVEN NOW, NOT SIX. MDB-07 (CIS-DB 6.6) joined the section and a default cluster has
+    no SNS topic, so it fires here too — which is the check behaving correctly rather
+    than a regression. The assertion is an exact set on purpose: it is the one place that
+    notices a check quietly joining or leaving the section's default-estate verdict, and
+    updating the number without reading why would defeat it."""
     s = _scanner([_cluster(ACLName="open-access-acl", TLSEnabled=False,
                            SnapshotRetentionLimit=0, KmsKeyId=None,
                            AutoMinorVersionUpgrade=False,
                            AvailabilityMode="singleaz")])
     failed = {r.check_id for r in s.results if r.status == "FAIL"}
-    assert failed == {"MDB-01", "MDB-02", "MDB-03", "MDB-04", "MDB-05", "MDB-06"}, (
-        f"expected all six, got {sorted(failed)}")
+    assert failed == {"MDB-01", "MDB-02", "MDB-03", "MDB-04", "MDB-05", "MDB-06",
+                      "MDB-07"}, f"expected all seven, got {sorted(failed)}"
 
 
 def test_the_section_is_in_the_default_run_list():

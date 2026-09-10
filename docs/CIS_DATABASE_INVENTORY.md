@@ -55,7 +55,7 @@ which is the distinction that whole document exists to keep.
 
 ## 4 — DynamoDB
 
-*9 recommendations in the benchmark. OverWatch ships 5 check(s) against this service.*
+*9 recommendations in the benchmark. OverWatch ships 7 check(s) against this service.*
 
 | Check | Severity | Proven to FAIL | What it asserts |
 |---|---|---|---|
@@ -64,11 +64,13 @@ which is the distinction that whole document exists to keep.
 | `DDB-03` | LOW | runs, no FAIL | A provisioned table without auto scaling throttles under a demand spike, turning a traffic flood into an application outage rather than a cost event. |
 | `DDB-04` | MEDIUM | runs, no FAIL | One accidental or malicious API call can wipe an entire production table irreversibly, causing outage and permanent data loss (mapped to PCI-DSS 12.10.1 /… |
 | `DDB-05` | CRITICAL | yes | This is a direct data-exposure path: an unauthorized external or public principal can read, tamper with, or destroy the table's contents, causing a data… |
+| `DDB-06` | MEDIUM | yes | Anything assuming this identity can read and write every row of every DynamoDB table in the account, including tables created later. |
+| `DDB-07` | LOW | yes | DynamoDB traffic crosses the public network and cannot be restricted to specific tables by an endpoint policy. |
 
 
 ## 5 — ElastiCache
 
-*13 recommendations in the benchmark. OverWatch ships 8 check(s) against this service.*
+*13 recommendations in the benchmark. OverWatch ships 9 check(s) against this service.*
 
 | Check | Severity | Proven to FAIL | What it asserts |
 |---|---|---|---|
@@ -80,11 +82,12 @@ which is the distinction that whole document exists to keep.
 | `ELC-06` | MEDIUM | yes | A single leaked AUTH token or one compromised in-VPC client grants full, unrestricted command access to all cached data with no per-application… |
 | `ELC-07` | MEDIUM | yes | A flushed, corrupted or lost cache cannot be restored -- and where Redis holds data that exists nowhere else, that is permanent loss. |
 | `ELC-08` | MEDIUM | yes | An availability-zone failure removes the entire cache, and the uncached load then arrives at the origin database at once. |
+| `ELC-09` | LOW | yes | The slow and engine logs are lost with the node, so cache incidents cannot be reconstructed afterwards. |
 
 
 ## 6 — MemoryDB
 
-*7 recommendations in the benchmark. OverWatch ships 6 check(s) against this service.*
+*7 recommendations in the benchmark. OverWatch ships 7 check(s) against this service.*
 
 | Check | Severity | Proven to FAIL | What it asserts |
 |---|---|---|---|
@@ -94,11 +97,12 @@ which is the distinction that whole document exists to keep.
 | `MDB-04` | LOW | yes | No key policy to audit, no attributable key-usage trail, and no way to revoke access to the data by disabling the key. |
 | `MDB-05` | MEDIUM | yes | Published engine vulnerabilities remain unpatched indefinitely, because nothing prompts anybody to apply them. |
 | `MDB-06` | MEDIUM | yes | An availability-zone failure removes the whole datastore, and without cross-AZ replicas that is potential data loss rather than downtime. |
+| `MDB-07` | LOW | yes | Failovers and maintenance on a primary datastore happen unannounced. |
 
 
 ## 7 — DocumentDB
 
-*12 recommendations in the benchmark. OverWatch ships 8 check(s) against this service.*
+*12 recommendations in the benchmark. OverWatch ships 10 check(s) against this service.*
 
 | Check | Severity | Proven to FAIL | What it asserts |
 |---|---|---|---|
@@ -110,6 +114,8 @@ which is the distinction that whole document exists to keep.
 | `DOCDB-06` | HIGH | yes | Client connections carry credentials and document contents in cleartext across the VPC, readable by anything with a position on the network. |
 | `DOCDB-07` | CRITICAL | yes | A document store holding complete records is reachable from the internet, with a static database password as the only authentication. |
 | `DOCDB-08` | MEDIUM | yes | Anything discovered more than a day late cannot be restored, and a document store gives no schema errors to make bad writes surface early. |
+| `DOCDB-09` | MEDIUM | yes | The cluster may be running a known-vulnerable engine version with the fix already queued and unapplied. |
+| `DOCDB-10` | LOW | yes | Failover, deletion and configuration events on the cluster are recorded but never announced. |
 
 
 ## 8 — Keyspaces
@@ -121,7 +127,7 @@ which is the distinction that whole document exists to keep.
 
 ## 9 — Neptune
 
-*11 recommendations in the benchmark. OverWatch ships 10 check(s) against this service.*
+*11 recommendations in the benchmark. OverWatch ships 11 check(s) against this service.*
 
 | Check | Severity | Proven to FAIL | What it asserts |
 |---|---|---|---|
@@ -135,16 +141,19 @@ which is the distinction that whole document exists to keep.
 | `NEP-08` | HIGH | yes | Anything that can reach the endpoint is authorised, and no connection can be attributed to a principal. |
 | `NEP-09` | MEDIUM | yes | No record of queries or connections survives the cluster, so an incident cannot be scoped to what was actually traversed. |
 | `NEP-10` | MEDIUM | yes | An availability-zone failure leaves the graph with no instance to serve it, and recovery is bounded by the backup window rather than by failover. |
+| `NEP-11` | LOW | yes | Failover, deletion and configuration events on the graph cluster are recorded but never announced. |
 
 
 ## 10 — Timestream
 
-*10 recommendations in the benchmark. OverWatch ships 2 check(s) against this service.*
+*10 recommendations in the benchmark. OverWatch ships 4 check(s) against this service.*
 
 | Check | Severity | Proven to FAIL | What it asserts |
 |---|---|---|---|
 | `TS-01` | LOW | yes | Rejected customer records accumulate in an S3 bucket under a key you neither control nor can audit. |
 | `TS-02` | MEDIUM | yes | Records that fail validation are dropped silently, leaving gaps in telemetry that cannot be distinguished from periods of no activity. |
+| `TS-03` | MEDIUM | yes | Anything assuming this identity can query every time series in the account, including the telemetry that would reveal it. |
+| `TS-04` | MEDIUM | yes | The table has no recovery path whatsoever; a delete or a bad ingest is unrecoverable. |
 
 
 ## 11 — QLDB
@@ -157,7 +166,7 @@ which is the distinction that whole document exists to keep.
 ## Totals
 
 - **98** recommendations across the ten services.
-- **58** OverWatch checks speak to those services today.
+- **67** OverWatch checks speak to those services today.
 - The two numbers are NOT comparable: one check can answer several recommendations, and several recommendations are not decidable at all. Producing the actual per-recommendation mapping is the point of the mapping pass; this file is its left-hand column.
 
 ## Declined, with reasons
@@ -165,6 +174,8 @@ which is the distinction that whole document exists to keep.
 Recorded as data in `engine/aws_cis_db.py` so this file and the coverage test read the same list.
 
 - **`keyspaces-needs-a-data-read-grant`** — Amazon Keyspaces authorises its control-plane reads -- ListKeyspaces, ListTables and GetTable -- under cassandra:Select, and that is the SAME action that authorises reading table rows. AWS offers no metadata-only read action for the service, so covering it would mean adding an action to the scanning role that permits reading customer data. That crosses the read-only-of-CONFIG line this product's role is built on, and which tests/test_perm_ledger.py::test_the_additive_policy_contains_only_read_actions already enforces by excluding s3:GetObject and logs:StartQuery for exactly the same reason. The checks themselves would be straightforward -- pointInTimeRecovery.status and encryptionSpecification.type are both plain enums -- so this is a decision about the GRANT, not about feasibility. If it is ever wanted, it belongs in an opt-in permission block alongside the other data-plane reads rather than in the default policy
+
+- **`memorydb-audit-logging`** — MemoryDB audit logging (recommendation 6.4) is configurable in the console and is not in the SDK. The pinned botocore model carries no log-delivery member on the Cluster shape and no log-delivery shape anywhere in the memorydb service, so a check would have to read a field DescribeClusters does not return -- which would report every cluster as non-compliant for a reason that has nothing to do with the cluster. Tranche 1 recorded this as a gap on the assumption it sat alongside the SNS topic MDB-07 reads; checking the model rather than the assumption is what moved it here. Recorded rather than dropped so it is re-decided if AWS ships the model, exactly as qldb-everything is
 
 - **`qldb-everything`** — Amazon QLDB has NO service model in the pinned botocore at all -- boto3 cannot construct a client for it, so none of section 11 is buildable regardless of whether it would be worth building. AWS removed the service from the SDK. tests/test_cis_db_keyspaces_timestream.py asserts this rather than asserting the judgement, so if AWS ever restores the model the decision gets re-made instead of silently standing
 

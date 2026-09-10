@@ -82,15 +82,15 @@ have let an edition bump in one document silently re-point citations in another.
 
 ## 4 — Amazon DynamoDB
 
-*9 recommendations; 3 covered by a check that can fail.*
+*9 recommendations; 5 covered by a check that can fail.*
 
 | # | Control | Verdict | OverWatch | Note |
 |---|---|---|---|---|
 | 4.1 | Access to tables controlled by IAM | covered | **DDB-05** | Read as its contrapositive, which is the decidable half: DDB-05 fails a table whose RESOURCE policy grants a wildcard principal, because such a table is reachable without the IAM control this recommendation assumes |
-| 4.2 | Fine-grained (item- and attribute-level) access control | **gap** | — | Decidable in principle by reading dynamodb:LeadingKeys and dynamodb:Attributes conditions out of attached policies, which the effective-permissions engine already parses. Not built |
+| 4.2 | Fine-grained (item- and attribute-level) access control | covered | **DDB-06** | DDB-06 reads the Condition block of each principal's policies, which is where fine-grained access actually lives. Deliberately scoped to grants reaching EVERY table with no dynamodb:LeadingKeys or dynamodb:Attributes condition: a role with GetItem on one named table is the correct shape for a service that owns its data, and reporting that would bury the finding |
 | 4.3 | Encryption at rest | observed only | **DDB-01** | DynamoDB is encrypted at rest unconditionally, so the recommendation as literally stated cannot fail. The only decidable question left is key ownership, and DDB-01 reports that as PASS or WARN |
 | 4.4 | Encryption in transit | vacuous | — | The DynamoDB endpoint is HTTPS-only and the SDKs offer no cleartext option. There is no setting to read |
-| 4.5 | VPC endpoints configured | **gap** | — | Decidable from ec2:DescribeVpcEndpoints. Not built, and worth noting it is a routing preference rather than an access control -- the gateway endpoint keeps traffic off the internet but grants nothing |
+| 4.5 | VPC endpoints configured | covered | **DDB-07** | DDB-07 fires only where the account HAS tables and the VPC has a path to the internet -- an isolated VPC is not reaching DynamoDB over the public network whatever its endpoint list says. The earlier note here called this a routing preference that grants nothing; that was half right. The endpoint also accepts an endpoint POLICY, which is the only mechanism that can restrict which tables a VPC may reach at all |
 | 4.6 | Streams and Lambda wired up for compliance checking | process | — | A recommendation to build a bespoke compliance pipeline, not a configuration of the table. An estate that runs this product has already answered the underlying need |
 | 4.7 | Activity monitored and audited | decided elsewhere | — | CloudTrail data events for DynamoDB are decided by the logging pillar, which reads the trail rather than the table |
 | 4.8 | Deletion protection enabled | covered | **DDB-04** |  |
@@ -99,7 +99,7 @@ have let an edition bump in one document silently re-point citations in another.
 
 ## 5 — Amazon ElastiCache
 
-*13 recommendations; 5 covered by a check that can fail.*
+*13 recommendations; 6 covered by a check that can fail.*
 
 | # | Control | Verdict | OverWatch | Note |
 |---|---|---|---|---|
@@ -108,10 +108,10 @@ have let an edition bump in one document silently re-point citations in another.
 | 5.3 | Encryption at rest and in transit | covered | **ELC-01**, **ELC-02** |  |
 | 5.4 | Engine kept patched | covered | **ELC-05** | ELC-05 fails an end-of-life engine. The recommendation asks for the AutoMinorVersionUpgrade flag, which for ElastiCache Redis AWS applies regardless of its value -- so the flag is a weaker question than the one ELC-05 answers |
 | 5.5 | The cluster is in a VPC | vacuous | — | As 3.3 |
-| 5.6 | Monitoring and logging enabled | **gap** | — | Decidable from the LogDeliveryConfigurations on the replication group. Not built |
+| 5.6 | Monitoring and logging enabled | covered | **ELC-09** | LogDeliveryConfigurations arrives on the same describe_replication_groups response the other ELC checks already read, so this cost no extra call. Rated LOW rather than alongside DOCDB-03 and NEP-09: those carry a record of who connected and what they ran, this carries the slow and engine logs |
 | 5.7 | Security configuration reviewed regularly | process | — | Shares its title verbatim with 5.10 -- see the defects section |
-| 5.8 | Authentication and access control | **gap** | — | MISFILED IN THE BENCHMARK: filed under ElastiCache, but its audit steps walk the Amazon Keyspaces console. Read as an ElastiCache control the intent duplicates 5.1, which ELC-03 and ELC-06 decide |
-| 5.9 | Audit logging enabled | **gap** | — | MISFILED IN THE BENCHMARK: the audit steps walk the Keyspaces console |
+| 5.8 | Authentication and access control | declined | — | MISFILED IN THE BENCHMARK: filed under ElastiCache, but its audit steps walk the Amazon Keyspaces console to enable IAM for Cassandra. Read as an ElastiCache control the intent duplicates 5.1, which ELC-03 and ELC-06 decide; read as the Keyspaces control it plainly is, it runs into the grant decision recorded in NOT_DETERMINABLE. Declined either way, and it was carried as a gap until tranche 2 checked which |
+| 5.9 | Audit logging enabled | declined | — | As 5.8: filed under ElastiCache, audited against Keyspaces. This one compounds the confusion -- its description talks about caching clusters and CloudWatch metrics, which is ElastiCache language, while its audit steps open the Keyspaces console |
 | 5.10 | Security configuration reviewed regularly | process | — | MISFILED IN THE BENCHMARK, and a duplicate of 5.7's title |
 | 5.11 | Cluster mode enabled | declined | — | Readable, and judged not a security defect: cluster mode is a scaling and sharding decision. Recorded in DECLINED_AS_NOT_A_FINDING |
 | 5.12 | Deployed across multiple availability zones | covered | **ELC-08**, **ELC-04** | ELC-08 reads MultiAZ; ELC-04 reads automatic failover, which the recommendation's own remediation names as a prerequisite -- Multi-AZ without failover has nowhere to fail over to |
@@ -120,22 +120,22 @@ have let an edition bump in one document silently re-point citations in another.
 
 ## 6 — Amazon MemoryDB for Redis
 
-*7 recommendations; 3 covered by a check that can fail.*
+*7 recommendations; 4 covered by a check that can fail.*
 
 | # | Control | Verdict | OverWatch | Note |
 |---|---|---|---|---|
 | 6.1 | Network security configured | decided elsewhere | — | As 5.2 |
 | 6.2 | Data at rest and in transit encrypted | covered | **MDB-01**, **MDB-04** | MDB-01 is the in-transit half and is a genuine failure state. The at-rest half cannot fail -- MemoryDB always encrypts -- so MDB-04 reports key ownership instead, at LOW |
 | 6.3 | Authentication and access control | covered | **MDB-02** | The strongest match in this benchmark. MemoryDB ships a passwordless ACL user by default, and MDB-02 reads Authentication.Type directly -- an observation, not an inference |
-| 6.4 | Audit logging enabled | **gap** | — | Decidable from the cluster's SNS and log-delivery configuration. Not built |
+| 6.4 | Audit logging enabled | declined | — | NOT EXPOSED BY THE SDK, which tranche 1 had assumed away by pairing it with 6.6 as 'SNS and log-delivery configuration'. MemoryDB audit logging is configurable in the console, and the pinned botocore model carries no log-delivery member on the Cluster shape and no log-delivery shape anywhere in the service -- a check would have to read a field AWS does not return. Recorded in NOT_DETERMINABLE so it is re-decided if AWS ships the model |
 | 6.5 | Security configuration reviewed regularly | process | — |  |
-| 6.6 | Monitoring and alerting enabled | **gap** | — | As 6.4 |
+| 6.6 | Monitoring and alerting enabled | covered | **MDB-07** | MDB-07 reads SnsTopicArn and SnsTopicStatus -- note the casing, which is SnsTopicArn and NOT SNSTopicArn, and which reading the shipped model caught before the check shipped. A topic attached with a non-active status is reported separately and is arguably worse than none: the console shows a topic while nothing is being delivered |
 | 6.7 | Automatic backups enabled | covered | **MDB-03** |  |
 
 
 ## 7 — Amazon DocumentDB
 
-*12 recommendations; 5 covered by a check that can fail.*
+*12 recommendations; 7 covered by a check that can fail.*
 
 | # | Control | Verdict | OverWatch | Note |
 |---|---|---|---|---|
@@ -145,8 +145,8 @@ have let an edition bump in one document silently re-point citations in another.
 | 7.4 | Non-TLS client connections refused by the engine | covered | **DOCDB-06** | DocumentDB spells this as the `tls` cluster parameter |
 | 7.5 | Access control and authentication | process | — | DocumentDB users live inside the engine, reachable only by connecting |
 | 7.6 | Audit logging enabled | covered | **DOCDB-03** |  |
-| 7.7 | Engine kept patched | **gap** | — | Decidable the same way ELC-05 and RDS-12 are, from the engine version. Not built for DocumentDB |
-| 7.8 | Monitoring and alerting implemented | **gap** | — | As 6.4 |
+| 7.7 | Engine kept patched | covered | **DOCDB-09** | Tranche 1 expected this to be an engine-version comparison like ELC-05 and RDS-12. The better read is DescribePendingMaintenanceActions: it says whether AWS has queued an update this cluster has not taken, and carries the date the update is force-applied. That is a dated per-cluster fact rather than an inference from a version string, and security fixes arrive through exactly that queue |
+| 7.8 | Monitoring and alerting implemented | covered | **DOCDB-10** | Distinct from 7.6/DOCDB-03, and the distinction is the point: 7.6 asks whether the cluster RECORDS what happened inside it, this asks whether anybody is TOLD when something happens to it. A cluster can log perfectly and notify nobody, and the two need different fixes |
 | 7.9 | Backup and disaster recovery implemented | covered | **DOCDB-08** | Was the most substantive gap this mapping found -- BackupRetentionPeriod sat on the DocumentDB cluster and nothing read it. DOCDB-08 now fails a window shorter than 7 days, off the DescribeDBClusters call already made |
 | 7.10 | A backup window is configured | process | — | A window always exists -- AWS assigns one. Choosing a quiet one is an operational preference, not a security state |
 | 7.11 | Security assessments conducted | process | — | This product is a way of doing it |
@@ -167,7 +167,7 @@ have let an edition bump in one document silently re-point citations in another.
 
 ## 9 — Amazon Neptune
 
-*11 recommendations; 8 covered by a check that can fail.*
+*11 recommendations; 9 covered by a check that can fail.*
 
 | # | Control | Verdict | OverWatch | Note |
 |---|---|---|---|---|
@@ -177,7 +177,7 @@ have let an edition bump in one document silently re-point citations in another.
 | 9.4 | IAM database authentication enabled | covered | **NEP-08** | NEP-08 is rated above its Aurora equivalent on purpose: Neptune has no database users at all, so IAM auth is not one authentication option among several -- it is the only one the engine has |
 | 9.5 | Audit logging enabled | covered | **NEP-09** | NEP-09 reads EnabledCloudwatchLogsExports, as DOCDB-03 does for DocumentDB. Note the export is only half of it -- the neptune_enable_audit_log parameter must also be set, which the remediation says and no control-plane read can confirm |
 | 9.6 | Security configuration reviewed regularly | process | — |  |
-| 9.7 | Monitoring and alerting enabled | **gap** | — | As 6.4 |
+| 9.7 | Monitoring and alerting enabled | covered | **NEP-11** | As 7.8 |
 | 9.8 | Instances not publicly accessible | covered | **NEP-06** | Was decided under the WRONG ID: Neptune instances are returned by rds:DescribeDBInstances, so RDS-02 fired on them and reported a Neptune exposure as an RDS finding with RDS remediation. NEP-06 replaced that, and the RDS instance loop now filters Neptune out -- both halves in one change, because filtering alone would have deleted the only coverage this had |
 | 9.9 | Automated backups enabled | covered | **NEP-07** | Was the same defect as 9.8, decided by RDS-03 on the Neptune instance. NEP-07 reads the CLUSTER, which is where Neptune holds retention |
 | 9.10 | Deletion protection enabled | covered | **NEP-02** |  |
@@ -186,7 +186,7 @@ have let an edition bump in one document silently re-point citations in another.
 
 ## 10 — Amazon Timestream
 
-*10 recommendations; 1 covered by a check that can fail.*
+*10 recommendations; 3 covered by a check that can fail.*
 
 | # | Control | Verdict | OverWatch | Note |
 |---|---|---|---|---|
@@ -194,12 +194,12 @@ have let an edition bump in one document silently re-point citations in another.
 | 10.2 | Data at rest encrypted | declined | — | Timestream always encrypts, and the API cannot distinguish a customer-managed key from the AWS-managed one -- both return a KmsKeyId of the same shape. Recorded in NOT_DETERMINABLE |
 | 10.3 | Encryption in transit | vacuous | — | HTTPS-only endpoint, as 4.4 |
 | 10.4 | Access control and authentication | decided elsewhere | — | IAM policy quality is the CIEM pillar's subject |
-| 10.5 | Fine-grained access control | **gap** | — | As 4.2 |
+| 10.5 | Fine-grained access control | covered | **TS-03** | As 4.2 |
 | 10.6 | Audit logging enabled | decided elsewhere | — | CloudTrail, as 4.7 |
 | 10.7 | Updates and patches installed | vacuous | — | Timestream is serverless. There is no engine version to be behind on, and the recommendation's own audit text is a patch-management process for a thing the customer does not run |
-| 10.8 | Monitoring and alerting enabled | **gap** | — | As 6.4 |
+| 10.8 | Monitoring and alerting enabled | process | — | NOT the same shape as 6.6 and 7.8, which tranche 1 filed it with. Those have a notification target whose absence is readable -- an SNS topic, an event subscription. Timestream has neither: its audit reads 'Define Monitoring Objectives' and 'Choose Monitoring Tools', CloudWatch metrics are emitted unconditionally, and there is no per-table setting to inspect |
 | 10.9 | Security configuration reviewed and updated | process | — |  |
-| 10.10 | Automated backups enabled via AWS Backup | **gap** | — | Decidable by resolving AWS Backup selections to table ARNs. The recommendation carries leftover PITR text from a neighbouring control -- see the defects section |
+| 10.10 | Automated backups enabled via AWS Backup | covered | **TS-04** | Rated above the backup-retention checks elsewhere in this benchmark on purpose. For RDS, Aurora, DocumentDB and Neptune a short retention period limits how far back you can go; Timestream has no native backup, snapshot or point-in-time restore at all, so a table no plan selects has no recovery path whatsoever. The recommendation also carries leftover PITR text from a neighbouring control -- see the defects section |
 
 
 ## 11 — Amazon QLDB
@@ -221,22 +221,22 @@ have let an edition bump in one document silently re-point citations in another.
 
 | Verdict | Recommendations |
 |---|---:|
-| covered | 37 |
+| covered | 46 |
 | observed only | 5 |
 | decided elsewhere | 8 |
-| **gap** | 13 |
-| declined | 13 |
-| process | 15 |
+| **gap** | 0 |
+| declined | 16 |
+| process | 16 |
 | vacuous | 7 |
 | **total** | **98** |
 
-48 checks carry a `CIS-DB` compliance key. 10 more speak to these services but answer no recommendation in this benchmark — they are coverage the document does not ask for:
+57 checks carry a `CIS-DB` compliance key. 10 more speak to these services but answer no recommendation in this benchmark — they are coverage the document does not ask for:
 
 - **AUR-03** (HIGH) — Aurora engine end-of-life — section 2 has no patching control
 - **AUR-04** (CRITICAL) — publicly restorable Aurora snapshot — no snapshot-sharing control
 - **DDB-03** (LOW) — DynamoDB auto scaling — a throttling risk the benchmark omits
 - **DOCDB-01** (CRITICAL) — publicly restorable DocumentDB snapshot — no such control
-- **DOCDB-07** (CRITICAL) — 
+- **DOCDB-07** (CRITICAL) — publicly accessible DocumentDB instance — section 7 has no public-access control, though Aurora, RDS and Neptune all do
 - **MDB-05** (MEDIUM) — MemoryDB minor-version patching — section 6 has no patching control
 - **MDB-06** (MEDIUM) — MemoryDB single-AZ — section 6 has no availability control
 - **NEP-03** (CRITICAL) — publicly restorable Neptune snapshot — no such control
@@ -342,6 +342,8 @@ reaches the endpoint is authorised by the security group and by nothing else.
 Held as data in `engine/aws_cis_db.py` so this document, the coverage tests and the inventory all read the same list.
 
 - **`keyspaces-needs-a-data-read-grant`** — Amazon Keyspaces authorises its control-plane reads -- ListKeyspaces, ListTables and GetTable -- under cassandra:Select, and that is the SAME action that authorises reading table rows. AWS offers no metadata-only read action for the service, so covering it would mean adding an action to the scanning role that permits reading customer data. That crosses the read-only-of-CONFIG line this product's role is built on, and which tests/test_perm_ledger.py::test_the_additive_policy_contains_only_read_actions already enforces by excluding s3:GetObject and logs:StartQuery for exactly the same reason. The checks themselves would be straightforward -- pointInTimeRecovery.status and encryptionSpecification.type are both plain enums -- so this is a decision about the GRANT, not about feasibility. If it is ever wanted, it belongs in an opt-in permission block alongside the other data-plane reads rather than in the default policy
+
+- **`memorydb-audit-logging`** — MemoryDB audit logging (recommendation 6.4) is configurable in the console and is not in the SDK. The pinned botocore model carries no log-delivery member on the Cluster shape and no log-delivery shape anywhere in the memorydb service, so a check would have to read a field DescribeClusters does not return -- which would report every cluster as non-compliant for a reason that has nothing to do with the cluster. Tranche 1 recorded this as a gap on the assumption it sat alongside the SNS topic MDB-07 reads; checking the model rather than the assumption is what moved it here. Recorded rather than dropped so it is re-decided if AWS ships the model, exactly as qldb-everything is
 
 - **`qldb-everything`** — Amazon QLDB has NO service model in the pinned botocore at all -- boto3 cannot construct a client for it, so none of section 11 is buildable regardless of whether it would be worth building. AWS removed the service from the SDK. tests/test_cis_db_keyspaces_timestream.py asserts this rather than asserting the judgement, so if AWS ever restores the model the decision gets re-made instead of silently standing
 

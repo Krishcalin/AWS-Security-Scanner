@@ -95,6 +95,7 @@ from engine import aws_perimeter
 from engine import aws_checkdef
 from engine import aws_cis_compute
 from engine import aws_cis_db
+from engine import aws_cis_db2
 from engine import aws_cis_foundations
 from engine import aws_extsvc
 from engine import aws_extsvc2
@@ -9679,6 +9680,14 @@ class AWSLiveScanner:
 
         for rg in (clusters or []):
             rgid = rg.get("ReplicationGroupId", "unknown")
+            # ELC-09 (CIS-DB 5.6) — log delivery. Reads a field this same
+            # describe_replication_groups response already carried, so no extra call.
+            _r = aws_cis_db2.elasticache_log_delivery(rg)
+            if _r.get("failed"):
+                self._add("FAIL", "ELC-09", "ELASTICACHE", rgid, _r["statement"])
+            elif not _r.get("unknown"):
+                self._add("PASS", "ELC-09", "ELASTICACHE", rgid,
+                          f"Log delivery configured | {rgid}")
             # ELC-01 — Encryption at rest
             if rg.get("AtRestEncryptionEnabled", False):
                 self._add("PASS", "ELC-01", "ELASTICACHE", rgid,
@@ -9896,6 +9905,169 @@ class AWSLiveScanner:
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 24: AMAZON DYNAMODB
     # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
+    # CIS AWS Database Services Benchmark v2.0.0 — tranche 2 (the recorded gaps)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _fgac_principals(self, check_id: str, rule, section: str) -> None:
+        """DDB-06 / TS-03 — unscoped item-level data grants, per principal.
+
+        Both recommendations ask the same question of two services, and both are decided
+        from the IAM principal set this scan has already built and cached. `rule` is the
+        pure function from aws_cis_db2 that knows which actions and condition keys the
+        service uses."""
+        try:
+            principals = self._get_iam_principals()
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied(check_id, "iam:GetPolicyVersion")
+            self._add("INFO", check_id, section, "iam",
+                      f"NOT EVALUATED — the IAM principal set could not be read ({e})")
+            return
+        if not principals:
+            self._add("INFO", check_id, section, "iam",
+                      "NOT EVALUATED — no IAM principals were resolved, so policy "
+                      "conditions could not be inspected")
+            return
+        hits = 0
+        for p in principals:
+            r = rule(p)
+            if r.get("failed"):
+                hits += 1
+                self._add("FAIL", check_id, section,
+                          str(p.get("name") or p.get("arn") or "?"), r["statement"])
+        if not hits:
+            self._add("PASS", check_id, section, "iam",
+                      f"No principal of {len(principals)} holds unscoped item-level "
+                      f"access across every table")
+
+    def _check_dynamodb_access_and_endpoints(self, has_tables: bool) -> None:
+        """DDB-06 (CIS-DB 4.2) and DDB-07 (4.5)."""
+        self._log("DDB-06: DynamoDB fine-grained access control")
+        self._fgac_principals("DDB-06", aws_cis_db2.dynamodb_fine_grained_access,
+                              "DYNAMODB")
+
+        self._log("DDB-07: DynamoDB VPC endpoints")
+        ec2 = self._client("ec2")
+        try:
+            eps = self._paginate_strict(ec2, "describe_vpc_endpoints", "VpcEndpoints")
+            rtbs = self._paginate_strict(ec2, "describe_route_tables", "RouteTables")
+            vpcs = self._paginate_strict(ec2, "describe_vpcs", "Vpcs")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("DDB-07", "ec2:DescribeVpcEndpoints")
+            self._add("INFO", "DDB-07", "DYNAMODB", "vpc-endpoints",
+                      f"NOT EVALUATED — the VPC endpoint inventory could not be read ({e})")
+            return
+
+        by_vpc: Dict[str, List[str]] = {}
+        for ep in eps:
+            v = str(ep.get("VpcId") or "")
+            if v and str(ep.get("State", "available")) in ("available", "pendingAcceptance"):
+                by_vpc.setdefault(v, []).append(str(ep.get("ServiceName") or ""))
+        outbound: Set[str] = set()
+        for rtb in rtbs:
+            v = str(rtb.get("VpcId") or "")
+            for r in (rtb.get("Routes") or []):
+                if (str(r.get("GatewayId") or "").startswith("igw-")
+                        or r.get("NatGatewayId")
+                        or r.get("EgressOnlyInternetGatewayId")):
+                    outbound.add(v)
+        bad = 0
+        for vpc in vpcs:
+            vid = str(vpc.get("VpcId") or "?")
+            r = aws_cis_db2.dynamodb_vpc_endpoint(
+                vid, has_tables, vid in outbound, by_vpc.get(vid, []))
+            if r.get("failed"):
+                bad += 1
+                self._add("FAIL", "DDB-07", "DYNAMODB", vid, r["statement"])
+        if vpcs and not bad:
+            self._add("PASS", "DDB-07", "DYNAMODB", "vpc-endpoints",
+                      "Every internet-connected VPC reaches DynamoDB through a gateway "
+                      "endpoint (or the account holds no tables)")
+
+    def _cluster_event_subs(self, client, check_id: str, section: str, service: str,
+                            cluster_ids: List[str]) -> None:
+        """DOCDB-10 (CIS-DB 7.8) and NEP-11 (9.7) — one shape, two services."""
+        if not cluster_ids:
+            return
+        try:
+            subs = self._paginate_strict(client, "describe_event_subscriptions",
+                                         "EventSubscriptionsList")
+        except Exception as e:
+            subs = None
+            if self._is_access_denied(e):
+                # rds:, not docdb:/neptune:. Both services are authorised under the RDS
+                # IAM namespace they share a control plane with, so naming the client's
+                # own prefix here would tell an operator to grant an action that does
+                # not exist.
+                self._coverage.note_denied(
+                    check_id, "rds:DescribeEventSubscriptions")
+        for cid in cluster_ids:
+            r = aws_cis_db2.cluster_event_subscription(cid, service, subs)
+            if r.get("failed"):
+                self._add("FAIL", check_id, section, cid, r["statement"])
+            elif r.get("unknown"):
+                self._add("INFO", check_id, section, cid,
+                          f"NOT EVALUATED — {r['reason']}")
+            else:
+                self._add("PASS", check_id, section, cid,
+                          f"{service} cluster {cid} is covered by an event subscription")
+
+    def _check_docdb_maintenance(self, docdb, cluster_ids: List[str]) -> None:
+        """DOCDB-09 (CIS-DB 7.7) — engine updates AWS has queued and the cluster has not
+        taken. The closest the control plane comes to answering 'is this engine patched'."""
+        if not cluster_ids:
+            return
+        try:
+            actions = self._paginate_strict(
+                docdb, "describe_pending_maintenance_actions",
+                "PendingMaintenanceActions")
+        except Exception as e:
+            actions = None
+            if self._is_access_denied(e):
+                self._coverage.note_denied(
+                    "DOCDB-09", "rds:DescribePendingMaintenanceActions")
+        for cid in cluster_ids:
+            mine = None if actions is None else [
+                a for a in actions
+                if cid in str(a.get("ResourceIdentifier") or "")]
+            r = aws_cis_db2.docdb_pending_maintenance(cid, mine)
+            if r.get("failed"):
+                self._add("FAIL", "DOCDB-09", "DOCDB", cid, r["statement"])
+            elif r.get("unknown"):
+                self._add("INFO", "DOCDB-09", "DOCDB", cid,
+                          f"NOT EVALUATED — {r['reason']}")
+            else:
+                self._add("PASS", "DOCDB-09", "DOCDB", cid,
+                          f"No pending maintenance actions on {cid}")
+
+    def _check_timestream_cis_db2(self, table_arns: List[str]) -> None:
+        """TS-03 (CIS-DB 10.5) and TS-04 (10.10)."""
+        self._log("TS-03: Timestream fine-grained access control")
+        self._fgac_principals("TS-03", aws_cis_db2.timestream_fine_grained_access,
+                              "TIMESTREAM")
+
+        if not table_arns:
+            return
+        self._log("TS-04: Timestream tables covered by AWS Backup")
+        try:
+            protected = [str(p.get("ResourceArn") or "") for p in self._paginate_strict(
+                self._client("backup"), "list_protected_resources", "Results")]
+        except Exception as e:
+            protected = None
+            if self._is_access_denied(e):
+                self._coverage.note_denied("TS-04", "backup:ListProtectedResources")
+        for arn in table_arns:
+            r = aws_cis_db2.timestream_backup_coverage(arn, protected)
+            if r.get("failed"):
+                self._add("FAIL", "TS-04", "TIMESTREAM", arn, r["statement"])
+            elif r.get("unknown"):
+                self._add("INFO", "TS-04", "TIMESTREAM", arn,
+                          f"NOT EVALUATED — {r['reason']}")
+            else:
+                self._add("PASS", "TS-04", "TIMESTREAM", arn,
+                          f"An AWS Backup plan protects {arn}")
+
     def _check_dynamodb(self):
         self._section_header("DYNAMODB")
         ddb = self._client("dynamodb")
@@ -9908,6 +10080,12 @@ class AWSLiveScanner:
         except Exception as e:
             self._read_failed("DDB-01", "DYNAMODB", "dynamodb", "dynamodb:ListTables", e)
             return
+        # DDB-06/07 (CIS-DB 4.2, 4.5) run BEFORE the empty-table early return, and
+        # deliberately: DDB-06 is about IAM grants, which exist whether or not a table
+        # does — a role holding item-level access to every table in an account with no
+        # tables today is still a grant that reaches every table created tomorrow.
+        self._check_dynamodb_access_and_endpoints(bool(tables))
+
         if not tables:
             self._add("INFO", "DDB-01", "DYNAMODB", "dynamodb",
                       "No DynamoDB tables found")
@@ -12951,6 +13129,16 @@ class AWSLiveScanner:
                     self._add("PASS", "DOCDB-07", "DOCDB", iid,
                               f"DocumentDB instance not publicly accessible | {iid}")
 
+        # DOCDB-09/10 (CIS-DB 7.7, 7.8) — pending engine updates, and whether anyone is
+        # told when something happens to the cluster. Both are cluster-scoped, so they
+        # reuse the cluster list already fetched above.
+        _docdb_ids = [str((c or {}).get("DBClusterIdentifier") or "")
+                      for c in (clusters or [])
+                      if str(((c or {}).get("Engine") or "docdb")).lower() == "docdb"
+                      and (c or {}).get("DBClusterIdentifier")]
+        self._check_docdb_maintenance(docdb, _docdb_ids)
+        self._cluster_event_subs(docdb, "DOCDB-10", "DOCDB", "DocumentDB", _docdb_ids)
+
     def _check_neptune(self):
         """NEP-01..10 — Amazon Neptune clusters, instances and manual cluster snapshots.
 
@@ -13159,6 +13347,14 @@ class AWSLiveScanner:
                               f"Neptune cluster snapshot {sid} is not shared publicly "
                               f"| {sid}")
 
+        # NEP-11 (CIS-DB 9.7) — whether anyone is told when something happens to the
+        # cluster. Distinct from NEP-09, which asks whether the cluster records what
+        # happened INSIDE it; a cluster can log perfectly and notify nobody.
+        self._cluster_event_subs(
+            nep, "NEP-11", "NEPTUNE", "Neptune",
+            [str((c or {}).get("DBClusterIdentifier") or "")
+             for c in (clusters or []) if (c or {}).get("DBClusterIdentifier")])
+
     def _check_memorydb(self):
         """MDB-01..06 — Amazon MemoryDB.
 
@@ -13213,6 +13409,15 @@ class AWSLiveScanner:
 
         for c in clusters:
             name = (c or {}).get("Name") or "unknown"
+            # MDB-07 (CIS-DB 6.6) — SNS notifications. The member is SnsTopicArn, NOT
+            # SNSTopicArn; reading the shipped botocore model rather than assuming the
+            # obvious spelling is what caught that before it shipped.
+            _r = aws_cis_db2.memorydb_notifications(c)
+            if _r.get("failed"):
+                self._add("FAIL", "MDB-07", "MEMORYDB", name, _r["statement"])
+            elif not _r.get("unknown"):
+                self._add("PASS", "MDB-07", "MEMORYDB", name,
+                          f"SNS notification topic active | {name}")
             # MDB-01 — TLS. MemoryDB enables it at creation and it cannot be changed
             # afterwards, so False here means the cluster was created that way.
             tls = c.get("TLSEnabled")
@@ -13317,6 +13522,13 @@ class AWSLiveScanner:
             except Exception as e:
                 self._read_failed("TS-01", "TIMESTREAM", dname,
                                   "timestream:ListTables", e)
+
+        # TS-03/04 (CIS-DB 10.5, 10.10) run BEFORE the empty-table early return for the
+        # reason DDB-06 does: TS-03 is about IAM grants, which reach tables that do not
+        # exist yet. TS-04 needs the table ARNs and no-ops on an empty list.
+        self._check_timestream_cis_db2(
+            [str((t or {}).get("Arn") or "") for t in (tables or [])
+             if (t or {}).get("Arn")])
 
         if not tables:
             self._add("INFO", "TS-01", "TIMESTREAM", "timestream",

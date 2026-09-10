@@ -181,13 +181,35 @@ def test_every_decline_points_at_a_recorded_reason():
 
 
 def test_the_gaps_are_named_rather_than_rounded_away():
-    """17 recommendations are decidable and unchecked. Publishing that number is the
-    point: a coverage document that reports only its wins is marketing."""
+    """THE GAP LIST IS NOW EMPTY, and the assertion changed shape rather than being deleted.
+
+    It used to require the list to be non-empty, on the reasoning that a coverage document
+    reporting only its wins is marketing. Tranche 2 emptied it — nine gaps became checks
+    and four became declines with recorded reasons — so requiring non-emptiness would now
+    fail for the opposite of the reason it was written.
+
+    What survives is the part that was always load-bearing: a `gap` has to say what would
+    close it. An entry with no such note is a shortfall wearing a backlog item's clothes,
+    and the next reader has nothing to act on."""
     gaps = sorted(r for r, v in M.RECOMMENDATIONS.items() if v[1] == M.NO_CHECK)
-    assert gaps, "no gaps recorded, which would be an implausibly perfect result"
     for rec in gaps:
         assert len(_resolved_note(rec)) > 15, (
             f"{rec} is recorded as a gap without saying what would close it")
+
+
+def test_the_four_reclassified_gaps_each_say_why_they_moved():
+    """Tranche 2's more useful half. Four of the thirteen recorded gaps turned out not to
+    be buildable at all, and a gap that quietly becomes a decline is indistinguishable
+    from one somebody gave up on. Each names the reason in its own row."""
+    moved = {"5.8": M.DECLINED, "5.9": M.DECLINED, "6.4": M.DECLINED, "10.8": M.PROCESS}
+    for rec, verdict in moved.items():
+        assert M.RECOMMENDATIONS[rec][1] == verdict, (
+            f"{rec} should be {verdict}, is {M.RECOMMENDATIONS[rec][1]}")
+        assert len(_resolved_note(rec)) > 60, (
+            f"{rec} moved out of the gap list without an account of why")
+    # 6.4's reason is a claim about the SDK, so it is held as data where the coverage
+    # document and the tests read the same copy.
+    assert "memorydb-audit-logging" in aws_cis_db.NOT_DETERMINABLE
 
 
 def _rds_fails_on(engine: str):

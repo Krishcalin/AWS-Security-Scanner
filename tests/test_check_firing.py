@@ -229,8 +229,17 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: refused" case, because six of these checks are denied in every member account and a
 #: silent denial reads as a clean organisation.
 #: See tests/test_cis_foundations.py and docs/CIS_FOUNDATIONS_BENCHMARK.md.
+#: 464 -> 473: the nine CIS AWS Database Services tranche-2 checks, closing the last of
+#: the thirteen gaps tranche 1 recorded. The other four gaps did not become checks and
+#: are not in this number: they turned out not to be buildable at all -- two are misfiled
+#: in the benchmark and audit a service this product declines to read, one is absent from
+#: the SDK, and one is a process control. Never-observed (28) and never-driven-to-failure
+#: (62) both held exactly steady for the second batch running, which is the pair worth
+#: watching: a batch of nine is the classic way this product has previously grown its
+#: backlog by nine.
+#: See tests/test_cis_db_tranche2.py and docs/CIS_DATABASE_BENCHMARK.md.
 MAX_NEVER_OBSERVED = 28
-MIN_PROVEN_FAILING = 464
+MIN_PROVEN_FAILING = 473
 
 
 def doc_text() -> str:

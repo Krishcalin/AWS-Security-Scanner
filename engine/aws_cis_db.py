@@ -67,6 +67,16 @@ NOT_DETERMINABLE: Dict[str, str] = {
         "enums -- so this is a decision about the GRANT, not about feasibility. If it is "
         "ever wanted, it belongs in an opt-in permission block alongside the other "
         "data-plane reads rather than in the default policy"),
+    "memorydb-audit-logging": (
+        "MemoryDB audit logging (recommendation 6.4) is configurable in the console and "
+        "is not in the SDK. The pinned botocore model carries no log-delivery member on "
+        "the Cluster shape and no log-delivery shape anywhere in the memorydb service, so "
+        "a check would have to read a field DescribeClusters does not return -- which "
+        "would report every cluster as non-compliant for a reason that has nothing to do "
+        "with the cluster. Tranche 1 recorded this as a gap on the assumption it sat "
+        "alongside the SNS topic MDB-07 reads; checking the model rather than the "
+        "assumption is what moved it here. Recorded rather than dropped so it is "
+        "re-decided if AWS ships the model, exactly as qldb-everything is"),
     "qldb-everything": (
         "Amazon QLDB has NO service model in the pinned botocore at all -- boto3 cannot "
         "construct a client for it, so none of section 11 is buildable regardless of "

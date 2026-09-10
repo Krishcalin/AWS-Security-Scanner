@@ -221,6 +221,13 @@ def build() -> str:
             "AUR-04": "publicly restorable Aurora snapshot — no snapshot-sharing control",
             "DDB-03": "DynamoDB auto scaling — a throttling risk the benchmark omits",
             "DOCDB-01": "publicly restorable DocumentDB snapshot — no such control",
+            # A genuine asymmetry in the benchmark rather than an oversight here: Aurora
+            # (2.9), RDS (3.12) and Neptune (9.8) each get a "not publicly accessible"
+            # recommendation and DocumentDB gets none, though it is the same control
+            # plane and the same PubliclyAccessible field. It rendered as a dangling
+            # em-dash with nothing after it, which reads as a truncation bug.
+            "DOCDB-07": "publicly accessible DocumentDB instance — section 7 has no "
+                        "public-access control, though Aurora, RDS and Neptune all do",
             "MDB-05": "MemoryDB minor-version patching — section 6 has no patching control",
             "MDB-06": "MemoryDB single-AZ — section 6 has no availability control",
             "NEP-03": "publicly restorable Neptune snapshot — no such control",
