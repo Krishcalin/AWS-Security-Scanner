@@ -44,7 +44,11 @@ COVERED = "covered"
 #: operator they are non-compliant, so it is never counted as covered.
 PARTIAL = "partial"
 #: Decided, but by a check outside this benchmark's services (segmentation, CloudTrail,
-#: IAM) or — in two cases — by the wrong check entirely. See the instance-filter defect.
+#: IAM) or — in one case, 2.9 — under an id that names the wrong service. This was two
+#: cases: 9.8 and 9.9 were decided by RDS-02 and RDS-03 firing on Neptune instances,
+#: which NEP-06 and NEP-07 replaced along with the instance-loop engine filter. 2.9 is
+#: the one that stays, and it is a milder version of the same thing: an Aurora instance
+#: genuinely IS an RDS instance, so RDS-02 is not wrong about it, only less specific.
 ELSEWHERE = "elsewhere"
 #: Decidable from the control plane, not currently checked. These are the real backlog.
 NO_CHECK = "gap"
@@ -264,10 +268,10 @@ RECOMMENDATIONS: Dict[str, Tuple[str, str, Tuple[str, ...], str]] = {
             "Decidable the same way ELC-05 and RDS-12 are, from the engine version. "
             "Not built for DocumentDB"),
     "7.8": ("Monitoring and alerting implemented", NO_CHECK, (), "As 6.4"),
-    "7.9": ("Backup and disaster recovery implemented", NO_CHECK, (),
-            "A real gap, and the most substantive one in this benchmark: "
-            "BackupRetentionPeriod is right there on the DocumentDB cluster and "
-            "nothing reads it. AUR-07 does exactly this for Aurora"),
+    "7.9": ("Backup and disaster recovery implemented", COVERED, ("DOCDB-08",),
+            "Was the most substantive gap this mapping found -- BackupRetentionPeriod "
+            "sat on the DocumentDB cluster and nothing read it. DOCDB-08 now fails a "
+            "window shorter than 7 days, off the DescribeDBClusters call already made"),
     "7.10": ("A backup window is configured", PROCESS, (),
              "A window always exists -- AWS assigns one. Choosing a quiet one is an "
              "operational preference, not a security state"),
@@ -295,25 +299,32 @@ RECOMMENDATIONS: Dict[str, Tuple[str, str, Tuple[str, ...], str]] = {
             ("NEP-01", "NEP-04"), ""),
     "9.3": ("Non-TLS client connections refused by the engine", COVERED, ("NEP-05",),
             "Neptune spells this as the `neptune_enforce_ssl` cluster parameter"),
-    "9.4": ("IAM database authentication enabled", NO_CHECK, (),
-            "A real gap: IAMDatabaseAuthenticationEnabled is on the Neptune cluster and "
-            "nothing reads it. AUR-08 does exactly this for Aurora"),
-    "9.5": ("Audit logging enabled", NO_CHECK, (),
-            "Decidable from EnabledCloudwatchLogsExports. DOCDB-03 does exactly this "
-            "for DocumentDB"),
+    "9.4": ("IAM database authentication enabled", COVERED, ("NEP-08",),
+            "NEP-08 is rated above its Aurora equivalent on purpose: Neptune has no "
+            "database users at all, so IAM auth is not one authentication option among "
+            "several -- it is the only one the engine has"),
+    "9.5": ("Audit logging enabled", COVERED, ("NEP-09",),
+            "NEP-09 reads EnabledCloudwatchLogsExports, as DOCDB-03 does for "
+            "DocumentDB. Note the export is only half of it -- the "
+            "neptune_enable_audit_log parameter must also be set, which the "
+            "remediation says and no control-plane read can confirm"),
     "9.6": ("Security configuration reviewed regularly", PROCESS, (), ""),
     "9.7": ("Monitoring and alerting enabled", NO_CHECK, (), "As 6.4"),
-    "9.8": ("Instances not publicly accessible", ELSEWHERE, ("RDS-02",),
-            "Decided, but under the WRONG ID. Neptune instances are returned by "
-            "rds:DescribeDBInstances, so RDS-02 fires on them and reports a Neptune "
-            "exposure as an RDS finding with RDS remediation. See the defects section"),
-    "9.9": ("Automated backups enabled", ELSEWHERE, ("RDS-03",),
-            "Same defect as 9.8: RDS-03 reads the Neptune instance's retention period "
-            "and reports it as an RDS finding"),
+    "9.8": ("Instances not publicly accessible", COVERED, ("NEP-06",),
+            "Was decided under the WRONG ID: Neptune instances are returned by "
+            "rds:DescribeDBInstances, so RDS-02 fired on them and reported a Neptune "
+            "exposure as an RDS finding with RDS remediation. NEP-06 replaced that, and "
+            "the RDS instance loop now filters Neptune out -- both halves in one change, "
+            "because filtering alone would have deleted the only coverage this had"),
+    "9.9": ("Automated backups enabled", COVERED, ("NEP-07",),
+            "Was the same defect as 9.8, decided by RDS-03 on the Neptune instance. "
+            "NEP-07 reads the CLUSTER, which is where Neptune holds retention"),
     "9.10": ("Deletion protection enabled", COVERED, ("NEP-02",), ""),
-    "9.11": ("Deployed across multiple availability zones", NO_CHECK, (),
-             "Decidable from the cluster's MultiAZ field. ELC-08 and MDB-06 do exactly "
-             "this for their services"),
+    "9.11": ("Deployed across multiple availability zones", COVERED, ("NEP-10",),
+             "NEP-10 reads the cluster's MultiAZ boolean. Worth stating what it does "
+             "NOT mean: Neptune storage already spans three zones, so the data survives "
+             "an AZ failure -- what a single-AZ cluster lacks is an instance left to "
+             "serve it"),
 
     # ── 10 Timestream ────────────────────────────────────────────────────────
     "10.1": ("Data ingestion path secured", COVERED, ("TS-02", "TS-01"),

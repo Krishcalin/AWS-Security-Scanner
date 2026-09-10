@@ -4037,6 +4037,83 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Check the client library reconnects on failover rather than holding a dead connection.",
         ],
     },
+    "NEP-06": {
+        "risk": "This Neptune DB instance is publicly accessible, so its endpoint resolves to a routable public address and anything on the internet that can reach the port can attempt to connect. What makes this worse than the same finding on a relational database is Neptune's authorisation model: Neptune has no database users of its own. There is no username, no password, no in-engine grant system. Authorisation is IAM database authentication or nothing at all, so on a cluster where IAM auth is off -- which NEP-08 reports separately -- the security group is the entire access control, and a security group is the control most likely to be wrong. A VPC-wide CIDR, a shared application subnet, or a peering arrangement made for an unrelated purpose all produce reachability nobody intended. Graph databases also concentrate exactly the data that is most damaging in aggregate: the edges between people, accounts and transactions are the fraud-detection and identity-resolution logic itself, and traversing them reveals relationships that no single record would.",
+        "impact": "The graph endpoint is reachable from the internet, and with IAM authentication off the security group is the only thing standing between an attacker and a full traversal.",
+        "steps": [
+            "Take it off the public internet: aws neptune modify-db-instance --db-instance-identifier <INSTANCE> --no-publicly-accessible --apply-immediately",
+            "Confirm: aws neptune describe-db-instances --db-instance-identifier <INSTANCE> --query 'DBInstances[0].PubliclyAccessible'",
+            "Read what the security group actually allowed, and treat the endpoint as having been reachable by all of it for as long as it has been public: aws ec2 describe-security-groups --group-ids <SG>",
+            "Enable IAM database authentication if it is off (NEP-08) -- with public access removed it is still the only authorisation Neptune has.",
+            "Confirm the DB subnet group uses private subnets, or the next instance created in it inherits the same exposure.",
+        ],
+    },
+    "NEP-07": {
+        "risk": "This Neptune cluster's automated backup retention is shorter than a week, which sets how far back any recovery can reach. Neptune's minimum is one day and its default is one day, so what this reports is not an absence of backups but a recovery window too short to be useful. The reason a graph needs a longer window than a relational database is the shape of its failure mode: bad data in a graph propagates through traversals rather than sitting in a row, so a malformed bulk load or an inverted edge-direction mapping produces answers that are subtly wrong rather than obviously broken. Subtle wrongness is discovered by someone questioning a result days or weeks later, and by then a one-day window is long gone. Recovery without a restore is not a fallback either: it means re-deriving the graph from its upstream sources and re-running the load, which for a knowledge graph or an identity graph is a project rather than an afternoon.",
+        "impact": "Anything discovered later than the retention window cannot be rolled back, and rebuilding a graph without a restore means a full re-ingest from source.",
+        "steps": [
+            "Extend the window: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --backup-retention-period 7 --apply-immediately",
+            "Set a backup window clear of your bulk-load jobs: --preferred-backup-window 03:00-04:00",
+            "Confirm: aws neptune describe-db-clusters --db-cluster-identifier <CLUSTER> --query 'DBClusters[0].BackupRetentionPeriod'",
+            "Restore to a point in time into a scratch cluster once, so the recovery path is something you have done rather than something you assume: aws neptune restore-db-cluster-to-point-in-time",
+            "Set backup_retention_period in whatever provisions the cluster, so new ones do not arrive at the one-day default.",
+        ],
+    },
+    "NEP-08": {
+        "risk": "This Neptune cluster has IAM database authentication disabled, and for Neptune that is a more serious statement than it would be for Aurora or RDS. Neptune does not have database users. There is no CREATE USER, no password, no in-engine role system -- authorisation is IAM database authentication or it is nothing at all. With it off, every request that reaches the endpoint is served, and the only thing deciding what reaches the endpoint is the security group. That collapses authentication and network reachability into a single control, which means one over-broad security-group rule is not a defence-in-depth weakness but a total loss of access control. It also removes identity from the audit trail: with IAM auth on, CloudTrail and the audit log attribute a connection to a principal; without it every query looks alike and an investigation cannot say who ran what. This is why it is rated above the equivalent Aurora finding, where the same failure still leaves passwords in the way.",
+        "impact": "Anything that can reach the endpoint is authorised, and no connection can be attributed to a principal.",
+        "steps": [
+            "Enable it: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --enable-iam-database-authentication --apply-immediately",
+            "Grant neptune-db:connect narrowly -- to the roles that should reach the graph and to nothing else. The resource is arn:aws:neptune-db:<REGION>:<ACCOUNT>:<CLUSTER_RESOURCE_ID>/database",
+            "Move clients to SigV4-signed requests; most Gremlin and SPARQL drivers need an explicit signing plugin rather than a configuration flag, so stage this before enforcing.",
+            "Confirm: aws neptune describe-db-clusters --db-cluster-identifier <CLUSTER> --query 'DBClusters[0].IAMDatabaseAuthenticationEnabled'",
+            "Review the security group afterwards as well -- it stops being the only control, but it is still the first one.",
+        ],
+    },
+    "NEP-09": {
+        "risk": "This Neptune cluster exports no audit logs, so no record of connections or queries leaves it. Neptune's audit log is the only place that records which traversals were run, and log data held inside a cluster shares that cluster's lifetime: delete the cluster, or lose it with an availability zone, and the evidence goes with it. The consequence is specific to graphs, and is why this is worth checking rather than assuming. When a relational database is compromised, scoping the incident means asking which tables and rows were read. When a graph database is compromised, the damaging action is often a single legitimate-looking traversal that walks from one known entity across an entire neighbourhood -- and the difference between an attacker who found one customer and an attacker who enumerated the whole social or transaction graph is visible only in the query text. Without the audit log there is no way to tell those apart, and the incident has to be assessed on the assumption that everything was taken.",
+        "impact": "No record of queries or connections survives the cluster, so an incident cannot be scoped to what was actually traversed.",
+        "steps": [
+            "Export the audit log: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --cloudwatch-logs-export-configuration EnableLogTypes=audit --apply-immediately",
+            "Enable the log itself -- the export carries nothing without it. Set neptune_enable_audit_log=1 in the cluster parameter group: aws neptune modify-db-cluster-parameter-group --db-cluster-parameter-group-name <GROUP> --parameters ParameterName=neptune_enable_audit_log,ParameterValue=1,ApplyMethod=pending-reboot, then reboot the instances.",
+            "Confirm both halves, because either alone is silent: the cluster's EnabledCloudwatchLogsExports and the parameter group's value.",
+            "Set a retention period on the destination log group; CloudWatch keeps logs indefinitely by default, which is its own cost and privacy problem.",
+            "Alarm on something in it -- a log group nobody reads restores the silence this fixes.",
+        ],
+    },
+    "NEP-10": {
+        "risk": "This Neptune cluster runs in a single availability zone, so an AZ-level failure takes the graph with it and recovery falls back on the backup retention window that NEP-07 checks. Neptune's storage layer already replicates across three availability zones, which is what makes this finding easy to dismiss and worth stating precisely: the DATA survives an AZ failure, but the cluster has no instance left to serve it. With no replica in another zone there is nothing to fail over to, so the outage lasts as long as it takes someone to notice and provision a new instance -- and for a graph backing fraud checks or identity resolution in a request path, that is an outage of the application rather than of a database. A reader also changes the failure mode of ordinary maintenance: with no replica, every engine patch and every instance resize is downtime, which is a strong practical reason teams postpone patching.",
+        "impact": "An availability-zone failure leaves the graph with no instance to serve it, and recovery is bounded by the backup window rather than by failover.",
+        "steps": [
+            "Add a reader in a different zone -- Multi-AZ is a consequence of having one, not a switch: aws neptune create-db-instance --db-instance-identifier <CLUSTER>-reader --db-cluster-identifier <CLUSTER> --engine neptune --db-instance-class <CLASS> --availability-zone <OTHER_AZ>",
+            "Confirm the subnet group actually spans zones first, or the replica lands in the same one: aws neptune describe-db-subnet-groups --db-subnet-group-name <SUBNET_GROUP>",
+            "Verify: aws neptune describe-db-clusters --db-cluster-identifier <CLUSTER> --query 'DBClusters[0].MultiAZ'",
+            "Point read-only workloads at the reader endpoint so the replica earns its cost rather than idling.",
+            "Test a failover once, in a maintenance window: aws neptune failover-db-cluster --db-cluster-identifier <CLUSTER>",
+        ],
+    },
+    "DOCDB-07": {
+        "risk": "This DocumentDB instance is publicly accessible, so its endpoint resolves to a routable public address and anything that can reach the port can attempt to authenticate. DocumentDB does have its own users and passwords, which is a real difference from Neptune -- but it turns the exposure into an online password-guessing surface rather than an open door, and the credential in question is frequently the master password created during setup and never rotated since. What raises the consequence is what a document store holds. Unlike a normalised relational schema where a single table is a fragment, a document is designed to be self-contained, so one collection typically holds whole customer or order records with their nested detail. A single successful authentication returns complete entities rather than joinable pieces. DocumentDB also has no IAM database authentication to fall back on, so that password is the authentication story in full.",
+        "impact": "A document store holding complete records is reachable from the internet, with a static database password as the only authentication.",
+        "steps": [
+            "Take it off the public internet: aws docdb modify-db-instance --db-instance-identifier <INSTANCE> --no-publicly-accessible --apply-immediately",
+            "Confirm: aws docdb describe-db-instances --db-instance-identifier <INSTANCE> --query 'DBInstances[0].PubliclyAccessible'",
+            "Rotate the master password on the assumption it has been exposed to whatever the security group allowed: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --master-user-password <NEW>",
+            "Review the security group and the subnet group, and confirm the subnets are private so the next instance does not inherit this.",
+            "Read the audit log (DOCDB-03) for authentication attempts from outside your own ranges -- and if audit logging is off, that gap is now part of this finding.",
+        ],
+    },
+    "DOCDB-08": {
+        "risk": "This DocumentDB cluster's automated backup retention is shorter than a week. The minimum is one day and the default is one day, so what this reports is a recovery window too short to be useful rather than an absence of backups. The reason a week is the threshold is that the failures backups exist for are rarely noticed the same day: a migration that writes a wrong field name, a release that stores dates in a different format, a bulk update with an inverted filter. In a document store those go unnoticed for longer than in a relational one, because there is no schema to reject them -- a document with an unexpected shape is a valid document, and the damage surfaces only when something tries to read it, which may be days later in a report or a downstream job. A one-day window means the last correct copies expired before anyone knew they were needed. Retention is a property of the CLUSTER, which is why this is read there and not from its instances.",
+        "impact": "Anything discovered more than a day late cannot be restored, and a document store gives no schema errors to make bad writes surface early.",
+        "steps": [
+            "Extend the window: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --backup-retention-period 7 --apply-immediately",
+            "Set a backup window outside your batch jobs: --preferred-backup-window 03:00-04:00",
+            "Confirm: aws docdb describe-db-clusters --db-cluster-identifier <CLUSTER> --query 'DBClusters[0].BackupRetentionPeriod'",
+            "Restore to a point in time into a scratch cluster once, to prove the path works before you need it: aws docdb restore-db-cluster-to-point-in-time --source-db-cluster-identifier <CLUSTER> --db-cluster-identifier <SCRATCH> --restore-to-time <TIMESTAMP>",
+            "Take a manual snapshot before risky migrations as well -- automated retention is a rolling window and preserves no specific known-good point.",
+        ],
+    },
     "IMGB-01": {
         "risk": "This EC2 Image Builder resource has a resource policy granting a wildcard principal, which shares the image -- and everything baked into it -- beyond your account. A golden image is not merely an operating system: it is the OS plus your agents, your configuration, your base packages, and frequently your bootstrap credentials. Image pipelines routinely embed things during the build that nobody intends to publish: a package-repository token, a monitoring agent key, an internal CA bundle, hard-coded configuration pointing at internal endpoints. Sharing the image publishes all of it, and unlike a running instance an image can be copied silently and inspected offline at leisure. The wider intelligence value matters too: your golden image reveals your standard build, your agent versions, and therefore which vulnerabilities your entire fleet is carrying.",
         "impact": "The image and everything baked into it -- agents, configuration, any embedded credential -- is shared beyond your account and can be copied and inspected offline.",

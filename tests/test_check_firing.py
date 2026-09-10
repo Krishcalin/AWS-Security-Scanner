@@ -199,8 +199,18 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: Only two, not four: KS-01/KS-02 were written and WITHDRAWN because Keyspaces'
 #: control-plane reads are authorised by cassandra:Select, which also reads table rows.
 #: See tests/test_cis_db_keyspaces_timestream.py.
+#: 435 -> 442: NEP-06..10, DOCDB-07/08 — the sibling-service checks the CIS Database
+#: mapping identified, shipped together with the RDS instance-loop engine filter because
+#: neither was safe alone. RDS-02 and RDS-03 were the ONLY coverage of Neptune public
+#: accessibility and backup retention while the loop was unfiltered, so filtering first
+#: would have deleted real findings; adding the checks first would have left every
+#: Neptune instance reported twice. Six of the seven close a CIS-DB recommendation
+#: (9.8, 9.9, 9.4, 9.5, 9.11, 7.9); DOCDB-07 closes none, because section 7 has no
+#: public-accessibility control — which is a gap in the benchmark rather than a reason
+#: to leave a public document database unreported.
+#: See tests/test_db_engine_routing.py and tests/test_cis_db_mapping.py.
 MAX_NEVER_OBSERVED = 28
-MIN_PROVEN_FAILING = 435
+MIN_PROVEN_FAILING = 442
 
 
 def doc_text() -> str:

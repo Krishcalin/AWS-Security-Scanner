@@ -502,6 +502,50 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "read neptune_enforce_ssl -- whether Gremlin/SPARQL queries and their "
              "results cross the network in cleartext"),
     ),
+    # ── the sibling-service gaps the CIS Database mapping exposed ────────────
+    # Five of these seven need NO new action at all: they read fields off the
+    # DescribeDBClusters response the section already fetches, so the entire cost of
+    # closing four CIS-DB recommendations is one action -- rds:DescribeDBInstances --
+    # which most scanning roles already hold for RDS itself. Recorded per check anyway,
+    # so a reviewer sees what each grant buys rather than inferring it from the service
+    # the client was built for. Neptune and DocumentDB both authorise under rds:*.
+    "NEP-06": (
+        _req("rds:DescribeDBInstances",
+             "read PubliclyAccessible on Neptune INSTANCES -- the cluster response does "
+             "not carry it, and Neptune has no database users, so on a cluster without "
+             "IAM auth the security group is the whole of access control"),
+    ),
+    "NEP-07": (
+        _req("rds:DescribeDBClusters",
+             "read BackupRetentionPeriod -- how far back a recovery can reach on a "
+             "cluster whose only other recovery path is a full re-ingest"),
+    ),
+    "NEP-08": (
+        _req("rds:DescribeDBClusters",
+             "read IAMDatabaseAuthenticationEnabled -- for Neptune this is not one "
+             "authentication option among several, it is the only one the engine has"),
+    ),
+    "NEP-09": (
+        _req("rds:DescribeDBClusters",
+             "read EnabledCloudwatchLogsExports -- whether any record of which "
+             "traversals were run survives the cluster"),
+    ),
+    "NEP-10": (
+        _req("rds:DescribeDBClusters",
+             "read MultiAZ -- Neptune storage already spans three zones, so this asks "
+             "the different question of whether an instance is left to serve it"),
+    ),
+    "DOCDB-07": (
+        _req("rds:DescribeDBInstances",
+             "read PubliclyAccessible on DocumentDB INSTANCES -- a document holds a "
+             "whole entity rather than a joinable fragment, so one authentication "
+             "against a public endpoint returns complete records"),
+    ),
+    "DOCDB-08": (
+        _req("rds:DescribeDBClusters",
+             "read BackupRetentionPeriod -- a document store has no schema to reject a "
+             "bad write, so the window has to outlast a slow discovery"),
+    ),
     "IMGB-01": (
         _req("imagebuilder:ListImages",
          "enumerate golden images this account owns and builds"),

@@ -705,6 +705,19 @@ CHECK_SEVERITY = {
     # not plaintext, and calling that HIGH is how a risk score stops meaning anything.
     "MDB-01": "HIGH", "MDB-02": "CRITICAL", "MDB-03": "MEDIUM",
     "MDB-04": "LOW", "MDB-05": "MEDIUM", "MDB-06": "MEDIUM",
+    # The seven ids that let the RDS INSTANCE loop finally filter foreign engines. Until
+    # they existed, a Neptune or DocumentDB instance was scored by RDS-01/02/03/04 -- so
+    # filtering alone would have deleted the only coverage Neptune's public accessibility
+    # and backups had. NEP-06 and DOCDB-07 inherit RDS-02's CRITICAL because they are the
+    # same finding on the same field, read from the service that owns it; NEP-07 and
+    # DOCDB-08 inherit RDS-03's MEDIUM for the same reason.
+    "NEP-06": "CRITICAL", "NEP-07": "MEDIUM", "NEP-10": "MEDIUM",
+    # NEP-08 is HIGH where AUR-08 is MEDIUM, and the difference is not an inconsistency:
+    # Aurora without IAM auth still has database users and passwords, so the finding is
+    # credential hygiene. Neptune has no user store at all, so IAM auth off means the
+    # security group is the entire authorisation model.
+    "NEP-08": "HIGH", "NEP-09": "MEDIUM",
+    "DOCDB-07": "CRITICAL", "DOCDB-08": "MEDIUM",
     # Timestream, which had no posture coverage. TS-01 is LOW for the same reason
     # MDB-04 is: the data IS encrypted, and the finding is key ownership.
     "TS-01": "LOW", "TS-02": "MEDIUM",
@@ -1113,6 +1126,17 @@ COMPLIANCE_MAP = {
     "MDB-04": {"CIS-DB": "6.2", "PCI-DSS": "3.6.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
     "MDB-05": {"PCI-DSS": "6.3.3", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "MDB-06": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(C)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "NEP-06": {"CIS-DB": "9.8", "PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "NEP-07": {"CIS-DB": "9.9", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "NEP-08": {"CIS-DB": "9.4", "PCI-DSS": "8.2.1", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2"},
+    "NEP-09": {"CIS-DB": "9.5", "PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
+    "NEP-10": {"CIS-DB": "9.11", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(C)", "SOC2": "A1.2", "NIST": "CP-9"},
+    "DOCDB-08": {"CIS-DB": "7.9", "PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)(ii)(A)", "SOC2": "A1.2", "NIST": "CP-9"},
+    # DOCDB-07 carries NO CIS-DB key on purpose: section 7 has no public-accessibility
+    # control, though sections 2, 3 and 9 all do. Inventing a number to fill the column
+    # would mis-cite the benchmark, so the mapping records it as coverage the document
+    # does not ask for -- the same treatment DOCDB-01 and NEP-03 already get.
+    "DOCDB-07": {"PCI-DSS": "1.3.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "TS-01": {"CIS-DB": "10.1", "PCI-DSS": "3.6.1", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
     "TS-02": {"CIS-DB": "10.1", "PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-12"},
     # CP-9 rather than the CP-10 this would otherwise map to: the NIST axis is a FROZEN
@@ -1595,6 +1619,13 @@ REMEDIATION_MAP = {
     "ELC-07": "Turn on automatic snapshots so a flushed or corrupted cache is recoverable: aws elasticache modify-replication-group --replication-group-id <RG_ID> --snapshot-retention-limit 7 --apply-immediately. Set a snapshot window that misses your peak, since snapshotting adds load to the node it runs on",
     "TS-01": "Point the rejected-data location at a KMS key rather than SSE-S3, so the customer records that land there sit under a key you control: aws timestream-write update-table --database-name <DB> --table-name <TABLE> --magnetic-store-write-properties 'EnableMagneticStoreWrites=true,MagneticStoreRejectedDataLocation={S3Configuration={BucketName=<BUCKET>,EncryptionOption=SSE_KMS,KmsKeyId=<KEY_ARN>}}'",
     "TS-02": "Give rejected magnetic-store writes somewhere to go, or you will never know what was dropped: aws timestream-write update-table --database-name <DB> --table-name <TABLE> --magnetic-store-write-properties 'EnableMagneticStoreWrites=true,MagneticStoreRejectedDataLocation={S3Configuration={BucketName=<BUCKET>,EncryptionOption=SSE_KMS,KmsKeyId=<KEY_ARN>}}'",
+    "NEP-06": "Take the Neptune instance off the public internet: aws neptune modify-db-instance --db-instance-identifier <INSTANCE> --no-publicly-accessible --apply-immediately. Then check the security group as well -- assume the endpoint has been reachable by whatever it allows, for as long as it has allowed it",
+    "NEP-07": "Give the cluster a recovery window worth having: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --backup-retention-period 7 --preferred-backup-window 03:00-04:00 --apply-immediately",
+    "NEP-08": "Neptune has no database users of its own, so IAM auth is the whole authorisation model: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --enable-iam-database-authentication --apply-immediately, then grant neptune-db:connect to the principals that should reach it and to nothing else",
+    "NEP-09": "Export audit logs so the record outlives the cluster: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --cloudwatch-logs-export-configuration EnableLogTypes=audit --apply-immediately. The neptune_enable_audit_log cluster parameter must also be 1, or the export carries nothing",
+    "NEP-10": "Multi-AZ follows from having a replica in another zone, so add one rather than flipping a flag: aws neptune create-db-instance --db-instance-identifier <CLUSTER>-reader --db-cluster-identifier <CLUSTER> --engine neptune --db-instance-class <CLASS> --availability-zone <OTHER_AZ>",
+    "DOCDB-07": "Take the DocumentDB instance off the public internet: aws docdb modify-db-instance --db-instance-identifier <INSTANCE> --no-publicly-accessible --apply-immediately, then review the security group on the assumption the endpoint has already been reached",
+    "DOCDB-08": "Set a retention window long enough to find a problem inside: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --backup-retention-period 7 --preferred-backup-window 03:00-04:00 --apply-immediately",
     "MDB-01": "TLS cannot be enabled on an existing MemoryDB cluster, so this needs a rebuild: snapshot it with aws memorydb create-snapshot --cluster-name <CLUSTER> --snapshot-name <SNAP>, then aws memorydb create-cluster --cluster-name <NEW> --tls-enabled --snapshot-name <SNAP> --node-type <TYPE> --acl-name <ACL> and cut over",
     "MDB-02": "Stop the cluster accepting unauthenticated connections. Create users with real authentication and an ACL containing only those: aws memorydb create-user --user-name <USER> --authentication-mode Type=iam --access-string 'on ~* &* +@all', then aws memorydb create-acl --acl-name <ACL> --user-names <USER>, then aws memorydb update-cluster --cluster-name <CLUSTER> --acl-name <ACL>",
     "MDB-03": "Turn on automatic snapshots -- MemoryDB is a durable datastore, so this is data loss and not a cold cache: aws memorydb update-cluster --cluster-name <CLUSTER> --snapshot-retention-limit 7",
@@ -5379,10 +5410,35 @@ class AWSLiveScanner:
         rds = self._client("rds")
 
         def _rds_instances():
+            """Genuine RDS instances only.
+
+            THE SAME DEFECT THE AURORA CLUSTER FILTER FIXED, one level down, and it stood
+            for as long as it did because nothing looked. Neptune and DocumentDB share the
+            RDS control plane, so rds:DescribeDBInstances returns their instances too, and
+            this generator used to yield them unfiltered. A single Neptune instance
+            produced four findings -- RDS-01, RDS-02, RDS-03, RDS-04 -- none of which said
+            Neptune anywhere, two of which duplicated NEP-01/NEP-02 with contradictory
+            remediation, and two of which were the only coverage Neptune's public
+            accessibility and backups had.
+
+            That last part is why the filter could not ship alone: dropping these
+            instances without NEP-06/07 and DOCDB-07/08 would have deleted real coverage
+            rather than relabelled it, which is exactly the trap the cluster fix avoided
+            by growing from zero new checks to six.
+
+            DENY-list, not allow-list, and for the same reason as
+            NON_AURORA_CLUSTER_ENGINES: a new RDS engine must keep being scored by
+            default. Only an engine that POSITIVELY declares itself as another service is
+            dropped; an absent Engine is kept.
+            """
             try:
                 paginator = rds.get_paginator("describe_db_instances")
                 for page in paginator.paginate():
-                    yield from page["DBInstances"]
+                    for db in page["DBInstances"]:
+                        engine = ((db or {}).get("Engine") or "").lower()
+                        if engine in NON_AURORA_CLUSTER_ENGINES:
+                            continue
+                        yield db
             except Exception:
                 return
 
@@ -11957,8 +12013,59 @@ class AWSLiveScanner:
                 service="docdb", cluster=True,
                 action="rds:DescribeDBClusterParameters")
 
+            # DOCDB-08 — automated backups. The most substantive gap the CIS Database
+            # mapping found (recommendation 7.9): BackupRetentionPeriod is right there on
+            # the cluster and, until the RDS instance filter landed, the only thing
+            # reading it for DocumentDB was RDS-03 reaching in by accident. Threshold and
+            # reasoning match AUR-07 and NEP-07 -- a cluster minimum of 1 makes 0
+            # unreachable, so the decidable question is whether the window is long enough
+            # to find a problem inside.
+            retention = (c or {}).get("BackupRetentionPeriod")
+            if isinstance(retention, int) and retention < 7:
+                self._add("FAIL", "DOCDB-08", "DOCDB", cid_,
+                          f"DocumentDB cluster backup retention={retention}d "
+                          f"(recommend >=7) | {cid_} — anything discovered later than "
+                          f"that window cannot be restored")
+            elif isinstance(retention, int):
+                self._add("PASS", "DOCDB-08", "DOCDB", cid_,
+                          f"DocumentDB cluster backup retention={retention}d | {cid_}")
+
+        # ── DOCDB-07 — instance public accessibility ─────────────────────────────
+        # The DocumentDB half of what makes the RDS instance filter safe. Note that this
+        # answers NO recommendation in the CIS Database benchmark: section 7 has no
+        # "not publicly accessible" control, though sections 2, 3 and 9 all do. That is a
+        # gap in the document, not a reason to leave a public document database
+        # unreported.
+        try:
+            instances = []
+            for page in docdb.get_paginator("describe_db_instances").paginate():
+                instances.extend(page.get("DBInstances", []))
+        except Exception as e:
+            self._read_failed("DOCDB-07", "DOCDB", "docdb",
+                              "rds:DescribeDBInstances", e)
+            instances = None
+
+        if instances is not None:
+            instances = [i for i in instances
+                         if ((i or {}).get("Engine") or "docdb").lower() == "docdb"]
+            if not instances:
+                self._add("INFO", "DOCDB-07", "DOCDB", "docdb",
+                          "No DocumentDB instances found in this region")
+            for inst in instances:
+                iid = (inst or {}).get("DBInstanceIdentifier", "unknown")
+                pub = inst.get("PubliclyAccessible")
+                if pub is True:
+                    self._add("FAIL", "DOCDB-07", "DOCDB", iid,
+                              f"DocumentDB instance PUBLICLY ACCESSIBLE | {iid} — the "
+                              f"endpoint resolves to a public address, leaving a "
+                              f"document store holding whole records reachable from "
+                              f"outside the VPC")
+                elif pub is False:
+                    self._add("PASS", "DOCDB-07", "DOCDB", iid,
+                              f"DocumentDB instance not publicly accessible | {iid}")
+
     def _check_neptune(self):
-        """NEP-01..04 — Amazon Neptune clusters and manual cluster snapshots.
+        """NEP-01..10 — Amazon Neptune clusters, instances and manual cluster snapshots.
 
         Neptune is a separate service sharing the RDS control plane, so
         rds:DescribeDBClusters returns Neptune clusters. Until NON_AURORA_CLUSTER_ENGINES
@@ -12017,6 +12124,101 @@ class AWSLiveScanner:
                     group=cl.get("DBClusterParameterGroup", ""),
                     service="neptune", cluster=True,
                     action="rds:DescribeDBClusterParameters")
+
+                # ── NEP-07/08/09/10 — four more fields off the call already made ──
+                # No extra API read and no extra permission: DescribeDBClusters returns
+                # all four. They are separate ids rather than one composite because a
+                # single finding that means four different things cannot be triaged,
+                # closed, or waived independently.
+
+                # NEP-07 — automated backups. Neptune's minimum retention is 1, so 0 is
+                # unreachable and a check for it would never fire; the decidable question
+                # is whether the window is long enough to find a problem inside, and
+                # AUR-07 already fixed 7 days as this product's answer.
+                retention = cl.get("BackupRetentionPeriod")
+                if isinstance(retention, int) and retention < 7:
+                    self._add("FAIL", "NEP-07", "NEPTUNE", cid,
+                              f"Neptune cluster backup retention={retention}d "
+                              f"(recommend >=7) | {cid} — a bad load discovered later "
+                              f"than that cannot be rolled back, and recovering a graph "
+                              f"without a restore means a full re-ingest")
+                elif isinstance(retention, int):
+                    self._add("PASS", "NEP-07", "NEPTUNE", cid,
+                              f"Neptune cluster backup retention={retention}d | {cid}")
+
+                # NEP-08 — IAM authentication. Neptune has no in-database user store at
+                # all: without IAM auth, authorisation is whatever the security group
+                # says, so this is closer to an access-control finding than to the
+                # credential-hygiene one AUR-08 reports on Aurora.
+                iam_auth = cl.get("IAMDatabaseAuthenticationEnabled")
+                if iam_auth is False:
+                    self._add("FAIL", "NEP-08", "NEPTUNE", cid,
+                              f"Neptune IAM database authentication=OFF | {cid} — "
+                              f"Neptune has no database users of its own, so anything "
+                              f"that reaches the endpoint is authorised by the security "
+                              f"group and nothing else")
+                elif iam_auth is True:
+                    self._add("PASS", "NEP-08", "NEPTUNE", cid,
+                              f"Neptune IAM database authentication=ON | {cid}")
+
+                # NEP-09 — audit logging. A list of exported log types, so the decidable
+                # question is whether 'audit' is among them; an empty list means nothing
+                # is exported and the logs die with the cluster.
+                exports = cl.get("EnabledCloudwatchLogsExports")
+                if isinstance(exports, list):
+                    if "audit" not in [str(x).lower() for x in exports]:
+                        self._add("FAIL", "NEP-09", "NEPTUNE", cid,
+                                  f"Neptune audit log export DISABLED | {cid} — no "
+                                  f"record of queries or connections leaves the cluster, "
+                                  f"so an incident cannot be scoped to what was actually "
+                                  f"traversed")
+                    else:
+                        self._add("PASS", "NEP-09", "NEPTUNE", cid,
+                                  f"Neptune audit log export enabled | {cid}")
+
+                # NEP-10 — availability. A boolean here, unlike ElastiCache's string enum.
+                multi_az = cl.get("MultiAZ")
+                if multi_az is False:
+                    self._add("FAIL", "NEP-10", "NEPTUNE", cid,
+                              f"Neptune cluster Multi-AZ=OFF | {cid} — an "
+                              f"availability-zone failure takes the graph with it, and "
+                              f"recovery depends entirely on NEP-07's retention window")
+                elif multi_az is True:
+                    self._add("PASS", "NEP-10", "NEPTUNE", cid,
+                              f"Neptune cluster Multi-AZ=ON | {cid}")
+
+        # ── NEP-06 — instance public accessibility ───────────────────────────────
+        # This is the id that makes the RDS instance filter safe to ship. Until it
+        # existed, a publicly reachable Neptune instance was reported by RDS-02, under an
+        # RDS label with `aws rds modify-db-instance` remediation. Filtering the RDS loop
+        # without this would have removed the finding rather than corrected it.
+        try:
+            instances = []
+            for page in nep.get_paginator("describe_db_instances").paginate():
+                instances.extend(page.get("DBInstances", []))
+        except Exception as e:
+            self._read_failed("NEP-06", "NEPTUNE", "neptune",
+                              "neptune:DescribeDBInstances", e)
+            instances = None
+
+        if instances is not None:
+            instances = [i for i in instances
+                         if ((i or {}).get("Engine") or "neptune").lower() == "neptune"]
+            if not instances:
+                self._add("INFO", "NEP-06", "NEPTUNE", "neptune",
+                          "No Neptune DB instances found in this region")
+            for inst in instances:
+                iid = (inst or {}).get("DBInstanceIdentifier", "unknown")
+                pub = inst.get("PubliclyAccessible")
+                if pub is True:
+                    self._add("FAIL", "NEP-06", "NEPTUNE", iid,
+                              f"Neptune DB instance PUBLICLY ACCESSIBLE | {iid} — the "
+                              f"graph endpoint resolves to a public address, and with "
+                              f"IAM auth off (NEP-08) the security group is the only "
+                              f"thing in the way")
+                elif pub is False:
+                    self._add("PASS", "NEP-06", "NEPTUNE", iid,
+                              f"Neptune DB instance not publicly accessible | {iid}")
 
         # ── NEP-03 snapshot public visibility, NEP-04 snapshot encryption ────────
         try:

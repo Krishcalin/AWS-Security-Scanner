@@ -98,7 +98,7 @@ which is the distinction that whole document exists to keep.
 
 ## 7 — DocumentDB
 
-*12 recommendations in the benchmark. OverWatch ships 6 check(s) against this service.*
+*12 recommendations in the benchmark. OverWatch ships 8 check(s) against this service.*
 
 | Check | Severity | Proven to FAIL | What it asserts |
 |---|---|---|---|
@@ -108,6 +108,8 @@ which is the distinction that whole document exists to keep.
 | `DOCDB-04` | MEDIUM | yes | One API call permanently destroys the cluster and its automated backups, with recovery possible only from a manual snapshot that may not exist. |
 | `DOCDB-05` | HIGH | yes | A complete plaintext copy of the database persists independently of the cluster and can be copied or restored into environments with weaker controls. |
 | `DOCDB-06` | HIGH | yes | Client connections carry credentials and document contents in cleartext across the VPC, readable by anything with a position on the network. |
+| `DOCDB-07` | CRITICAL | yes | A document store holding complete records is reachable from the internet, with a static database password as the only authentication. |
+| `DOCDB-08` | MEDIUM | yes | Anything discovered more than a day late cannot be restored, and a document store gives no schema errors to make bad writes surface early. |
 
 
 ## 8 — Keyspaces
@@ -119,7 +121,7 @@ which is the distinction that whole document exists to keep.
 
 ## 9 — Neptune
 
-*11 recommendations in the benchmark. OverWatch ships 5 check(s) against this service.*
+*11 recommendations in the benchmark. OverWatch ships 10 check(s) against this service.*
 
 | Check | Severity | Proven to FAIL | What it asserts |
 |---|---|---|---|
@@ -128,6 +130,11 @@ which is the distinction that whole document exists to keep.
 | `NEP-03` | CRITICAL | yes | Any AWS account can restore this snapshot and traverse the entire graph, with no trace in your account because the restore happens in theirs. |
 | `NEP-04` | HIGH | yes | A complete plaintext copy of the graph persists independently of the cluster and can be copied or restored into weaker environments. |
 | `NEP-05` | HIGH | yes | Query traffic and results cross the network in cleartext, exposing both the graph contents and the traversals being run against it. |
+| `NEP-06` | CRITICAL | yes | The graph endpoint is reachable from the internet, and with IAM authentication off the security group is the only thing standing between an attacker and a… |
+| `NEP-07` | MEDIUM | yes | Anything discovered later than the retention window cannot be rolled back, and rebuilding a graph without a restore means a full re-ingest from source. |
+| `NEP-08` | HIGH | yes | Anything that can reach the endpoint is authorised, and no connection can be attributed to a principal. |
+| `NEP-09` | MEDIUM | yes | No record of queries or connections survives the cluster, so an incident cannot be scoped to what was actually traversed. |
+| `NEP-10` | MEDIUM | yes | An availability-zone failure leaves the graph with no instance to serve it, and recovery is bounded by the backup window rather than by failover. |
 
 
 ## 10 — Timestream
@@ -150,7 +157,7 @@ which is the distinction that whole document exists to keep.
 ## Totals
 
 - **98** recommendations across the ten services.
-- **51** OverWatch checks speak to those services today.
+- **58** OverWatch checks speak to those services today.
 - The two numbers are NOT comparable: one check can answer several recommendations, and several recommendations are not decidable at all. Producing the actual per-recommendation mapping is the point of the mapping pass; this file is its left-hand column.
 
 ## Declined, with reasons

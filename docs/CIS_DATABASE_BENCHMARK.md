@@ -19,7 +19,7 @@ hand-edit.**
 |---|---|
 | covered | A named check decides it and can FAIL on it. |
 | observed only | A check reads the setting and reports it, but never FAILs. Real coverage of the observation, not of the finding. |
-| decided elsewhere | Answered outside these services — by the segmentation, CloudTrail or CIEM pillars — or, in two cases, by the wrong check. See the defects section. |
+| decided elsewhere | Answered outside these services — by the segmentation, CloudTrail or CIEM pillars — or, in one case, under an id that names the wrong service. |
 | **gap** | Decidable from the control plane today, and not checked. This is the honest backlog. |
 | declined | Deliberately not built, with the reason recorded in `engine/aws_cis_db.py` rather than left as silence. |
 | process | Asks about a human process: a review cadence, a design exercise, a procurement decision. No API read can decide it. |
@@ -131,7 +131,7 @@ mis-cite every mapping in both directions at once, so Database controls carry th
 
 ## 7 — Amazon DocumentDB
 
-*12 recommendations; 4 covered by a check that can fail.*
+*12 recommendations; 5 covered by a check that can fail.*
 
 | # | Control | Verdict | OverWatch | Note |
 |---|---|---|---|---|
@@ -143,7 +143,7 @@ mis-cite every mapping in both directions at once, so Database controls carry th
 | 7.6 | Audit logging enabled | covered | **DOCDB-03** |  |
 | 7.7 | Engine kept patched | **gap** | — | Decidable the same way ELC-05 and RDS-12 are, from the engine version. Not built for DocumentDB |
 | 7.8 | Monitoring and alerting implemented | **gap** | — | As 6.4 |
-| 7.9 | Backup and disaster recovery implemented | **gap** | — | A real gap, and the most substantive one in this benchmark: BackupRetentionPeriod is right there on the DocumentDB cluster and nothing reads it. AUR-07 does exactly this for Aurora |
+| 7.9 | Backup and disaster recovery implemented | covered | **DOCDB-08** | Was the most substantive gap this mapping found -- BackupRetentionPeriod sat on the DocumentDB cluster and nothing read it. DOCDB-08 now fails a window shorter than 7 days, off the DescribeDBClusters call already made |
 | 7.10 | A backup window is configured | process | — | A window always exists -- AWS assigns one. Choosing a quiet one is an operational preference, not a security state |
 | 7.11 | Security assessments conducted | process | — | This product is a way of doing it |
 | 7.12 | Deletion protection enabled | covered | **DOCDB-04** |  |
@@ -163,21 +163,21 @@ mis-cite every mapping in both directions at once, so Database controls carry th
 
 ## 9 — Amazon Neptune
 
-*11 recommendations; 3 covered by a check that can fail.*
+*11 recommendations; 8 covered by a check that can fail.*
 
 | # | Control | Verdict | OverWatch | Note |
 |---|---|---|---|---|
 | 9.1 | Network security configured | decided elsewhere | — | As 5.2 |
 | 9.2 | Cluster storage and snapshots encrypted at rest | covered | **NEP-01**, **NEP-04** |  |
 | 9.3 | Non-TLS client connections refused by the engine | covered | **NEP-05** | Neptune spells this as the `neptune_enforce_ssl` cluster parameter |
-| 9.4 | IAM database authentication enabled | **gap** | — | A real gap: IAMDatabaseAuthenticationEnabled is on the Neptune cluster and nothing reads it. AUR-08 does exactly this for Aurora |
-| 9.5 | Audit logging enabled | **gap** | — | Decidable from EnabledCloudwatchLogsExports. DOCDB-03 does exactly this for DocumentDB |
+| 9.4 | IAM database authentication enabled | covered | **NEP-08** | NEP-08 is rated above its Aurora equivalent on purpose: Neptune has no database users at all, so IAM auth is not one authentication option among several -- it is the only one the engine has |
+| 9.5 | Audit logging enabled | covered | **NEP-09** | NEP-09 reads EnabledCloudwatchLogsExports, as DOCDB-03 does for DocumentDB. Note the export is only half of it -- the neptune_enable_audit_log parameter must also be set, which the remediation says and no control-plane read can confirm |
 | 9.6 | Security configuration reviewed regularly | process | — |  |
 | 9.7 | Monitoring and alerting enabled | **gap** | — | As 6.4 |
-| 9.8 | Instances not publicly accessible | decided elsewhere | **RDS-02** | Decided, but under the WRONG ID. Neptune instances are returned by rds:DescribeDBInstances, so RDS-02 fires on them and reports a Neptune exposure as an RDS finding with RDS remediation. See the defects section |
-| 9.9 | Automated backups enabled | decided elsewhere | **RDS-03** | Same defect as 9.8: RDS-03 reads the Neptune instance's retention period and reports it as an RDS finding |
+| 9.8 | Instances not publicly accessible | covered | **NEP-06** | Was decided under the WRONG ID: Neptune instances are returned by rds:DescribeDBInstances, so RDS-02 fired on them and reported a Neptune exposure as an RDS finding with RDS remediation. NEP-06 replaced that, and the RDS instance loop now filters Neptune out -- both halves in one change, because filtering alone would have deleted the only coverage this had |
+| 9.9 | Automated backups enabled | covered | **NEP-07** | Was the same defect as 9.8, decided by RDS-03 on the Neptune instance. NEP-07 reads the CLUSTER, which is where Neptune holds retention |
 | 9.10 | Deletion protection enabled | covered | **NEP-02** |  |
-| 9.11 | Deployed across multiple availability zones | **gap** | — | Decidable from the cluster's MultiAZ field. ELC-08 and MDB-06 do exactly this for their services |
+| 9.11 | Deployed across multiple availability zones | covered | **NEP-10** | NEP-10 reads the cluster's MultiAZ boolean. Worth stating what it does NOT mean: Neptune storage already spans three zones, so the data survives an AZ failure -- what a single-AZ cluster lacks is an instance left to serve it |
 
 
 ## 10 — Amazon Timestream
@@ -217,21 +217,22 @@ mis-cite every mapping in both directions at once, so Database controls carry th
 
 | Verdict | Recommendations |
 |---|---:|
-| covered | 31 |
+| covered | 37 |
 | observed only | 5 |
-| decided elsewhere | 10 |
-| **gap** | 17 |
+| decided elsewhere | 8 |
+| **gap** | 13 |
 | declined | 13 |
 | process | 15 |
 | vacuous | 7 |
 | **total** | **98** |
 
-42 checks carry a `CIS-DB` compliance key. 9 more speak to these services but answer no recommendation in this benchmark — they are coverage the document does not ask for:
+48 checks carry a `CIS-DB` compliance key. 10 more speak to these services but answer no recommendation in this benchmark — they are coverage the document does not ask for:
 
 - **AUR-03** (HIGH) — Aurora engine end-of-life — section 2 has no patching control
 - **AUR-04** (CRITICAL) — publicly restorable Aurora snapshot — no snapshot-sharing control
 - **DDB-03** (LOW) — DynamoDB auto scaling — a throttling risk the benchmark omits
 - **DOCDB-01** (CRITICAL) — publicly restorable DocumentDB snapshot — no such control
+- **DOCDB-07** (CRITICAL) — 
 - **MDB-05** (MEDIUM) — MemoryDB minor-version patching — section 6 has no patching control
 - **MDB-06** (MEDIUM) — MemoryDB single-AZ — section 6 has no availability control
 - **NEP-03** (CRITICAL) — publicly restorable Neptune snapshot — no such control
@@ -286,34 +287,50 @@ Rationale; 2.4, 2.5, 3.5–3.11 and others have an empty Remediation. 3.1 in par
 audit, which its empty fields make plain.
 
 
-## What the mapping found in OverWatch
+## What the mapping found in OverWatch, and what was done about it
 
-**The RDS instance loop scores Neptune and DocumentDB instances as RDS.** This is the same
-defect that tranche 1 fixed for *clusters*, still present one level down. Neptune and
+**The RDS instance loop scored Neptune and DocumentDB instances as RDS.** *Fixed.* This was
+the same defect tranche 1 fixed for *clusters*, still present one level down. Neptune and
 DocumentDB share the RDS control plane, so `rds:DescribeDBInstances` returns their
-instances, and `_rds_instances()` applies no engine filter. Run against a single Neptune
-instance the section produces four findings — RDS-01, RDS-02, RDS-03 and RDS-04 — none of
-which say Neptune anywhere.
+instances, and `_rds_instances()` applied no engine filter. Run against a single Neptune
+instance the section produced four findings — RDS-01, RDS-02, RDS-03 and RDS-04 — none of
+which said Neptune anywhere.
 
-Two consequences, and they pull in opposite directions:
+It was found by *running* the section rather than reading it. The first version of the test
+that pinned it read the source for an engine filter and was fooled immediately: `_check_rds`
+mentions both `Engine` and `NON_AURORA_CLUSTER_ENGINES` for reasons that have nothing to do
+with filtering instances, so the text said "filtered" while the code was not.
 
-* RDS-01 and RDS-04 **double-report**. Cluster storage encryption is already reported as
+The reason it could not simply be filtered is that it cut both ways:
+
+* RDS-01 and RDS-04 **double-reported**. Cluster storage encryption was already reported as
   NEP-01 or DOCDB-02, and deletion protection as NEP-02 or DOCDB-04, so the same fact
-  arrives twice under two ids with two different remediation commands.
-* RDS-02 and RDS-03 are the **only** coverage of Neptune 9.8 and 9.9. Nothing else reads
-  public accessibility or backup retention for Neptune. Deleting the RDS finding without
-  adding a Neptune one would remove real coverage, which is exactly the trap tranche 1
-  avoided by expanding from zero new checks to six.
+  arrived twice under two ids with two different remediation commands.
+* RDS-02 and RDS-03 were the **only** coverage of Neptune 9.8 and 9.9. Nothing else read
+  public accessibility or backup retention for Neptune. Filtering the loop without adding
+  Neptune checks would have deleted real coverage — exactly the trap tranche 1 avoided by
+  expanding from zero new checks to six.
 
-That is why 9.8 and 9.9 are recorded above as *decided elsewhere* rather than as covered
-or as gaps: neither would be true. Fixing it properly means filtering the instance loop
-and adding the Neptune and DocumentDB instance-level checks in the same change.
+So the filter and the replacement checks shipped in one change: `_rds_instances()` now drops
+an instance that positively declares another service's engine, and NEP-06 and DOCDB-07 read
+`PubliclyAccessible` where it belongs. The filter is a **deny-list, not an allow-list**, for
+the same reason `NON_AURORA_CLUSTER_ENGINES` is: an instance with an unrecognised or absent
+`Engine` keeps being scored, so a new RDS engine is covered by default rather than silently
+dropped the day AWS ships it.
 
-**The gaps are concentrated and unglamorous.** Of the 17, the ones that would close real
-exposure are DocumentDB backup retention (7.9), Neptune IAM authentication (9.4), Neptune
-audit logging (9.5) and Neptune Multi-AZ (9.11) — every one of which already exists for a
-sibling service, so each is a small variation on a check that ships today rather than new
-ground.
+**The four gaps worth closing are closed.** DocumentDB backup retention (7.9), Neptune IAM
+authentication (9.4), Neptune audit logging (9.5) and Neptune Multi-AZ (9.11) each already
+existed for a sibling service, and each reads a field the section's existing
+`DescribeDBClusters` call already returns — so all four cost no additional API read and no
+additional permission. Two of them are Neptune-only for a reason worth recording: the
+service model shows DocumentDB clusters carry no `IAMDatabaseAuthenticationEnabled` and
+DocumentDB instances carry no `MultiAZ`, which is independent confirmation of the *process*
+verdict this mapping had already given DocumentDB 7.5.
+
+NEP-08 is rated a step above its Aurora equivalent. On Aurora, IAM authentication being off
+means static passwords — a credential-hygiene problem. On Neptune it means there is no
+authentication at all, because the engine has no database users to have passwords: whatever
+reaches the endpoint is authorised by the security group and by nothing else.
 
 
 ## Declines, in full

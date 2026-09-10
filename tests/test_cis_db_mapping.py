@@ -226,31 +226,136 @@ def _rds_fails_on(engine: str):
     return {r.check_id for r in s.results if r.status == "FAIL"}
 
 
-def test_the_instance_filter_defect_is_recorded_while_it_is_open():
-    """Neptune and DocumentDB instances are returned by rds:DescribeDBInstances, and the
-    RDS instance loop applies no engine filter — the tranche-1 cluster defect, one level
-    down. So 9.8 and 9.9 ARE decided, but by RDS-02 and RDS-03, under ids that say
-    nothing about Neptune and carry RDS remediation.
+def test_a_sibling_service_instance_produces_no_rds_finding():
+    """The instance-filter defect this mapping found, now closed and pinned shut.
 
-    The mapping records that as 'decided elsewhere', which is neither 'covered' nor
-    'gap' and is the only honest option while it holds. This test pins the admission to
-    the behaviour, so whichever changes first drags the other with it — including the
-    good direction: fix the filter without adding Neptune instance checks and this fails,
-    because 9.8 and 9.9 would then be decided by nothing at all.
+    Neptune and DocumentDB instances are returned by rds:DescribeDBInstances because they
+    share the RDS control plane, and the instance loop used to score them: a single
+    Neptune instance produced RDS-01, RDS-02, RDS-03 and RDS-04, none of which said
+    Neptune anywhere. It was the tranche-1 cluster defect one level down.
     """
-    fails = _rds_fails_on("neptune")
-    leaks = fails & {"RDS-01", "RDS-02", "RDS-03", "RDS-04"}
+    for engine in ("neptune", "docdb"):
+        fails = _rds_fails_on(engine)
+        leaked = {c for c in fails if c.startswith("RDS-")}
+        assert not leaked, (
+            f"a {engine} instance produced {sorted(leaked)} — the engine filter in "
+            f"_rds_instances() has regressed, and a {engine} exposure is being reported "
+            f"under an RDS id with RDS remediation")
+
+
+def test_the_engine_filter_is_a_deny_list_and_not_an_allow_list():
+    """The property most likely to be lost by someone 'tightening' the filter, and the
+    one whose loss is invisible: an allow-list of known engines silently stops scoring
+    every RDS engine AWS ships after the day it was written. Only an engine that
+    POSITIVELY declares itself another service is dropped — an unrecognised or absent
+    Engine keeps being scored, which is the same rule NON_AURORA_CLUSTER_ENGINES uses one
+    level up.
+    """
+    for engine in ("mysql", "postgres", "some-engine-aws-ships-in-2029", ""):
+        fails = _rds_fails_on(engine)
+        assert {"RDS-01", "RDS-02", "RDS-03", "RDS-04"} <= fails, (
+            f"an instance with Engine={engine!r} produced only {sorted(fails)} — the "
+            f"filter has become an allow-list, so unrecognised engines are no longer "
+            f"scored at all")
+
+
+def test_no_coverage_was_deleted_when_the_filter_landed():
+    """The trap this change existed to avoid. RDS-02 and RDS-03 were the ONLY coverage of
+    Neptune 9.8 and 9.9 while the loop was unfiltered, so filtering alone would have
+    turned two 'decided elsewhere' rows into silence while the mapping still claimed they
+    were decided. Filter and replacement had to ship together, and this asserts they did:
+    both rows are covered, by Neptune checks, that can actually FAIL.
+    """
     for rec in ("9.8", "9.9"):
-        verdict = M.RECOMMENDATIONS[rec][1]
-        if leaks:
-            assert verdict == M.ELSEWHERE, (
-                f"a Neptune instance still produces {sorted(leaks)}, so {rec} is decided "
-                f"by an RDS check and must stay recorded as 'decided elsewhere'")
+        label, verdict, checks, _note = M.RECOMMENDATIONS[rec]
+        assert verdict == M.COVERED, f"{rec} ({label}) is no longer covered"
+        assert checks and all(c.startswith("NEP-") for c in checks), (
+            f"{rec} must be decided by a Neptune check, not {list(checks)}")
+    assert {"NEP-06", "NEP-07"} <= _fails_of(_neptune_section()), (
+        "NEP-06/NEP-07 replaced RDS-02/RDS-03 for Neptune, so they must be able to FAIL "
+        "— a check that cannot fail would leave 9.8 and 9.9 covered on paper only")
+
+
+def _neptune_section():
+    """Run the Neptune section against one deliberately bad cluster and instance."""
+    from unittest.mock import MagicMock
+    from test_live_scanner import make_scanner                          # noqa: WPS433
+
+    s = make_scanner(sections=["NEPTUNE"])
+    s.account = "123456789012"
+    cluster = {"DBClusterIdentifier": "graph", "StorageEncrypted": False,
+               "DeletionProtection": False, "BackupRetentionPeriod": 1,
+               "IAMDatabaseAuthenticationEnabled": False,
+               "EnabledCloudwatchLogsExports": [], "MultiAZ": False,
+               "DBClusterParameterGroup": "pg"}
+    inst = [{"DBInstanceIdentifier": "graph-1", "PubliclyAccessible": True,
+             "DBClusterIdentifier": "graph"}]
+
+    def _pager(op):
+        p = MagicMock()
+        if op == "describe_db_instances":
+            p.paginate.return_value = [{"DBInstances": inst}]
+        elif op == "describe_db_clusters":
+            p.paginate.return_value = [{"DBClusters": [cluster]}]
         else:
-            assert verdict != M.ELSEWHERE, (
-                f"the RDS instance loop no longer fires on Neptune, so {rec} is not "
-                f"decided elsewhere any more — it is now covered by a Neptune check or "
-                f"it is a gap. Update the mapping to say which")
+            p.paginate.return_value = [{}]
+        return p
+
+    nep = MagicMock()
+    nep.get_paginator.side_effect = _pager
+    nep.describe_db_cluster_snapshots.return_value = {"DBClusterSnapshots": []}
+    nep.describe_db_cluster_parameters.return_value = {"Parameters": []}
+    s._clients["neptune:us-east-1"] = nep
+    s._check_neptune()
+    return s
+
+
+def _fails_of(scanner):
+    return {r.check_id for r in scanner.results if r.status == "FAIL"}
+
+
+def test_the_four_sibling_gaps_are_closed_by_checks_that_can_fail():
+    """7.9, 9.4, 9.5 and 9.11 were the four gaps worth closing: each already existed for
+    a sibling service, and each reads a field the DescribeDBClusters call already
+    returns. Recording them as covered is only true if the checks fire, so run them."""
+    fired = _fails_of(_neptune_section())
+    for rec, check in (("9.4", "NEP-08"), ("9.5", "NEP-09"), ("9.11", "NEP-10")):
+        _label, verdict, checks, _note = M.RECOMMENDATIONS[rec]
+        assert verdict == M.COVERED and check in checks, f"{rec} -> {check}"
+        assert check in fired, (
+            f"{rec} is recorded as covered by {check}, but {check} did not FAIL on a "
+            f"cluster deliberately built to fail it")
+    # 7.9 is DocumentDB, which is a different section and a different client.
+    _label, verdict, checks, _note = M.RECOMMENDATIONS["7.9"]
+    assert verdict == M.COVERED and "DOCDB-08" in checks
+
+
+def test_the_neptune_only_checks_are_neptune_only_for_a_reason():
+    """DocumentDB has no equivalent of NEP-08 or NEP-10, and that is a property of the
+    service rather than a shortcut: the botocore service model shows DocumentDB clusters
+    carry no IAMDatabaseAuthenticationEnabled and DocumentDB instances carry no MultiAZ.
+    Asserting it here means a future 'why is there no DOCDB version of this?' is answered
+    by a test rather than by a guess — and if AWS ever adds the fields, this fails and
+    tells us to build them.
+    """
+    import botocore.session
+    from botocore import xform_name
+
+    sess = botocore.session.get_session()
+    model = sess.get_service_model("docdb")
+    ops = {xform_name(o): o for o in model.operation_names}
+
+    clusters = model.operation_model(
+        ops["describe_db_clusters"]).output_shape.members["DBClusters"].member
+    assert "IAMDatabaseAuthenticationEnabled" not in clusters.members, (
+        "DocumentDB clusters now expose IAMDatabaseAuthenticationEnabled — build the "
+        "DocumentDB equivalent of NEP-08 and map it")
+
+    instances = model.operation_model(
+        ops["describe_db_instances"]).output_shape.members["DBInstances"].member
+    assert "MultiAZ" not in instances.members, (
+        "DocumentDB instances now expose MultiAZ — build the DocumentDB equivalent of "
+        "NEP-10 and map it")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
