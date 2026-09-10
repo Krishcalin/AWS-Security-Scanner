@@ -4037,6 +4037,40 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Check the client library reconnects on failover rather than holding a dead connection.",
         ],
     },
+    "CREDEXP-01": {
+        "risk": "An access key id that is live in this account also appears in a breach corpus or stealer log you supplied. This is the strongest join a credential-exposure feed can produce, and it is worth being precise about why: an AWS access key id is globally unique and structurally recognisable, so unlike an email address it cannot belong to somebody else by coincidence. The key was real, it is still active, and its identifier circulated outside your organisation. What this does NOT establish is equally important. A corpus carries what a third party observed in a compilation; it does not show that the secret half of the key was captured intact, that anyone attempted to use it, or that this account was ever accessed. Those are questions CloudTrail can answer and the corpus cannot. The reason to act immediately anyway is asymmetry: rotating a key costs an afternoon, while a live long-lived credential in circulation is the single most common root cause of cloud account compromise, and stealer logs are traded and re-traded for years after the theft.",
+        "impact": "A currently-active AWS credential's identifier is circulating outside your organisation, and whether the secret half went with it cannot be determined from the corpus.",
+        "steps": [
+            "Create a replacement before disabling anything, so nothing breaks mid-rotation: aws iam create-access-key --user-name <USER>",
+            "Deploy the new key, then disable the old one rather than deleting it -- an inactive key still shows in CloudTrail and still answers get-access-key-last-used: aws iam update-access-key --user-name <USER> --access-key-id <LEAKED> --status Inactive",
+            "Find out whether it was used, rather than assuming: aws cloudtrail lookup-events --lookup-attributes AttributeKey=AccessKeyId,AttributeValue=<LEAKED> --start-time <BEFORE_THE_BREACH_DATE>",
+            "Check what it last did and when: aws iam get-access-key-last-used --access-key-id <LEAKED>",
+            "Delete it once nothing has broken: aws iam delete-access-key --user-name <USER> --access-key-id <LEAKED>",
+            "Ask whether this user needs a long-lived key at all -- the durable fix is a role assumed with short-lived credentials, which cannot appear in next year's corpus.",
+        ],
+    },
+    "CREDEXP-02": {
+        "risk": "An IAM principal in this account matches an exposure in a breach corpus by exact email address or username. The match is exact rather than fuzzy -- this product will not attribute somebody else's breach to your estate on a near-miss -- but an identifier match is weaker evidence than a key match, and the difference matters for how you respond. What the corpus supports is that this identifier appeared alongside a credential in a compilation somebody observed. It does not say the credential was ever this account's: people reuse usernames across dozens of services, and the exposure may be from a forum breach with no relationship to AWS. What makes it actionable regardless is password reuse, which is the mechanism that turns an unrelated breach into a cloud incident. If this principal has a console password and no MFA, a reused password from any corpus is sufficient on its own. If MFA is enrolled, the same exposure is a prompt rather than an emergency -- which is why the MFA check belongs in the response and not in a separate ticket.",
+        "impact": "A credential associated with this IAM identity is in third-party circulation, and without MFA a reused password would be sufficient to use it.",
+        "steps": [
+            "Establish whether MFA is enrolled first -- it decides how urgent the rest of this is: aws iam list-mfa-devices --user-name <USER>",
+            "Rotate the console password: aws iam update-login-profile --user-name <USER> --password <NEW> --password-reset-required",
+            "Rotate every access key the user holds: aws iam list-access-keys --user-name <USER>, then follow CREDEXP-01's create/disable/delete sequence for each.",
+            "Look for use you did not expect around the exposure date: aws cloudtrail lookup-events --lookup-attributes AttributeKey=Username,AttributeValue=<USER>",
+            "Remove the long-lived human credential entirely where you can -- federating through IAM Identity Center leaves no account password for a corpus to carry.",
+        ],
+    },
+    "CREDEXP-03": {
+        "risk": "An exposure carries an email address at one of your organisation's domains but matches no IAM principal in this account. This is a signal about the organisation rather than about this account, and the honest reading is narrower than the words suggest. The person may hold no AWS identity at all; they may hold one under a different name; or the exposed account may be an unrelated third-party service they signed up for with a work address. None of those is an AWS finding on its own, and treating it as one produces exactly the alert fatigue that gets a whole feed switched off. The reason it is reported rather than dropped is the identity provider. If this account is entered through federation -- IAM Identity Center, Okta, Entra -- then the credential that matters is held in the IdP, not in IAM, and an exposure of a work address is one password-reuse away from the front door. So the finding exists to reach the identity team, whose systems this product cannot see, rather than to prompt a change in AWS.",
+        "impact": "A work credential is in third-party circulation for someone with no IAM identity here, which matters most where this account is entered through a federated identity provider.",
+        "steps": [
+            "Confirm the person really holds no identity here under another name: aws iam list-users --query 'Users[].UserName'",
+            "Check the federation path, because that is where the credential that matters lives: aws sso-admin list-instances and aws iam list-saml-providers / list-open-id-connect-providers",
+            "Hand it to whoever owns the identity provider and force a password reset there -- this product cannot see or fix that system.",
+            "Ask specifically whether the leaked password was reused anywhere that does reach AWS; reuse is the mechanism that makes this matter at all.",
+            "If nothing here federates and the address belongs to no AWS user, record the finding as accepted rather than leaving it open -- an alert nobody can action is one that trains people to ignore the next one.",
+        ],
+    },
     "NEP-06": {
         "risk": "This Neptune DB instance is publicly accessible, so its endpoint resolves to a routable public address and anything on the internet that can reach the port can attempt to connect. What makes this worse than the same finding on a relational database is Neptune's authorisation model: Neptune has no database users of its own. There is no username, no password, no in-engine grant system. Authorisation is IAM database authentication or nothing at all, so on a cluster where IAM auth is off -- which NEP-08 reports separately -- the security group is the entire access control, and a security group is the control most likely to be wrong. A VPC-wide CIDR, a shared application subnet, or a peering arrangement made for an unrelated purpose all produce reachability nobody intended. Graph databases also concentrate exactly the data that is most damaging in aggregate: the edges between people, accounts and transactions are the fraud-detection and identity-resolution logic itself, and traversing them reveals relationships that no single record would.",
         "impact": "The graph endpoint is reachable from the internet, and with IAM authentication off the security group is the only thing standing between an attacker and a full traversal.",

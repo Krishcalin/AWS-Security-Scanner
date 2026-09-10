@@ -55,6 +55,7 @@ the reason these two defects share a fix.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 DAY = 86_400
@@ -166,6 +167,92 @@ class Series:
             line += ("; %d period(s) excluded — elapsed time is not the same as "
                      "collected data" % len(self.gaps))
         return line
+
+
+NO_SCAN_REASON = ("no scan completed in this month, so the estate was not measured "
+                  "in it at all")
+"""Why an empty month is emitted rather than skipped. See :func:`monthly_series`."""
+
+
+def _month_of(epoch: int) -> Tuple[int, int]:
+    d = datetime.fromtimestamp(int(epoch), tz=timezone.utc)
+    return (d.year, d.month)
+
+
+def _month_after(year: int, month: int) -> Tuple[int, int]:
+    return (year + 1, 1) if month == 12 else (year, month + 1)
+
+
+def _month_bounds(year: int, month: int) -> Tuple[int, int]:
+    start = datetime(year, month, 1, tzinfo=timezone.utc)
+    end = datetime(*_month_after(year, month), 1, tzinfo=timezone.utc)
+    return int(start.timestamp()), int(end.timestamp())
+
+
+def monthly_series(observations: Optional[Iterable[Sequence]],
+                   *, metric: str, unit: str = "",
+                   min_periods: int = AD_04_PERIODS,
+                   min_coverage: float = 0.9) -> Series:
+    """Bucket ``(epoch, value, coverage[, reason])`` observations into the calendar
+    months AD-04 counts in.
+
+    Pure, and deliberately ignorant of where the observations came from: it takes
+    triples, not scan rows, so the module keeps its no-I/O contract and the caller
+    owns the question of what "coverage" means for its data.
+
+    THREE DECISIONS, EACH WITH A FAILURE MODE IF TAKEN THE OTHER WAY.
+
+    **A period is a calendar month**, because :data:`AD_04_PERIODS` is AD-04's six
+    months expressed in periods. Bucketing by anything else — per scan, per week —
+    would make the sufficiency tier mean something other than what AD-04 says.
+
+    **The LAST observation in a month wins**, not the mean. Scans are not evenly
+    spaced: an account scanned daily for one week and then monthly contributes seven
+    points to one month and one to the next, and a mean would let scan *frequency*
+    move the trend line. The last scan is the posture the month ended on, which is
+    the thing a monthly series is understood to report.
+
+    **A month with no observation is emitted as an EMPTY period, not skipped** —
+    the whole point of this function. Skipping is the tempting implementation and it
+    silently reintroduces exactly the defect this module exists to fix: three scans
+    in March and nothing until September would present as two adjacent periods, and
+    a series that is mostly hole would report itself production-grade. Emitted as
+    gaps, they carry a reason, they are excluded from :attr:`Series.usable`, they
+    show up in :attr:`Series.gaps`, and :meth:`Series.describe` counts them in its
+    denominator — so "6 of 12 periods usable" is visible rather than inferred.
+
+    An observation may carry a FOURTH element, its own reason, used when its value
+    is ``None`` for a cause other than "nothing ran" — a scan whose coverage is
+    unrecorded rather than poor, say. Without one, a ``None`` value falls back to
+    :data:`NO_SCAN_REASON`, which would be a false statement about a scan that did
+    run; the caller who knows better is the one who should say so.
+    """
+    by_month: Dict[Tuple[int, int], Tuple[Optional[float], float, str]] = {}
+    for obs in sorted(observations or [], key=lambda o: int(o[0])):
+        epoch, value, coverage = obs[0], obs[1], obs[2]
+        reason = obs[3] if len(obs) > 3 else ""
+        by_month[_month_of(epoch)] = (value, float(coverage), str(reason or ""))
+
+    if not by_month:
+        return Series(metric, (), min_periods=min_periods,
+                      min_coverage=min_coverage, unit=unit)
+
+    periods: List[Period] = []
+    cur, last = min(by_month), max(by_month)
+    while cur <= last:
+        start, end = _month_bounds(*cur)
+        if cur in by_month:
+            value, coverage, reason = by_month[cur]
+            if value is None and not reason:
+                reason = NO_SCAN_REASON
+            periods.append(Period(start, end, value, coverage,
+                                  reason="" if value is not None else reason))
+        else:
+            periods.append(Period(start, end, None, 0.0, reason=NO_SCAN_REASON))
+        cur = _month_after(*cur)
+
+    return Series(metric, tuple(periods), min_periods=min_periods,
+                  min_coverage=min_coverage, unit=unit)
 
 
 def _fit(points: Sequence[Tuple[float, float]]) -> Tuple[float, float]:

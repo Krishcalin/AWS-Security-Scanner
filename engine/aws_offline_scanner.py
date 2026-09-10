@@ -2533,6 +2533,29 @@ Examples:
         help="Policy-as-code gate: a JSON policy (or list) evaluated over the findings; exit 1 "
              "when any policy fires. Findings-level clauses only (there is no cloud graph offline).",
     )
+    # ── gate failure mode (FR-5 / review defect D5) ──────────────────────────
+    parser.add_argument(
+        "--environment", default="production", metavar="ENV",
+        help="Which enforcement mode applies, matched against each policy's optional "
+             "'enforcement' map (default: production). A policy in audit mode never "
+             "blocks, so an unevaluated one must not start blocking on its behalf.")
+    parser.add_argument(
+        "--allow-empty", action="store_true",
+        help="Treat a target containing no IaC files as a legitimate clean pass. "
+             "WITHOUT this, scanning nothing exits 2 (unverified) rather than 0: a "
+             "gate that inspected nothing has not established that anything is safe.")
+    parser.add_argument(
+        "--gate-record", metavar="FILE",
+        help="Write the gate's audit record (OW2-GR-005) as JSON: the action, the "
+             "outcome, which policies did NOT evaluate, and any override.")
+    parser.add_argument("--break-glass-actor", metavar="WHO",
+                        help="Break-glass override: who is accepting the risk.")
+    parser.add_argument("--break-glass-reason", metavar="TEXT",
+                        help="Break-glass override: why, in at least 20 characters.")
+    parser.add_argument("--break-glass-hours", type=float, metavar="H",
+                        help="Break-glass override: how long it is valid for.")
+    parser.add_argument("--break-glass-ticket", metavar="REF", default="",
+                        help="Break-glass override: the change/incident reference.")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show files as they are scanned")
     parser.add_argument("--version",       action="version", version=f"aws_scanner v{VERSION}")
     args = parser.parse_args()
@@ -2547,6 +2570,9 @@ Examples:
 
     print(f"[*] AWS IaC Security Scanner v{VERSION}")
     print(f"[*] Target: {args.target}\n")
+
+    import time
+    _t0 = time.time()
 
     scanner = AWSIaCScanner(verbose=args.verbose)
     try:
@@ -2571,46 +2597,290 @@ Examples:
         print(f"[!] Could not write report: {e}", file=sys.stderr)  # NEVER a gate-breach exit 1
         sys.exit(2)
 
-    # exit code: gate (default HIGH) so the CI gate + IDE both key off it. --fail-on picks the
-    # threshold; --policy adds policy-as-code gating; exit 1 on a breach, 0 when clean (exit 2
-    # above is reserved for usage/env errors).
+    # ── the gate ──────────────────────────────────────────────────────────────
+    # exit code: 0 clean, 1 do-not-proceed, 2 PROCEEDED WITHOUT A COMPLETED
+    # EVALUATION. --fail-on picks the severity threshold; --policy adds
+    # policy-as-code gating; aws_guardrail decides what happens when the evaluation
+    # did not finish.
+    #
+    # ON EXIT 2, WHICH NOW MEANS TWO THINGS. It has always meant "usage or
+    # environment error" here, and aws_guardrail.EXIT_UNVERIFIED — mirroring
+    # scripts/overwatch_evidence.py, where 2 means "consistent but the signer was not
+    # checked" — means "allowed without a completed evaluation". Both are conflated
+    # deliberately rather than inventing a third code: every one of them means DO NOT
+    # TREAT THIS AS A PASS, every pipeline that fails on non-zero handles all of
+    # them, and two gates in one product disagreeing about their own exit-code
+    # vocabulary would be the worse outcome. A caller that needs to tell them apart
+    # reads --gate-record, which is written only on the gate path.
     fail_on = args.fail_on or "HIGH"
     sev_fail = scanner.gate_fails(fail_on)
-    policy_hits = _evaluate_policies(scanner, args.policy) if args.policy else []
-    if policy_hits:
-        print(f"\n[gate] policy violation(s): {', '.join(policy_hits)}", file=sys.stderr)
+    scanned_nothing = scanner.scanned_files == 0 and not args.allow_empty
+    elapsed_ms = int((time.time() - _t0) * 1000)
+
+    gr = _guardrail()
+    if gr is None:
+        # Cannot load the decision layer. Report what is known and refuse to call it
+        # a pass: a gate that could not run its own failure-mode logic has not
+        # established anything, which is the whole of D5.
+        if sev_fail:
+            print(f"\n[gate] findings at or above {fail_on} — failing the build "
+                  f"(--fail-on {fail_on}).", file=sys.stderr)
+            sys.exit(1)
+        print("\n[gate] the guardrail decision layer (engine/aws_guardrail.py) could "
+              "not be loaded, so this run is UNVERIFIED rather than a pass.",
+              file=sys.stderr)
+        sys.exit(2)
+
+    if args.policy:
+        policies, evaluation = _policy_evaluation(
+            scanner, args.policy, gr, elapsed_ms=elapsed_ms,
+            scanned_nothing=scanned_nothing)
+    else:
+        policies = []
+        evaluation = gr.Evaluation(
+            outcome=gr.UNAVAILABLE if scanned_nothing else gr.EVALUATED,
+            elapsed_ms=elapsed_ms,
+            detail=("no IaC files were parsed, so nothing was inspected"
+                    if scanned_nothing else ""))
+
+    verdict = gr.decide(
+        evaluation, policies, args.environment,
+        now_epoch=int(_t0),
+        break_glass=_break_glass(gr, args, int(_t0)))
+
+    if args.gate_record:
+        record = verdict.audit_record()
+        record.update({"target": args.target, "fail_on": fail_on,
+                       "severity_gate_failed": bool(sev_fail),
+                       "scanned_files": scanner.scanned_files,
+                       "scanner_version": VERSION})
+        try:
+            with open(args.gate_record, "w", encoding="utf-8") as fh:
+                json.dump(record, fh, indent=2, sort_keys=True)
+            print(f"[+] Gate record: {args.gate_record}")
+        except OSError as e:
+            # Same rule as the report writers above: an unwritable path is an
+            # environment fault, NEVER a gate-breach exit 1.
+            print(f"[!] Could not write gate record: {e}", file=sys.stderr)
+            sys.exit(2)
+
+    if scanned_nothing:
+        print("\n[gate] no CloudFormation or Terraform files were parsed under "
+              f"{args.target}. A gate that inspected nothing is not a pass — pass "
+              "--allow-empty if an empty target is expected here.", file=sys.stderr)
+    if verdict.violations:
+        print("\n[gate] policy violation(s): "
+              f"{', '.join(sorted(v.policy_id for v in verdict.violations))}",
+              file=sys.stderr)
+    if verdict.unevaluated:
+        print("\n[gate] policy/policies that did NOT evaluate: "
+              f"{', '.join(verdict.unevaluated)} — {evaluation.detail}",
+              file=sys.stderr)
+    if verdict.budget_exceeded:
+        print(f"\n[gate] the scan took {elapsed_ms}ms, over the "
+              f"{gr.DEFAULT_BUDGET_MS}ms budget (OW2-GR-004). The result is still "
+              "honoured on its merits; the breach is recorded.", file=sys.stderr)
+
+    # The severity gate and the policy gate are two verdicts, and printing only the
+    # policy one would say "PASSED" over an exit 1 — the severity breach is not a
+    # policy violation, so `verdict` knows nothing about it. Lead with whichever
+    # actually decides the build.
     if sev_fail:
-        print(f"\n[gate] findings at or above {fail_on} — failing the build (--fail-on {fail_on}).", file=sys.stderr)
-    sys.exit(1 if (sev_fail or policy_hits) else 0)
+        print(f"\n[gate] BLOCKED — findings at or above {fail_on} "
+              f"(--fail-on {fail_on}). Policy gate: {verdict.headline()}",
+              file=sys.stderr)
+    elif policies or verdict.outcome != gr.EVALUATED:
+        print(f"\n[gate] {verdict.headline()}", file=sys.stderr)
+    else:
+        # No policies and a completed scan: there is no policy verdict worth
+        # reporting, and "all 0 policies evaluated" would imply one was sought.
+        print(f"\n[gate] PASSED — no findings at or above {fail_on}; no policy file "
+              "supplied.", file=sys.stderr)
+
+    # A severity breach is a completed evaluation that found something, so it blocks
+    # on its own merits regardless of the policy verdict — it cannot be degraded into
+    # an unverified allow by a policy file that failed to parse.
+    if sev_fail:
+        sys.exit(1)
+    sys.exit(verdict.exit_code)
 
 
-def _evaluate_policies(scanner, policy_path):
-    """Evaluate a policy file's FINDING clauses over the IaC findings (there is no cloud graph
-    offline, so graph clauses never fire). Returns the ids of policies that fired. Reads the file
-    (exit 2 on a read error) and imports the pure-Python policy engine lazily so the base scanner
-    stays standalone."""
+def _repo_on_path():
+    """Put the repo root on ``sys.path`` so ``from engine import ...`` resolves when
+    this file is run BY PATH rather than as a module.
+
+    THE BUG THIS FIXES. ``--policy`` could never work in the shipped GitHub Action.
+    `.github/actions/overwatch-iac-gate/entrypoint.sh` runs
+    ``python3 "$GITHUB_WORKSPACE/engine/aws_offline_scanner.py" ... --policy p.json``,
+    which puts ``engine/`` on ``sys.path`` and not the repo root, so
+    ``from engine import aws_policy`` raised ``No module named 'engine'`` and the gate
+    exited 2 — reported by the action as "OverWatch IaC scan errored". The action's
+    own README documents ``--policy`` as supported. Policy-as-code gating in CI was
+    therefore broken from both ends: unreachable, and reported as an environment
+    fault rather than as the missing feature it was.
+
+    Kept to a bootstrap rather than a module-level import so the scanner still runs
+    standalone with no OverWatch packages present at all — the property the action's
+    comment relies on ("aws_offline_scanner has no cross-package imports").
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+
+def _guardrail():
+    """The CI/CD gate decision layer, or None if it is not importable.
+
+    Returning None rather than raising keeps the scanner standalone, and the caller
+    turns None into an UNVERIFIED exit rather than a pass — because "I could not
+    load my own gate logic" is not evidence that the change is clean.
+    """
+    _repo_on_path()
     try:
-        data = json.loads(open(policy_path, encoding="utf-8").read())
+        from engine import aws_guardrail
+        return aws_guardrail
+    except Exception:                                      # noqa: BLE001
+        return None
+
+
+def _policy_modes(pol):
+    """Read a policy's per-environment enforcement modes.
+
+    Optional top-level ``enforcement``, either a mode string or an
+    ``{env: mode}`` map. ``aws_policy.parse`` validates only the ``match`` object's
+    keys, so this is additive and no existing policy file changes meaning.
+
+    THE DEFAULT IS ``block``, NOT ``audit``. `aws_guardrail.Policy` defaults to
+    audit, which is right for a greenfield policy set and wrong here: today a firing
+    policy fails the build, and a default of audit would have silently converted
+    every existing customer's blocking gate into an advisory one. A gate may only be
+    relaxed deliberately, in the policy file, in writing.
+    """
+    enf = pol.get("enforcement") if isinstance(pol, dict) else None
+    if isinstance(enf, str):
+        return {}, enf
+    if isinstance(enf, dict):
+        return {str(k): str(v) for k, v in enf.items()}, "block"
+    return {}, "block"
+
+
+def _policy_evaluation(scanner, policy_path, gr, *, elapsed_ms=0, scanned_nothing=False):
+    """Evaluate a policy file's FINDING clauses over the IaC findings, and report what
+    did NOT evaluate as well as what fired.
+
+    (There is no cloud graph offline, so graph clauses never fire.)
+
+    THE DEFECT THIS FIXES — review finding D5, in this product's own CI gate. The
+    previous implementation ended each policy with::
+
+        except aws_policy.PolicyError:
+            continue            # inert policy (never crashes the gate)
+
+    A policy that failed to parse — a typo in a key, a clause written against a
+    newer schema, a file mangled by a templating step — was silently dropped, and
+    the gate exited 0. That is fail-open: the control is disabled while the pipeline
+    shows a green check, and nobody finds out until an audit. It is precisely the
+    outcome `aws_guardrail` exists to make impossible, and it was sitting in the one
+    gate this product ships to other people's pipelines.
+
+    So a policy that did not evaluate is now DECLARED BUT UNEVALUATED. `decide()`
+    demotes such a run to PARTIAL, and a partial evaluation follows the strictest
+    configured mode of the policies that went unread — which by default is block.
+    """
+    try:
+        data = json.loads(open(policy_path, encoding="utf-8-sig").read())
         policies = data if isinstance(data, list) else [data]
     except Exception as e:
         print(f"[!] --policy: cannot read {policy_path}: {e}", file=sys.stderr)
         sys.exit(2)
+    _repo_on_path()
     try:
         from engine import aws_policy
     except Exception as e:
         print(f"[!] --policy requires the OverWatch policy engine (aws_policy): {e}", file=sys.stderr)
         sys.exit(2)
+
     catalog = [{"check_id": f.rule_id, "section": f.category, "severity": f.severity,
                 "status": "FAIL", "compliance": {}} for f in scanner.findings]
-    hits = []
-    for pol in policies:
+
+    declared, evaluated, violations, errors = [], [], [], {}
+    for i, pol in enumerate(policies):
+        # A policy too malformed to have an id still has to be NAMED, or the count of
+        # unevaluated policies is right and the report cannot say which one to fix.
+        pid = str((pol or {}).get("id") or "").strip() if isinstance(pol, dict) else ""
+        pid = pid or f"<policy #{i + 1} with no id>"
+        modes, default_mode = _policy_modes(pol if isinstance(pol, dict) else {})
+        try:
+            declared.append(gr.Policy(
+                id=pid, title=str((pol or {}).get("title") or pid) if isinstance(pol, dict) else pid,
+                modes=modes, default_mode=default_mode,
+                severity=aws_policy.policy_severity(pol) if isinstance(pol, dict) else "MEDIUM"))
+        except ValueError as e:
+            # An unusable enforcement mode is a config error in the gate itself. It
+            # must not silently become the default, so the policy is declared with
+            # the strictest mode and left unevaluated.
+            declared.append(gr.Policy(id=pid, title=pid, default_mode=gr.BLOCK))
+            errors[pid] = f"unusable enforcement config: {e}"
+            continue
+
         try:
             aws_policy.parse(pol)
-            if aws_policy.evaluate(pol, None, catalog):
-                hits.append(str(pol.get("id")))
-        except aws_policy.PolicyError:
-            continue                                       # inert policy (never crashes the gate)
-    return hits
+            hit = aws_policy.evaluate(pol, None, catalog)
+            evaluated.append(pid)
+            if hit:
+                violations.append(gr.Violation(
+                    policy_id=pid, resource=policy_path,
+                    detail=str(hit.get("message") or hit.get("title") or "policy matched")
+                    if isinstance(hit, dict) else "policy matched"))
+        except aws_policy.PolicyError as e:
+            errors[pid] = str(e)                           # declared, NOT evaluated
+
+    if scanned_nothing:
+        # Nothing was parsed, so no policy was actually tested against anything. The
+        # findings-shaped clauses would all report "no match" over an empty catalog,
+        # which reads identically to a clean estate.
+        evaluated = []
+        outcome, detail = gr.UNAVAILABLE, (
+            "no IaC files were parsed, so no policy was evaluated against anything")
+    elif errors:
+        outcome, detail = gr.PARTIAL, (
+            "%d policy/policies could not be parsed: %s"
+            % (len(errors), "; ".join(f"{k}: {v}" for k, v in sorted(errors.items()))))
+    else:
+        outcome, detail = gr.EVALUATED, ""
+
+    return declared, gr.Evaluation(
+        outcome=outcome, violations=tuple(violations),
+        evaluated_policy_ids=tuple(evaluated), errors=errors,
+        elapsed_ms=int(elapsed_ms), detail=detail)
+
+
+def _break_glass(gr, args, now_epoch):
+    """Build the override from the CLI, or None.
+
+    Expensive on purpose (OW2-GR-005): an actor, a real justification and an expiry,
+    all three or nothing. `aws_guardrail.BreakGlass` enforces the minimum
+    justification length; a partial set is a usage error rather than a weaker
+    override, because an override that degrades quietly is how fail-closed becomes
+    fail-open one flag at a time.
+    """
+    given = [bool(args.break_glass_actor), bool(args.break_glass_reason),
+             args.break_glass_hours is not None]
+    if not any(given):
+        return None
+    if not all(given):
+        print("[!] --break-glass-actor, --break-glass-reason and --break-glass-hours "
+              "must be given together; an unattributed or open-ended override is not "
+              "an override.", file=sys.stderr)
+        sys.exit(2)
+    try:
+        return gr.BreakGlass(
+            actor=args.break_glass_actor, justification=args.break_glass_reason,
+            expires_epoch=int(now_epoch + args.break_glass_hours * 3600),
+            ticket=args.break_glass_ticket or "")
+    except ValueError as e:
+        print(f"[!] --break-glass: {e}", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

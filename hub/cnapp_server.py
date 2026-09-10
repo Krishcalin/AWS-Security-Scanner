@@ -138,6 +138,28 @@ def _load_registry_connectors():
         return []
 
 
+def _marketplace_client_factory():
+    """A lazy ``marketplacemetering`` client, or None when this is not a metered
+    listing.
+
+    Returns None — and therefore imports no boto3 — unless
+    ``CNAPP_MARKETPLACE_PRODUCT_CODE`` is set, so the decision to be a metered
+    listing is made once, in one place, and the "off" case cannot construct a
+    client by accident. MeterUsage must be called in the region the container runs
+    in; AWS_REGION is the same source every other seam here uses.
+    """
+    if not os.environ.get("CNAPP_MARKETPLACE_PRODUCT_CODE"):
+        return None
+
+    region = (os.environ.get("AWS_REGION")
+              or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1")
+
+    def factory():
+        import boto3                                    # noqa: WPS433
+        return boto3.client("marketplacemetering", region_name=region)
+    return factory
+
+
 def build_service():
     """Construct the PlatformService from env. Multi-tenant + metered; fail-closed auth
     is applied at the API layer, not here."""
@@ -197,6 +219,14 @@ def build_service():
         applications=cnapp_application.ApplicationStore(be),
         policies=_load_policies(),
         registry_connectors=_load_registry_connectors(),
+        # ── AWS Marketplace metering: OPT-IN, and off unless a product code is set ──
+        # Only a METERED listing sets CNAPP_MARKETPLACE_PRODUCT_CODE. Unset — the
+        # default, and what an air-gapped or contract/private-offer deployment
+        # leaves it as — keeps the emitter dormant and makes the client factory
+        # unreachable, so no boto3 marketplacemetering client is ever constructed.
+        marketplace_product_code=os.environ.get(
+            "CNAPP_MARKETPLACE_PRODUCT_CODE", ""),
+        marketplace_client=_marketplace_client_factory(),
     )
     # The one Backend this service was built on. Exposed so an auth provider (or any
     # other add-on store) shares this connection/pool instead of opening a second one

@@ -17,7 +17,7 @@ carries neither - so a check that never fails never renders what the catalogue
 advertises for it.
 
 
-**532 registered checks.** 442 are proven to FAIL in the suite; 62 run but have never been driven to a failure; 28 were never observed at all.
+**535 registered checks.** 445 are proven to FAIL in the suite; 62 run but have never been driven to a failure; 28 were never observed at all.
 
 
 ## Never observed
@@ -140,6 +140,7 @@ A finding whose id the catalogue does not know renders with the default severity
 - `AMEM-00` (INFO)
 - `CIEM-00` (INFO)
 - `CIEM-01` (WARN)
+- `CREDEXP-00` (INFO)
 - `CWPP-04` (INFO/WARN)
 - `FLOW-00` (INFO)
 - `FLOW-03` (INFO)

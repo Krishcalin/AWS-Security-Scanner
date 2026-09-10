@@ -502,6 +502,26 @@ REQUIREMENTS: Mapping[str, Tuple[Requirement, ...]] = {
              "read neptune_enforce_ssl -- whether Gremlin/SPARQL queries and their "
              "results cross the network in cleartext"),
     ),
+    # ── credential exposure joined to identity ───────────────────────────────
+    # THE ONE NEW ACTION IN THIS TRANCHE, and the reason it is worth the line in an
+    # IAM review: ListAccessKeys returns key IDs, owner, status and creation date. It
+    # does NOT return secret access keys -- those are returned exactly once, at
+    # creation, and by no API afterwards -- so this stays inside read-only-of-CONFIG,
+    # and a key id is an identifier of the same kind as a role ARN.
+    #
+    # It is NOT the credential report, which NHI-02 already reads. That report carries
+    # key AGE and rotation dates and no key IDs at all, so it cannot answer the one
+    # question this exists for: is the key in this corpus a key in this account?
+    #
+    # CREDEXP-02 and -03 need nothing new -- they match against principals already
+    # enumerated by GetAccountAuthorizationDetails.
+    "CREDEXP-01": (
+        _req("iam:ListAccessKeys",
+             "list live access key IDs so a key id found in a breach corpus can be "
+             "matched against a key that actually exists here -- without it the "
+             "highest-value join in the whole feed cannot happen, and an empty "
+             "result reads as 'clean' when it means 'not looked at'"),
+    ),
     # ── the sibling-service gaps the CIS Database mapping exposed ────────────
     # Five of these seven need NO new action at all: they read fields off the
     # DescribeDBClusters response the section already fetches, so the entire cost of

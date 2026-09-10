@@ -67,6 +67,151 @@ def test_meter_hourly_reraises_other_errors():
                         mp_client=_BoomMP(), period="2023-11")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# The wiring — and, mostly, that it stays OFF
+# ══════════════════════════════════════════════════════════════════════════════
+# This emitter was complete, tested and documented in deploy/marketplace/ while no
+# code path could reach it, so a metered listing would have billed nothing. The
+# worker is the only hourly process in the product and is now its caller. Almost
+# every test below asserts the emitter does NOT fire, because for the deployments
+# this product targets — air-gapped, contract SKU, private offer — an unexpected
+# call to an AWS billing endpoint is disqualifying, and "off by default" is a claim
+# that has to be tested rather than commented.
+class _Svc:
+    """Only the attributes meter_marketplace_usage reads."""
+    def __init__(self, *, code="", factory=None, metering=None, now=1_700_000_000):
+        self.marketplace_product_code = code
+        self.marketplace_client = factory
+        self.metering = metering
+        self.clock = lambda: now
+
+
+def test_the_emitter_is_off_without_a_product_code():
+    from hub import cnapp_worker
+    mp = _FakeMP()
+    out = cnapp_worker.meter_marketplace_usage(
+        _Svc(code="", factory=lambda: mp, metering=_metering()))
+    assert out is None
+    assert mp.calls == [], "MeterUsage was called on an unmetered deployment"
+
+
+def test_the_emitter_is_off_without_a_client_factory():
+    from hub import cnapp_worker
+    assert cnapp_worker.meter_marketplace_usage(
+        _Svc(code="prod-abc", factory=None, metering=_metering())) is None
+
+
+def test_the_emitter_is_off_without_a_metering_store():
+    from hub import cnapp_worker
+    mp = _FakeMP()
+    assert cnapp_worker.meter_marketplace_usage(
+        _Svc(code="prod-abc", factory=lambda: mp, metering=None)) is None
+    assert mp.calls == []
+
+
+def test_all_three_gates_open_emits_once():
+    from hub import cnapp_worker
+    mp = _FakeMP()
+    out = cnapp_worker.meter_marketplace_usage(
+        _Svc(code="prod-abc", factory=lambda: mp, metering=_metering()))
+    assert out and out["quantity"] == 3
+    assert len(mp.calls) == 1 and mp.calls[0]["ProductCode"] == "prod-abc"
+
+
+def test_a_metering_failure_never_propagates():
+    """FAIL-OPEN, matching the per-scan metering block in run_scan_job. An operator
+    whose scans stop because a billing endpoint was unreachable has lost the product
+    in order to protect the invoice. The error is returned and logged, not raised."""
+    from hub import cnapp_worker
+
+    class _BoomMP:
+        def meter_usage(self, **kw):
+            raise RuntimeError("throttled")
+
+    logged = []
+    out = cnapp_worker.meter_marketplace_usage(
+        _Svc(code="p", factory=lambda: _BoomMP(), metering=_metering()),
+        log=logged.append)
+    assert out and "throttled" in out["error"]
+    assert logged and "FAILED" in logged[0]
+
+
+def test_the_client_factory_is_not_called_when_the_emitter_is_off():
+    """The factory is a factory precisely so that 'off' constructs no boto3 client
+    and resolves no hostname. A truthy product code is the only thing that may cause
+    it to be invoked."""
+    from hub import cnapp_worker
+    called = []
+
+    def factory():
+        called.append(1)
+        return _FakeMP()
+
+    cnapp_worker.meter_marketplace_usage(
+        _Svc(code="", factory=factory, metering=_metering()))
+    assert called == [], "a client was constructed on an unmetered deployment"
+
+
+def test_the_worker_loop_meters_once_per_hour_not_once_per_tick():
+    """MeterUsage is hourly; the tick interval is typically five minutes. AWS
+    de-duplicates within the hour so over-calling would not over-bill, but it would
+    burn twelve API calls an hour for one record."""
+    from hub import cnapp_worker
+    mp = _FakeMP()
+    clk = {"t": 1_700_000_000}
+
+    class _LoopSvc(_Svc):
+        def __init__(self):
+            super().__init__(code="prod-abc", factory=lambda: mp,
+                             metering=_metering())
+            self.clock = lambda: clk["t"]
+
+        def schedule_due_scans(self):
+            return []
+
+        def pending_jobs(self):
+            return []
+
+    svc = _LoopSvc()
+    totals = cnapp_worker.run_forever(svc, ticks=4, sleep=lambda s: None,
+                                      log=lambda m: None)
+    assert len(mp.calls) == 1, "metered %d times in one hour" % len(mp.calls)
+    assert totals["metered"] == 1
+
+    clk["t"] += 3600                                  # next hour
+    cnapp_worker.run_forever(svc, ticks=2, sleep=lambda s: None,
+                             log=lambda m: None)
+    assert len(mp.calls) == 2
+
+
+def test_an_unmetered_worker_loop_reports_no_metering():
+    from hub import cnapp_worker
+
+    class _Plain(_Svc):
+        def __init__(self):
+            super().__init__()
+
+        def schedule_due_scans(self):
+            return []
+
+        def pending_jobs(self):
+            return []
+
+    totals = cnapp_worker.run_forever(_Plain(), ticks=3, sleep=lambda s: None,
+                                      log=lambda m: None)
+    assert totals["metered"] == 0
+
+
+def test_the_server_builds_no_client_factory_without_the_env_var(monkeypatch):
+    """The decision to be a metered listing is made in one place. Unset means the
+    factory itself is None, so boto3 is never imported for this purpose."""
+    from hub import cnapp_server
+    monkeypatch.delenv("CNAPP_MARKETPLACE_PRODUCT_CODE", raising=False)
+    assert cnapp_server._marketplace_client_factory() is None
+    monkeypatch.setenv("CNAPP_MARKETPLACE_PRODUCT_CODE", "prod-abc")
+    assert callable(cnapp_server._marketplace_client_factory())
+
+
 # ── marketplace artifacts parse + carry the right security posture ────────────
 def test_marketplace_artifacts_valid():
     import pytest

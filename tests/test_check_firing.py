@@ -209,8 +209,19 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: public-accessibility control — which is a gap in the benchmark rather than a reason
 #: to leave a public document database unreported.
 #: See tests/test_db_engine_routing.py and tests/test_cis_db_mapping.py.
+#: 442 -> 445: CREDEXP-01/02/03 — credential exposure joined to identity. Not new
+#: capability so much as capability that could not be reached: `aws_ingest_credexp`
+#: had been library-only for two versions, with no CLI flag, no API route and no
+#: console surface, so a module that normalises a breach corpus and joins it to IAM
+#: principals could not put a single finding in a report. Wiring it took the ingest
+#: surface AND `iam:ListAccessKeys` together, which docs/PRODUCTION.md had already
+#: recorded as one decision rather than two: without a live key inventory the key
+#: join cannot happen, and it is the highest-value join the corpus offers.
+#: CREDEXP-00 is deliberately unregistered — it is INFO-only, like AIDR-00, and
+#: `_add` reads the catalogue for no status but FAIL.
+#: See tests/test_ingest_credexp.py.
 MAX_NEVER_OBSERVED = 28
-MIN_PROVEN_FAILING = 442
+MIN_PROVEN_FAILING = 445
 
 
 def doc_text() -> str:

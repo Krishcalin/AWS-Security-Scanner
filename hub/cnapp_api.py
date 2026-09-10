@@ -399,6 +399,20 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
     def trend(account_id: str):
         return service.get_trend(account_id)
 
+    @app.get("/accounts/{account_id}/forecast",
+             dependencies=[Depends(account_gate("auditor"))])
+    def forecast(account_id: str, horizon_days: int = 30):
+        """Where the posture score is heading, or an explicit refusal to say.
+
+        Separate from /trend on purpose: /trend reports what was measured, this
+        reports an extrapolation. Below three usable months the response carries
+        `value: null` and a reason rather than a labelled number — see aws_trend.
+        """
+        if horizon_days <= 0:
+            raise HTTPException(status_code=400,
+                                detail="horizon_days must be positive")
+        return service.get_forecast(account_id, horizon_days=horizon_days)
+
     @app.get("/accounts/{account_id}/mttr", dependencies=[Depends(account_gate("auditor"))])
     def mttr(account_id: str):
         return service.get_mttr(account_id)

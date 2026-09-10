@@ -292,3 +292,104 @@ def test_the_accuracy_headline_reports_the_unresolved_count():
 def test_an_unsufficient_accuracy_headline_says_not_established():
     h = T.accuracy([], now_epoch=T0).headline()
     assert "not established" in h
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# monthly_series — the adapter that made this module reachable
+# ══════════════════════════════════════════════════════════════════════════════
+# This module was library-only for two versions: real, tested, documented code that
+# nothing called, which `tests/test_unreached_modules.py` exists to stop being read
+# as delivered capability. What it was missing was never the statistics; it was a
+# way to turn scans (points in time) into the calendar months AD-04 counts in.
+import datetime  # noqa: E402
+
+
+def epoch_of(year, month, day=15):
+    return int(datetime.datetime(year, month, day,
+                                 tzinfo=datetime.timezone.utc).timestamp())
+
+
+def test_observations_bucket_into_calendar_months():
+    s = T.monthly_series([(epoch_of(2025, m), 90.0 - m, 1.0) for m in range(1, 5)],
+                         metric="posture")
+    assert len(s.periods) == 4
+    assert len(s.usable) == 4
+
+
+def test_a_month_with_no_scan_becomes_a_gap_rather_than_disappearing():
+    """THE WHOLE POINT, and the tempting implementation is the wrong one. Skipping
+    empty months would present three scans in March and three in September as six
+    adjacent periods, and a series that is mostly hole would report itself
+    production-grade — the exact defect this module exists to fix, reintroduced by
+    the adapter that feeds it."""
+    s = T.monthly_series([(epoch_of(2025, 1), 90.0, 1.0),
+                          (epoch_of(2025, 2), 88.0, 1.0),
+                          (epoch_of(2025, 3), 86.0, 1.0),
+                          (epoch_of(2025, 9), 70.0, 1.0),
+                          (epoch_of(2025, 10), 68.0, 1.0),
+                          (epoch_of(2025, 11), 66.0, 1.0)], metric="posture")
+    assert len(s.periods) == 11, "the five empty months were skipped, not recorded"
+    assert len(s.usable) == 6
+    assert len(s.gaps) == 5
+    assert "6 of 11 periods usable" in s.describe()
+    assert all(T.NO_SCAN_REASON in why for _start, why in s.gaps)
+
+
+def test_the_last_observation_in_a_month_wins_not_the_mean():
+    """Scans are not evenly spaced. A mean would let scan FREQUENCY move the trend
+    line: an account scanned daily for one week then monthly contributes seven points
+    to one month and one to the next, and the busy month would dominate. The last
+    scan is the posture the month ended on."""
+    s = T.monthly_series([(epoch_of(2025, 1, 2), 10.0, 1.0),
+                          (epoch_of(2025, 1, 9), 20.0, 1.0),
+                          (epoch_of(2025, 1, 28), 90.0, 1.0)], metric="posture")
+    assert [p.value for p in s.periods] == [90.0]
+
+
+def test_observations_arriving_out_of_order_still_resolve_to_the_latest():
+    s = T.monthly_series([(epoch_of(2025, 1, 28), 90.0, 1.0),
+                          (epoch_of(2025, 1, 2), 10.0, 1.0)], metric="posture")
+    assert [p.value for p in s.periods] == [90.0]
+
+
+def test_a_low_coverage_month_is_excluded_by_the_adapter_too():
+    """The D3 rule surviving the trip through the adapter. Six months of scans, one
+    of which reached 40% of the estate: five usable, so the forecast is demoted from
+    production-grade to indicative rather than resting on a hole."""
+    obs = [(epoch_of(2025, m), 90.0 - 2 * m, 0.4 if m == 4 else 1.0)
+           for m in range(1, 7)]
+    s = T.monthly_series(obs, metric="posture")
+    assert len(s.usable) == 5
+    assert s.sufficiency == T.INDICATIVE
+    assert not T.project(s).kra_eligible
+
+
+def test_a_caller_can_give_its_own_reason_for_an_absent_value():
+    """A scan that ran but whose coverage was never recorded is not a month in which
+    nothing happened, and labelling it NO_SCAN_REASON would be a false statement
+    about a scan that plainly produced a score. The caller who knows the difference
+    supplies the sentence."""
+    mine = "coverage was never recorded for this scan"
+    s = T.monthly_series([(epoch_of(2025, 1), None, 0.0, mine)], metric="posture")
+    assert s.gaps and s.gaps[0][1] == mine
+
+
+def test_an_absent_value_with_no_reason_still_gets_one():
+    """Period's own contract refuses an unexplained gap; the adapter must not be the
+    thing that violates it."""
+    s = T.monthly_series([(epoch_of(2025, 1), None, 0.0)], metric="posture")
+    assert s.gaps and s.gaps[0][1] == T.NO_SCAN_REASON
+
+
+def test_no_observations_is_an_empty_series_not_an_error():
+    s = T.monthly_series([], metric="posture")
+    assert s.periods == () and s.sufficiency == T.INSUFFICIENT
+    assert T.project(s).value is None
+    assert T.monthly_series(None, metric="posture").periods == ()
+
+
+def test_a_december_boundary_rolls_the_year():
+    s = T.monthly_series([(epoch_of(2024, 11), 1.0, 1.0),
+                          (epoch_of(2025, 2), 4.0, 1.0)], metric="posture")
+    assert len(s.periods) == 4, "Nov, Dec, Jan, Feb"
+    assert len(s.gaps) == 2

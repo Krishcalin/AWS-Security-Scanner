@@ -39,6 +39,7 @@ from hub import aws_registry_connectors
 from engine import aws_license
 from engine import aws_sbom_diff
 from engine import aws_sidescan
+from engine import aws_trend
 from store import aws_state
 from engine import aws_vex
 from hub import cnapp_connectors as cc
@@ -257,6 +258,8 @@ class PlatformService:
                  registry_connectors: Optional[List[dict]] = None,
                  registry_request: Optional[Callable] = None,
                  registry_blob_get: Optional[Callable] = None,
+                 marketplace_product_code: str = "",
+                 marketplace_client: Optional[Callable] = None,
                  clock: Callable[[], int] = None):
         import time
         # Optional grounded-copilot LLM seam (system, question, context) -> str. None (default)
@@ -289,6 +292,18 @@ class PlatformService:
         self.state = state                      # an aws_state.StateStore (or None) — lifecycle/drift/trend
         self.workspaces = workspaces            # a cnapp_workspace.WorkspaceStore (or None -> single-tenant)
         self.metering = metering                # a cnapp_metering.MeteringStore (or None -> no metering)
+        # ── AWS Marketplace metering (OPT-IN, off by default) ─────────────────
+        # BOTH must be set before a single byte leaves for AWS Marketplace, and both
+        # default to off, because the deployments this product is built for are the
+        # ones where unexpected egress is disqualifying: an air-gapped install bills
+        # on a contract or private-offer SKU and must never call MeterUsage at all
+        # (NETWORK.md records this seam as unused for exactly that reason). A
+        # METERED listing sets the product code and injects a client; everything
+        # else keeps the emitter dormant. `marketplace_client` is a FACTORY rather
+        # than a client so constructing the service imports no boto3 and opens no
+        # connection — the same seam discipline as session_factory.
+        self.marketplace_product_code = marketplace_product_code or ""
+        self.marketplace_client = marketplace_client
         # ── external-vuln ingest plane (Phase-2 capstone) ─────────────────────
         # The SAME {records/osv, epss, kev, exploits} bundle the native side-scan
         # uses, so an ingested CVE gets byte-identical KEV/EPSS. Fail-open: None →
@@ -549,6 +564,78 @@ class PlatformService:
     # ── lifecycle / drift readers (fail-open when no state store) ────────────────
     def get_trend(self, account_id: str) -> List[dict]:
         return self.state.trend(account_id) if self.state is not None else []
+
+    def get_forecast(self, account_id: str, *, horizon_days: int = 30) -> dict:
+        """Project the posture score forward, or refuse to.
+
+        The forecast half of FR-4. `get_trend` reports what was measured, which is a
+        fact; this reports where it is heading, which is a claim — so it goes through
+        `aws_trend`, whose whole discipline is that a claim below three usable
+        MONTHS produces no number at all rather than a labelled one. A caveat
+        travels separately from a value and only the value survives into the slide.
+
+        THE COVERAGE DENOMINATOR IS A JUDGEMENT, and it is made here rather than in
+        the pure module because it is the arguable part. A period is usable only if
+        its scan coverage cleared the floor, and coverage needs a denominator that
+        the store does not hold. Three candidates:
+
+        * the registered catalogue (532 today) — WRONG, and quietly so. No account
+          runs every check; an estate with no Neptune, no Timestream and no
+          MemoryDB legitimately executes far fewer, so every period would sit under
+          the floor and the forecast would refuse forever for a reason that has
+          nothing to do with data quality.
+        * a per-account expected set — right in principle, and the store does not
+          have one; inferring it is the same problem again.
+        * the account's own HIGH-WATER MARK, used here: the most checks this account
+          has ever executed in one scan. Self-calibrating, needs nothing new, and it
+          measures the thing that actually matters — this scan against this
+          estate's normal.
+
+        Its limitation, stated because it is real: if EVERY scan for an account was
+        degraded, the high-water mark is degraded too and coverage reads 1.0. It
+        catches the scan that went wrong, not the estate that was never reachable.
+        `aws_perm_ledger`'s coverage manifest is the artefact for the latter, and it
+        is per-scan rather than historical.
+        """
+        if self.state is None:
+            return {}
+        rows = self.state.trend(account_id)
+        counts = self.state.coverage_counts(account_id)
+        best = max(counts.values()) if counts else 0
+
+        observations = []
+        for r in rows:
+            n = counts.get(r.get("scan_id"), 0)
+            if n:
+                observations.append((int(r.get("ts_epoch") or 0),
+                                     float(r.get("posture_score") or 0.0),
+                                     float(n) / best))
+            else:
+                # A scan with no coverage rows is not a scan that inspected nothing
+                # — it is one whose coverage was never recorded, which is a
+                # different sentence and the honest one to write. It cannot count
+                # toward sufficiency, because there is no evidence it was clean;
+                # but claiming it "measured nothing" would be a false statement
+                # about a scan that plainly produced a score.
+                observations.append((
+                    int(r.get("ts_epoch") or 0), None, 0.0,
+                    "this scan recorded no coverage rows, so what it inspected is "
+                    "unknown — excluded because unverifiable, not because it failed"))
+
+        series = aws_trend.monthly_series(
+            observations, metric="posture score", unit="points")
+        projection = aws_trend.project(series, horizon_days=horizon_days)
+        out = projection.to_dict()
+        out["series"] = {
+            "describe": series.describe(),
+            "periods": len(series.periods),
+            "usable": len(series.usable),
+            "gaps": [{"start_epoch": s, "reason": why} for s, why in series.gaps],
+            "coverage_basis": (
+                "%d checks — the most this account has executed in one scan" % best
+                if best else "no coverage recorded for this account"),
+        }
+        return out
 
     def get_mttr(self, account_id: str) -> dict:
         if self.state is None:

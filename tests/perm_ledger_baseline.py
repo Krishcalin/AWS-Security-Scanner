@@ -126,6 +126,7 @@ BASELINE = {
             "iam:GetPolicyVersion",
             "iam:GetRole",
             "iam:GetRolePolicy",
+            "iam:ListAccessKeys",
             "iam:ListAttachedRolePolicies",
             "iam:ListInstanceProfilesForRole",
             "iam:ListRolePolicies",
@@ -252,6 +253,7 @@ BASELINE = {
             "CB-01",
             "CB-02",
             "CGP-01",
+            "CREDEXP-01",
             "DIRSVC-01",
             "DIRSVC-02",
             "DOCDB-01",
@@ -404,7 +406,7 @@ BASELINE = {
             "XFER-03",
             "XRAY-01",
         ],
-        "annotated_policy_rows": 178,
+        "annotated_policy_rows": 179,
     },
     "shipped_role": {
         "missing_actions": [

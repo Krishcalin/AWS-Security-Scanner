@@ -53,25 +53,28 @@ ENTRY_POINTS = {
                     "for its session factory",
 }
 
-#: The debt. Each of these is real, tested, documented code that nothing calls.
-#: Recorded rather than deleted because three encode ratified review-defect fixes
-#: (D5, D6) whose removal is a product decision, not an engineering one — see
-#: docs/DECISIONS.md. What is NOT acceptable is presenting them as delivered
-#: capability; CLAUDE.md marks each as library-only for that reason.
-UNREACHED = {
-    "aws_guardrail":
-        "FR-5 / defect D5 (a gate that is down does what its strictest configured "
-        "mode would have done). No CI entry point and no ExposureGate producer.",
-    "aws_trend":
-        "FR-4 / defect D6 (a forecast refuses rather than labels below three usable "
-        "periods). The console's trend comes from aws_scorecard.Trend, a simple "
-        "prior-vs-current comparison; this is the II-C version and nothing routes to it.",
-    "aws_ingest_credexp":
-        "credential-exposure ingest. No CLI flag, no API route, no console surface.",
-    "cnapp_marketplace_metering":
-        "marketplace usage metering. deploy/marketplace/ documents it as OPT-IN "
-        "optional code; no hub billing path calls it.",
-}
+#: The debt, and it is EMPTY. It held four modules — real, tested, documented code
+#: that nothing called — and all four are now wired:
+#:
+#:   * ``aws_trend``  -> ``cnapp_service.get_forecast`` + ``GET /accounts/{id}/forecast``.
+#:     Its recorded blocker ("needs trend materialisation") was already stale:
+#:     ``StateStore.trend`` had the series and ``scan_coverage`` had the coverage
+#:     denominator. What was missing was the adapter from scans to calendar months.
+#:   * ``aws_guardrail`` -> the IaC gate in ``aws_offline_scanner.main``, which had
+#:     D5's own defect in it: ``except PolicyError: continue`` dropped an unparseable
+#:     policy and exited 0.
+#:   * ``cnapp_marketplace_metering`` -> ``cnapp_worker.meter_marketplace_usage``,
+#:     the hourly process its docstring was written for. Three gates, all off by
+#:     default.
+#:   * ``aws_ingest_credexp`` -> ``CREDEXP-00..03`` in the IAM section, with
+#:     ``iam:ListAccessKeys`` collected so the key join it names as its
+#:     highest-value gap can actually happen.
+#:
+#: KEEP IT EMPTY. An entry here is a module that passes CI, appears in CLAUDE.md as a
+#: delivered bullet, and is counted by a reader as working software while being
+#: unreachable. The list existing at all was a concession; that it is empty is the
+#: state to defend. Adding to it is not progress — wiring or deleting is.
+UNREACHED = {}
 
 
 def _modules() -> dict:

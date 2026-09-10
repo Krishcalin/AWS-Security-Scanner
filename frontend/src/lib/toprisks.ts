@@ -60,8 +60,13 @@ export const RISK_CATEGORIES: RiskCategory[] = [
     // NHI- is here rather than in its own card: a non-human identity is an identity,
     // and splitting the pillar out would let a reader review "identity" and miss the
     // machine half -- which is the half that outnumbers the other and goes unrotated.
+    // CREDEXP- belongs here for the same reason NHI- does: a leaked credential
+    // joined to an IAM principal or a live access key is an identity finding, and
+    // the action it calls for is rotation. Filing it under a "threat intel" card
+    // would put it next to detections about attackers rather than next to the
+    // accounts it names.
     prefixes: ['IAM-', 'IAMPE-', 'IDENTITY-', 'CIEM-', 'SSO-', 'COG-', 'DIRSVC-',
-      'MPA-', 'VP-', 'NHI-'],
+      'MPA-', 'VP-', 'NHI-', 'CREDEXP-'],
     seeAll: '/identity',
   },
   {

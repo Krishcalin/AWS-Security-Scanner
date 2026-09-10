@@ -292,3 +292,208 @@ def test_normalize_many_skips_the_unusable_and_keeps_the_rest():
 def test_correlate_survives_empty_inputs():
     assert ce.correlate(None, None) == []
     assert ce.coverage(None)["total_exposures"] == 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# The wiring — CREDEXP-00..03 in the IAM section
+# ══════════════════════════════════════════════════════════════════════════════
+# This module was library-only: real, tested, documented code with no CLI flag, no
+# API route and no console surface, so none of the above could reach a report. Two
+# things were needed and they were one decision, as docs/PRODUCTION.md said: an
+# ingest surface, and `iam:ListAccessKeys` — without a live key inventory the key
+# join is impossible, and it is the highest-value join the corpus offers.
+import json                                                            # noqa: E402
+from unittest.mock import MagicMock                                    # noqa: E402
+
+PLAINTEXT = "Sup3rSecret!Passw0rd"
+LIVE_KEY = "AKIAIOSFODNN7EXAMPLE"
+DEAD_KEY = "AKIAI44QH8DHBEXAMPLE"
+
+
+def _emit(tmp_path, corpus, *, keys_readable=True, salt="pepper",
+          domains="acme.example", principals=None):
+    """Run the real IAM-section emitter over a corpus loaded the way the CLI loads it."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from test_live_scanner import make_scanner                         # noqa: WPS433
+    from engine import aws_live_scanner as als                         # noqa: WPS433
+
+    s = make_scanner(sections=["IAM"])
+    s.account = "123456789012"
+    s._iam_principals = principals if principals is not None else [
+        {"type": "user", "name": "deploy-bot", "arn": "arn:aws:iam::1:user/deploy-bot",
+         "tags": {}, "statements": [], "allow": set(), "deny": set()},
+        {"type": "user", "name": "alice", "arn": "arn:aws:iam::1:user/alice",
+         "tags": {"email": "dev@acme.example"}, "statements": [],
+         "allow": set(), "deny": set()},
+    ]
+
+    iam = MagicMock()
+    if keys_readable:
+        def _pager(op):
+            p = MagicMock()
+            p.paginate.side_effect = lambda **kw: [
+                {"AccessKeyMetadata": [{"AccessKeyId": LIVE_KEY, "Status": "Active"}]}
+                if kw.get("UserName") == "deploy-bot" else {"AccessKeyMetadata": []}]
+            return p
+        iam.get_paginator.side_effect = _pager
+    else:
+        iam.get_paginator.side_effect = RuntimeError("AccessDenied")
+    s._clients["iam:us-east-1"] = iam
+
+    f = tmp_path / "corpus.json"
+    f.write_text(json.dumps(corpus), encoding="utf-8")
+    s._cred_exposures = als._load_cred_exposures(str(f), salt=salt, domains=domains)
+    s._emit_credential_exposures()
+    return s
+
+
+def _fails(s):
+    return {r.check_id for r in s.results if r.status == "FAIL"}
+
+
+def _info(s):
+    return [r for r in s.results if r.check_id == "CREDEXP-00"][0].message
+
+
+def test_a_live_leaked_key_is_the_strongest_join(tmp_path):
+    """An AWS access key id is globally unique and structurally recognisable, so
+    unlike an email it cannot belong to somebody else by coincidence. CRITICAL for
+    that reason and not because the words are alarming."""
+    s = _emit(tmp_path, [{"email": "x@acme.example", "password": PLAINTEXT,
+                          "access_key_id": LIVE_KEY, "source": "RedLine log"}])
+    assert "CREDEXP-01" in _fails(s)
+    hit = [r for r in s.results if r.check_id == "CREDEXP-01"][0]
+    assert LIVE_KEY in hit.resource
+    assert "does NOT establish" in hit.message, (
+        "the message must not let a corpus hit read as a proven compromise")
+
+
+def test_a_leaked_key_that_is_not_live_here_does_not_fire(tmp_path):
+    """The join is exact. A key id from another account's breach is not this
+    account's problem, and reporting it would be the fuzzy attribution this module
+    refuses everywhere else."""
+    s = _emit(tmp_path, [{"username": "nobody", "access_key_id": DEAD_KEY,
+                          "source": "y"}], domains="")
+    assert "CREDEXP-01" not in _fails(s)
+
+
+def test_an_exact_identifier_match_fires_credexp_02(tmp_path):
+    s = _emit(tmp_path, [{"username": "deploy-bot", "password": PLAINTEXT,
+                          "breach": "SomeForum 2021"}])
+    assert "CREDEXP-02" in _fails(s)
+
+
+def test_an_email_tag_on_an_iam_user_is_matched(tmp_path):
+    """IAM users have no email field, so the only place one exists is a tag — and
+    tags arrive on the GetAccountAuthorizationDetails page already read, so matching
+    on them costs no call and no grant."""
+    s = _emit(tmp_path, [{"email": "dev@acme.example", "password": PLAINTEXT,
+                          "source": "z"}], keys_readable=False)
+    hit = [r for r in s.results if r.check_id == "CREDEXP-02"]
+    assert hit and hit[0].resource == "alice"
+
+
+def test_a_domain_only_match_is_medium_and_says_it_is_about_the_org(tmp_path):
+    s = _emit(tmp_path, [{"email": "cfo@acme.example", "password": PLAINTEXT,
+                          "source": "combolist"}])
+    assert "CREDEXP-03" in _fails(s)
+    msg = [r for r in s.results if r.check_id == "CREDEXP-03"][0].message
+    assert "about the" in msg and "organisation" in msg
+
+
+def test_a_foreign_exposure_produces_nothing(tmp_path):
+    s = _emit(tmp_path, [{"email": "someone@other.example", "password": PLAINTEXT}])
+    assert not _fails(s), "somebody else's breach was attributed to this estate"
+
+
+# ── the negative property, which is the one that matters ────────────────────
+def test_no_credential_material_reaches_a_finding(tmp_path):
+    """The reason `normalize` builds from an allowlist instead of deleting known-bad
+    fields: a field this module has never heard of cannot survive by being
+    unrecognised. This asserts the whole path, not just the normaliser."""
+    s = _emit(tmp_path, [
+        {"email": "dev@acme.example", "password": PLAINTEXT, "access_key_id": LIVE_KEY,
+         "source": "RedLine log", "password_plaintext_v2": PLAINTEXT,
+         "some_future_secret_field": PLAINTEXT},
+        {"username": "deploy-bot", "hash": PLAINTEXT, "breach": "b"},
+    ])
+    blob = json.dumps([{"c": r.check_id, "s": r.status, "r": r.resource,
+                        "m": r.message} for r in s.results])
+    assert PLAINTEXT not in blob
+    assert PLAINTEXT.lower() not in blob.lower()
+    # and not in the normalised records the state store would persist either
+    assert PLAINTEXT not in json.dumps(s._cred_exposures["exposures"])
+
+
+def test_credential_digests_are_salted_when_a_salt_is_given(tmp_path):
+    s = _emit(tmp_path, [{"username": "deploy-bot", "password": PLAINTEXT}])
+    exp = s._cred_exposures["exposures"]
+    assert all(e["secret_digest"].startswith("sha256:")
+               for e in exp if e["has_password"])
+    assert all(e["salted"] for e in exp if e["has_password"])
+
+
+# ── the coverage statement: an empty result must not read as "clean" ────────
+def test_without_a_key_inventory_the_gap_is_stated_not_implied(tmp_path):
+    """THE REASON iam:ListAccessKeys IS WORTH ASKING FOR, tested from the other side.
+    With no inventory the key join cannot happen, and a report that simply showed no
+    CREDEXP-01 would be read as 'no leaked keys are live here'. It means 'we could
+    not look'."""
+    s = _emit(tmp_path, [{"email": "x@acme.example", "access_key_id": LIVE_KEY,
+                          "source": "RedLine log"}], keys_readable=False)
+    assert "CREDEXP-01" not in _fails(s)
+    assert "no live key inventory was supplied" in _info(s)
+    assert "not a finding that the keys are unused" in _info(s)
+
+
+def test_without_estate_domains_the_gap_is_stated(tmp_path):
+    s = _emit(tmp_path, [{"email": "cfo@acme.example", "password": PLAINTEXT}],
+              domains="")
+    assert "CREDEXP-03" not in _fails(s)
+    assert "No estate domains were supplied" in _info(s)
+
+
+def test_an_unsalted_digest_is_declared_weaker_rather_than_accepted(tmp_path):
+    s = _emit(tmp_path, [{"username": "deploy-bot", "password": PLAINTEXT}], salt="")
+    assert "rainbow table" in _info(s)
+
+
+def test_the_provenance_note_travels_with_the_finding(tmp_path):
+    """A breach record is a third party's observation of a CORPUS. Saying so beside
+    the count is the difference between a prompt to rotate and a reported breach."""
+    s = _emit(tmp_path, [{"username": "deploy-bot", "password": PLAINTEXT}])
+    assert "OBSERVATION of a corpus" in _info(s)
+    assert "NOT an observation of this" in _info(s)
+
+
+def test_no_corpus_emits_nothing_at_all(tmp_path):
+    """Not a PASS. An operator who supplied no corpus has learned nothing about
+    credential exposure, and a green CREDEXP row would say otherwise."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from test_live_scanner import make_scanner                         # noqa: WPS433
+    s = make_scanner(sections=["IAM"])
+    s.account = "123456789012"
+    s._cred_exposures = {}
+    s._emit_credential_exposures()
+    assert not [r for r in s.results if r.check_id.startswith("CREDEXP")]
+
+
+def test_the_loader_tolerates_the_shapes_vendors_actually_export(tmp_path):
+    from engine import aws_live_scanner as als                         # noqa: WPS433
+    rec = {"email": "a@acme.example", "password": PLAINTEXT}
+    for shape in ([rec], {"records": [rec]}, {"exposures": [rec]}, {"data": [rec]}):
+        f = tmp_path / "c.json"
+        f.write_text(json.dumps(shape), encoding="utf-8")
+        out = als._load_cred_exposures(str(f), salt="s")
+        assert len(out["exposures"]) == 1, shape
+
+
+def test_the_loader_refuses_junk_without_raising(tmp_path):
+    from engine import aws_live_scanner as als                         # noqa: WPS433
+    f = tmp_path / "c.json"
+    f.write_text("not json at all", encoding="utf-8")
+    assert als._load_cred_exposures(str(f)) == {}
+    f.write_text(json.dumps({"records": "a string, not a list"}), encoding="utf-8")
+    assert als._load_cred_exposures(str(f)) == {}
+    assert als._load_cred_exposures(str(tmp_path / "nope.json")) == {}
+    assert als._load_cred_exposures(None) == {}

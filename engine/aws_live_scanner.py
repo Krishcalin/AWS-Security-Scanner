@@ -79,6 +79,7 @@ from engine import aws_toxicflow
 from engine import aws_toolpoison
 from engine import aws_agentmemory
 from engine import aws_ingest_aidr
+from engine import aws_ingest_credexp
 from engine import aws_ingest_pentest
 from engine import aws_aiprotect
 from engine import aws_cbom
@@ -654,6 +655,19 @@ CHECK_SEVERITY = {
     # a BLOCKED detection -- that is a control working, and scoring it would teach a
     # team to switch the detector off rather than to keep it.
     "AIDR-01": "HIGH",
+    # Credential exposure, joined to identity. The three are graded by the STRENGTH OF
+    # THE JOIN rather than by how alarming the words are, which is the only defensible
+    # way to rank an observation of somebody else's corpus.
+    # CREDEXP-01 is CRITICAL because the identifier is not a guess: the leaked access
+    # key id is live in this account right now. Nothing else in the corpus is that
+    # specific -- an AKIA is unique, unlike an email address that may belong to anyone.
+    # CREDEXP-02 is HIGH: an exact email/username match to an IAM principal, which is
+    # strong but not conclusive -- the credential in the corpus may never have been
+    # this account's.
+    # CREDEXP-03 is MEDIUM and would be wrong at anything higher: a domain match with
+    # no principal is a signal about the ORGANISATION, and the person may hold no IAM
+    # identity here at all.
+    "CREDEXP-01": "CRITICAL", "CREDEXP-02": "HIGH", "CREDEXP-03": "MEDIUM",
     # Slice 5.3 -- platform traffic encryption. Both LOW, and deliberately: neither
     # is a misconfiguration. An instance type that does not automatically encrypt
     # east-west traffic is a PLATFORM property the operator chose implicitly when they
@@ -1092,6 +1106,23 @@ COMPLIANCE_MAP = {
     "SM-27": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
     "SM-28": {"PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(1)", "SOC2": "CC6.1", "NIST": "CM-8"},
     "AIDR-01": {"PCI-DSS": "10.6.1", "HIPAA": "164.308(a)(1)(ii)(D)", "SOC2": "CC7.2", "NIST": "SI-4"},
+    # Credential exposure. IA-5 (authenticator management) is the spine for all three:
+    # a credential known outside the organisation has to be replaced, whatever the
+    # corpus does or does not prove about its current validity. CREDEXP-02 cites the
+    # password-based enhancement IA-5(1) instead, because the mechanism that turns an
+    # unrelated forum breach into a cloud incident is password REUSE specifically.
+    # AC-2 was the first choice for CREDEXP-01 -- a live access key is an account to
+    # manage and not only an authenticator -- and it is NOT in the frozen 38-control
+    # universe, which only carries the AC-2(3) "disable inactive accounts"
+    # enhancement. That enhancement is about dormancy, not compromise, so it would be
+    # a worse citation rather than a narrower one; IA-5 is the honest answer.
+    # CIS Foundations 1.14 is the access-key-rotation control CREDEXP-01 lands on.
+    "CREDEXP-01": {"CIS": "1.14", "PCI-DSS": "8.3.9", "HIPAA": "164.308(a)(5)(ii)(D)",
+                   "SOC2": "CC6.1", "NIST": "IA-5"},
+    "CREDEXP-02": {"PCI-DSS": "8.3.9", "HIPAA": "164.308(a)(5)(ii)(D)", "SOC2": "CC6.1",
+                   "NIST": "IA-5(1)"},
+    "CREDEXP-03": {"PCI-DSS": "12.10.5", "HIPAA": "164.308(a)(6)(ii)", "SOC2": "CC7.3",
+                   "NIST": "IA-5"},
     "SEGREC-01": {"PCI-DSS": "1.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
     "IOT-01": {"PCI-DSS": "7.2.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
     "IOT-02": {"PCI-DSS": "10.2.1", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
@@ -1594,6 +1625,9 @@ REMEDIATION_MAP = {
     "SM-27": "Tag the app image configuration so it can be attributed and governed: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Tags with the aws: prefix are system tags and do not satisfy the control. Never put personally identifiable or sensitive information in a tag -- tags are readable from many AWS services",
     "SM-28": "Tag the image: aws sagemaker add-tags --resource-arn <ARN> --tags Key=owner,Value=<TEAM>. Same caveats as SM-27 -- system aws: tags do not count, and tags are not a place for sensitive values",
     "AIDR-01": "Your own detector recognised this and the request reached the model anyway, so treat the detector as reporting rather than enforcing: check whether it is deployed in blocking mode, and put an AWS-side control behind it -- aws bedrock get-guardrail --guardrail-identifier <ID> --guardrail-version DRAFT to confirm a PROMPT_ATTACK filter is set to BLOCK rather than NONE (AIGRD-01), and aws bedrock-agent update-agent to attach the guardrail if the agent has none. Then bound what a successful injection reaches with AISPM-01/02",
+    "CREDEXP-01": "Rotate the key on the assumption it is compromised, then find out whether it was used. Create a replacement first so nothing breaks: aws iam create-access-key --user-name <USER>, deploy it, then aws iam update-access-key --user-name <USER> --access-key-id <LEAKED> --status Inactive and, once nothing has broken, aws iam delete-access-key --user-name <USER> --access-key-id <LEAKED>. Then read the usage rather than assuming there was none: aws cloudtrail lookup-events --lookup-attributes AttributeKey=AccessKeyId,AttributeValue=<LEAKED> --start-time <BEFORE_THE_BREACH>, and aws iam get-access-key-last-used --access-key-id <LEAKED> for the last call it made. If this user needs no programmatic access at all, the durable fix is deleting the key and moving the workload to a role",
+    "CREDEXP-02": "Treat the principal's credentials as needing replacement, not the account as breached. Rotate the console password (aws iam update-login-profile --user-name <USER> --password <NEW> --password-reset-required) and any access keys the user holds (aws iam list-access-keys --user-name <USER>, then rotate as in CREDEXP-01). Confirm MFA is enrolled, since a reused password is only decisive without it: aws iam list-mfa-devices --user-name <USER>. The durable fix is removing the long-lived human credential entirely -- federate through IAM Identity Center so there is no password in a corpus to match next time",
+    "CREDEXP-03": "Nothing to rotate in AWS: this matched an estate domain and no IAM principal, so the exposed account is probably a third-party service rather than this one. Confirm that -- aws iam list-users --query 'Users[].UserName' and check whether the address belongs to anyone who holds an identity here under another name. Then treat it as the identity-team signal it is: force a password reset in your IdP for that person, and check whether the leaked password was reused for anything that does reach AWS. If your IdP is the front door to this account, an exposure there is one step from it",
     "IOT-01": "Replace the wildcard IoT policy with one scoped to the topics each device actually needs. Inspect it first: aws iot get-policy --policy-name <POLICY>. Then publish a scoped version and make it the default: aws iot create-policy-version --policy-name <POLICY> --policy-document file://scoped.json --set-as-default. IoT policies attach to certificates, so this is every device carrying one -- stage the change and watch for connection failures before deleting the old version",
     "IOT-02": "Turn IoT logging back on so device activity leaves a record: aws iot set-v2-logging-options --role-arn <ROLE_ARN> --default-log-level WARN --no-disable-all-logs. Use INFO or DEBUG only for targeted investigation; WARN is the sustainable default",
     "IOT-03": "Disable auto-registration on the CA so a certificate it signs cannot join the fleet unreviewed: aws iot update-ca-certificate --certificate-id <CA_ID> --new-auto-registration-status DISABLE. If devices genuinely need to self-register, pair it with a registration config and a provisioning template rather than leaving the gate open",
@@ -2654,6 +2688,10 @@ class AWSLiveScanner:
         self._cred_report_ok: bool = False
         self._all_regions:  Optional[List[str]]  = None
         self._iam_principals: Optional[List[Dict]] = None
+        # Live access key ids, lazily collected by `_access_key_ids`. None means NOT
+        # COLLECTED (denied, or never asked for) as opposed to an empty list, which
+        # means this account genuinely has none — see that method.
+        self._access_keys: Optional[List[str]] = None
         self._managed_policy_cache: Dict[str, tuple] = {}
         # ── Phase 5: effective-permissions ceiling refinement ────────────────
         self._scp_context: Optional[List] = None    # ordered SCP levels root->acct
@@ -2786,6 +2824,9 @@ class AWSLiveScanner:
         # Slice 4.7 -- the operator's own AI runtime detections, vendor
         # neutral. OverWatch produces none of these itself.
         self._ai_detections = {}
+        # An operator-supplied breach corpus, normalised by aws_ingest_credexp before
+        # it reaches here. Empty = the flag was not given, and CREDEXP emits nothing.
+        self._cred_exposures = {}
         # Slice 3.3: one entry per gateway, compared against the state DB AFTER the
         # scan. The scan path stays stateless -- a DB is a --state opt-in, and a check
         # that needs one to run at all would make the config half hostage to it.
@@ -3168,6 +3209,106 @@ class AWSLiveScanner:
             except Exception as e:
                 self._add("WARN", "IAM-10", "IAM", rgn,
                           f"Could not check Access Analyzer in {rgn}: {e}")
+
+        self._emit_credential_exposures()
+
+    def _emit_credential_exposures(self):
+        """CREDEXP-00..03 — leaked credentials the operator supplied, joined to identity.
+
+        Reported in the IAM section rather than a section of its own, because that is
+        what these findings are ABOUT: an IAM user whose credential is in a breach
+        corpus, and an access key id that is both leaked and live. IAM is also
+        already a GLOBAL section, so the join happens once per scan rather than once
+        per region.
+
+        A HIT IS AN OBSERVATION OF A CORPUS, NEVER A COMPROMISE. Somebody genuinely
+        saw this data in a compilation; that does not establish that the credential
+        still works, that it was ever used against this account, or that this account
+        was breached. The wording of every message below is deliberate about that
+        distinction, because "leaked credential found" is exactly the phrase that
+        gets read as "we were hacked" — and the corpus cannot support it.
+
+        NO CREDENTIAL MATERIAL ENTERS THE PRODUCT. `aws_ingest_credexp.normalize`
+        builds each record from an allowlist and stores a salted digest, so the
+        plaintext never reaches a finding, a report or the state store.
+        """
+        parsed = self._cred_exposures
+        if not parsed or not parsed.get("exposures"):
+            return
+
+        exposures = parsed["exposures"]
+        domains = parsed.get("estate_domains") or ()
+        keys = self._access_key_ids()
+
+        principals = []
+        for p in self._get_iam_principals():
+            # An `email` tag is the only place an IAM user carries one, and the tags
+            # arrive on the GetAccountAuthorizationDetails page already read, so
+            # matching on it costs no call and no grant.
+            tags = p.get("tags") or {}
+            principals.append({
+                "name": p.get("name") or "",
+                "email": tags.get("email") or tags.get("Email") or "",
+                "type": p.get("type") or "",
+                "arn": p.get("arn") or ""})
+
+        joined = aws_ingest_credexp.correlate(
+            exposures, principals, estate_domains=domains,
+            known_key_ids=keys or ())
+
+        cov = aws_ingest_credexp.coverage(
+            exposures, known_key_ids=keys or (), estate_domains=domains,
+            salt=parsed.get("salt") or "")
+
+        # The coverage statement is emitted whether or not anything matched, and that
+        # is the point of it: with no key inventory an empty result means "we could
+        # not look", and an operator who reads it as "nothing was exposed" has drawn
+        # the opposite conclusion from the evidence.
+        notes = "; ".join(cov.get("not_evaluated") or []) or "no gaps recorded"
+        self._add("INFO", "CREDEXP-00", "IAM", "credential-exposure",
+                  f"Ingested {cov['total_exposures']} credential exposure(s): "
+                  f"{cov['with_credential']} carry a credential digest, "
+                  f"{cov['with_access_key']} carry an AWS access key id; "
+                  f"{len(joined)} joined to this estate. "
+                  f"{cov['provenance_note']} "
+                  f"NOT EVALUATED: {notes} | credential-exposure")
+
+        if keys is None:
+            # Named as a denial rather than left as an empty join, so the coverage
+            # manifest carries it too.
+            self._coverage.note_denied("CREDEXP-01", "iam:ListAccessKeys")
+
+        for hit in joined:
+            exp = hit["exposure"]
+            src = exp.get("source") or exp.get("kind") or "an unnamed corpus"
+            who = ", ".join(sorted(
+                p.get("name") or "?" for p in hit.get("principals") or [])) or "-"
+
+            if hit.get("matched_on") == "access_key_id":
+                kid = exp.get("access_key_id")
+                self._add("FAIL", "CREDEXP-01", "IAM", kid,
+                          f"Access key {kid} is LIVE in this account and appears in "
+                          f"{src}. This is the strongest join a breach corpus "
+                          f"supports: the identifier is not a guess and the key is "
+                          f"not retired. It does NOT establish that the secret half "
+                          f"is still valid or that it was used here — rotate it and "
+                          f"read CloudTrail for its usage | {kid}")
+            elif hit.get("domain_match_only"):
+                self._add("FAIL", "CREDEXP-03", "IAM", exp.get("domain") or "estate",
+                          f"An exposure in {src} carries an address at "
+                          f"{exp.get('domain')}, one of this estate's domains, but "
+                          f"matches no IAM principal. It is a signal about the "
+                          f"organisation rather than about this account: the person "
+                          f"may hold no IAM identity, or hold one under another "
+                          f"name | {exp.get('domain')}")
+            else:
+                self._add("FAIL", "CREDEXP-02", "IAM", who,
+                          f"IAM principal '{who}' matches an exposure in {src} on "
+                          f"its {hit.get('matched_on')}. The corpus says this "
+                          f"identifier appeared with a credential; it says nothing "
+                          f"about whether that credential was ever this account's, "
+                          f"so treat it as a prompt to rotate and to check for MFA "
+                          f"rather than as evidence of a breach | {who}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 2: S3 SECURITY
@@ -14256,6 +14397,56 @@ class AWSLiveScanner:
         self._iam_principals = principals
         return principals
 
+    def _access_key_ids(self):
+        """Live access key ids for every IAM user, or ``None`` if they could not be read.
+
+        THE GRANT THIS BUYS, AND WHY IT IS WORTH ASKING FOR. A breach corpus that
+        carries an AWS access key id is the single most actionable thing in it, and
+        without a live inventory that key id cannot be matched against anything —
+        `aws_ingest_credexp.coverage()` names it as its highest-value gap in those
+        words. This is the read that closes it.
+
+        IT IS CONFIG, NOT CREDENTIAL. ``ListAccessKeys`` returns key IDs, their
+        owner, status and creation date. It does NOT return secret access keys —
+        those exist exactly once, at creation, and no API returns them afterwards.
+        So this stays inside the read-only-of-CONFIG charter, and a key id is an
+        identifier of the same kind as a role ARN.
+
+        NOT the credential report, which is what NHI-02 reads. The report carries
+        key AGE and rotation dates but no key IDs at all, so it cannot answer the
+        question this exists for.
+
+        ``None`` rather than ``[]`` on failure, and the distinction is the point: an
+        empty list means "this account has no keys", which would make a leaked key
+        look unmatched-and-therefore-fine. None means "not collected", which is what
+        `coverage()` turns into a stated gap.
+        """
+        if self._access_keys is not None:
+            return self._access_keys
+
+        iam = self._client("iam")
+        users = [p["name"] for p in self._get_iam_principals()
+                 if p.get("type") == "user" and p.get("name")]
+        keys, failed = [], False
+        for name in users:
+            try:
+                for page in iam.get_paginator("list_access_keys").paginate(UserName=name):
+                    for meta in page.get("AccessKeyMetadata", []):
+                        kid = (meta or {}).get("AccessKeyId")
+                        if kid:
+                            keys.append(str(kid))
+            except Exception:
+                # One denied user must not discard the whole inventory, but it must
+                # not be silently treated as "no keys" either: a partial inventory
+                # can only fail to match, never falsely match, so the keys collected
+                # are kept and the shortfall is recorded.
+                failed = True
+        if failed and not keys:
+            self._access_keys = None
+            return None
+        self._access_keys = keys
+        return keys
+
     def _admin_cap_id(self) -> str:
         return f"capability:admin:{self.account or 'account'}"
 
@@ -19892,6 +20083,56 @@ def _load_ai_detections(path) -> dict:
     return parsed
 
 
+def _load_cred_exposures(path, *, salt: str = "", domains: str = "") -> dict:
+    """Read an operator-supplied breach corpus and strip the credentials out of it.
+
+    NO NETWORK. OverWatch subscribes to no breach feed and names no vendor — the
+    same choice `aws_ingest_aidr` made, and for the same reason (D13). The operator
+    exports from whatever they already pay for; a list of records, or an object with
+    a ``records``/``exposures``/``data`` list.
+
+    NORMALISATION HAPPENS HERE, BEFORE ANYTHING ELSE SEES IT.
+    `aws_ingest_credexp.normalize_many` rebuilds each record from an allowlist and
+    replaces credential material with a salted digest, so the plaintext exists only
+    inside this function's locals and falls out of scope with them. A filter that
+    deleted known-bad fields instead would leak the next vendor's
+    ``password_plaintext_v2`` by virtue of not recognising it.
+    """
+    if not path:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8-sig") as fh:
+            doc = json.load(fh)
+    except OSError as exc:
+        print(f"{YELLOW}[WARN]{RESET} credential exposures not read: {exc}")
+        return {}
+    except ValueError as exc:
+        print(f"{YELLOW}[WARN]{RESET} credential exposures not parsed: {exc}")
+        return {}
+
+    if isinstance(doc, list):
+        records = doc
+    elif isinstance(doc, dict):
+        records = (doc.get("records") or doc.get("exposures")
+                   or doc.get("data") or [])
+    else:
+        records = []
+    if not isinstance(records, list):
+        print(f"{YELLOW}[WARN]{RESET} credential exposures: expected a list of "
+              f"records, got {type(records).__name__}")
+        return {}
+
+    exposures = aws_ingest_credexp.normalize_many(records, salt=salt)
+    dropped = len(records) - len(exposures)
+    estate = tuple(d.strip().lstrip("@").lower()
+                   for d in (domains or "").split(",") if d.strip())
+    print(f"{BLUE}[*]{RESET} Credential exposures: {len(exposures)} ingested"
+          + (f", {dropped} unattributable record(s) dropped" if dropped else "")
+          + (f", {len(estate)} estate domain(s)" if estate else "")
+          + ("" if salt else ", NO SALT (digests are rainbow-table reversible)"))
+    return {"exposures": exposures, "estate_domains": estate, "salt": salt}
+
+
 def _load_pentest_results(path) -> dict:
     """Read an adversarial-test result file (slice 3.5).
 
@@ -19948,6 +20189,10 @@ def _apply_phase6_config(sc, args) -> None:
     # never has to parse a CLI string.
     sc._scan_model_artifacts = bool(getattr(args, "scan_model_artifacts", False))
     sc._ai_detections = _load_ai_detections(getattr(args, "ai_detections", None))
+    sc._cred_exposures = _load_cred_exposures(
+        getattr(args, "cred_exposures", None),
+        salt=getattr(args, "cred_exposure_salt", "") or "",
+        domains=getattr(args, "estate_domains", "") or "")
     sc._ai_owners = tuple(o.strip() for o in
                           (getattr(args, "ai_owners", "") or "").split(",")
                           if o.strip())
@@ -20150,6 +20395,27 @@ examples:
              "these and is tied to no product. Verdicts only: the schema has no field "
              "for a prompt, and content fields present in the file are counted and "
              "left unread.")
+    parser.add_argument(
+        "--cred-exposures", metavar="FILE", dest="cred_exposures",
+        help="A breach / stealer-log corpus YOU already hold, joined to this "
+             "account's IAM principals and live access keys (CREDEXP-01..03). "
+             "OverWatch subscribes to no feed and names no vendor: export a list of "
+             "records from whatever you pay for. Credential material is replaced "
+             "with a salted digest before anything else sees it, and a hit is "
+             "recorded as an observation of a CORPUS -- never as a compromise of "
+             "this estate.")
+    parser.add_argument(
+        "--cred-exposure-salt", metavar="STR", dest="cred_exposure_salt", default="",
+        help="Salt for credential digests. Without one, a digest of a common "
+             "password is reversible by rainbow table, so the redaction is weaker "
+             "than it looks -- CREDEXP-00 says so in the report rather than letting "
+             "it pass silently.")
+    parser.add_argument(
+        "--estate-domains", metavar="LIST", dest="estate_domains", default="",
+        help="Comma-separated email domains belonging to this organisation. "
+             "Without them --cred-exposures can only match an exposure by an exact "
+             "email or username against a known IAM principal, so an employee "
+             "credential under any other address is invisible (CREDEXP-03).")
     parser.add_argument(
         "--scan-model-artifacts", action="store_true", dest="scan_model_artifacts",
         help="Fetch SageMaker model artifacts and statically scan their pickle opcode "
