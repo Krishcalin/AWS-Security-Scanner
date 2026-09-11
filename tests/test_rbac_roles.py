@@ -1,6 +1,6 @@
 """The four-tier RBAC, and the bug that made the old one partly imaginary.
 
-`ingest` was ranked in cnapp_api, allowed by cnapp_workspace._ROLES, and
+`ingest` was ranked in cnapp_api, allowed by cnapp_workspace.ACCEPTED_ROLES, and
 REJECTED by workspace_members' CHECK constraint — so the tier was grantable in
 code and impossible in the database. Nothing caught it because every RBAC test
 built `Principal(memberships={ws: "ingest"})` in memory and never called
@@ -73,7 +73,7 @@ def test_viewer_is_accepted_on_write_but_never_offered():
     """Rows written before the rename exist, and rewriting a live authorisation
     column is not a migration worth risking. But nothing new should be granted
     that name."""
-    assert ws.LEGACY_VIEWER in ws._ROLES
+    assert ws.LEGACY_VIEWER in ws.ACCEPTED_ROLES
     assert ws.LEGACY_VIEWER not in ws.ASSIGNABLE_ROLES
 
 
@@ -258,3 +258,113 @@ def test_every_role_has_a_description():
     that gets granted by rank."""
     for role in ws.ASSIGNABLE_ROLES:
         assert ws.ROLE_DESCRIPTIONS.get(role, "").strip()
+
+
+# ── offered ≠ grantable: the second copy of the role list ───────────────────
+#
+# GET /roles offered four roles. The store accepted five. The request model in
+# between validated against a hand-written `^(viewer|ingest|admin)$`, so
+# `auditor` and `analyst` 422'd — and the DDL test above could not see it,
+# because it reads the DDL and the rank table, never the request schema.
+#
+# Everything above proved the role list agreed with itself in three places.
+# The fourth was the one an administrator actually posts through.
+_needs_fastapi = pytest.mark.skipif(
+    not cnapp_api._HAVE_FASTAPI, reason="fastapi not installed")
+
+
+def _members_client():
+    """A real app over a real store — the 422 lived in the request model, so an
+    in-memory Principal proves nothing about it."""
+    from hub.cnapp_registry import AccountRegistry
+    from hub.cnapp_service import InMemoryResultStore, PlatformService
+
+    TestClient = pytest.importorskip("fastapi.testclient").TestClient
+    reg = AccountRegistry.open(":memory:")
+    svc = PlatformService(
+        registry=reg, results=InMemoryResultStore(), hub_role_arn="a",
+        cfn_template_url="b", secret_writer=lambda a, v: "ssm://x",
+        secret_reader=lambda r: "x", state=aws_state.StateStore(reg._be),
+        workspaces=ws.WorkspaceStore(reg._be), clock=lambda: 5000)
+    svc.create_workspace("w1", name="n")
+    admin = cnapp_api.Principal(subject="a@x", memberships={"w1": ws.ADMIN})
+    return TestClient(cnapp_api.create_app(svc, current_principal=lambda: admin))
+
+
+def _granted_role(client, principal):
+    return {m["principal"]: m["role"]
+            for m in client.get("/workspaces/w1/members").json()}.get(principal)
+
+
+@_needs_fastapi
+@pytest.mark.parametrize("role", list(ws.ASSIGNABLE_ROLES))
+def test_every_offered_role_is_actually_grantable_through_the_endpoint(role):
+    """THE DEFECT. /roles advertised it, the store accepted it, and the POST
+    refused it — so the picker listed two roles that could not be granted."""
+    c = _members_client()
+    r = c.post("/workspaces/w1/members", json={"principal": f"{role}@x", "role": role})
+    assert r.status_code == 201, (
+        f"{role} is offered by GET /roles but the members endpoint returned "
+        f"{r.status_code}: {r.text}")
+    assert _granted_role(c, f"{role}@x") == role, "granted a role other than the one asked for"
+
+
+@_needs_fastapi
+def test_the_legacy_name_is_still_accepted_by_the_endpoint():
+    """A client that reads a pre-rename member's role and writes it back must
+    not be rejected — the store still accepts it, so the API must too."""
+    c = _members_client()
+    r = c.post("/workspaces/w1/members",
+               json={"principal": "old@x", "role": ws.LEGACY_VIEWER})
+    assert r.status_code == 201, r.text
+
+
+@_needs_fastapi
+def test_an_unknown_role_is_still_refused_by_the_endpoint():
+    """Widening the pattern must not have widened it to everything."""
+    c = _members_client()
+    assert c.post("/workspaces/w1/members",
+                  json={"principal": "z@x", "role": "wizard"}).status_code == 422
+
+
+@_needs_fastapi
+def test_an_omitted_role_does_not_grant_the_deprecated_alias():
+    """The default was `viewer`: the one name GET /roles documents as the thing
+    new grants should not use. Storage does not normalise, so an unspecified
+    role wrote a legacy row that would outlive the alias."""
+    c = _members_client()
+    assert c.post("/workspaces/w1/members", json={"principal": "d@x"}).status_code == 201
+    stored = _granted_role(c, "d@x")
+    assert stored == ws.AUDITOR, f"default grant stored {stored!r}"
+    assert stored in ws.ASSIGNABLE_ROLES
+
+
+def test_the_request_pattern_is_derived_rather_than_restated():
+    """The structural guard. A fourth hand-kept copy is the only way this comes
+    back, so pin that the model builds its pattern from the store's tuple.
+
+    Reads the FIELDS, not the class text: the docstring quotes the old regex on
+    purpose, and a guard that scanned prose would fire on its own explanation.
+    """
+    import ast
+
+    source = open(module_path("cnapp_api.py"), encoding="utf-8").read()
+    cls = next(n for n in ast.walk(ast.parse(source))
+               if isinstance(n, ast.ClassDef) and n.name == "MemberReq")
+    fields = "\n".join(
+        ast.unparse(n) for n in cls.body
+        if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)))
+    assert "ACCEPTED_ROLES" in fields, (
+        "MemberReq no longer derives its role pattern from cnapp_workspace")
+    for role in ws.ACCEPTED_ROLES:
+        assert f"|{role}" not in fields and f"({role}|" not in fields, (
+            f"a role alternation naming {role!r} is written out in MemberReq again")
+
+
+def test_the_accepted_set_is_the_offered_set_plus_only_legacy_aliases():
+    """What makes deriving the pattern from ACCEPTED_ROLES safe: the extra names
+    it carries are aliases, not a wider authority."""
+    extra = set(ws.ACCEPTED_ROLES) - set(ws.ASSIGNABLE_ROLES)
+    assert extra == {ws.LEGACY_VIEWER}
+    for alias in extra:
+        assert ws.normalise_role(alias) in ws.ASSIGNABLE_ROLES

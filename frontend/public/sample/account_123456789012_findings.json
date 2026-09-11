@@ -577,12 +577,12 @@
    "SOC2": "CC6.1",
    "NIST": "SC-28"
   },
-  "remediation_cmd": "Set a customer-managed key on the knowledge base and its data sources: aws bedrock-agent update-knowledge-base --knowledge-base-id <KB_ID> --name <NAME> --role-arn <ROLE_ARN> --knowledge-base-configuration file://kb-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}'",
+  "remediation_cmd": "The key is set on the DATA SOURCE, not the knowledge base -- update-knowledge-base has no --server-side-encryption-configuration. For each source: aws bedrock-agent update-data-source --knowledge-base-id <KB_ID> --data-source-id <DS_ID> --name <NAME> --data-source-configuration file://ds-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}', then encrypt the vector store and the S3 bucket behind it with the same key",
   "risk": "A Bedrock knowledge base or one of its data sources is not encrypted with a customer-managed key. The knowledge base IS the retrieval corpus: whatever it contains can be surfaced verbatim in a model response, which makes it the highest-value target in a RAG deployment. Its vector store and ingested documents hold the source content, and under an AWS-managed key you cannot scope, audit or revoke access to them.",
   "impact": "The retrieval corpus \u2014 the material a model will quote back on request \u2014 is protected by a key you cannot control, and its exposure is invisible to your own key auditing.",
   "steps": [
    "Create a CMK for the RAG corpus: aws kms create-key --description 'Bedrock knowledge bases'",
-   "Set it on the knowledge base: aws bedrock-agent update-knowledge-base --knowledge-base-id <KB_ID> --name <NAME> --role-arn <ROLE_ARN> --knowledge-base-configuration file://kb-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}'",
+   "Set it on each DATA SOURCE, which is where the key lives -- not on the knowledge base: aws bedrock-agent update-data-source --knowledge-base-id <KB_ID> --data-source-id <DS_ID> --name <NAME> --data-source-configuration file://ds-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}'",
    "Apply encryption to each data source as well \u2014 an encrypted knowledge base fed by an unencrypted source still leaves the source readable.",
    "Encrypt the underlying vector store (OpenSearch Serverless collection, Aurora cluster or S3 vector bucket) with the same key.",
    "Confirm the S3 bucket holding the ingested documents uses the same CMK, so the whole retrieval chain shares one control."
@@ -660,12 +660,12 @@
    "SOC2": "CC6.6",
    "NIST": "SC-7"
   },
-  "remediation_cmd": "Isolate the AI resource on a private VPC subnet and disable direct internet egress: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --subnet-id <SUBNET> ; for a Studio domain: aws sagemaker update-domain --domain-id <DOMAIN_ID> --app-network-access-type VpcOnly",
+  "remediation_cmd": "Isolate the AI resource on a private VPC subnet and disable direct internet egress. For a notebook instance this is a replacement, not an update -- SubnetId and DirectInternetAccess are both fixed at creation: back up the volume, then aws sagemaker create-notebook-instance --notebook-instance-name <NB>-vpc --instance-type <TYPE> --role-arn <ROLE_ARN> --subnet-id <PRIVATE_SUBNET> --security-group-ids <SG> --direct-internet-access Disabled and delete the old one. A Studio domain CAN be changed in place: aws sagemaker update-domain --domain-id <DOMAIN_ID> --app-network-access-type VpcOnly",
   "risk": "The AI resource has no network isolation: a SageMaker notebook with DirectInternetAccess enabled or not attached to a VPC subnet, or a Studio domain whose AppNetworkAccessType is PublicInternetOnly. Traffic to and from the model bypasses your VPC egress controls, so a compromised notebook/kernel or a prompt-injected agent can reach arbitrary internet destinations to exfiltrate data or pull second-stage tooling, and the resource is not protected behind your network perimeter, security groups, or egress inspection.",
   "impact": "Direct internet egress from the AI resource creates a data-exfiltration and command-and-control channel that bypasses VPC egress controls and network monitoring.",
   "steps": [
    "Confirm the exposure: aws sagemaker describe-notebook-instance --notebook-instance-name <NB> --query '[DirectInternetAccess,SubnetId]' or aws sagemaker describe-domain --domain-id <DOMAIN_ID> --query AppNetworkAccessType",
-   "Attach the resource to a private VPC subnet with no direct internet route: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --subnet-id <PRIVATE_SUBNET> --direct-internet-access Disabled",
+   "Attach the resource to a private VPC subnet with no direct internet route. On a notebook instance this means REPLACING it -- SubnetId and DirectInternetAccess are both fixed at creation: back up the volume, then aws sagemaker create-notebook-instance --notebook-instance-name <NB>-vpc --instance-type <TYPE> --role-arn <ROLE_ARN> --subnet-id <PRIVATE_SUBNET> --security-group-ids <SG> --direct-internet-access Disabled",
    "For a Studio domain, restrict egress to the VPC: aws sagemaker update-domain --domain-id <DOMAIN_ID> --app-network-access-type VpcOnly (deploy interface VPC endpoints for SageMaker/S3/STS first, or apps lose connectivity).",
    "Provide required outbound access through NAT with egress filtering or VPC endpoints rather than direct internet.",
    "Verify: aws sagemaker describe-notebook-instance --notebook-instance-name <NB> --query DirectInternetAccess returns Disabled and a private SubnetId is set.",

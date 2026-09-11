@@ -43,6 +43,7 @@ from engine import aws_trend
 from store import aws_state
 from engine import aws_vex
 from hub import cnapp_connectors as cc
+from hub import cnapp_workspace
 from hub import cnapp_onboarding
 from hub import cnapp_validate
 from hub.cnapp_validate import ConnectionHealth
@@ -2091,8 +2092,8 @@ class PlatformService:
     def list_members(self, workspace_id: str) -> List[dict]:
         return [] if self.workspaces is None else self.workspaces.list_members(workspace_id)
 
-    def add_member(self, workspace_id: str, principal: str, *, role: str = "viewer",
-                   added_by: str = "") -> dict:
+    def add_member(self, workspace_id: str, principal: str, *,
+                   role: str = cnapp_workspace.AUDITOR, added_by: str = "") -> dict:
         return self._require_workspaces().add_member(
             workspace_id, principal, role=role, added_by=added_by, now_epoch=self.clock())
 

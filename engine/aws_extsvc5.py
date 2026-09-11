@@ -459,10 +459,13 @@ CHECKS = _cd.register(
               "an account reaches that state by not choosing"),
        ),
        remediation=(
+           # The CLI command word is the service name, `iot-managed-integrations`;
+           # `iotmanagedintegrations` is the SIGNING name, correct in the IAM
+           # action above and wrong here. The two differ for this service.
            "Move IoT Managed Integrations to a customer-managed key: aws "
-           "iotmanagedintegrations put-default-encryption-configuration "
+           "iot-managed-integrations put-default-encryption-configuration "
            "--encryption-type CUSTOMER_KEY_ENCRYPTION --kms-key-arn <KEY_ARN>. Verify "
-           "with aws iotmanagedintegrations get-default-encryption-configuration"),
+           "with aws iot-managed-integrations get-default-encryption-configuration"),
        risk=(
            "IoT Managed Integrations is using MANAGED_INTEGRATIONS_DEFAULT_ENCRYPTION "
            "rather than a customer-managed key. This is the value the service ships "
@@ -480,9 +483,9 @@ CHECKS = _cd.register(
        steps=(
            "Create or choose a CMK whose key policy names the roles that operate the "
            "integration.",
-           "Apply it: aws iotmanagedintegrations put-default-encryption-configuration "
+           "Apply it: aws iot-managed-integrations put-default-encryption-configuration "
            "--encryption-type CUSTOMER_KEY_ENCRYPTION --kms-key-arn <KEY_ARN>",
-           "Confirm: aws iotmanagedintegrations get-default-encryption-configuration",
+           "Confirm: aws iot-managed-integrations get-default-encryption-configuration",
            "Review which third-party clouds are connected while you are here -- each is "
            "an outward path, and the list tends to grow without review.")),
 

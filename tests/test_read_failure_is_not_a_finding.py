@@ -274,13 +274,97 @@ def test_no_check_above_low_can_only_fail_when_the_read_fails():
         "can render." % offenders)
 
 
-#: `_add("FAIL", ..., str(e))` — an exception's text presented as a security finding.
-#: Each produced, on a denied or throttled read, a FAIL carrying that check's
+#: `_add("FAIL", ..., <the exception's text>)` — an exception presented as a security
+#: finding. Each produced, on a denied or throttled read, a FAIL carrying that check's
 #: remediation: advice for a problem nobody observed. There were 32 — ten whose ONLY
 #: FAIL had this shape (fixed first, see `_read_failed`) and 22 more that also had real
-#: FAIL paths, five of them CRITICAL. All 32 are converted, so the floor is now zero and
-#: this ratchet is at its end state: the shape must never reappear.
+#: FAIL paths, five of them CRITICAL.
+#:
+#: THE CEILING SAID ZERO AND FOUR MORE WERE LIVE. The detector below used to match one
+#: AST shape, `str(e)` — an ast.Call to `str` with a single Name argument. An f-string
+#: interpolating the same exception is an ast.JoinedStr, a different node, and was
+#: invisible to it. Three checks sat in that blind spot behind a ratchet whose comment
+#: said the shape "must never reappear": IAM-01 (CRITICAL, and the most prominent check
+#: in the product — a denied iam:GetAccountSummary reported root MFA as off) and S3-01
+#: twice (HIGH). Both shapes are counted now.
+#:
+#: The rule is also SCOPED to the enclosing handler's own bound name. A first cut
+#: matched any name that looked like an exception and flagged ECS-04, where `e` is the
+#: loop variable of `for e in env` — an environment variable whose name is the whole
+#: finding. Converting that would have deleted a real check.
 MAX_EXCEPTION_TEXT_AS_A_FAILURE = 0
+
+#: The section runner's crash net, not a read handler. `_add("FAIL", section, ...)` in
+#: AWSLiveScanner.run reports that a whole section raised — its "check id" is a SECTION
+#: NAME, it carries no catalogue entry, and it is the only way a crashed section becomes
+#: visible at all. Silencing it would hide the scanner's own failures, which is a worse
+#: defect than the one this ratchet exists to prevent.
+CRASH_NET_IS_NOT_A_READ_FAILURE = {"run"}
+
+
+def _exception_text_failures():
+    """Every FAIL whose message reports the exception bound by the except handler it
+    sits inside, in either shape. Returns (path, lineno, check_id) triples."""
+    hits = []
+    for path in sorted(glob.glob(os.path.join(ROOT, "engine", "*.py"))):
+        tree = ast.parse(io.open(path, encoding="utf-8").read())
+        enclosing = {}
+        for fn in ast.walk(tree):
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for sub in ast.walk(fn):
+                    enclosing[id(sub)] = fn.name
+        for handler in (n for n in ast.walk(tree)
+                        if isinstance(n, ast.ExceptHandler) and n.name):
+            bound = handler.name
+            for n in ast.walk(handler):
+                if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                        and n.func.attr == "_add" and len(n.args) >= 5):
+                    continue
+                if not (isinstance(n.args[0], ast.Constant)
+                        and n.args[0].value == "FAIL"):
+                    continue
+                if enclosing.get(id(n)) in CRASH_NET_IS_NOT_A_READ_FAILURE:
+                    continue
+                msg = n.args[4]
+                reports = False
+                if (isinstance(msg, ast.Call) and isinstance(msg.func, ast.Name)
+                        and msg.func.id == "str" and len(msg.args) == 1
+                        and isinstance(msg.args[0], ast.Name)
+                        and msg.args[0].id == bound):
+                    reports = True
+                elif isinstance(msg, ast.JoinedStr):
+                    for part in msg.values:
+                        if not isinstance(part, ast.FormattedValue):
+                            continue
+                        if any(isinstance(s, ast.Name) and s.id == bound
+                               for s in ast.walk(part.value)):
+                            reports = True
+                            break
+                if reports:
+                    cid = (n.args[1].value if isinstance(n.args[1], ast.Constant)
+                           else "<dynamic>")
+                    hits.append((os.path.basename(path), n.lineno, cid))
+    return hits
+
+
+def test_an_exception_is_never_reported_as_a_failure_in_either_shape():
+    """The widened ratchet. `str(e)` and f"...{e}..." are the same defect wearing two
+    AST nodes, and counting only the first is how four live instances sat behind a
+    ceiling of zero."""
+    hits = _exception_text_failures()
+    assert len(hits) <= MAX_EXCEPTION_TEXT_AS_A_FAILURE, (
+        "%d FAIL finding(s) report an exception's text as the finding, ceiling is %d: "
+        "%s. A failed read is not a misconfiguration — use _read_failed."
+        % (len(hits), MAX_EXCEPTION_TEXT_AS_A_FAILURE,
+           ["%s:%d %s" % h for h in hits]))
+
+
+def test_the_loop_variable_false_positive_stays_excluded():
+    """ECS-04 builds its message from `for e in env` — an environment variable, not an
+    exception. A detector that matched on the NAME rather than on the enclosing
+    handler's binding would demand its removal and break a real check."""
+    hits = {cid for _f, _l, cid in _exception_text_failures()}
+    assert "ECS-04" not in hits
 
 
 def test_reporting_an_exception_as_a_finding_can_only_decrease():

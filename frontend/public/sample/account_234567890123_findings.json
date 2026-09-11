@@ -208,12 +208,12 @@
    "SOC2": "CC6.1",
    "NIST": "SC-28"
   },
-  "remediation_cmd": "Set a customer-managed key on the knowledge base and its data sources: aws bedrock-agent update-knowledge-base --knowledge-base-id <KB_ID> --name <NAME> --role-arn <ROLE_ARN> --knowledge-base-configuration file://kb-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}'",
+  "remediation_cmd": "The key is set on the DATA SOURCE, not the knowledge base -- update-knowledge-base has no --server-side-encryption-configuration. For each source: aws bedrock-agent update-data-source --knowledge-base-id <KB_ID> --data-source-id <DS_ID> --name <NAME> --data-source-configuration file://ds-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}', then encrypt the vector store and the S3 bucket behind it with the same key",
   "risk": "A Bedrock knowledge base or one of its data sources is not encrypted with a customer-managed key. The knowledge base IS the retrieval corpus: whatever it contains can be surfaced verbatim in a model response, which makes it the highest-value target in a RAG deployment. Its vector store and ingested documents hold the source content, and under an AWS-managed key you cannot scope, audit or revoke access to them.",
   "impact": "The retrieval corpus \u2014 the material a model will quote back on request \u2014 is protected by a key you cannot control, and its exposure is invisible to your own key auditing.",
   "steps": [
    "Create a CMK for the RAG corpus: aws kms create-key --description 'Bedrock knowledge bases'",
-   "Set it on the knowledge base: aws bedrock-agent update-knowledge-base --knowledge-base-id <KB_ID> --name <NAME> --role-arn <ROLE_ARN> --knowledge-base-configuration file://kb-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}'",
+   "Set it on each DATA SOURCE, which is where the key lives -- not on the knowledge base: aws bedrock-agent update-data-source --knowledge-base-id <KB_ID> --data-source-id <DS_ID> --name <NAME> --data-source-configuration file://ds-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}'",
    "Apply encryption to each data source as well \u2014 an encrypted knowledge base fed by an unencrypted source still leaves the source readable.",
    "Encrypt the underlying vector store (OpenSearch Serverless collection, Aurora cluster or S3 vector bucket) with the same key.",
    "Confirm the S3 bucket holding the ingested documents uses the same CMK, so the whole retrieval chain shares one control."

@@ -3078,7 +3078,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         "impact": "The retrieval corpus — the material a model will quote back on request — is protected by a key you cannot control, and its exposure is invisible to your own key auditing.",
         "steps": [
             "Create a CMK for the RAG corpus: aws kms create-key --description 'Bedrock knowledge bases'",
-            "Set it on the knowledge base: aws bedrock-agent update-knowledge-base --knowledge-base-id <KB_ID> --name <NAME> --role-arn <ROLE_ARN> --knowledge-base-configuration file://kb-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}'",
+            "Set it on each DATA SOURCE, which is where the key lives -- not on the knowledge base: aws bedrock-agent update-data-source --knowledge-base-id <KB_ID> --data-source-id <DS_ID> --name <NAME> --data-source-configuration file://ds-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}'",
             "Apply encryption to each data source as well — an encrypted knowledge base fed by an unencrypted source still leaves the source readable.",
             "Encrypt the underlying vector store (OpenSearch Serverless collection, Aurora cluster or S3 vector bucket) with the same key.",
             "Confirm the S3 bucket holding the ingested documents uses the same CMK, so the whole retrieval chain shares one control.",
@@ -3773,7 +3773,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         "steps": [
             "Plan this as a migration rather than a fix -- DocumentDB storage encryption cannot be enabled on an existing cluster.",
             "Take a snapshot: aws docdb create-db-cluster-snapshot --db-cluster-identifier <CLUSTER> --db-cluster-snapshot-identifier <SNAPSHOT>",
-            "Restore it into a new encrypted cluster: aws docdb restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAPSHOT> --kms-key-id <KEY_ARN> --storage-encrypted",
+            "Restore it into a new cluster -- the key named here is what encrypts it: aws docdb restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAPSHOT> --kms-key-id <KEY_ARN>",
             "Cut the application over, verify, then delete the old cluster and its unencrypted snapshots -- the snapshots are the part most likely to be forgotten.",
             "Prevent recurrence with an SCP requiring StorageEncrypted on rds:CreateDBCluster for the docdb engine.",
         ],
@@ -3816,7 +3816,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         "steps": [
             "Plan this as a migration -- Neptune storage encryption cannot be enabled on an existing cluster.",
             "Snapshot the cluster: aws neptune create-db-cluster-snapshot --db-cluster-identifier <CLUSTER> --db-cluster-snapshot-identifier <SNAPSHOT>",
-            "Restore into a new encrypted cluster: aws neptune restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAPSHOT> --engine neptune --kms-key-id <KEY_ARN> --storage-encrypted",
+            "Restore into a new cluster -- the key named here is what encrypts it: aws neptune restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAPSHOT> --engine neptune --kms-key-id <KEY_ARN>",
             "Cut the application over, verify query results match, then delete the old cluster AND its unencrypted snapshots -- the snapshots are the part most often left behind.",
             "Prevent recurrence with an SCP requiring StorageEncrypted on rds:CreateDBCluster for the neptune engine.",
         ],
@@ -4019,7 +4019,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         "risk": "This MemoryDB cluster does not take automatic minor version upgrades, so engine security fixes only arrive if somebody schedules them by hand. Minor versions in the Redis-compatible engine line are where security patches ship, and the failure mode is not a dramatic one: nothing breaks, nobody is alerted, and the cluster simply stays on the version it was created with while advisories accumulate against it. Because MemoryDB is managed, the team running it usually has no patching process pointed at it at all -- the mental model is that AWS handles it, which is true only when this setting is on. Automatic minor upgrades apply within the maintenance window and are minor-version-only, so they do not introduce the breaking changes that make major upgrades a project; the risk of leaving this off is considerably larger than the risk of turning it on. The practical consequence is a datastore holding authoritative data running an engine with published, unpatched vulnerabilities for as long as nobody notices.",
         "impact": "Published engine vulnerabilities remain unpatched indefinitely, because nothing prompts anybody to apply them.",
         "steps": [
-            "Enable it: aws memorydb update-cluster --cluster-name <CLUSTER> --auto-minor-version-upgrade",
+            "It cannot be enabled in place -- MemoryDB fixes this at creation. Take the current patch now: aws memorydb update-cluster --cluster-name <CLUSTER> --engine-version <PATCHED>, then build replacements with aws memorydb create-cluster --auto-minor-version-upgrade",
             "Check what version it is on now and how far behind that is: aws memorydb describe-clusters --cluster-name <CLUSTER> --query 'Clusters[0].EngineVersion' against aws memorydb describe-engine-versions",
             "Set a maintenance window you are comfortable with rather than accepting the default: --maintenance-window sun:05:00-sun:06:00",
             "If it is far behind, apply the outstanding upgrade explicitly rather than waiting for the next minor release to carry it.",
@@ -4130,7 +4130,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         "risk": "This DocumentDB instance is publicly accessible, so its endpoint resolves to a routable public address and anything that can reach the port can attempt to authenticate. DocumentDB does have its own users and passwords, which is a real difference from Neptune -- but it turns the exposure into an online password-guessing surface rather than an open door, and the credential in question is frequently the master password created during setup and never rotated since. What raises the consequence is what a document store holds. Unlike a normalised relational schema where a single table is a fragment, a document is designed to be self-contained, so one collection typically holds whole customer or order records with their nested detail. A single successful authentication returns complete entities rather than joinable pieces. DocumentDB also has no IAM database authentication to fall back on, so that password is the authentication story in full.",
         "impact": "A document store holding complete records is reachable from the internet, with a static database password as the only authentication.",
         "steps": [
-            "Take it off the public internet: aws docdb modify-db-instance --db-instance-identifier <INSTANCE> --no-publicly-accessible --apply-immediately",
+            "Close the security group first -- DocumentDB has no PubliclyAccessible to unset, unlike RDS and Neptune: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --vpc-security-group-ids <PRIVATE_SG> --apply-immediately",
             "Confirm: aws docdb describe-db-instances --db-instance-identifier <INSTANCE> --query 'DBInstances[0].PubliclyAccessible'",
             "Rotate the master password on the assumption it has been exposed to whatever the security group allowed: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --master-user-password <NEW>",
             "Review the security group and the subnet group, and confirm the subnets are private so the next instance does not inherit this.",
@@ -4567,7 +4567,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         "risk": "This gateway sets exceptionLevel to DEBUG. The AgentCore reference is explicit about the effect: if the value is DEBUG, granular exception messages are returned to help a user debug the gateway; if it is omitted, a generic error message is returned to the end user. Granular exception messages from a gateway describe what is behind it - target names, schema mismatches, downstream service errors, and the shape of failures an attacker can provoke deliberately. On a development gateway that is a convenience. On one whose callers are not all trusted, it is a free description of the internal surface, obtainable by sending deliberately malformed requests and reading the replies.",
         "impact": "An unauthenticated or lightly-authenticated caller can map the targets behind the gateway by provoking errors, without needing to invoke anything successfully.",
         "steps": [
-            "Omit exceptionLevel so callers receive the generic message: aws bedrock-agentcore-control update-gateway --gateway-identifier <ID> --no-exception-level",
+            "Clear it by leaving the argument off an otherwise complete update -- the field is a string whose only value is DEBUG, so there is no negating flag to pass: aws bedrock-agentcore-control update-gateway --gateway-identifier <ID> with the gateway's other settings restated",
             "Keep DEBUG only on gateways whose callers are entirely trusted - a development or staging gateway that is not reachable by production traffic.",
             "If you need the detail for operations, take it from CloudWatch logs on your side rather than from the response on the caller's side.",
             "Combine with AGC-05: DEBUG detail matters far more on a gateway that admits callers it does not authorize, because provoking errors is then free.",
@@ -4694,7 +4694,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         "impact": "Direct internet egress from the AI resource creates a data-exfiltration and command-and-control channel that bypasses VPC egress controls and network monitoring.",
         "steps": [
             "Confirm the exposure: aws sagemaker describe-notebook-instance --notebook-instance-name <NB> --query '[DirectInternetAccess,SubnetId]' or aws sagemaker describe-domain --domain-id <DOMAIN_ID> --query AppNetworkAccessType",
-            "Attach the resource to a private VPC subnet with no direct internet route: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --subnet-id <PRIVATE_SUBNET> --direct-internet-access Disabled",
+            "Attach the resource to a private VPC subnet with no direct internet route. On a notebook instance this means REPLACING it -- SubnetId and DirectInternetAccess are both fixed at creation: back up the volume, then aws sagemaker create-notebook-instance --notebook-instance-name <NB>-vpc --instance-type <TYPE> --role-arn <ROLE_ARN> --subnet-id <PRIVATE_SUBNET> --security-group-ids <SG> --direct-internet-access Disabled",
             "For a Studio domain, restrict egress to the VPC: aws sagemaker update-domain --domain-id <DOMAIN_ID> --app-network-access-type VpcOnly (deploy interface VPC endpoints for SageMaker/S3/STS first, or apps lose connectivity).",
             "Provide required outbound access through NAT with egress filtering or VPC endpoints rather than direct internet.",
             "Verify: aws sagemaker describe-notebook-instance --notebook-instance-name <NB> --query DirectInternetAccess returns Disabled and a private SubnetId is set.",
@@ -4705,7 +4705,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         "risk": "Two facts about this AI resource are true at once, and together they are worse than either alone: its execution role can escalate privilege or read crown-jewel data, and it has an unrestricted egress path (SageMaker direct-internet access, a Studio domain with public egress, or no VPC attachment at all). OverWatch does NOT claim the resource is reachable from the internet, and this finding should not be read that way. Every network signal available here is an EGRESS or isolation property — the SageMaker API reference is explicit that DirectInternetAccess governs access TO the internet FROM the notebook, and that inbound traffic arrives through the VPC subnet whose presence this scanner treats as the safer configuration. There is no observed route in, so the attack-path graph deliberately carries no inbound edge to this node. What makes the pair worth reporting anyway is that the most likely compromise of an AI resource does not need a network route: prompt injection arrives in CONTENT — a document in a knowledge base, a page an agent fetches, a file a notebook opens — and a stolen notebook credential or a poisoned dependency needs none either. This finding is therefore CONDITIONAL: it demonstrates capability, not occurrence. If a compromise lands by any means, the attacker inherits both powerful credentials and an unimpeded channel to use them.",
         "impact": "Conditional on a compromise landing: the attacker holds credentials that can escalate privilege or read crown-jewel data, and an egress path that no VPC control inspects — so exfiltration is unimpeded and leaves no network chokepoint where it could have been seen or stopped. The premise is unverified; the consequences, if it holds, are not.",
         "steps": [
-            "Close the egress channel — the faster of the two containments, and the one that removes the exfiltration path without touching entitlements: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --direct-internet-access Disabled",
+            "Close the egress channel — on a notebook instance this is a REPLACEMENT, because DirectInternetAccess is fixed at creation: back up the volume, then aws sagemaker create-notebook-instance --notebook-instance-name <NB>-private --instance-type <TYPE> --role-arn <ROLE_ARN> --subnet-id <PRIVATE_SUBNET> --security-group-ids <SG> --direct-internet-access Disabled, cut over, and delete the old instance. That makes the identity leg below the faster containment of the two.",
             "Cut the identity leg: remove the execution role's admin/privesc grants (see AISPM-01) and narrow its crown-data reach (see AISPM-02).",
             "If the resource shows any active detection (GuardDuty/CDR) on the path, treat it as an in-progress incident: isolate the host and rotate the role's sessions.",
             "Re-scan and confirm AIPATH-01 no longer fires. Note what you should NOT expect to see change: there is no 'internet -> AI -> role -> crown' path in the graph to disappear, because OverWatch never asserted one — the finding is the pair of legs, not a route.",
@@ -5082,7 +5082,7 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
         "impact": "The fleet role's credentials are retrievable by anything executing in a session, and those credentials then act from inside your account with whatever the role permits. A server-side request forgery in the streamed application is enough.",
         "steps": [
             "Confirm: aws appstream describe-fleets --names <FLEET> --query 'Fleets[*].DisableIMDSV1' — true means v1 is already off",
-            "Turn v1 off: aws appstream update-fleet --name <FLEET> --disable-imds-v1",
+            "Turn v1 off: aws appstream update-fleet --name <FLEET> --disable-imdsv1",
             "Test on a non-production fleet first: anything baked into the image that reads metadata the old way stops working, which is precisely the behaviour you are removing",
             "While you are there, scope the fleet's IAM role down — IMDSv2 limits who can read the credentials, not what they grant",
         ],

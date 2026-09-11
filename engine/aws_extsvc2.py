@@ -560,8 +560,10 @@ CHECKS = _cd.register(
            "a trust root, not an ordinary shared resource: aws acm-pca get-policy "
            "--resource-arn <CA_ARN> to read it, then aws acm-pca put-policy "
            "--resource-arn <CA_ARN> --policy file://scoped-policy.json naming specific "
-           "accounts or an aws:PrincipalOrgID condition. Then audit issued certificates "
-           "with aws acm-pca list-certificates --certificate-authority-arn <CA_ARN>"),
+           "accounts or an aws:PrincipalOrgID condition. Then audit what the CA has "
+           "already issued with aws acm-pca create-certificate-authority-audit-report "
+           "--certificate-authority-arn <CA_ARN> --s3-bucket-name <BUCKET> "
+           "--audit-report-response-format JSON"),
        risk=(
            "This AWS Private CA has a resource policy granting a wildcard principal. A "
            "private CA is not an ordinary resource being shared -- it is a TRUST ROOT. "
@@ -582,9 +584,12 @@ CHECKS = _cd.register(
            "Replace it with one naming specific accounts, or gated on aws:PrincipalOrgID: "
            "aws acm-pca put-policy --resource-arn <CA_ARN> --policy "
            "file://scoped-policy.json",
+           # ACM PCA has no list-certificates operation; an audit report IS how the
+           # service enumerates what a CA has issued.
            "Audit what has already been issued -- the certificates are genuine and will "
-           "not look anomalous: aws acm-pca list-certificates "
-           "--certificate-authority-arn <CA_ARN>",
+           "not look anomalous: aws acm-pca create-certificate-authority-audit-report "
+           "--certificate-authority-arn <CA_ARN> --s3-bucket-name <BUCKET> "
+           "--audit-report-response-format JSON, then read the report from that bucket",
            "Revoke anything unexpected and consider whether the CA itself should be "
            "rotated, since you cannot distinguish attacker-requested certificates from "
            "legitimate ones by inspection.")),

@@ -296,8 +296,20 @@ def create_app(service, *, current_role=lambda: "", current_principal=None):
         plan: Optional[str] = None
 
     class MemberReq(BaseModel):
+        """A role grant.
+
+        THE PATTERN IS DERIVED, NOT WRITTEN. It was once a hand-kept copy reading
+        `^(viewer|ingest|admin)$`, which silently 422'd `auditor` and `analyst` —
+        two of the four roles GET /roles offers and the store accepts — while
+        defaulting new grants to `viewer`, the deprecated alias that same endpoint
+        documents as the one thing new grants should not use.
+
+        `viewer` stays ACCEPTED (a client that reads a legacy member's role and
+        writes it back must not be rejected) but is no longer the default.
+        """
         principal: str = Field(min_length=1)
-        role: str = Field(default="viewer", pattern=r"^(viewer|ingest|admin)$")
+        role: str = Field(default=cnapp_workspace.AUDITOR,
+                          pattern="^(%s)$" % "|".join(cnapp_workspace.ACCEPTED_ROLES))
 
     class PlatformAdminReq(BaseModel):
         principal: str = Field(min_length=1)

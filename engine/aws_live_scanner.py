@@ -1659,7 +1659,7 @@ REMEDIATION_MAP = {
     "ELC-05": "Upgrade the cache to a supported engine version: aws elasticache modify-replication-group --replication-group-id <ID> --engine-version <SUPPORTED_VERSION> --apply-immediately",
     "ELC-06": "Attach an RBAC user group (Redis/Valkey 6+): aws elasticache modify-replication-group --replication-group-id <ID> --user-group-ids-to-add <USER_GROUP_ID> --apply-immediately",
     "OSR-01": "Enforce HTTPS: aws opensearch update-domain-config --domain-name <DOMAIN> --domain-endpoint-options EnforceHTTPS=true,TLSSecurityPolicy=Policy-Min-TLS-1-2-2019-07",
-    "OSR-02": "Enable encryption at rest: aws opensearch update-domain-config --domain-name <DOMAIN> --encrypt-at-rest-options Enabled=true",
+    "OSR-02": "Enable encryption at rest: aws opensearch update-domain-config --domain-name <DOMAIN> --encryption-at-rest-options Enabled=true,KmsKeyId=<KMS_KEY>. This triggers a blue/green deployment, and it cannot be turned on in place for every configuration -- if it is rejected, create a replacement domain with the option set and migrate by snapshot restore or reindex-from-remote",
     "OSR-04": "Configure VPC: aws opensearch update-domain-config --domain-name <DOMAIN> --vpc-options SubnetIds=<SUBNETS>,SecurityGroupIds=<SGS>",
     "OSR-06": "Require min TLS 1.2: aws opensearch update-domain-config --domain-name <DOMAIN> --domain-endpoint-options EnforceHTTPS=true,TLSSecurityPolicy=Policy-Min-TLS-1-2-2019-07",
     "OSR-07": "Upgrade to a supported engine version: aws opensearch upgrade-domain --domain-name <DOMAIN> --target-version OpenSearch_2.13",
@@ -1688,7 +1688,7 @@ REMEDIATION_MAP = {
     "APS-02": "Attach the fleet to your own VPC so its traffic is subject to your routing and security groups: aws appstream update-fleet --name <FLEET> --vpc-config SubnetIds=<SUBNET_A>,<SUBNET_B>,SecurityGroupIds=<SG>. Use two subnets in different Availability Zones; a single-subnet fleet cannot launch capacity when that zone is impaired.",
     "APS-03": "Create an interface endpoint for AppStream streaming and point the stack at it, so sessions never traverse the public internet: aws ec2 create-vpc-endpoint --vpc-id <VPC> --vpc-endpoint-type Interface --service-name com.amazonaws.<REGION>.appstream.streaming --subnet-ids <SUBNETS> --security-group-ids <SG> ; then aws appstream update-stack --name <STACK> --access-endpoints EndpointType=STREAMING,VpceId=<VPCE_ID>. Users must be able to reach that VPC. Existing sessions keep using the old path until they end.",
     "APS-04": "Bring the fleet's session limits within the benchmark's bounds (the API takes SECONDS, the console takes minutes): aws appstream update-fleet --name <FLEET> --max-user-duration-in-seconds 36000 --disconnect-timeout-in-seconds 300 --idle-disconnect-timeout-in-seconds 600. Setting the idle timeout to 0 disables it entirely, which is the state this check fails on -- pick a real number.",
-    "APS-05": "Turn off IMDSv1 so a process inside a streaming session cannot read the fleet role's credentials with a single unauthenticated GET: aws appstream update-fleet --name <FLEET> --disable-imds-v1. Test first on a non-production fleet: software baked into the image that reads instance metadata the old way will stop working, and that is the point.",
+    "APS-05": "Turn off IMDSv1 so a process inside a streaming session cannot read the fleet role's credentials with a single unauthenticated GET: aws appstream update-fleet --name <FLEET> --disable-imdsv1. Test first on a non-production fleet: software baked into the image that reads instance metadata the old way will stop working, and that is the point.",
     "APS-06": "Rebuild the image so streamed applications carry current patches: launch an image builder from the current base image, apply updates, then aws appstream create-updated-image --existing-image-name <IMAGE> --new-image-name <NEW_IMAGE>, and repoint the fleet with aws appstream update-fleet --name <FLEET> --image-name <NEW_IMAGE>. Automate the cadence -- an image rebuilt once by hand ages exactly as fast as the one it replaced.",
     "BCK-04": "Add a copy action so the recovery point exists somewhere the original disaster cannot reach. Cross-region: aws backup update-backup-plan --backup-plan-id <PLAN_ID> --backup-plan with a CopyActions entry naming a DestinationBackupVaultArn in another region. Cross-account is stronger against ransomware and credential compromise, because deleting the copy then needs a second account's credentials — see AWS Backup cross-account copy with Organizations.",
     "BCK-05": "Re-create the vault on a customer-managed key; the key is fixed at vault creation and cannot be changed afterwards: aws backup create-backup-vault --backup-vault-name <NEW_VAULT> --encryption-key-arn <KMS_KEY_ARN>, repoint the plan's rules at it, and let the old vault age out under its retention. Grant the Backup service principal kms:Decrypt/GenerateDataKey on the key or backups will start failing.",
@@ -1726,10 +1726,10 @@ REMEDIATION_MAP = {
     "ACM-02": "Reissue with strong key: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS --key-algorithm RSA_2048",
     "ACM-04": "Re-request the failed/revoked certificate: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS",
     "ACM-05": "Migrate imported / non-auto-renewing certs to an ACM-managed (auto-renewing) certificate: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS",
-    "SM-01": "Disable direct internet: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --direct-internet-access Disabled (recreate may be required; attach to a private subnet)",
+    "SM-01": "DirectInternetAccess is fixed at creation -- update-notebook-instance has no flag for it, so this is a replacement, not a setting change. Back up or migrate the volume first (deleting the instance destroys it), then aws sagemaker create-notebook-instance --notebook-instance-name <NB>-private --instance-type <TYPE> --role-arn <ROLE_ARN> --subnet-id <PRIVATE_SUBNET> --security-group-ids <SG> --direct-internet-access Disabled, cut over, and aws sagemaker delete-notebook-instance --notebook-instance-name <NB>",
     "SM-02": "Disable root access: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --root-access Disabled",
     "SM-03": "Set KMS key at creation: aws sagemaker create-notebook-instance --notebook-instance-name <NB> --kms-key-id <KMS_KEY> --instance-type ml.t3.medium --role-arn <ROLE>",
-    "SM-04": "Attach to VPC subnet: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --subnet-id <SUBNET> (recreate if subnet not set)",
+    "SM-04": "SubnetId is fixed at creation -- update-notebook-instance cannot move an instance into a VPC. Back up or migrate the volume first (deleting the instance destroys it), then aws sagemaker create-notebook-instance --notebook-instance-name <NB>-vpc --instance-type <TYPE> --role-arn <ROLE_ARN> --subnet-id <PRIVATE_SUBNET> --security-group-ids <SG> --direct-internet-access Disabled, cut over, and aws sagemaker delete-notebook-instance --notebook-instance-name <NB>",
     "SM-05": "Restrict Studio egress to the VPC (deploy interface VPC endpoints first, else apps lose connectivity): aws sagemaker update-domain --domain-id <DOMAIN_ID> --app-network-access-type VpcOnly",
     "SM-06": "KMS key is immutable on an existing domain — recreate with a CMK: aws sagemaker create-domain --domain-name <NAME> --auth-mode IAM --vpc-id <VPC> --subnet-ids <SUBNET_IDS> --kms-key-id <KMS_KEY_ARN> --default-user-settings file://user-settings.json",
     "SM-07": "KmsKeyId is immutable on an endpoint-config — create a new config with a CMK then repoint the endpoint: aws sagemaker create-endpoint-config --endpoint-config-name <NEW_CFG> --kms-key-id <KMS_KEY_ARN> --production-variants file://variants.json ; aws sagemaker update-endpoint --endpoint-name <EP> --endpoint-config-name <NEW_CFG>",
@@ -1740,7 +1740,7 @@ REMEDIATION_MAP = {
     "BDR-05": "Replace the wildcard Bedrock grant with least privilege scoped to the models actually used: aws iam put-role-policy --role-name <ROLE> --policy-name bedrock-least-priv --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"bedrock:InvokeModel\"],\"Resource\":\"arn:aws:bedrock:<REGION>::foundation-model/<MODEL_ID>\"}]}'",
     "AGT-01": "Encrypt the agent's resources under a customer-managed key: aws bedrock-agent update-agent --agent-id <AGENT_ID> --agent-name <NAME> --agent-resource-role-arn <ROLE_ARN> --foundation-model <MODEL_ID> --customer-encryption-key-arn <CMK_ARN>",
     "AGT-02": "Scope the agent execution role to the exact models, knowledge bases and Lambdas it needs: aws iam put-role-policy --role-name <AGENT_ROLE> --policy-name agent-least-priv --policy-document file://scoped.json",
-    "AGT-03": "Set a customer-managed key on the knowledge base and its data sources: aws bedrock-agent update-knowledge-base --knowledge-base-id <KB_ID> --name <NAME> --role-arn <ROLE_ARN> --knowledge-base-configuration file://kb-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}'",
+    "AGT-03": "The key is set on the DATA SOURCE, not the knowledge base -- update-knowledge-base has no --server-side-encryption-configuration. For each source: aws bedrock-agent update-data-source --knowledge-base-id <KB_ID> --data-source-id <DS_ID> --name <NAME> --data-source-configuration file://ds-config.json --server-side-encryption-configuration '{\"kmsKeyArn\":\"<CMK_ARN>\"}', then encrypt the vector store and the S3 bucket behind it with the same key",
     "AGT-04": "Restrict the action-group Lambda so only this agent can invoke it, and scope the function's own role: aws lambda add-permission --function-name <FN> --statement-id bedrock-agent --action lambda:InvokeFunction --principal bedrock.amazonaws.com --source-arn <AGENT_ALIAS_ARN>",
     "AGT-06": "Create one guardrail and attach it to every agent that lacks one, then make it mandatory in IAM so it cannot simply be omitted: aws bedrock create-guardrail --name prod-guardrail --blocked-input-messaging 'Blocked' --blocked-outputs-messaging 'Blocked' --content-policy-config '{\"filtersConfig\":[{\"type\":\"PROMPT_ATTACK\",\"inputStrength\":\"HIGH\",\"outputStrength\":\"NONE\"}]}'",
     "AGC-07": "Re-key the token vault onto a customer-managed key so you can revoke, audit and bound access to it: aws kms create-key --description 'AgentCore token vault' --key-usage ENCRYPT_DECRYPT ; aws bedrock-agentcore-control set-token-vault-cmk --token-vault-id default --kms-configuration '{\"keyType\":\"CustomerManagedKey\",\"kmsKeyArn\":\"<KEY_ARN>\"}' ; then scope the key policy to the roles that legitimately decrypt",
@@ -1749,7 +1749,7 @@ REMEDIATION_MAP = {
     "AGY-02": "Scope the capability to what the agent needs, or remove it: aws bedrock-agent update-agent-action-group --agent-id <AGENT_ID> --agent-version DRAFT --action-group-id <AG_ID> --action-group-name <NAME> --action-group-state DISABLED ; and bound what it can reach by narrowing the execution role (see AISPM-01/AISPM-02), because a sandbox limits the filesystem and not the credentials",
     "AGY-03": "Require confirmation on every action whose effect you would not want taken on the strength of a document the agent read. Set requireConfirmation ENABLED in the function schema: aws bedrock-agent update-agent-action-group --agent-id <AGENT_ID> --agent-version DRAFT --action-group-id <AG_ID> --action-group-name <NAME> --function-schema '{\"functions\":[{\"name\":\"<FN>\",\"requireConfirmation\":\"ENABLED\"}]}' ; then aws bedrock-agent prepare-agent --agent-id <AGENT_ID>",
     "AGC-05": "Either authorize at the gateway or carry the caller's identity to the target -- not neither. To authorize at the edge: aws bedrock-agentcore-control update-gateway --gateway-identifier <ID> --authorizer-type CUSTOM_JWT --authorizer-configuration '{\"customJWTAuthorizer\":{\"discoveryUrl\":\"<URL>\",\"allowedClients\":[\"<CLIENT_ID>\"]}}' . To delegate instead, switch the targets to CALLER_IAM_CREDENTIALS so the target's own IAM still applies, and scope the gateway execution role down either way",
-    "AGC-06": "Stop returning granular errors to callers by omitting exceptionLevel: aws bedrock-agentcore-control update-gateway --gateway-identifier <ID> --no-exception-level ; keep DEBUG for a non-production gateway only",
+    "AGC-06": "Stop returning granular errors to callers. exceptionLevel is a string whose only value is DEBUG, so it is cleared by LEAVING THE FLAG OFF an otherwise complete update -- there is no negating flag: aws bedrock-agentcore-control update-gateway --gateway-identifier <ID> with the gateway's other settings restated and no exception-level argument. Keep DEBUG for a non-production gateway only",
     "AGC-03": "Inventory what each provider opens and scope it: aws bedrock-agentcore-control list-oauth2-credential-providers ; aws bedrock-agentcore-control list-api-key-credential-providers ; then confirm each credential is least-privilege IN THE THIRD-PARTY SYSTEM, because no AWS control bounds it -- and set a rotation owner, since CloudTrail will not show you its use",
     "AGC-04": "Enumerate the tool surface and remove what is unused: aws bedrock-agentcore-control list-code-interpreters ; aws bedrock-agentcore-control list-browsers ; aws bedrock-agentcore-control list-gateways ; delete the ones no agent needs with aws bedrock-agentcore-control delete-code-interpreter --code-interpreter-id <ID>",
     "AGC-01": "Require MMDSv2 on the runtime so the metadata service cannot be read by a request the agent was talked into making: aws bedrock-agentcore-control update-agent-runtime --agent-runtime-id <ID> --metadata-configuration '{\"requireMMDSV2\":true}' ; then confirm with aws bedrock-agentcore-control get-agent-runtime --agent-runtime-id <ID> --query metadataConfiguration",
@@ -1797,11 +1797,11 @@ REMEDIATION_MAP = {
     "CB-01": "Make the project private so its build logs and artifacts stop being world-readable: aws codebuild update-project-visibility --project-arn <ARN> --project-visibility PRIVATE. Then treat every credential that appeared in a public build log as exposed and rotate it",
     "CB-02": "Re-enable artifact encryption -- it is an explicit opt-out rather than a default: aws codebuild update-project --name <PROJECT> --artifacts type=S3,location=<BUCKET>,encryptionDisabled=false. Supply a CMK with --encryption-key if the artifacts warrant customer-managed custody",
     "DOCDB-01": "Stop sharing the snapshot with every AWS account immediately: aws docdb modify-db-cluster-snapshot-attribute --db-cluster-snapshot-identifier <SNAPSHOT> --attribute-name restore --values-to-remove all. Then establish how long it was public and treat the contents as disclosed for that window",
-    "DOCDB-02": "DocumentDB storage encryption can only be set at creation, so this cannot be switched on in place. Create an encrypted cluster from a snapshot and cut over: aws docdb restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAPSHOT> --kms-key-id <KEY_ARN> --storage-encrypted",
+    "DOCDB-02": "DocumentDB storage encryption can only be set at creation, so this cannot be switched on in place. Create an encrypted cluster from a snapshot and cut over: the key you name on the restore is what encrypts the new cluster: aws docdb restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAPSHOT> --kms-key-id <KEY_ARN>",
     "DOCDB-03": "Export audit logs so there is a record of who connected and what they queried: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --cloudwatch-logs-export-configuration EnableLogTypes=audit. The cluster parameter group also needs audit_logs enabled",
     "DOCDB-04": "Turn on deletion protection so the cluster cannot be dropped by a single API call or a mistaken Terraform destroy: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --deletion-protection. It takes effect immediately and does not require a reboot",
     "DOCDB-05": "Snapshot encryption is inherited from the cluster and cannot be added to an existing snapshot. Copy it to a new encrypted snapshot and delete the plaintext one: aws docdb copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier <SNAPSHOT> --target-db-cluster-snapshot-identifier <NEW> --kms-key-id <KEY_ARN>, then aws docdb delete-db-cluster-snapshot --db-cluster-snapshot-identifier <SNAPSHOT>",
-    "NEP-01": "Neptune storage encryption can only be set at cluster creation, so this needs a migration rather than a setting change: aws neptune restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAPSHOT> --engine neptune --kms-key-id <KEY_ARN> --storage-encrypted, then cut over and delete the old cluster",
+    "NEP-01": "Neptune storage encryption can only be set at cluster creation, so this needs a migration rather than a setting change: the key named on the restore is what encrypts the new cluster: aws neptune restore-db-cluster-from-snapshot --db-cluster-identifier <NEW> --snapshot-identifier <SNAPSHOT> --engine neptune --kms-key-id <KEY_ARN>, then cut over and delete the old cluster",
     "NEP-02": "Turn on deletion protection so the graph cannot be dropped by a single API call: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --deletion-protection --apply-immediately",
     "NEP-03": "Stop sharing the snapshot with every AWS account immediately: aws neptune modify-db-cluster-snapshot-attribute --db-cluster-snapshot-identifier <SNAPSHOT> --attribute-name restore --values-to-remove all. Then establish how long it was public and treat the graph contents as disclosed for that window",
     "NEP-04": "Copy the snapshot to an encrypted one and delete the plaintext original: aws neptune copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier <SNAPSHOT> --target-db-cluster-snapshot-identifier <NEW> --kms-key-id <KEY_ARN>, then aws neptune delete-db-cluster-snapshot --db-cluster-snapshot-identifier <SNAPSHOT>",
@@ -1819,13 +1819,13 @@ REMEDIATION_MAP = {
     "NEP-08": "Neptune has no database users of its own, so IAM auth is the whole authorisation model: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --enable-iam-database-authentication --apply-immediately, then grant neptune-db:connect to the principals that should reach it and to nothing else",
     "NEP-09": "Export audit logs so the record outlives the cluster: aws neptune modify-db-cluster --db-cluster-identifier <CLUSTER> --cloudwatch-logs-export-configuration EnableLogTypes=audit --apply-immediately. The neptune_enable_audit_log cluster parameter must also be 1, or the export carries nothing",
     "NEP-10": "Multi-AZ follows from having a replica in another zone, so add one rather than flipping a flag: aws neptune create-db-instance --db-instance-identifier <CLUSTER>-reader --db-cluster-identifier <CLUSTER> --engine neptune --db-instance-class <CLASS> --availability-zone <OTHER_AZ>",
-    "DOCDB-07": "Take the DocumentDB instance off the public internet: aws docdb modify-db-instance --db-instance-identifier <INSTANCE> --no-publicly-accessible --apply-immediately, then review the security group on the assumption the endpoint has already been reached",
+    "DOCDB-07": "DocumentDB has no PubliclyAccessible you can set -- modify-db-instance does not take the flag, unlike RDS and Neptune. Reachability comes from the subnet group and the security group, so close the security group first: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --vpc-security-group-ids <PRIVATE_SG> --apply-immediately. The durable fix is a subnet group of private subnets (aws docdb create-db-subnet-group --db-subnet-group-name <NEW> --db-subnet-group-description <D> --subnet-ids <PRIVATE_SUBNETS>) and a restore into it, because the subnet group cannot be changed on a live cluster. Assume the endpoint has already been reached",
     "DOCDB-08": "Set a retention window long enough to find a problem inside: aws docdb modify-db-cluster --db-cluster-identifier <CLUSTER> --backup-retention-period 7 --preferred-backup-window 03:00-04:00 --apply-immediately",
     "MDB-01": "TLS cannot be enabled on an existing MemoryDB cluster, so this needs a rebuild: snapshot it with aws memorydb create-snapshot --cluster-name <CLUSTER> --snapshot-name <SNAP>, then aws memorydb create-cluster --cluster-name <NEW> --tls-enabled --snapshot-name <SNAP> --node-type <TYPE> --acl-name <ACL> and cut over",
     "MDB-02": "Stop the cluster accepting unauthenticated connections. Create users with real authentication and an ACL containing only those: aws memorydb create-user --user-name <USER> --authentication-mode Type=iam --access-string 'on ~* &* +@all', then aws memorydb create-acl --acl-name <ACL> --user-names <USER>, then aws memorydb update-cluster --cluster-name <CLUSTER> --acl-name <ACL>",
     "MDB-03": "Turn on automatic snapshots -- MemoryDB is a durable datastore, so this is data loss and not a cold cache: aws memorydb update-cluster --cluster-name <CLUSTER> --snapshot-retention-limit 7",
     "MDB-04": "The key is chosen at creation and cannot be changed, so switching to a customer-managed key means a restore: aws memorydb create-cluster --cluster-name <NEW> --kms-key-id <KEY_ARN> --snapshot-name <SNAP> --node-type <TYPE> --acl-name <ACL>. Worth doing only where you need an auditable key policy or the ability to revoke by disabling the key",
-    "MDB-05": "Let the engine take its own security fixes: aws memorydb update-cluster --cluster-name <CLUSTER> --auto-minor-version-upgrade",
+    "MDB-05": "MemoryDB fixes this at creation, so it cannot be switched on for a running cluster. Take the current patch by hand with aws memorydb update-cluster --cluster-name <CLUSTER> --engine-version <PATCHED>, and build replacements with aws memorydb create-cluster --auto-minor-version-upgrade so they pick up their own fixes",
     "MDB-06": "Multi-AZ needs at least one replica per shard, so add replicas rather than flipping a flag: aws memorydb update-cluster --cluster-name <CLUSTER> --replica-configuration ReplicaCount=1. Confirm the replicas landed in different availability zones afterwards",
     "ELC-08": "Enable Multi-AZ so the group survives an availability-zone failure: aws elasticache modify-replication-group --replication-group-id <RG_ID> --multi-az-enabled --automatic-failover-enabled --apply-immediately. It needs at least one replica in another AZ, so add one first if there is none: aws elasticache increase-replica-count --replication-group-id <RG_ID> --new-replica-count 1 --apply-immediately",
     "IMGB-01": "Remove the wildcard principal from the Image Builder resource policy so the image and everything baked into it stops being shared beyond your account: aws imagebuilder put-image-policy --image-arn <ARN> --policy file://scoped-policy.json . Then audit the image for embedded credentials, since anyone could have pulled it",
@@ -1890,8 +1890,8 @@ REMEDIATION_MAP = {
     "AITHR-02": "Restore the deleted or weakened control and deny the tamper actions to application roles: aws bedrock put-model-invocation-logging-configuration --logging-config file://logging.json ; aws iam put-role-policy --role-name <ROLE> --policy-name deny-ai-tamper --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"bedrock:DeleteGuardrail\",\"bedrock:DeleteModelInvocationLoggingConfiguration\"],\"Resource\":\"*\"}]}'",
     "AISPM-01": "Scope the AI execution role to least privilege — drop admin/privesc grants (iam:PassRole/*, *:*): aws iam put-role-policy --role-name <AI_EXEC_ROLE> --policy-name aispm-least-priv --policy-document file://scoped.json",
     "AISPM-02": "Restrict the AI execution role's data reach to only the buckets/tables the model needs (remove wildcard s3:GetObject/* grants): aws iam put-role-policy --role-name <AI_EXEC_ROLE> --policy-name aispm-data-scope --policy-document file://data-scope.json",
-    "AISPM-03": "Isolate the AI resource on a private VPC subnet and disable direct internet egress: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --subnet-id <SUBNET> ; for a Studio domain: aws sagemaker update-domain --domain-id <DOMAIN_ID> --app-network-access-type VpcOnly",
-    "AIPATH-01": "Either leg alone defuses the pair. Closing egress is the faster containment: aws sagemaker update-notebook-instance --notebook-instance-name <NB> --direct-internet-access Disabled ; cutting the role's reach (see AISPM-01/AISPM-02) is the one that actually bounds a compromise, because prompt injection arrives in content and needs no network route at all",
+    "AISPM-03": "Isolate the AI resource on a private VPC subnet and disable direct internet egress. For a notebook instance this is a replacement, not an update -- SubnetId and DirectInternetAccess are both fixed at creation: back up the volume, then aws sagemaker create-notebook-instance --notebook-instance-name <NB>-vpc --instance-type <TYPE> --role-arn <ROLE_ARN> --subnet-id <PRIVATE_SUBNET> --security-group-ids <SG> --direct-internet-access Disabled and delete the old one. A Studio domain CAN be changed in place: aws sagemaker update-domain --domain-id <DOMAIN_ID> --app-network-access-type VpcOnly",
+    "AIPATH-01": "Either leg alone defuses the pair -- and on a notebook instance the identity leg is the FASTER one, because DirectInternetAccess is fixed at creation, so closing egress means replacing the instance. Cut the role's reach first (see AISPM-01/AISPM-02): that is both quicker and the leg that actually bounds a compromise, since prompt injection arrives in content and needs no network route at all. Then close egress by replacing the instance: back up the volume, aws sagemaker create-notebook-instance --notebook-instance-name <NB>-private --instance-type <TYPE> --role-arn <ROLE_ARN> --subnet-id <PRIVATE_SUBNET> --security-group-ids <SG> --direct-internet-access Disabled, cut over, then aws sagemaker delete-notebook-instance --notebook-instance-name <NB>",
     "COG-01": "Require MFA: aws cognito-idp set-user-pool-mfa-config --user-pool-id <POOL_ID> --mfa-configuration ON --software-token-mfa-configuration Enabled=true",
     "COG-02": "Strengthen password policy: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --policies PasswordPolicy='{MinimumLength=12,RequireUppercase=true,RequireLowercase=true,RequireNumbers=true,RequireSymbols=true}'",
     "COG-03": "Enable threat protection: aws cognito-idp update-user-pool --user-pool-id <POOL_ID> --user-pool-add-ons AdvancedSecurityMode=ENFORCED",
@@ -1918,7 +1918,7 @@ REMEDIATION_MAP = {
     "CNT-04": "Make image tags immutable so a tag cannot be overwritten with a poisoned image: aws ecr put-image-tag-mutability --repository-name <REPO> --image-tag-mutability IMMUTABLE",
     "CNT-05": "Add a lifecycle policy to expire untagged/old images: aws ecr put-lifecycle-policy --repository-name <REPO> --lifecycle-policy-text file://lifecycle.json",
     "CNT-06": "Configure registry image signing with an AWS Signer profile: aws ecr put-signing-configuration --signing-configuration 'rules=[{signingProfileArn=<SIGNER_PROFILE_ARN>,repositoryFilters=[{filter=*,filterType=WILDCARD}]}]'",
-    "LMB-06": "Create an Enforce-mode code-signing config and attach it: aws lambda create-code-signing-config --allowed-publishers SigningProfileVersionArns=<SIGNER_PROFILE_ARN> --code-signing-policies UntrustedArtifactOnDeployment=Enforce ; aws lambda update-function-code-signing-config --function-name <FUNC> --code-signing-config-arn <CSC_ARN>",
+    "LMB-06": "Create an Enforce-mode code-signing config and attach it: aws lambda create-code-signing-config --allowed-publishers SigningProfileVersionArns=<SIGNER_PROFILE_ARN> --code-signing-policies UntrustedArtifactOnDeployment=Enforce ; aws lambda put-function-code-signing-config --function-name <FUNC> --code-signing-config-arn <CSC_ARN>",
     "LMB-08": "Require IAM auth on the function URL: aws lambda update-function-url-config --function-name <FUNC> --auth-type AWS_IAM ; then drop the public invoke grant the NONE endpoint needed: aws lambda remove-permission --function-name <FUNC> --statement-id <SID>. If the endpoint must stay anonymous, front it with API Gateway or CloudFront + WAF instead of exposing the function URL directly.",
     "LMB-09": "Replace the wildcard origin with the exact origins that need it: aws lambda update-function-url-config --function-name <FUNC> --cors '{\"AllowOrigins\":[\"<ORIGIN>\"],\"AllowMethods\":[\"GET\",\"POST\"],\"AllowHeaders\":[\"Content-Type\",\"Authorization\"],\"AllowCredentials\":true}'  (<ORIGIN> is a full scheme-and-host origin, one entry per site that must call the endpoint)",
     "LMB-07": "Rebuild the function package on patched dependencies and redeploy: bump the vulnerable package in the function's manifest (requirements.txt / package.json / pom.xml / go.mod), rebuild the deployment zip, then aws lambda update-function-code --function-name <FUNC> --zip-file fileb://<ZIP>. If the dependency comes from a layer, publish a patched version (aws lambda publish-layer-version --layer-name <LAYER> --zip-file fileb://<ZIP>) and repoint the function with aws lambda update-function-configuration --function-name <FUNC> --layers <NEW_LAYER_ARN>.",
@@ -3113,6 +3113,19 @@ class AWSLiveScanner:
             status, check_id, section, resource, message,
             severity, compliance, remediation,
         ))
+        # THE LIVE CONSOLE LINE. This block had come to rest after the `return` in
+        # `_remediation_for`, where it was unreachable and referred to `status`,
+        # `resource`, `severity`, `check_id` and `message` -- none of which that
+        # method has. The effect was silent and total: a scan printed section headers
+        # and `_log` lines and not one finding, FAIL and WARN included, so an operator
+        # watching a run saw nothing until a report file was written, and `--verbose`
+        # was a documented flag that did nothing. It belongs here, in the one place
+        # every finding passes through and where those names are actually bound.
+        if self.verbose or status in ("FAIL", "WARN"):
+            col = STATUS_COLOR.get(status, RESET)
+            res = f" | {resource}" if resource else ""
+            sev_tag = f" [{severity}]" if severity else ""
+            print(f"  {col}{STATUS_ICON[status]}{RESET} {check_id}{sev_tag}: {message}{res}")
 
     def _remediation_for(self, r) -> str:
         """The remediation a finding carries, resolved ONE way for every export.
@@ -3139,11 +3152,6 @@ class AWSLiveScanner:
         if r.status not in ("FAIL", "WARN"):
             return ""
         return REMEDIATION_MAP.get(r.check_id, "")
-        if self.verbose or status in ("FAIL", "WARN"):
-            col = STATUS_COLOR.get(status, RESET)
-            res = f" | {resource}" if resource else ""
-            sev_tag = f" [{severity}]" if severity else ""
-            print(f"  {col}{STATUS_ICON[status]}{RESET} {check_id}{sev_tag}: {message}{res}")
 
     def _log(self, msg: str):
         print(f"{BLUE}[*]{RESET} {msg}")
@@ -3629,8 +3637,18 @@ class AWSLiveScanner:
                 self._add("FAIL", "IAM-02", "IAM", "root",
                           "Root access keys EXIST — CRITICAL: remove immediately")
         except Exception as e:
-            self._add("FAIL", "IAM-01", "IAM", "root",
-                      f"Could not check root account: {e}")
+            # ONE call answers BOTH checks, so a failure has to be reported for both.
+            # What was here emitted a CRITICAL FAIL for IAM-01 carrying IAM-01's
+            # compliance keys and remediation -- telling an operator root MFA was off
+            # when nothing had been observed -- and dropped IAM-02 in silence, which
+            # is the phantom pass. This is the defect `_read_failed` exists to remove,
+            # and it survived on the most prominent check in the product because the
+            # structural ratchet in tests/test_read_failure_is_not_a_finding.py asks
+            # whether a check's ONLY FAIL is in an except handler. IAM-01 has a real
+            # FAIL at the root-MFA branch above, so it passed the ratchet while
+            # carrying exactly the defect the ratchet was built to catch.
+            for cid in ("IAM-01", "IAM-02"):
+                self._read_failed(cid, "IAM", "root", "iam:GetAccountSummary", e)
 
         # IAM-04 — Console users without MFA
         self._log("IAM-04: Console users without MFA")
@@ -4061,16 +4079,21 @@ class AWSLiveScanner:
                 self._add("FAIL", "S3-01", "S3", "account",
                           f"Block Public Access not fully enabled — Disabled: {disabled}")
         except Exception as e:
-            self._add("FAIL", "S3-01", "S3", "account",
-                      f"Could not retrieve account-level BPA: {e}")
+            # Was a HIGH FAIL carrying S3-01's remediation for a setting nobody read.
+            # Account-level BPA is reached through s3control, whose IAM action is
+            # s3:GetAccountPublicAccessBlock -- not the bucket-level name.
+            self._read_failed("S3-01", "S3", "account",
+                              "s3:GetAccountPublicAccessBlock", e)
 
         # Per-bucket checks
         self._log("S3-01/S3-03/S3-05: Per-bucket security scan")
         try:
             buckets = s3.list_buckets().get("Buckets", [])
         except Exception as e:
-            self._add("FAIL", "S3-01", "S3", "all-buckets",
-                      f"Cannot list S3 buckets: {e}")
+            # Not being allowed to enumerate buckets is a missing grant, not a public
+            # bucket. The `return` stays: without the listing there is nothing further
+            # this section can assess, and the WARN says so rather than implying clean.
+            self._read_failed("S3-01", "S3", "all-buckets", "s3:ListAllMyBuckets", e)
             return
 
         for b in buckets:

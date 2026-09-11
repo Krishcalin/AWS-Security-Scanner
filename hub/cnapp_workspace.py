@@ -41,7 +41,11 @@ AUDITOR, INGEST, ANALYST, ADMIN = "auditor", "ingest", "analyst", "admin"
 LEGACY_VIEWER = "viewer"
 
 #: Accepted on write. `viewer` is kept for compatibility, not offered.
-_ROLES = (AUDITOR, LEGACY_VIEWER, INGEST, ANALYST, ADMIN)
+#: PUBLIC because the API layer must derive its request validation from it — a
+#: second, hand-written copy of this tuple is how `auditor` and `analyst` came
+#: to be unreachable through POST /workspaces/{id}/members while both were
+#: perfectly valid here and offered by GET /roles.
+ACCEPTED_ROLES = (AUDITOR, LEGACY_VIEWER, INGEST, ANALYST, ADMIN)
 
 #: What an operator may CHOOSE. `viewer` is deliberately absent: it is an alias
 #: nobody should be creating new rows with.
@@ -152,10 +156,10 @@ class WorkspaceStore:
             self._be.execute("DELETE FROM workspaces WHERE workspace_id=?", (workspace_id,))
 
     # ── members ───────────────────────────────────────────────────────────────
-    def add_member(self, workspace_id: str, principal: str, *, role: str = "viewer",
+    def add_member(self, workspace_id: str, principal: str, *, role: str = AUDITOR,
                    status: str = "active", added_by: Optional[str] = None,
                    now_epoch: int) -> Optional[Dict]:
-        if role not in _ROLES:
+        if role not in ACCEPTED_ROLES:
             raise ValueError(f"invalid role {role!r}")
         if status not in _MEMBER_STATUS:
             raise ValueError(f"invalid member status {status!r}")

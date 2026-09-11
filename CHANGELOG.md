@@ -71,6 +71,75 @@ but a stated method that does not test the stated control.
   38-control NIST axis — widening the universe as a side effect of adding checks is
   how a coverage denominator stops meaning anything. Same call the DRS rows record.
 
+### Fixed — remediations that could not be run, and the role picker that offered roles it could not grant
+
+**Two copies of every remediation, and the guard watched one of them.** A
+2024 hardening pass fixed `aws lambda update-function-code-signing-config`
+(not an operation — it is `put-`) and `--encrypt-at-rest-options` (the
+OpenSearch flag is `--encryption-at-rest-options`), recorded both as done, and
+added `test_no_known_invalid_cli_tokens` to ban them by name. That test reads
+`FINDING_DETAIL`. `REMEDIATION_MAP` holds a **second, independently written**
+copy of the same advice — so both invalid tokens shipped in the one-line
+remediation for another year, LMB-06's beside a correct sibling and OSR-02's
+one line from OSR-03, which spells the flag right.
+
+Naming bad tokens one at a time can only catch mistakes already made, in the
+one place someone thought to look. `tests/test_remediation_cli_verbs.py` asks
+**botocore** instead, across both maps: `xform_name` is the transform the AWS
+CLI itself uses to turn an operation into a command word, so every
+`aws <service> <verb> --flag` is checked against the shipped model. Across
+2,537 commands and 5,258 flags it found **13 further defects** beyond those two
+— and most were not typos but procedures that cannot work:
+
+- **SM-01, SM-04, AISPM-03, AIPATH-01** — `update-notebook-instance
+  --direct-internet-access` / `--subnet-id`. Both are fixed at **creation**;
+  the advertised one-command fix fails every time. These are now replacements,
+  with the back-up-first step the delete requires. AIPATH-01 also had its
+  containment order backwards as a result: the identity leg is the faster one.
+- **AGT-03** — `--server-side-encryption-configuration` belongs to the data
+  **source**, not the knowledge base. Right flag, wrong command.
+- **DOCDB-07** — `--no-publicly-accessible`, which DocumentDB does not have.
+  RDS and Neptune do, which is presumably where it was copied from; NEP-06 uses
+  it correctly and was untouched. Reachability there is the security group and
+  the subnet group, and the subnet group cannot be changed on a live cluster.
+- **DOCDB-02, NEP-01** — `restore-db-cluster-from-snapshot --storage-encrypted`.
+  The flag is real on `create-db-cluster` and absent from the restore; the key
+  you name is what encrypts it.
+- **MDB-05** — `--auto-minor-version-upgrade` on `memorydb update-cluster`:
+  create-time only.
+- **AGC-06** — `--no-exception-level`, for a field that is a *string* whose only
+  value is `DEBUG`. The remediation's own sentence said "by omitting
+  exceptionLevel", which is exactly right and not what the flag it then printed
+  does. Found only after the negation rule was narrowed to genuinely boolean
+  members — the first, looser version had pardoned every `--no-anything`.
+- **APS-05** — `--disable-imds-v1` → `--disable-imdsv1`.
+- **PCA-01** — `acm-pca list-certificates` does not exist; enumerating what a
+  private CA has issued is an audit report.
+- **IMI-01** — `aws iotmanagedintegrations` is the **signing** name, correct in
+  the IAM action beside it and wrong as a CLI command word, which is
+  `iot-managed-integrations`. Nothing distinguished them because both were typed.
+
+The remaining 53 unresolved flags are CLI customizations botocore does not model
+(`ec2 ... --port`, `lambda publish-layer-version --zip-file`) or flags named in
+prose — LSAIL-03 cites `--add-on-request` precisely to say it is *not* the path.
+They are a closed ratchet, not a pardon: a new unknown flag fails the build, and
+a stale entry fails too, so the list cannot rot into permission.
+
+**The console offered two roles it could not grant.** `MemberReq.role` in
+`cnapp_api` validated against a hand-written `^(viewer|ingest|admin)$` — a third
+copy of a role list that `cnapp_workspace` already held twice. `auditor` and
+`analyst`, two of the four roles `GET /roles` serves to the picker, were
+rejected with a 422, and the default was `viewer`, the deprecated alias that
+same endpoint documents as the one thing new grants should not use. The console
+initialises its picker to `auditor`, so the most ordinary action on the screen —
+open it, type a username, grant — failed. It went unnoticed because the adjacent
+*create a user* flow validates against `ASSIGNABLE_ROLES` and worked.
+
+The pattern is now derived from `cnapp_workspace.ACCEPTED_ROLES` (renamed from
+`_ROLES` precisely because the API layer needs it), `viewer` stays accepted on
+write and is no longer a default anywhere, and a test grants every assignable
+role through the real endpoint.
+
 ### Fixed — the role we ship now grants every call the engine makes
 
 **The scanner could issue 352 IAM actions. The role named 124.** The other 228 were
