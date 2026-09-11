@@ -6,6 +6,70 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — the role we ship now grants every call the engine makes
+
+**The scanner could issue 352 IAM actions. The role named 124.** The other 228 were
+assumed to arrive through the `SecurityAudit` and `ViewOnlyAccess` managed policies
+attached alongside. Mostly they do — but nothing checked, AWS revises managed policies
+without announcing it, and the assumption was already wrong: the six `drs:` and
+`backup:` reads added for the CIS Storage benchmark shipped with **no grant in any
+policy**, because Elastic Disaster Recovery postdates SecurityAudit entirely.
+
+That failure is invisible from inside the product. A denied call becomes a coverage
+note, the scan completes, the console renders, and the section simply has nothing in
+it — which is what a clean account looks like. `deploy/cnapp-scanner-role.yaml` has
+said the right thing about this since batch 1: *"a check that silently degrades to a
+coverage note in every real deployment is worse than one that asks for the grant it
+needs."* It was applied one service at a time and never to the whole surface.
+
+- **`scripts/gen_call_surface.py`** derives the surface from the source by AST and
+  resolves every IAM action through botocore. The prefix comes from
+  `metadata.signingName`, never the boto3 client name — a distinction this repository
+  has got wrong six times by hand (`sso-admin`/`sso`, `amp`/`aps`,
+  `bedrock-agentcore-control`/`bedrock-agentcore`, `emr`/`elasticmapreduce`,
+  `cloudhsmv2`/`cloudhsm`, CodeGuru Profiler's hyphen), each producing a policy that
+  grants nothing while reading correctly. Resolving it from the shipped model closes
+  the seventh for all 105 services at once.
+- **`CnappScannerServiceReads`**, a second inline policy carrying the 215 actions the
+  role did not name, in five reviewable groups. Second rather than more Sids in the
+  first because an inline policy document caps at 10,240 characters and one document
+  holding the whole surface renders past 9,300; split, the two sit at 4,751 and 6,766.
+  Mirrored in the Terraform module, and `test_terraform_parity` now compares them
+  **per policy** rather than as one pooled set, so an action cannot drift between
+  documents unnoticed.
+- **Named actions, not verb wildcards.** `ec2:Describe*` and four siblings would have
+  been shorter, and would have granted about 2,590 actions beyond what the engine
+  calls — including `s3:GetObject`, the workload-data read that keeps `ReadOnlyAccess`
+  off this role. A test refuses any wildcard in a shipped policy.
+- **`tests/test_call_surface.py` is the ratchet.** A new boto3 call fails the build
+  until the role grants it. Committed alongside `tests/call_surface_baseline.py`,
+  generated the way `perm_ledger_baseline.py` is and living beside it for the same
+  reason: it is build data, not something production imports.
+
+**Two blind spots the converse test found.** Asserting that every *granted* action is
+one the engine can call reported 22 grants with no visible caller. Eighteen were real
+calls the AST walk could not see — a client passed to a helper
+(`self._audit_agentcore_gateways(ac, ...)`, where every AgentCore read happens one
+frame down) and operations dispatched by name out of a table (`getattr(ac, op)` over
+`aws_agentcore.LIST_OPERATIONS`). Teaching the deriver both raised the surface from
+295 actions to 352, which means the first version of this work would have shipped 57
+actions short. `CALL_SURFACE_EXTRA` in `aws_agentcore.py` declares the dynamic ones,
+derived from `LIST_OPERATIONS` itself so it cannot drift.
+
+**Four genuine over-grants, recorded rather than removed.** `cloudformation:ListStacks`
+(the engine calls `DescribeStacks`), `codeartifact:ListRepositories` (it calls
+`ListRepositoriesInDomain`), `ec2:GetEbsDefaultKmsKeyId` (it calls
+`GetEbsEncryptionByDefault`) and `ec2:GetSnapshotBlockPublicAccessState` have no
+caller. They are pinned in `KNOWN_OVER_GRANTS` with a test that fails when one gains a
+caller or is removed — because after two analyser blind spots surfaced in a single
+afternoon, "no caller visible" earns less confidence than it appears to, and deleting
+a grant is safe only once you are sure.
+
+**What this does not do.** It answers *may the role make this call*, not *which check
+needs it*. Per-check attribution stays in `engine/aws_perm_ledger.py`, hand-authored
+against call sites and covering 266 of 572 checks. A derived draft agreed with those
+hand-authored declarations exactly on 91 of 261 and was deliberately not promoted.
+
 ### Added — CIS AWS Storage Services Benchmark v1.0.0, and a verdict for advice that is wrong
 
 All 56 recommendations mapped, six new checks, and one finding worth stating plainly:
