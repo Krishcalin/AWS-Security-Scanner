@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Krishcalin/AWS-Security-Scanner/compliance/ccm/ccm-matrix.schema.json",
+  "title": "CSA CCM applicability matrix",
+  "description": "One facet of the CSA Cloud Controls Matrix: a value per control id, per section, along a single named axis. The source spreadsheet exports carry no schema at all, which is how a string value in one file and a boolean in another went unnoticed, and how a mistyped enum member would parse cleanly and mean nothing.",
+  "type": "object",
+  "required": [
+    "name",
+    "description",
+    "framework",
+    "version",
+    "version_status",
+    "source",
+    "licence",
+    "axis",
+    "value_type",
+    "value_enum",
+    "default",
+    "control_count",
+    "section_count",
+    "content"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string", "minLength": 1 },
+    "framework": { "const": "CSA-CCM" },
+    "version": {
+      "description": "Exact CCM release these rows describe. null is permitted ONLY while version_status is 'unverified'; a guessed version is worse than an absent one because it is indistinguishable from a checked one.",
+      "type": ["string", "null"]
+    },
+    "version_status": {
+      "description": "'verified' means the id universe was reconciled against the published CCM release named in `version`.",
+      "enum": ["verified", "unverified"]
+    },
+    "version_note": { "type": "string" },
+    "source": { "type": "string", "minLength": 1 },
+    "generated": { "type": "string", "format": "date" },
+    "licence": { "type": "string", "minLength": 1 },
+    "axis": {
+      "description": "What the sections of this file enumerate. Each file carries exactly one axis; mixing two is what makes a matrix unreadable.",
+      "enum": [
+        "service_model",
+        "cloud_stack_component",
+        "organizational_function"
+      ]
+    },
+    "value_type": { "enum": ["string", "boolean"] },
+    "value_enum": {
+      "description": "Closed vocabulary for `value`. Every non-null value in every section must be a member.",
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": { "type": ["string", "boolean"] }
+    },
+    "default": {
+      "description": "The value that dominates this facet. Rows equal to it are the uninteresting majority; the exception rows are the content.",
+      "type": ["string", "boolean"]
+    },
+    "unresolved": {
+      "description": "Control ids present in the id universe but carrying no authored value. They are emitted as null in every section so the gap is visible in the data rather than absent from it.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["control_id", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "control_id": { "$ref": "#/$defs/controlId" },
+          "reason": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "control_count": { "type": "integer", "minimum": 1 },
+    "section_count": { "type": "integer", "minimum": 1 },
+    "content": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/section" }
+    }
+  },
+  "$defs": {
+    "controlId": {
+      "description": "CCM control id: DOMAIN-NN. A&A is a real domain code; I&S is not, and was the source export's mis-spelling of IVS.",
+      "type": "string",
+      "pattern": "^(A&A|AIS|BCR|CCC|CEK|DCS|DSP|GRC|HRS|IAM|IPY|IVS|LOG|SEF|STA|TVM|UEM)-[0-9]{2}$"
+    },
+    "section": {
+      "type": "object",
+      "required": ["title", "id", "content"],
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "description": "Display label. Never a join key - use `id`.",
+          "type": "string",
+          "minLength": 1
+        },
+        "id": {
+          "description": "Stable slug. Consumers join on this, so renaming `title` cannot silently break them.",
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        },
+        "content": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["control_id", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "control_id": { "$ref": "#/$defs/controlId" },
+              "value": { "type": ["string", "boolean", "null"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}
