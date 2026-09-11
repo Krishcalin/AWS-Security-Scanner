@@ -35,7 +35,6 @@
     },
     "version_note": { "type": "string" },
     "source": { "type": "string", "minLength": 1 },
-    "generated": { "type": "string", "format": "date" },
     "licence": { "type": "string", "minLength": 1 },
     "axis": {
       "description": "What the sections of this file enumerate. Each file carries exactly one axis; mixing two is what makes a matrix unreadable.",

@@ -19,7 +19,6 @@ version_note: >-
   4.0. Resolve against the authoritative CCM release and record the
   per-domain deltas here before any consumer cites these rows.
 source: "transcribed from a CSA Cloud Controls Matrix spreadsheet export; the export carried no version marker, so version_status is 'unverified'"
-generated: "2026-09-10"
 licence: >-
   CSA Cloud Controls Matrix is published by the Cloud Security
   Alliance under its own terms. This file carries control IDENTIFIERS

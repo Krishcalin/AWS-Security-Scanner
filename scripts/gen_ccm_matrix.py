@@ -42,7 +42,6 @@ Run:  python scripts/gen_ccm_matrix.py [--check]
 from __future__ import annotations
 
 import argparse
-import datetime as _dt
 import os
 import sys
 
@@ -237,7 +236,13 @@ def _fmt(value) -> str:
 
 def _render(*, name, description, value_type, enum, default, sections,
             axis) -> str:
-    today = _dt.date.today().isoformat()
+    # NO TIMESTAMP IN THE OUTPUT. An earlier version stamped
+    # `generated: <date.today()>` into every file, which made the output
+    # irreproducible: tests/test_ccm_matrix.py asserts the committed files are
+    # byte-for-byte what this script produces, so the suite passed on the day the
+    # files were written and failed every day after. Git already records when a
+    # file changed, and it records it correctly. A generator that consults the
+    # clock cannot be checked against its own output.
     out: list[str] = [HEADER_BANNER]
     out.append(f"name: {_quote(name)}")
     out.append(f"description: {_quote(description)}")
@@ -252,7 +257,6 @@ def _render(*, name, description, value_type, enum, default, sections,
         "  4.0. Resolve against the authoritative CCM release and record the\n"
         "  per-domain deltas here before any consumer cites these rows.")
     out.append(f"source: {_quote(SOURCE_NOTE)}")
-    out.append(f"generated: {_quote(today)}")
     out.append(
         "licence: >-\n"
         "  CSA Cloud Controls Matrix is published by the Cloud Security\n"

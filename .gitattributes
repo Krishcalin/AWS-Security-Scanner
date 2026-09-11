@@ -1,0 +1,24 @@
+# Line endings for GENERATED artefacts.
+#
+# Several tests assert that a committed file is byte-for-byte what its generator
+# produces today -- test_ccm_matrix, test_call_surface, test_iam_surface, and the
+# `--check` mode of every scripts/*benchmark.py. The generators all write LF
+# (`newline="\n"`), and git stores these blobs as LF. But this repository is worked
+# on with `core.autocrlf=true`, which materialises them as CRLF on checkout, so the
+# comparison fails on a fresh Windows clone with nothing actually wrong. It failed
+# exactly that way when the CCM branch was merged.
+#
+# Pinning eol=lf changes only how the working tree is written -- the blobs are
+# already LF, so this produces no index churn -- and it makes "regenerate and see no
+# diff" true on every platform. Without it the alternative is to teach each test to
+# ignore line endings, which is the same fix applied N times and forgotten on N+1.
+
+# Generated data and documents.
+compliance/ccm/*.yaml   text eol=lf
+compliance/*.json       text eol=lf
+docs/*.md               text eol=lf
+tests/*_baseline.py     text eol=lf
+
+# The deploy artefacts are compared against each other by test_terraform_parity.
+deploy/**/*.yaml        text eol=lf
+deploy/**/*.tf          text eol=lf
