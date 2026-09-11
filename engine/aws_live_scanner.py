@@ -89,6 +89,7 @@ from engine import aws_mcp
 from engine import aws_nhi
 from engine import aws_perm_ledger
 from engine import aws_cis_storage
+from engine import aws_cis_euc
 from engine import aws_sagemaker
 from engine import aws_modelartifact
 from engine import aws_nitro
@@ -317,6 +318,17 @@ SECTIONS = [
     # disk outside production. The other five sections map onto EBS, EFS, S3 and
     # BACKUP, which already exist.
     "DRS",
+    # CIS AWS End User Compute Services Benchmark v1.2.0. Two new sections out of a
+    # 34-recommendation document -- see engine/aws_cis_euc_map.py. WorkSpaces and
+    # AppStream are managed DESKTOPS and applications: an employee's whole working
+    # environment, holding whatever they open in it, reachable from any device on
+    # the internet unless somebody narrowed that. Nothing here could see either.
+    #
+    # WorkSpaces Web (section 3) already had WSW-01/02 and needed nothing. WorkDocs
+    # (section 4) gets no section at all, and that is a decision rather than an
+    # omission: its site settings have no administrative API, and the only WorkDocs
+    # operations a role can reach read customer documents.
+    "WORKSPACES", "APPSTREAM",
     # NHI reads what the IAM section already fetched (principals + credential
     # report) and makes no call of its own, so it can sit anywhere before
     # CORRELATE. `aws_nhi` had been complete and callerless since it was written;
@@ -400,6 +412,8 @@ SECTION_LABELS = {
     "BATCH":          "AWS BATCH",
     "BEANSTALK":      "AWS ELASTIC BEANSTALK",
     "DRS":            "ELASTIC DISASTER RECOVERY (CIS STORAGE v1.0.0)",
+    "WORKSPACES":     "AMAZON WORKSPACES (CIS END USER COMPUTE v1.2.0)",
+    "APPSTREAM":      "AMAZON APPSTREAM 2.0 (CIS END USER COMPUTE v1.2.0)",
     "WICKR":          "AWS WICKR",
     "MEDIAPACKAGE":   "AWS ELEMENTAL MEDIAPACKAGE",
     "ELASTICACHE":    "AMAZON ELASTICACHE",
@@ -577,6 +591,20 @@ CHECK_SEVERITY = {
     # and never that they survive the region. BCK-05 is LOW because an AWS-owned key
     # is still encryption -- the finding is key ownership, not exposure.
     "BCK-04": "MEDIUM", "BCK-05": "LOW",
+    # CIS AWS End User Compute v1.2.0 -- managed desktops and streamed applications.
+    # WKS-01 is HIGH: an unencrypted desktop volume holds whatever the employee put
+    # on it. WKS-07 is HIGH because PAP, CHAP and MS-CHAPv1 do not protect the
+    # credential they carry, so an "MFA-enabled" directory using one is weaker than
+    # it reads. WKS-08 is MEDIUM and answers no recommendation: local administrator
+    # on your own desktop is how a phished session becomes a persistent one.
+    "WKS-01": "HIGH", "WKS-02": "MEDIUM", "WKS-03": "MEDIUM", "WKS-04": "LOW",
+    "WKS-05": "LOW", "WKS-06": "MEDIUM", "WKS-07": "HIGH", "WKS-08": "MEDIUM",
+    "WKS-09": "MEDIUM",
+    # APS-05 is HIGH and answers no recommendation either: IMDSv1 on a fleet whose
+    # whole purpose is to run software a user chose is the AppStream shape of the
+    # credential-theft path EC2 closed with IMDSv2.
+    "APS-01": "MEDIUM", "APS-02": "MEDIUM", "APS-03": "MEDIUM", "APS-04": "LOW",
+    "APS-05": "HIGH", "APS-06": "LOW",
     "ELC-01": "HIGH", "ELC-02": "HIGH", "ELC-03": "HIGH", "ELC-04": "MEDIUM",
     "ELC-05": "HIGH", "ELC-06": "MEDIUM",
     "OSR-01": "HIGH", "OSR-02": "HIGH", "OSR-03": "MEDIUM",
@@ -1029,6 +1057,32 @@ COMPLIANCE_MAP = {
     # a control outside that axis would widen the universe as a side effect of adding
     # two checks, which is how a coverage denominator quietly stops meaning anything.
     "DRS-04": {"CIS-STORAGE": "6.8", "PCI-DSS": "12.10.2", "HIPAA": "164.308(a)(7)(ii)(D)", "SOC2": "A1.3", "NIST": "CP-9"},
+    # CIS AWS End User Compute v1.2.0. The CIS-EUC key lands only on a check named by
+    # a covered row AND belonging to that row's own service section -- see
+    # engine/aws_cis_euc_map.py. WKS-08 and APS-05 carry no key on purpose: the
+    # benchmark never asks whether desktop users are local administrators, nor
+    # whether a streaming fleet still answers IMDSv1.
+    "WKS-01": {"CIS-EUC": "2.3", "PCI-DSS": "3.4", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-28"},
+    # AC-3 and SC-7 rather than the precise controls. AC-17 (REMOTE ACCESS) is what
+    # WKS-02 and WKS-03 really assert and AC-12 (SESSION TERMINATION) is what APS-04
+    # really asserts, and neither is in the product's declared 38-control NIST axis.
+    # Citing one would widen the universe as a side effect of adding checks, which is
+    # how a coverage denominator quietly stops meaning anything -- the same call the
+    # DRS and BCK rows above record for CP-4 and CP-9(3).
+    "WKS-02": {"CIS-EUC": "2.6", "PCI-DSS": "7.1.1", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.6", "NIST": "AC-3"},
+    "WKS-03": {"CIS-EUC": "2.8", "PCI-DSS": "1.3", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "WKS-04": {"CIS-EUC": "2.10", "PCI-DSS": "6.2", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
+    "WKS-05": {"CIS-EUC": "2.14", "PCI-DSS": "12.5.1", "HIPAA": "164.310(d)(2)", "SOC2": "CC6.1", "NIST": "CM-8"},
+    "WKS-06": {"CIS-EUC": "2.2", "PCI-DSS": "8.3", "HIPAA": "164.312(d)", "SOC2": "CC6.1", "NIST": "IA-2"},
+    "WKS-07": {"CIS-EUC": "2.18", "PCI-DSS": "8.2.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "IA-5"},
+    "WKS-08": {"PCI-DSS": "7.1.2", "HIPAA": "164.308(a)(4)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "WKS-09": {"CIS-EUC": "2.5", "PCI-DSS": "1.3", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "APS-01": {"CIS-EUC": "5.6", "PCI-DSS": "1.3", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "APS-02": {"CIS-EUC": "5.1", "PCI-DSS": "1.3", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.6", "NIST": "SC-7"},
+    "APS-03": {"CIS-EUC": "5.2", "PCI-DSS": "4.1", "HIPAA": "164.312(e)(1)", "SOC2": "CC6.7", "NIST": "SC-8"},
+    "APS-04": {"CIS-EUC": "5.3", "PCI-DSS": "8.1.8", "HIPAA": "164.312(a)(2)(iii)", "SOC2": "CC6.1", "NIST": "AC-3"},
+    "APS-05": {"PCI-DSS": "7.1.2", "HIPAA": "164.312(a)(1)", "SOC2": "CC6.3", "NIST": "AC-6"},
+    "APS-06": {"CIS-EUC": "5.7", "PCI-DSS": "6.2", "HIPAA": "164.308(a)(5)(ii)(B)", "SOC2": "CC7.1", "NIST": "SI-2"},
     "BCK-04": {"PCI-DSS": "12.10.1", "HIPAA": "164.308(a)(7)", "SOC2": "A1.2", "NIST": "CP-9"},
     "BCK-05": {"PCI-DSS": "3.5", "HIPAA": "164.312(a)(2)(iv)", "SOC2": "CC6.1", "NIST": "SC-12"},
     "WAF-02": {"PCI-DSS": "10.2", "HIPAA": "164.312(b)", "SOC2": "CC7.2", "NIST": "AU-2"},
@@ -1621,6 +1675,21 @@ REMEDIATION_MAP = {
     "DRS-02": "Move replication onto private connectivity so a continuous copy of production disks stops crossing the public internet: aws drs update-replication-configuration-template --replication-configuration-template-id <TEMPLATE_ID> --data-plane-routing PRIVATE_IP. This requires the staging subnet to reach the DRS and S3 endpoints privately — add interface VPC endpoints (or a NAT/Direct Connect path) before flipping it, or replication will stall.",
     "DRS-03": "Find out why replication stopped before assuming it can simply be restarted: aws drs describe-source-servers --filters sourceServerIDs=<SERVER_ID> and read dataReplicationInfo.dataReplicationError. Then aws drs retry-data-replication --source-server-id <SERVER_ID>. A STALLED server usually means the agent lost its route to the staging subnet or the staging volume filled; restarting without fixing that returns it to the same state.",
     "DRS-04": "Run a recovery drill, which launches real instances in an isolated fashion and does not affect the source: aws drs start-recovery --source-servers sourceServerID=<SERVER_ID> --is-drill. Verify the launched instance boots and serves, then clean up with aws drs terminate-recovery-instances --recovery-instance-ids <RECOVERY_INSTANCE_ID>. Schedule it — a drill run once and never repeated goes stale as the workload changes.",
+    "WKS-01": "Volume encryption is fixed when a WorkSpace is launched and cannot be added afterwards, so this one is a rebuild rather than an edit. Launch the replacement encrypted: aws workspaces create-workspaces --workspaces DirectoryId=<DIR>,UserName=<USER>,BundleId=<BUNDLE>,VolumeEncryptionKey=<KMS_KEY_ARN>,RootVolumeEncryptionEnabled=true,UserVolumeEncryptionEnabled=true. Move the user's data first: the D: drive (Windows) or /home (Linux) on the old desktop is not migrated for you, and terminating the old WorkSpace destroys it.",
+    "WKS-02": "Deny the browser client so desktops are reachable only from managed endpoints: aws workspaces modify-workspace-access-properties --resource-id <DIRECTORY_ID> --workspace-access-properties DeviceTypeWeb=DENY. Check who is actually using web access first (the WorkSpaces console's connection history shows the client type) -- this is the path people fall back on from an unmanaged machine, which is both the reason to close it and the reason closing it is disruptive.",
+    "WKS-03": "Create an IP access control group holding your egress ranges and attach it to the directory: aws workspaces create-ip-group --group-name corp-egress --user-rules ipRule=203.0.113.0/24,ruleDesc=office ; aws workspaces associate-ip-groups --directory-id <DIRECTORY_ID> --group-ids <GROUP_ID>. Two warnings: a group with NO rules blocks every connection, and these rules match the client's public source address, so users behind a dynamic ISP address or a NAT gateway you do not control will be locked out.",
+    "WKS-04": "Turn on the maintenance window so desktops receive operating-system patches: aws workspaces modify-workspace-creation-properties --resource-id <DIRECTORY_ID> --workspace-creation-properties EnableMaintenanceMode=true. If you patch through SSM, WSUS or another tool instead, that is a legitimate alternative -- document it and treat this finding as accepted rather than fixed.",
+    "WKS-05": "Confirm the desktop is genuinely abandoned and not merely seasonal, then remove it: aws workspaces terminate-workspaces --terminate-workspace-requests WorkspaceId=<WORKSPACE_ID>. TERMINATION IS IRREVERSIBLE AND DESTROYS THE USER VOLUME. Take a snapshot or have the owner confirm in writing first; the command does not prompt.",
+    "WKS-06": "Attach a RADIUS server to the directory the WorkSpaces fleet uses, so desktop sign-in needs a second factor: aws ds enable-radius --directory-id <DIRECTORY_ID> --radius-settings RadiusServers=radius.example.com,RadiusPort=1812,RadiusTimeout=20,RadiusRetries=3,SharedSecret=<SECRET>,AuthenticationProtocol=MS-CHAPv2,DisplayLabel=MFA,UseSameUsername=true. This needs a RADIUS server you already run; AWS Directory Service does not provide one, and Simple AD cannot do MFA at all.",
+    "WKS-07": "Move the RADIUS exchange to the strongest protocol Directory Service offers: aws ds update-radius --directory-id <DIRECTORY_ID> --radius-settings AuthenticationProtocol=MS-CHAPv2,RadiusServers=<SERVERS>,RadiusPort=1812,RadiusTimeout=20,RadiusRetries=3,SharedSecret=<SECRET>. Be clear about what this buys: MS-CHAPv2 is the best of PAP, CHAP, MS-CHAPv1 and MS-CHAPv2, and it is still not a strong protocol. Keep the RADIUS server on a private path and treat the shared secret as a credential.",
+    "WKS-08": "Stop granting local administrator on newly created desktops: aws workspaces modify-workspace-creation-properties --resource-id <DIRECTORY_ID> --workspace-creation-properties UserEnabledAsLocalAdministrator=false. This applies to desktops created AFTER the change -- existing WorkSpaces keep the rights they were built with, so audit those separately and rebuild or demote them.",
+    "WKS-09": "Stop attaching public addresses to desktops and route their egress through a NAT gateway instead: aws workspaces modify-workspace-creation-properties --resource-id <DIRECTORY_ID> --workspace-creation-properties EnableInternetAccess=false. Put the NAT gateway in place BEFORE flipping this, or desktops in private subnets lose internet access entirely -- including the path they use to fetch operating-system updates.",
+    "APS-01": "Stop giving streaming instances their own public addresses and send egress through a NAT gateway in your VPC: stop the fleet, then aws appstream update-fleet --name <FLEET> --no-enable-default-internet-access, then start it again. The fleet's subnets must already reach a NAT gateway first; without that the change takes the instances offline rather than making them private.",
+    "APS-02": "Attach the fleet to your own VPC so its traffic is subject to your routing and security groups: aws appstream update-fleet --name <FLEET> --vpc-config SubnetIds=<SUBNET_A>,<SUBNET_B>,SecurityGroupIds=<SG>. Use two subnets in different Availability Zones; a single-subnet fleet cannot launch capacity when that zone is impaired.",
+    "APS-03": "Create an interface endpoint for AppStream streaming and point the stack at it, so sessions never traverse the public internet: aws ec2 create-vpc-endpoint --vpc-id <VPC> --vpc-endpoint-type Interface --service-name com.amazonaws.<REGION>.appstream.streaming --subnet-ids <SUBNETS> --security-group-ids <SG> ; then aws appstream update-stack --name <STACK> --access-endpoints EndpointType=STREAMING,VpceId=<VPCE_ID>. Users must be able to reach that VPC. Existing sessions keep using the old path until they end.",
+    "APS-04": "Bring the fleet's session limits within the benchmark's bounds (the API takes SECONDS, the console takes minutes): aws appstream update-fleet --name <FLEET> --max-user-duration-in-seconds 36000 --disconnect-timeout-in-seconds 300 --idle-disconnect-timeout-in-seconds 600. Setting the idle timeout to 0 disables it entirely, which is the state this check fails on -- pick a real number.",
+    "APS-05": "Turn off IMDSv1 so a process inside a streaming session cannot read the fleet role's credentials with a single unauthenticated GET: aws appstream update-fleet --name <FLEET> --disable-imds-v1. Test first on a non-production fleet: software baked into the image that reads instance metadata the old way will stop working, and that is the point.",
+    "APS-06": "Rebuild the image so streamed applications carry current patches: launch an image builder from the current base image, apply updates, then aws appstream create-updated-image --existing-image-name <IMAGE> --new-image-name <NEW_IMAGE>, and repoint the fleet with aws appstream update-fleet --name <FLEET> --image-name <NEW_IMAGE>. Automate the cadence -- an image rebuilt once by hand ages exactly as fast as the one it replaced.",
     "BCK-04": "Add a copy action so the recovery point exists somewhere the original disaster cannot reach. Cross-region: aws backup update-backup-plan --backup-plan-id <PLAN_ID> --backup-plan with a CopyActions entry naming a DestinationBackupVaultArn in another region. Cross-account is stronger against ransomware and credential compromise, because deleting the copy then needs a second account's credentials — see AWS Backup cross-account copy with Organizations.",
     "BCK-05": "Re-create the vault on a customer-managed key; the key is fixed at vault creation and cannot be changed afterwards: aws backup create-backup-vault --backup-vault-name <NEW_VAULT> --encryption-key-arn <KMS_KEY_ARN>, repoint the plan's rules at it, and let the old vault age out under its retention. Grant the Backup service principal kms:Decrypt/GenerateDataKey on the key or backups will start failing.",
     "WAF-06": "Put a Web ACL in front of the internet-facing load balancer: aws wafv2 associate-web-acl --web-acl-arn <ACL_ARN> --resource-arn <ALB_ARN>. If no suitable ACL exists yet, create one with an AWS managed rule group first (aws wafv2 create-web-acl --scope REGIONAL --default-action Allow={} --rules with AWSManagedRulesCommonRuleSet), then associate it. A load balancer deliberately left unfiltered should be waived rather than left as an open finding.",
@@ -10009,6 +10078,287 @@ class AWSLiveScanner:
                 self._add("PASS", "DRS-04", "DRS", name,
                           f"Source server {name} last recovery launch: "
                           f"{p['launch_result']} | {name}")
+
+    def _check_workspaces(self):
+        """WKS-01..09 — Amazon WorkSpaces, an employee's whole desktop.
+
+        WHY THIS SECTION EXISTS. A WorkSpace is a persistent Windows or Linux
+        desktop holding whatever its owner put on it, reachable from any device on
+        the internet unless somebody narrowed that. Nothing in OverWatch could see
+        one. Section 2 of the CIS End User Compute benchmark is the largest in that
+        document and most of it maps onto fields the API returns plainly.
+
+        WKS-08 answers no recommendation: the benchmark never asks whether desktop
+        users are local administrators of their own machine. See
+        engine/aws_cis_euc_map.py.
+        """
+        self._section_header("WORKSPACES")
+        try:
+            ws = self._client("workspaces")
+            directories = self._tokens(ws.describe_workspace_directories,
+                                       "Directories")
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("WKS-02", "WKS-03", "WKS-04", "WKS-06", "WKS-08",
+                            "WKS-09"):
+                    self._coverage.note_denied(
+                        cid, "workspaces:DescribeWorkspaceDirectories")
+            return
+
+        # The RADIUS configuration lives on the Directory Service directory, not on
+        # the WorkSpaces registration, so WKS-06/07 need a second read. Scoped to
+        # directories WorkSpaces actually uses: a directory serving something else
+        # is not failed for a second factor it has no reason to carry.
+        radius_by_id = {}
+        if directories:
+            try:
+                ds = self._client("ds")
+                for d in self._tokens(ds.describe_directories,
+                                      "DirectoryDescriptions") or []:
+                    r = aws_cis_euc.radius_posture(d)
+                    if r["id"]:
+                        radius_by_id[r["id"]] = r
+            except Exception as e:
+                if self._is_access_denied(e):
+                    for cid in ("WKS-06", "WKS-07"):
+                        self._coverage.note_denied(cid, "ds:DescribeDirectories")
+
+        for d in (directories or []):
+            p = aws_cis_euc.directory_posture(d)
+            name = p["name"] or p["id"] or "workspaces-directory"
+            if p["web_known"] and p["web_allowed"]:
+                self._add("FAIL", "WKS-02", "WORKSPACES", name,
+                          f"WorkSpaces directory {name} permits browser access to "
+                          f"desktops — the one client that runs on an unmanaged "
+                          f"machine with nothing installed, which is what makes it "
+                          f"convenient and what makes it the weakest way in "
+                          f"| {name}")
+            elif p["web_known"]:
+                self._add("PASS", "WKS-02", "WORKSPACES", name,
+                          f"WorkSpaces directory {name} denies browser access "
+                          f"| {name}")
+
+            if not p["ip_restricted"]:
+                self._add("FAIL", "WKS-03", "WORKSPACES", name,
+                          f"WorkSpaces directory {name} has no IP access control "
+                          f"group, so the default group applies and a desktop can "
+                          f"be reached from any source address on the internet "
+                          f"| {name}")
+            else:
+                self._add("PASS", "WKS-03", "WORKSPACES", name,
+                          f"WorkSpaces directory {name} restricts source addresses "
+                          f"({len(p['ip_groups'])} group(s)) | {name}")
+
+            if p["maintenance_known"] and not p["maintenance_enabled"]:
+                self._add("FAIL", "WKS-04", "WORKSPACES", name,
+                          f"WorkSpaces directory {name} has maintenance mode off, "
+                          f"so desktops get no window in which to install "
+                          f"operating-system patches. If another tool patches them, "
+                          f"record that and accept this finding | {name}")
+            elif p["maintenance_known"]:
+                self._add("PASS", "WKS-04", "WORKSPACES", name,
+                          f"WorkSpaces directory {name} has maintenance mode on "
+                          f"| {name}")
+
+            if p["local_admin_known"] and p["users_are_local_admin"]:
+                self._add("FAIL", "WKS-08", "WORKSPACES", name,
+                          f"WorkSpaces directory {name} makes every user a local "
+                          f"administrator of their own desktop, so anything running "
+                          f"as them can install a service, disable the agent and "
+                          f"survive a reboot. The benchmark never asks this "
+                          f"| {name}")
+            elif p["local_admin_known"]:
+                self._add("PASS", "WKS-08", "WORKSPACES", name,
+                          f"WorkSpaces directory {name} does not grant users local "
+                          f"administrator | {name}")
+
+            if p["internet_known"] and p["direct_internet"]:
+                self._add("FAIL", "WKS-09", "WORKSPACES", name,
+                          f"WorkSpaces directory {name} attaches a public address "
+                          f"to every desktop it creates, putting each one directly "
+                          f"on the internet instead of behind mediated egress "
+                          f"| {name}")
+            elif p["internet_known"]:
+                self._add("PASS", "WKS-09", "WORKSPACES", name,
+                          f"WorkSpaces directory {name} does not assign public "
+                          f"addresses to desktops | {name}")
+
+            r = radius_by_id.get(p["id"])
+            if r is not None and (not r["configured"] or r["failed"]):
+                why = ("is in a FAILED state, so the console shows a second factor "
+                       "that sign-in does not actually require"
+                       if r["failed"] else "has no RADIUS server attached")
+                self._add("FAIL", "WKS-06", "WORKSPACES", name,
+                          f"The directory behind WorkSpaces {name} {why} — desktop "
+                          f"sign-in rests on a password alone | {name}")
+            elif r is not None:
+                self._add("PASS", "WKS-06", "WORKSPACES", name,
+                          f"The directory behind WorkSpaces {name} requires a second "
+                          f"factor (RADIUS {r['status']}) | {name}")
+            if r is not None and r["protocol_known"] and r["weak_protocol"]:
+                self._add("FAIL", "WKS-07", "WORKSPACES", name,
+                          f"The directory behind WorkSpaces {name} carries its "
+                          f"second factor over {r['protocol']}, which does not "
+                          f"protect the credential it transports. "
+                          f"{aws_cis_euc.STRONGEST_RADIUS_PROTOCOL} is the "
+                          f"strongest of the four protocols the service offers — "
+                          f"which is not the same as strong | {name}")
+            elif r is not None and r["protocol_known"]:
+                self._add("PASS", "WKS-07", "WORKSPACES", name,
+                          f"The directory behind WorkSpaces {name} uses "
+                          f"{r['protocol']} | {name}")
+
+        try:
+            spaces = self._tokens(ws.describe_workspaces, "Workspaces")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("WKS-01", "workspaces:DescribeWorkspaces")
+            return
+
+        for w in (spaces or []):
+            p = aws_cis_euc.workspace_volume_posture(w)
+            name = p["id"] or "workspace"
+            who = f" ({p['user_name']})" if p["user_name"] else ""
+            if p["known"] and p["any_unencrypted"]:
+                self._add("FAIL", "WKS-01", "WORKSPACES", name,
+                          f"WorkSpace {name}{who} has its "
+                          f"{' and '.join(p['unencrypted'])} volume(s) unencrypted "
+                          f"— the desktop holds whatever its owner put on it, and "
+                          f"encryption cannot be added after launch | {name}")
+            elif p["known"]:
+                self._add("PASS", "WKS-01", "WORKSPACES", name,
+                          f"WorkSpace {name}{who} encrypts both volumes | {name}")
+
+        try:
+            statuses = self._tokens(ws.describe_workspaces_connection_status,
+                                    "WorkspacesConnectionStatus")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied(
+                    "WKS-05", "workspaces:DescribeWorkspacesConnectionStatus")
+            return
+
+        now = datetime.now(timezone.utc).timestamp()
+        for s in (statuses or []):
+            p = aws_cis_euc.workspace_idle_posture(s, now)
+            name = p["id"] or "workspace"
+            if p["never"]:
+                self._add("FAIL", "WKS-05", "WORKSPACES", name,
+                          f"WorkSpace {name} has never been connected to. It is "
+                          f"being billed, and it is an account that can still sign "
+                          f"in | {name}")
+            elif p["idle"]:
+                self._add("FAIL", "WKS-05", "WORKSPACES", name,
+                          f"WorkSpace {name} has not been used for {p['days']} days "
+                          f"| {name}")
+            else:
+                self._add("PASS", "WKS-05", "WORKSPACES", name,
+                          f"WorkSpace {name} was last used {p['days']} day(s) ago "
+                          f"| {name}")
+
+    def _check_appstream(self):
+        """APS-01..06 — AppStream 2.0, applications streamed to a browser.
+
+        The same shape of asset as WorkSpaces and the same blind spot: a fleet runs
+        software a user chose, on an instance holding an IAM role, and nothing here
+        looked at one. APS-05 answers no recommendation — the benchmark never asks
+        whether the fleet still serves IMDSv1, which is the AppStream form of the
+        credential path EC2 closed with IMDSv2.
+        """
+        self._section_header("APPSTREAM")
+        try:
+            ap = self._client("appstream")
+            fleets = self._tokens(ap.describe_fleets, "Fleets")
+        except Exception as e:
+            if self._is_access_denied(e):
+                for cid in ("APS-01", "APS-02", "APS-04", "APS-05"):
+                    self._coverage.note_denied(cid, "appstream:DescribeFleets")
+            return
+
+        for f in (fleets or []):
+            n = aws_cis_euc.fleet_network_posture(f)
+            name = n["name"] or "fleet"
+            if n["internet_known"] and n["direct_internet"]:
+                self._add("FAIL", "APS-01", "APPSTREAM", name,
+                          f"AppStream fleet {name} gives streaming instances public "
+                          f"addresses through the default internet path rather than "
+                          f"routing their egress through your VPC | {name}")
+            elif n["internet_known"]:
+                self._add("PASS", "APS-01", "APPSTREAM", name,
+                          f"AppStream fleet {name} does not use default internet "
+                          f"access | {name}")
+
+            if not n["in_vpc"]:
+                self._add("FAIL", "APS-02", "APPSTREAM", name,
+                          f"AppStream fleet {name} is not attached to a VPC, so its "
+                          f"traffic is subject to none of your routing, security "
+                          f"groups or flow logs | {name}")
+            else:
+                self._add("PASS", "APS-02", "APPSTREAM", name,
+                          f"AppStream fleet {name} runs in your VPC "
+                          f"({len(n['subnets'])} subnet(s)) | {name}")
+
+            if n["imds_known"] and n["imdsv1_enabled"]:
+                self._add("FAIL", "APS-05", "APPSTREAM", name,
+                          f"AppStream fleet {name} still answers IMDSv1, so any "
+                          f"process inside a streaming session can read the fleet "
+                          f"role's credentials with one unauthenticated request. "
+                          f"The benchmark never asks this | {name}")
+            elif n["imds_known"]:
+                self._add("PASS", "APS-05", "APPSTREAM", name,
+                          f"AppStream fleet {name} requires IMDSv2 | {name}")
+
+            s = aws_cis_euc.fleet_session_posture(f)
+            if s["known"] and s["any_over"]:
+                self._add("FAIL", "APS-04", "APPSTREAM", name,
+                          f"AppStream fleet {name} session limits exceed the "
+                          f"benchmark: {'; '.join(s['over'])} — a session nobody is "
+                          f"sitting at stays live and billable | {name}")
+            elif s["known"]:
+                self._add("PASS", "APS-04", "APPSTREAM", name,
+                          f"AppStream fleet {name} session limits are within the "
+                          f"benchmark | {name}")
+
+        try:
+            stacks = self._tokens(ap.describe_stacks, "Stacks")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("APS-03", "appstream:DescribeStacks")
+            stacks = None
+
+        for st in (stacks or []):
+            p = aws_cis_euc.stack_endpoint_posture(st)
+            name = p["name"] or "stack"
+            if not p["private_streaming"]:
+                self._add("FAIL", "APS-03", "APPSTREAM", name,
+                          f"AppStream stack {name} has no VPC streaming endpoint, "
+                          f"so every session — keystrokes, screen and clipboard — "
+                          f"crosses the public internet to reach the user | {name}")
+            else:
+                self._add("PASS", "APS-03", "APPSTREAM", name,
+                          f"AppStream stack {name} streams over a VPC endpoint "
+                          f"({', '.join(p['endpoints'])}) | {name}")
+
+        try:
+            images = self._tokens(ap.describe_images, "Images", Type="PRIVATE")
+        except Exception as e:
+            if self._is_access_denied(e):
+                self._coverage.note_denied("APS-06", "appstream:DescribeImages")
+            return
+
+        now = datetime.now(timezone.utc).timestamp()
+        for im in (images or []):
+            name = (im or {}).get("Name") or "image"
+            p = aws_cis_euc.image_age_posture((im or {}).get("CreatedTime"), now)
+            if p["known"] and p["stale"]:
+                self._add("FAIL", "APS-06", "APPSTREAM", name,
+                          f"AppStream image {name} was built {p['days']} days ago, "
+                          f"so every session launched from it carries whatever was "
+                          f"unpatched that day | {name}")
+            elif p["known"]:
+                self._add("PASS", "APS-06", "APPSTREAM", name,
+                          f"AppStream image {name} was built {p['days']} day(s) ago "
+                          f"| {name}")
 
     def _check_waf_unprotected_entry_points(self):
         """WAF-06 — an internet-facing load balancer with no Web ACL in front of it.
@@ -20353,6 +20703,8 @@ class AWSLiveScanner:
             "BATCH":          self._check_batch,
             "BEANSTALK":      self._check_beanstalk,
             "DRS":            self._check_drs,
+            "WORKSPACES":     self._check_workspaces,
+            "APPSTREAM":      self._check_appstream,
             "WICKR":          self._check_wickr,
             "MEDIAPACKAGE":   self._check_mediapackage,
             "ELASTICACHE":    self._check_elasticache,

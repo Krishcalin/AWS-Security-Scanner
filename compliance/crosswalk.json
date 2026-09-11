@@ -160,6 +160,18 @@
             "sources": []
         },
         {
+            "id": "CIS-EUC",
+            "name": "CIS AWS End User Compute Services Benchmark",
+            "version": "1.2.0",
+            "authority": "CIS",
+            "family": "cloud",
+            "native": true,
+            "near_identity": false,
+            "description": "Per-service benchmark for Amazon WorkSpaces, WorkSpaces Web, WorkDocs and AppStream 2.0 - managed desktops and streamed applications, which is to say an employee's whole working environment. A better document than the Storage benchmark: 13 of its 34 recommendations are Automated where Storage had none. Two findings shape the mapping. All eight WorkDocs recommendations are unreachable, because every workdocs API is user-scoped behind an AuthenticationToken and the operations a token unlocks read customer documents, which this product refuses by charter. And 2.17 cannot be audited from the account at all - it asks whether API calls traversed a VPC endpoint, which is a property of the caller's network, and its own audit procedure tests nothing. Section numbers collide with the siblings as usual: 2.3 is CloudTrail log validation in Foundations v7.0.0 and desktop volume encryption here. See docs/CIS_EUC_BENCHMARK.md for the row-by-row verdict.",
+            "catalog_size": 0,
+            "sources": []
+        },
+        {
             "id": "CIS-AWS-FOUNDATIONS-3",
             "name": "CIS Amazon Web Services Foundations Benchmark",
             "version": "3.0.0",

@@ -56,6 +56,7 @@ DETAIL_MAP = aws_finding_detail.FINDING_DETAIL
 #: text the mapping had to refuse in places — see the UNSAFE verdict in
 #: engine/aws_cis_storage_map.py.
 ALLOWED_FRAMEWORKS = {"CIS", "CIS-COMPUTE", "CIS-DB", "CIS-AL2", "CIS-STORAGE",
+                      "CIS-EUC",
                       "PCI-DSS", "HIPAA", "SOC2", "NIST"}
 
 # ── the frozen backlog — now EMPTY, and it can only stay that way ───────────

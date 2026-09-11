@@ -71,7 +71,12 @@ def test_load_shipped_file_is_valid():
     # mapping had to argue with -- two of its recommendations would reduce security if
     # followed, which is why engine/aws_cis_storage_map.py carries an UNSAFE verdict that
     # none of the sibling mappings needs.
+    # CIS-EUC is a TENTH, and makes 2.2 mean six different things: add WorkSpaces MFA
+    # to that list. It is the first native whose mapping is bounded by a REFUSAL
+    # rather than by effort -- all eight of its WorkDocs recommendations are blocked
+    # because the only WorkDocs APIs a role can reach read customer documents.
     assert set(natives) == {"CIS", "CIS-COMPUTE", "CIS-DB", "CIS-AL2", "CIS-STORAGE",
+                            "CIS-EUC",
                             "PCI-DSS", "HIPAA", "SOC2", "NIST"}
     assert len(derived) >= 30                       # the breadth goal
     # every mapped NIST control is one of the 38 the product actually tags

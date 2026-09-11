@@ -132,6 +132,7 @@ FLOORS = {
     "test_cis_db_memorydb.py": 21,
     "test_cis_db_tls.py": 24,
     "test_cis_db_tranche2.py": 27,
+    "test_cis_euc_mapping.py": 57,
     "test_cis_foundations.py": 48,
     "test_cis_foundations_mapping.py": 29,
     "test_cis_storage_mapping.py": 37,

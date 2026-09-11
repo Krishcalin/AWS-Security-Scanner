@@ -563,6 +563,27 @@ Resources:
                   - ssm:DescribeInstancePatches
                   - ssm:ListInventoryEntries
                 Resource: '*'
+
+              # Managed desktops and streamed applications, from the CIS AWS End
+              # User Compute Services Benchmark v1.2.0. These are an employee's
+              # whole working environment running in the account, and nothing here
+              # could see them before. All read-only.
+              #
+              # `workdocs:` is deliberately ABSENT and must stay absent. Every
+              # operation in that service is document- or user-scoped and the ones a
+              # role could reach return customer documents, so granting it would
+              # breach read-only-of-CONFIG. tests/test_cis_euc_mapping.py fails the
+              # build if the scanner ever opens a workdocs client.
+              - Sid: EndUserComputeReads
+                Effect: Allow
+                Action:
+                  - workspaces:DescribeWorkspaceDirectories
+                  - workspaces:DescribeWorkspaces
+                  - workspaces:DescribeWorkspacesConnectionStatus
+                  - appstream:DescribeFleets
+                  - appstream:DescribeStacks
+                  - appstream:DescribeImages
+                Resource: '*'
       Tags:
         - { Key: 'cnapp:managed', Value: 'true' }
 

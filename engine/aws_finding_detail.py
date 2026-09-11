@@ -4943,6 +4943,160 @@ FINDING_DETAIL: Dict[str, Dict[str, object]] = {
             "Let the old vault age out under its own retention rather than deleting it — the recovery points in it are still the only copies of what they hold",
         ],
     },
+    # ── CIS AWS End User Compute Services v1.2.0 ─────────────────────────────
+    "WKS-01": {
+        "risk": "The WorkSpace has at least one volume unencrypted. A WorkSpace is a persistent desktop, not a stateless worker: the root volume carries the image and everything installed on it, and the user volume carries the documents, mail caches, browser profiles and saved credentials of one named employee. Volume encryption can only be chosen when the WorkSpace is launched, so an unencrypted desktop stays unencrypted for its whole life unless it is rebuilt.",
+        "impact": "Anyone who reaches the underlying storage or a snapshot of it reads one employee's entire working life without authenticating as them, without a session appearing in any access log, and without the desktop being running at the time.",
+        "steps": [
+            "Confirm which volume is unencrypted: aws workspaces describe-workspaces --workspace-ids <WORKSPACE_ID> --query 'Workspaces[*].[RootVolumeEncryptionEnabled,UserVolumeEncryptionEnabled]'",
+            "Preserve the user's data BEFORE anything else, because termination destroys the user volume and nothing migrates it for you",
+            "Launch the replacement encrypted: aws workspaces create-workspaces --workspaces DirectoryId=<DIR>,UserName=<USER>,BundleId=<BUNDLE>,VolumeEncryptionKey=<KMS_KEY_ARN>,RootVolumeEncryptionEnabled=true,UserVolumeEncryptionEnabled=true",
+            "Grant the WorkSpaces service principal use of the KMS key, or the launch fails rather than falling back to unencrypted",
+            "Terminate the old WorkSpace only once the user has confirmed the replacement works",
+        ],
+    },
+    "WKS-02": {
+        "risk": "The WorkSpaces directory permits browser (Web Access) connections to desktops. Every other client requires software to be installed, which in practice means a device somebody provisioned. The browser client requires nothing, so a desktop holding corporate data becomes reachable from a personal laptop, a home machine shared with a family, or a hotel business-centre PC, with the corporate password as the only thing in the way.",
+        "impact": "The desktop's security depends entirely on the endpoint it is streamed to, and with web access enabled that endpoint can be one nobody manages, patches or scans. Screen contents, keystrokes and anything copied out land on a device outside the estate.",
+        "steps": [
+            "Find out who is actually using it before switching it off — the WorkSpaces console's connection history records the client type per session",
+            "Deny the browser client: aws workspaces modify-workspace-access-properties --resource-id <DIRECTORY_ID> --workspace-access-properties DeviceTypeWeb=DENY",
+            "Give the affected users a managed alternative first, or they will find another way in",
+            "Re-run the scan and confirm the finding clears for the directory",
+        ],
+    },
+    "WKS-03": {
+        "risk": "The WorkSpaces directory has no IP access control group attached, so the default group applies. The benchmark is explicit that the default group carries a rule permitting access from anywhere, and it cannot be edited. Desktop sign-in is therefore reachable from any source address on the internet, leaving the directory password and whatever second factor exists as the only controls.",
+        "impact": "Credential stuffing and password spraying against the directory can be attempted from anywhere, continuously, with no network-layer filter in front of them. A stolen password is immediately usable from the attacker's own network rather than requiring them to first reach yours.",
+        "steps": [
+            "Establish the source ranges users legitimately connect from, including VPN egress and office addresses",
+            "Create the group: aws workspaces create-ip-group --group-name corp-egress --user-rules ipRule=203.0.113.0/24,ruleDesc=office",
+            "Attach it: aws workspaces associate-ip-groups --directory-id <DIRECTORY_ID> --group-ids <GROUP_ID>",
+            "Never attach a group with no rules — that blocks every connection to every desktop on the directory",
+            "Remember these match the client's PUBLIC source address, so users on dynamic residential addresses need the VPN range rather than their own",
+        ],
+    },
+    "WKS-04": {
+        "risk": "The WorkSpaces directory has maintenance mode disabled, so desktops are not given the window in which AWS applies operating-system updates. A WorkSpace is a long-lived Windows or Linux machine that an employee uses daily and that reaches the internet; left unpatched it accumulates exactly the vulnerabilities that any other unmanaged endpoint would.",
+        "impact": "Known, patched vulnerabilities stay exploitable on desktops that browse the web and open mail attachments, which is the highest-exposure software any employee runs.",
+        "steps": [
+            "Confirm the setting: aws workspaces describe-workspace-directories --query 'Directories[*].WorkspaceCreationProperties.EnableMaintenanceMode'",
+            "Enable it: aws workspaces modify-workspace-creation-properties --resource-id <DIRECTORY_ID> --workspace-creation-properties EnableMaintenanceMode=true",
+            "If you patch these desktops with SSM, WSUS or another tool instead, that is a legitimate alternative — record the decision and accept this finding rather than silently leaving both off",
+        ],
+    },
+    "WKS-05": {
+        "risk": "The WorkSpace has not been connected to for longer than the benchmark's thirty-day window, or has never been connected to at all. An unused desktop is not merely a cost: it is a running machine with a directory account that can still sign in, holding whatever was on it when its owner stopped using it, and nobody is looking at it to notice if someone else starts.",
+        "impact": "A desktop nobody uses is a desktop nobody misses. It keeps its credentials, its network position and its data, while the person who would have noticed anomalous activity on it has moved on.",
+        "steps": [
+            "Confirm the last connection: aws workspaces describe-workspaces-connection-status --workspace-ids <WORKSPACE_ID>",
+            "Check whether the owner has left, is on extended leave, or uses it seasonally — the API cannot tell these apart",
+            "Disable the directory account first if you are unsure; that removes the access without destroying the data",
+            "Only then: aws workspaces terminate-workspaces --terminate-workspace-requests WorkspaceId=<WORKSPACE_ID>. THIS IS IRREVERSIBLE and destroys the user volume, and the command does not prompt",
+        ],
+    },
+    "WKS-06": {
+        "risk": "The directory behind this WorkSpaces fleet requires no second factor, or its RADIUS configuration is in a FAILED state. The second case is worse than the first: the console reports MFA as configured while sign-in silently falls back to a password alone, so the control appears in an audit and does nothing. WorkSpaces sign-in is reachable from the internet, which is what makes single-factor authentication here consequential.",
+        "impact": "One phished or reused password yields a full interactive desktop inside the network, with whatever that desktop can reach, from anywhere on the internet. No second factor stands between the credential and the session.",
+        "steps": [
+            "Confirm the real state rather than the console's summary: aws ds describe-directories --directory-ids <DIRECTORY_ID> --query 'DirectoryDescriptions[*].RadiusStatus' — the healthy value is Completed",
+            "Attach a RADIUS server: aws ds enable-radius --directory-id <DIRECTORY_ID> --radius-settings RadiusServers=radius.example.com,RadiusPort=1812,RadiusTimeout=20,RadiusRetries=3,SharedSecret=<SECRET>,AuthenticationProtocol=MS-CHAPv2,DisplayLabel=MFA,UseSameUsername=true",
+            "You must already run a RADIUS server — Directory Service does not provide one, and Simple AD cannot do MFA at all",
+            "If the status is Failed, fix the reachability or shared secret rather than re-enabling: a Failed state does not block sign-in, it just does not protect it",
+        ],
+    },
+    "WKS-07": {
+        "risk": "The directory carries its RADIUS exchange over PAP, CHAP or MS-CHAPv1. PAP hands the password to the RADIUS server protected by nothing but an MD5 keystream derived from the shared secret; CHAP and MS-CHAPv1 are both broken against offline attack. The second factor is still requested, so the control looks present, but the channel carrying the authentication can be recovered by anyone positioned on the path between the directory and the RADIUS server.",
+        "impact": "An attacker who can observe or interpose on directory-to-RADIUS traffic recovers credentials from the very exchange meant to strengthen them, turning the MFA deployment into an additional place the password is exposed.",
+        "steps": [
+            "Read the current protocol: aws ds describe-directories --directory-ids <DIRECTORY_ID> --query 'DirectoryDescriptions[*].RadiusSettings.AuthenticationProtocol'",
+            "Move to the strongest option the service offers: aws ds update-radius --directory-id <DIRECTORY_ID> --radius-settings AuthenticationProtocol=MS-CHAPv2,RadiusServers=<SERVERS>,RadiusPort=1812,RadiusTimeout=20,RadiusRetries=3,SharedSecret=<SECRET>",
+            "Be clear about what that buys: MS-CHAPv2 is the best of four weak choices, not a strong protocol. Keep the RADIUS path private and treat the shared secret as a credential of its own",
+            "Confirm the RADIUS server accepts MS-CHAPv2 before switching, or sign-in breaks for everyone on the directory",
+        ],
+    },
+    "WKS-08": {
+        "risk": "The WorkSpaces directory grants every user local administrator on their own desktop. This is convenient and it is how most fleets are built, but it means any code running as the user — a macro, a malicious installer, a browser exploit — inherits the ability to install services, load drivers, disable the endpoint agent and write to locations that survive a reboot. The CIS End User Compute benchmark never asks about this setting; it is reported because the API answers it plainly and the consequence is real.",
+        "impact": "The difference between a compromised session and a compromised machine disappears. An attacker who gets code execution as the user gets persistence on a domain-joined desktop inside the network, and the tooling meant to detect that is theirs to switch off.",
+        "steps": [
+            "Confirm the setting: aws workspaces describe-workspace-directories --query 'Directories[*].WorkspaceCreationProperties.UserEnabledAsLocalAdministrator'",
+            "Turn it off for newly created desktops: aws workspaces modify-workspace-creation-properties --resource-id <DIRECTORY_ID> --workspace-creation-properties UserEnabledAsLocalAdministrator=false",
+            "Understand the limit: this governs desktops created AFTER the change. Existing WorkSpaces keep the rights they were built with",
+            "Audit the existing fleet separately and demote or rebuild those, or the setting is documentation rather than a control",
+            "Have a route for the legitimate cases — a privileged-access workflow beats a blanket grant",
+        ],
+    },
+    "WKS-09": {
+        "risk": "The WorkSpaces directory attaches a public IP address to every desktop it creates. Each desktop then sits directly on the internet rather than reaching it through a NAT gateway, so its egress is not mediated by anything you control and its network position is one hop from the outside. The benchmark reaches for this through a NAT-gateway route-table audit, and concedes in its own notes that a centralised-egress design makes that audit wrong; this setting is the unambiguous fact underneath.",
+        "impact": "Desktop egress bypasses whatever inspection, filtering or logging the NAT path provides, and each desktop presents its own attack surface to the internet rather than being reachable only through the streaming protocol.",
+        "steps": [
+            "Confirm the setting: aws workspaces describe-workspace-directories --query 'Directories[*].WorkspaceCreationProperties.EnableInternetAccess'",
+            "Put a NAT gateway in the path FIRST and confirm the WorkSpaces subnets route 0.0.0.0/0 to it",
+            "Then turn the direct path off: aws workspaces modify-workspace-creation-properties --resource-id <DIRECTORY_ID> --workspace-creation-properties EnableInternetAccess=false",
+            "Do not reverse that order — desktops in private subnets with no NAT lose internet access entirely, including the path they fetch operating-system updates over",
+        ],
+    },
+    "APS-01": {
+        "risk": "The AppStream fleet uses default internet access, so its streaming instances are assigned public IP addresses and reach the internet through the VPC's internet gateway directly. AppStream instances run whatever application the stack publishes, on a machine holding the fleet's IAM role, and default internet access puts each of them on the public network rather than behind mediated egress.",
+        "impact": "Instance egress escapes whatever inspection and filtering the NAT path provides, and each streaming instance carries a public address for the life of the session.",
+        "steps": [
+            "Confirm the setting: aws appstream describe-fleets --names <FLEET> --query 'Fleets[*].EnableDefaultInternetAccess'",
+            "Ensure the fleet's subnets already route 0.0.0.0/0 to a NAT gateway",
+            "Stop the fleet, then: aws appstream update-fleet --name <FLEET> --no-enable-default-internet-access, then start it again",
+            "Verify a session can still reach what it needs — this change is what takes an unprepared fleet offline",
+        ],
+    },
+    "APS-02": {
+        "risk": "The AppStream fleet is not attached to a VPC. Its streaming instances therefore sit outside your network entirely: no security group governs what they can talk to, no route table constrains where their traffic goes, no VPC flow log records it, and no network-layer control you operate applies to a machine that is running software for your users and holding an IAM role.",
+        "impact": "Egress from the streaming instances is unobservable and ungoverned, and the fleet cannot reach private resources without exposing them publicly.",
+        "steps": [
+            "Confirm: aws appstream describe-fleets --names <FLEET> --query 'Fleets[*].VpcConfig'",
+            "Attach it: aws appstream update-fleet --name <FLEET> --vpc-config SubnetIds=<SUBNET_A>,<SUBNET_B>,SecurityGroupIds=<SG>",
+            "Use two subnets in different Availability Zones — a single-subnet fleet cannot launch capacity when that zone is impaired",
+            "Size the subnets for the fleet's maximum capacity; AppStream consumes one address per streaming instance",
+        ],
+    },
+    "APS-03": {
+        "risk": "The AppStream stack has no STREAMING access endpoint, so user sessions reach it over the public internet rather than through a VPC interface endpoint. An AppStream session carries keystrokes, the rendered screen and clipboard contents — which is to say everything the user types and everything they are looking at, including whatever the streamed application displays.",
+        "impact": "Session traffic traverses the public internet for its whole duration, and the streaming entry point is reachable from anywhere rather than only from networks that can reach your VPC.",
+        "steps": [
+            "Confirm: aws appstream describe-stacks --names <STACK> --query 'Stacks[*].AccessEndpoints'",
+            "Create the endpoint: aws ec2 create-vpc-endpoint --vpc-id <VPC> --vpc-endpoint-type Interface --service-name com.amazonaws.<REGION>.appstream.streaming --subnet-ids <SUBNETS> --security-group-ids <SG>",
+            "Point the stack at it: aws appstream update-stack --name <STACK> --access-endpoints EndpointType=STREAMING,VpceId=<VPCE_ID>",
+            "Confirm users can route to that VPC — over VPN or Direct Connect — before switching, or they lose access",
+            "Expect existing sessions to keep using the old path until they end",
+        ],
+    },
+    "APS-04": {
+        "risk": "The AppStream fleet allows sessions to run, sit disconnected, or sit idle for longer than the benchmark's bounds — or has the idle timeout set to zero, which disables it entirely. A streaming session that outlives the person using it is a live, authenticated desktop nobody is watching, and an idle timeout of zero means such a session never ends on its own.",
+        "impact": "An unattended session remains available to whoever reaches the device it was left on, and abandoned sessions continue to consume fleet capacity and be billed.",
+        "steps": [
+            "Read the current values, remembering the API is in SECONDS while the console shows minutes: aws appstream describe-fleets --names <FLEET> --query 'Fleets[*].[MaxUserDurationInSeconds,DisconnectTimeoutInSeconds,IdleDisconnectTimeoutInSeconds]'",
+            "Bring them inside the bounds: aws appstream update-fleet --name <FLEET> --max-user-duration-in-seconds 36000 --disconnect-timeout-in-seconds 300 --idle-disconnect-timeout-in-seconds 600",
+            "Never leave the idle timeout at 0 — that is 'never disconnect', not 'disconnect immediately'",
+            "Warn users before shortening the disconnect window: below five minutes, a brief network drop costs them their session rather than reconnecting to it",
+        ],
+    },
+    "APS-05": {
+        "risk": "The AppStream fleet still answers Instance Metadata Service v1. IMDSv1 responds to an unauthenticated HTTP GET with no token exchange, so any process running inside a streaming session — including software the user chose to run, and anything that persuades the streamed application to fetch a URL — can read the fleet's IAM role credentials. This is the same failure EC2 closed with IMDSv2, on instances whose whole purpose is to run third-party software interactively. The CIS End User Compute benchmark does not ask about it.",
+        "impact": "The fleet role's credentials are retrievable by anything executing in a session, and those credentials then act from inside your account with whatever the role permits. A server-side request forgery in the streamed application is enough.",
+        "steps": [
+            "Confirm: aws appstream describe-fleets --names <FLEET> --query 'Fleets[*].DisableIMDSV1' — true means v1 is already off",
+            "Turn v1 off: aws appstream update-fleet --name <FLEET> --disable-imds-v1",
+            "Test on a non-production fleet first: anything baked into the image that reads metadata the old way stops working, which is precisely the behaviour you are removing",
+            "While you are there, scope the fleet's IAM role down — IMDSv2 limits who can read the credentials, not what they grant",
+        ],
+    },
+    "APS-06": {
+        "risk": "The AppStream image was built longer ago than the benchmark's thirty-day window. Every session launched from that image starts from its contents, and nothing installed during a session persists, so an unpatched image means every user gets the same unpatched software every time — and no amount of in-session updating changes what the next session starts with.",
+        "impact": "Known vulnerabilities in the operating system and in the streamed applications are reintroduced at the start of every session, indefinitely, until the image is rebuilt.",
+        "steps": [
+            "List image ages: aws appstream describe-images --type PRIVATE --query 'Images[*].[Name,CreatedTime]'",
+            "Launch an image builder from the current image, apply operating-system and application updates, then: aws appstream create-updated-image --existing-image-name <IMAGE> --new-image-name <NEW_IMAGE>",
+            "Repoint the fleet: aws appstream update-fleet --name <FLEET> --image-name <NEW_IMAGE>",
+            "Put the rebuild on a schedule — an image refreshed once by hand ages at exactly the rate of the one it replaced",
+        ],
+    },
     "WAF-06": {
         "risk": "An internet-facing application load balancer has no WAFv2 Web ACL associated with it, so every request from the internet reaches the application unfiltered. This is a narrower and more actionable question than WAF-01: WAF-01 observes that a scope holds no Web ACLs, which on an estate that needs no WAF is a correct and unactionable observation, whereas this finding names a specific entry point that is reachable from the internet right now with nothing in front of it. Only application load balancers are reported — a network load balancer operates below the layer a WAF inspects and cannot carry a Web ACL — and internal load balancers are out of scope because a WAF protects the internet edge.",
         "impact": "Requests carrying the known-bad-input classes an AWS managed rule group would drop — SQL injection, cross-site scripting, path traversal, exploit probes against common frameworks — arrive at the application intact, and the only defence is the application's own input handling. There is also no request-level record of web attacks against this entry point, because a Web ACL is what produces one.",

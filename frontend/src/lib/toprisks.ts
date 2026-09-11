@@ -137,9 +137,15 @@ export const RISK_CATEGORIES: RiskCategory[] = [
     // they act on it: a host they run, not a managed service. Filing it under
     // Vulnerabilities would put configuration findings next to CVEs, which are a
     // different job with a different fix.
+    // WKS- (WorkSpaces) and APS- (AppStream 2.0) arrived with the CIS End User
+    // Compute Services Benchmark, and sit here beside WSW- for the same reason it
+    // does: they are managed services an operator configures, not clusters they
+    // run. They are deliberately NOT under Identity even though several of the
+    // checks are about who may connect — an operator acting on "desktop volumes
+    // unencrypted" is looking at a fleet, not at a principal.
     prefixes: ['EC2-', 'AMI-', 'ASG-', 'LT-', 'SSM-', 'AL2-', 'LMB-', 'SFN-', 'SQS-', 'SNS-',
-      'ELC-', 'MM-', 'IOT-', 'MPV-', 'WM-', 'WSW-', 'CART-', 'CB-', 'CGP-', 'GRF-',
-      'STACK-', 'IMGB-', 'APRUN-', 'BATCH-', 'EB-'],
+      'ELC-', 'MM-', 'IOT-', 'MPV-', 'WM-', 'WSW-', 'WKS-', 'APS-', 'CART-', 'CB-',
+      'CGP-', 'GRF-', 'STACK-', 'IMGB-', 'APRUN-', 'BATCH-', 'EB-'],
     seeAll: '/findings',
   },
 ]

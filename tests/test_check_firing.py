@@ -277,8 +277,17 @@ DOC = os.path.join(ROOT, "docs", "CHECK_FIRING.md")
 #: subnet that holds a continuous copy of every protected disk -- and BCK-04/05 ask the
 #: two questions that benchmark never asks: does the backup survive the region, and is
 #: it held under a key this account can actually revoke.
+#:
+#: 514 -> 529, registered 572 -> 587 (CIS AWS End User Compute v1.2.0). Fifteen new
+#: checks, fifteen driving tests, +15 exactly -- the second batch to land under the
+#: zero ceiling and the second to show what it buys: the checks and their fixtures
+#: arrive together or not at all. WKS-01..09 read Amazon WorkSpaces and APS-01..06
+#: read AppStream 2.0, two services this product could not see at all. Two of the
+#: fifteen answer no recommendation in the source document: WKS-08 (desktop users
+#: are local administrators of their own machine) and APS-05 (the fleet still
+#: answers IMDSv1).
 MAX_NEVER_OBSERVED = 0
-MIN_PROVEN_FAILING = 514
+MIN_PROVEN_FAILING = 529
 
 
 def doc_text() -> str:

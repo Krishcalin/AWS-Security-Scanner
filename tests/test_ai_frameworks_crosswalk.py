@@ -178,4 +178,8 @@ def test_the_shipped_file_still_validates():
     # reason. It gets its own key rather than folding into CIS because these section
     # numbers collide with the Foundations ones -- "2.1" means a different thing in
     # each document, and a single key would silently merge two claims.
-    assert len(frameworks) == 47
+    # 48: +CIS-EUC, the CIS AWS End User Compute Services Benchmark. Native for the
+    # same reason, and the one whose own document bounded the mapping: its eight
+    # WorkDocs rows are blocked because WorkDocs has no administrative API and the
+    # operations that do exist read customer documents.
+    assert len(frameworks) == 48

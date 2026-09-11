@@ -210,7 +210,17 @@ class TestDataStructures(unittest.TestCase):
         # production, under a template nobody administers alongside the workloads it
         # shadows. `ebsEncryption` carries a real NONE value, so "all of it,
         # unencrypted, where nobody looks" is a state the API will report if asked.
-        self.assertEqual(len(SECTIONS), 100)
+        #
+        # 101, 102: +WORKSPACES, +APPSTREAM. Managed desktops and streamed
+        # applications, from the CIS AWS End User Compute Services Benchmark — an
+        # employee's whole working environment running in the account, reachable
+        # from any device on the internet unless somebody narrowed that, and
+        # invisible to every check that existed before. WorkSpaces Web needed no
+        # new section (WSW-01/02 already covered its one recommendation) and
+        # WorkDocs gets none at all: its site settings have no administrative API,
+        # and the only WorkDocs operations a role can reach read customer
+        # documents, which this product refuses by charter.
+        self.assertEqual(len(SECTIONS), 102)
 
     def test_all_sections_have_labels(self):
         for s in SECTIONS:

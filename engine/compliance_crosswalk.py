@@ -47,6 +47,7 @@ _CONF_RANK = {"low": 0, "medium": 1, "high": 2}
 #: overlays legitimately declare only some natives, so an equality check here would
 #: reject them. Adding a sixth native framework means editing both places.
 _NATIVE_IDS = frozenset({"CIS", "CIS-COMPUTE", "CIS-DB", "CIS-AL2", "CIS-STORAGE",
+                         "CIS-EUC",
                          "PCI-DSS", "HIPAA",
                          "SOC2", "NIST"})
 

@@ -6,6 +6,71 @@ and the project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — CIS AWS End User Compute Services v1.2.0, and one thing we refuse to read
+
+All 34 recommendations mapped, **15 new checks** across two new sections, and a
+blind spot closed: WorkSpaces and AppStream 2.0 are managed **desktops** — an
+employee's whole working environment, running in the account, reachable from any
+device on the internet unless somebody narrowed that — and OverWatch could see
+neither. 572 → 587 checks, 100 → 102 sections.
+
+This is a better document than its Storage sibling: **13 of its 34 recommendations
+are Automated** where Storage had none, and most of section 5 maps onto fields the
+API returns plainly. Two findings shaped the mapping, and both came from reading the
+pinned service models rather than the recommendation text.
+
+**All eight WorkDocs recommendations are unreachable, and six of them are a refusal
+rather than a backlog item.** Every operation in the `workdocs` service model is
+document- or user-scoped and takes an `AuthenticationToken`, which is issued to a
+signed-in WorkDocs *user*, never to an IAM role. There is no administrative API
+returning the site settings 4.3–4.8 govern (IP allow list, invite rules, public
+sharing, inactive users). The operations a token *would* unlock — `DescribeUsers`,
+`GetDocument`, `SearchResources` — read customer documents, which breaches
+read-only-of-CONFIG. `test_no_check_ever_reads_workdocs_content` fails the build if
+the scanner ever opens a `workdocs` client, and `workdocs:` is deliberately absent
+from the shipped role. These rows stay blocked **even if a token were available**.
+
+**2.17 cannot be audited from the account being scanned**, and its own audit does
+not attempt to be. It asks that WorkSpaces API calls travel over a VPC endpoint —
+a property of the *caller's* network path, which the account records nothing about.
+The stated audit tells the operator to pass `--endpoint-url` themselves and confirm
+the value they passed came back, which would pass from the open internet. Its
+remediation creates an endpoint for `elasticloadbalancing`, a different service.
+Together with 2.12 — whose audit concludes that uniform bundles are *approved*
+bundles, which does not follow — this needed a new `UNSOUND` verdict that no sibling
+mapping has: not a gap (we could build it) and not blocked (something can read it),
+but a stated method that does not test the stated control.
+
+- **`WKS-01..09` — Amazon WorkSpaces.** Volume encryption (2.3), browser access
+  (2.6), IP access control groups (2.8), maintenance mode (2.10), unused desktops
+  (2.14), directory MFA (2.2) and the RADIUS protocol carrying it (2.18).
+- **`APS-01..06` — AppStream 2.0.** Default internet access (5.6), VPC attachment
+  (5.1), private streaming endpoints (5.2), session limits (5.3/5.4/5.5) and image
+  age (5.7).
+- **Two checks the benchmark never asks for**, carrying no `CIS-EUC` key because the
+  absence is the finding: `WKS-08` (desktop users are local administrators of their
+  own machine, so a phished session becomes a persistent one) and `APS-05` (the
+  fleet still answers **IMDSv1** — the credential-theft path EC2 closed with IMDSv2,
+  on instances whose entire purpose is running software a user chose).
+- **`WSW-02` was reused, not duplicated.** Section 3 has exactly one recommendation
+  and an existing check already answered it; it gained the key rather than a twin.
+- **Three unit traps the model caught.** `RadiusStatus` is `Completed`, not
+  "Enabled" — the source uses both words and only one is real. The AppStream
+  timeouts are in **seconds** while the document and console speak in **minutes**, so
+  a check written from the prose compares 600 against 36,000 and passes everything.
+  And `DisableIMDSV1` is named for the action, not the posture.
+- **`WKS-07` refuses to oversell its own fix.** MS-CHAPv2 is the strongest of the
+  four protocols Directory Service offers, which is not the same as strong; the
+  finding says so, and a test asserts the message keeps saying so.
+- **The call-surface ratchet worked.** The six new `workspaces:` and `appstream:`
+  grants were caught by `test_call_surface` before they could reach a customer as
+  silent AccessDenied, and added to the role in both the CloudFormation and
+  Terraform twins. This is the first batch since that guard landed.
+- **`AC-3` and `SC-7` rather than `AC-17`/`AC-12`.** Remote access and session
+  termination are what these checks really assert, and neither is in the fixed
+  38-control NIST axis — widening the universe as a side effect of adding checks is
+  how a coverage denominator stops meaning anything. Same call the DRS rows record.
+
 ### Fixed — the role we ship now grants every call the engine makes
 
 **The scanner could issue 352 IAM actions. The role named 124.** The other 228 were

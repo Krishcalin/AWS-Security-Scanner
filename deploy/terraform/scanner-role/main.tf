@@ -478,6 +478,23 @@ data "aws_iam_policy_document" "service_reads" {
     ]
     resources = ["*"]
   }
+
+  # Managed desktops and streamed applications (CIS AWS End User Compute v1.2.0).
+  # `workdocs:` is deliberately absent and must stay absent -- see the CloudFormation
+  # twin and tests/test_cis_euc_mapping.py.
+  statement {
+    sid       = "EndUserComputeReads"
+    effect    = "Allow"
+    actions   = [
+      "workspaces:DescribeWorkspaceDirectories",
+      "workspaces:DescribeWorkspaces",
+      "workspaces:DescribeWorkspacesConnectionStatus",
+      "appstream:DescribeFleets",
+      "appstream:DescribeStacks",
+      "appstream:DescribeImages",
+    ]
+    resources = ["*"]
+  }
 }
 
 resource "aws_iam_role_policy" "service_reads" {

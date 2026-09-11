@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Dict, Tuple
 
-#: 352 IAM actions, each mapped to the engine modules that can issue it.
+#: 358 IAM actions, each mapped to the engine modules that can issue it.
 CALL_SURFACE: Dict[str, Tuple[str, ...]] = {
     "access-analyzer:GetFindingV2": ("aws_live_scanner.py",),
     "access-analyzer:ListAnalyzers": ("aws_live_scanner.py",),
@@ -39,6 +39,9 @@ CALL_SURFACE: Dict[str, Tuple[str, ...]] = {
     "apigateway:GetStages": ("aws_live_scanner.py",),
     "apprunner:DescribeService": ("aws_live_scanner.py",),
     "apprunner:ListServices": ("aws_live_scanner.py",),
+    "appstream:DescribeFleets": ("aws_live_scanner.py",),
+    "appstream:DescribeImages": ("aws_live_scanner.py",),
+    "appstream:DescribeStacks": ("aws_live_scanner.py",),
     "aps:DescribeWorkspace": ("aws_live_scanner.py",),
     "aps:ListWorkspaces": ("aws_live_scanner.py",),
     "autoscaling:DescribeAutoScalingGroups": ("aws_live_scanner.py",),
@@ -373,6 +376,9 @@ CALL_SURFACE: Dict[str, Tuple[str, ...]] = {
     "workmail:ListOrganizations": ("aws_live_scanner.py",),
     "workspaces-web:GetPortal": ("aws_live_scanner.py",),
     "workspaces-web:ListPortals": ("aws_live_scanner.py",),
+    "workspaces:DescribeWorkspaceDirectories": ("aws_live_scanner.py",),
+    "workspaces:DescribeWorkspaces": ("aws_live_scanner.py",),
+    "workspaces:DescribeWorkspacesConnectionStatus": ("aws_live_scanner.py",),
     "xray:GetEncryptionConfig": ("aws_live_scanner.py",),
 }
 

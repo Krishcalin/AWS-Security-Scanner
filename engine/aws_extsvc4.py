@@ -422,7 +422,13 @@ CHECKS = _cd.register(
            "Pair this with the identity provider: IP restriction bounds where, "
            "authentication bounds who, and neither substitutes for the other.")),
 
-    _C(id="WSW-02", section="WORKSPACESWEB", severity="MEDIUM", compliance=_LOG,
+    # CIS-EUC 3.1 is the ONLY recommendation in that benchmark's WorkSpaces Web
+    # section, and this check already answered it before the benchmark was read.
+    # The key is spliced onto a COPY of _LOG rather than added to _LOG itself,
+    # which a dozen unrelated logging checks share -- mutating the shared dict
+    # would tag every one of them with a WorkSpaces Web recommendation.
+    _C(id="WSW-02", section="WORKSPACESWEB", severity="MEDIUM",
+       compliance={**_LOG, "CIS-EUC": "3.1"},
        permissions=(
            _P("workspaces-web:GetPortal",
               "read whether any user access logging or session logger is attached to "
