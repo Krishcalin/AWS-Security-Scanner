@@ -47,6 +47,27 @@ def _cfn_extras_actions():
     return actions
 
 
+def _cfn_policy_actions(policy_name):
+    """One CFN inline policy's actions, by PolicyName."""
+    for pol in _cfn_props().get("Policies", []):
+        if pol["PolicyName"] == policy_name:
+            out = []
+            for s in pol["PolicyDocument"]["Statement"]:
+                act = s["Action"]
+                out += act if isinstance(act, list) else [act]
+            return set(out)
+    raise AssertionError(f"no CFN inline policy named {policy_name}")
+
+
+#: CFN PolicyName -> the Terraform aws_iam_policy_document that must mirror it.
+#: Two documents rather than one because an inline policy caps at 10,240 characters
+#: and the full call surface renders past 9,300 in a single document.
+_ALWAYS_ON_POLICIES = {
+    "CnappScannerReadOnlyExtras": "extras",
+    "CnappScannerServiceReads": "service_reads",
+}
+
+
 def _tf():
     return open(TF_MAIN, encoding="utf-8").read()
 
@@ -98,15 +119,29 @@ def _tf_block(resource_name):
     return tf[start:]
 
 
-# ── parity: the always-on inline extras action set matches the CFN EXACTLY ────
-def test_tf_extras_actions_match_cfn_exactly():
-    # scope to the 'extras' policy-document block (the first "extras" is the data source),
-    # so the trust condition (sts:ExternalId) + tag (cnapp:managed) aren't mistaken for
-    # actions; assert set-equality so a dropped OR added action fails
-    tf_actions = set(_ACTION_RE.findall(_tf_block("extras")))
-    assert tf_actions == set(_cfn_extras_actions()), (
-        f"always-on extras drift: TF-only={tf_actions - set(_cfn_extras_actions())}, "
-        f"CFN-only={set(_cfn_extras_actions()) - tf_actions}")
+# ── parity: each always-on inline policy matches its CFN twin EXACTLY ─────────
+@pytest.mark.parametrize("policy_name,tf_doc", sorted(_ALWAYS_ON_POLICIES.items()))
+def test_tf_always_on_policy_matches_cfn_exactly(policy_name, tf_doc):
+    # scope to the named policy-document block, so the trust condition
+    # (sts:ExternalId) + tag (cnapp:managed) aren't mistaken for actions; assert
+    # set-equality so a dropped OR added action fails. Compared per POLICY rather
+    # than as one pooled set: pooling would let an action move between the two
+    # documents unnoticed, and which document an action lives in is what keeps each
+    # under the 10,240-character inline limit.
+    tf_actions = set(_ACTION_RE.findall(_tf_block(tf_doc)))
+    cfn_actions = _cfn_policy_actions(policy_name)
+    assert tf_actions == cfn_actions, (
+        f"{policy_name} drift: TF-only={sorted(tf_actions - cfn_actions)}, "
+        f"CFN-only={sorted(cfn_actions - tf_actions)}")
+
+
+def test_every_cfn_always_on_policy_has_a_terraform_twin():
+    """A new inline policy in the CFN with no TF mirror is a Terraform deployment
+    that silently grants less than the CloudFormation one."""
+    names = {p["PolicyName"] for p in _cfn_props().get("Policies", [])}
+    assert names == set(_ALWAYS_ON_POLICIES), (
+        f"CFN inline policies {sorted(names)} do not match the mirrored set "
+        f"{sorted(_ALWAYS_ON_POLICIES)}")
 
 
 # ── parity: the four opt-in policies match the CFN's (commented) opt-in blocks ─

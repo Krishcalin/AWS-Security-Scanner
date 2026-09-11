@@ -287,6 +287,282 @@ Resources:
                   - bedrock-agentcore:ListBrowsers
                   - bedrock-agentcore:ListCodeInterpreters
                 Resource: '*'
+
+        # ── Every remaining call the engine can make ────────────────────────────
+        # GENERATED from tests/call_surface_baseline.py, which scripts/gen_call_surface.py
+        # derives from the source by AST and resolves through botocore's signingName.
+        # tests/test_call_surface.py fails the build if the two drift apart.
+        #
+        # These 215 actions were previously ASSUMED to come from the SecurityAudit and
+        # ViewOnlyAccess managed policies attached above. Mostly they do -- but nothing
+        # verified it, AWS can revise a managed policy without telling anyone, and the
+        # assumption was wrong at least once: six drs: and backup: reads shipped with no
+        # grant in any policy, because Elastic Disaster Recovery postdates SecurityAudit
+        # entirely. Naming them is the same decision the batches above record, applied to
+        # the rest of the surface instead of one service at a time.
+        #
+        # A SECOND inline policy rather than more Sids in the first: an inline policy
+        # document caps at 10,240 characters, and one document holding the whole surface
+        # renders past 9,300 -- about thirty checks of headroom for a catalogue that
+        # grows every release. Split, the two sit at 4,751 and 6,766 characters, and
+        # tests/test_call_surface.py fails either past 80% of the limit.
+        #
+        # Every action is read-only-of-CONFIG. No Put/Create/Delete/Update, and none of
+        # the four workload-DATA reads that kept ReadOnlyAccess off this role.
+        - PolicyName: CnappScannerServiceReads
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Instances, images, clusters, tasks and the build pipeline that produces
+              # them.
+              - Sid: ComputeAndContainerReads
+                Effect: Allow
+                Action:
+                  - apprunner:DescribeService
+                  - apprunner:ListServices
+                  - autoscaling:DescribeAutoScalingGroups
+                  - autoscaling:DescribeLaunchConfigurations
+                  - batch:DescribeJobDefinitions
+                  - ec2:DescribeAddresses
+                  - ec2:DescribeImageAttribute
+                  - ec2:DescribeImages
+                  - ec2:DescribeInstanceAttribute
+                  - ec2:DescribeInstanceTypes
+                  - ec2:DescribeInstances
+                  - ec2:DescribeLaunchTemplateVersions
+                  - ec2:DescribeLaunchTemplates
+                  - ec2:DescribeNetworkAcls
+                  - ec2:DescribeRegions
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeVolumes
+                  - ec2:DescribeVpcEndpoints
+                  - ec2:DescribeVpcPeeringConnections
+                  - ec2:DescribeVpcs
+                  - ecr:DescribeImageScanFindings
+                  - ecr:DescribeImages
+                  - ecr:DescribeRepositories
+                  - ecr:GetLifecyclePolicy
+                  - ecr:GetRegistryScanningConfiguration
+                  - ecr:GetRepositoryPolicy
+                  - ecr:GetSigningConfiguration
+                  - ecs:DescribeClusters
+                  - ecs:DescribeServices
+                  - ecs:DescribeTaskDefinition
+                  - ecs:DescribeTaskSets
+                  - ecs:DescribeTasks
+                  - ecs:ListClusters
+                  - ecs:ListTaskDefinitions
+                  - ecs:ListTasks
+                  - eks:DescribeAccessEntry
+                  - eks:DescribeCluster
+                  - eks:DescribeFargateProfile
+                  - eks:DescribeNodegroup
+                  - eks:ListAccessEntries
+                  - eks:ListAssociatedAccessPolicies
+                  - eks:ListClusters
+                  - eks:ListFargateProfiles
+                  - eks:ListNodegroups
+                  - eks:ListPodIdentityAssociations
+                  - elasticbeanstalk:DescribeConfigurationSettings
+                  - elasticbeanstalk:DescribeEnvironments
+                  - imagebuilder:GetDistributionConfiguration
+                  - imagebuilder:GetImageRecipe
+                  - imagebuilder:ListDistributionConfigurations
+                  - imagebuilder:ListImageRecipes
+                  - lambda:GetCodeSigningConfig
+                  - lambda:GetFunctionCodeSigningConfig
+                  - lambda:GetFunctionConcurrency
+                  - lambda:GetFunctionRecursionConfig
+                  - lambda:GetFunctionUrlConfig
+                  - lambda:GetLayerVersionPolicy
+                  - lambda:GetPolicy
+                  - lambda:ListFunctions
+                  - lightsail:GetBuckets
+                  - states:DescribeStateMachine
+                  - states:ListStateMachines
+                Resource: '*'
+              # Principals, policies and the organisation they sit in. No credential
+              # VALUES are readable through any of these -- iam:GetCredentialReport
+              # returns last-used metadata, never a secret.
+              - Sid: IdentityAndOrgReads
+                Effect: Allow
+                Action:
+                  - access-analyzer:GetFindingV2
+                  - access-analyzer:ListAnalyzers
+                  - access-analyzer:ListFindingsV2
+                  - account:GetAlternateContact
+                  - account:GetContactInformation
+                  - cognito-identity:DescribeIdentityPool
+                  - cognito-identity:GetIdentityPoolRoles
+                  - cognito-identity:ListIdentityPools
+                  - cognito-idp:DescribeUserPool
+                  - cognito-idp:ListUserPools
+                  - iam:GenerateCredentialReport
+                  - iam:GetAccountAuthorizationDetails
+                  - iam:GetAccountPasswordPolicy
+                  - iam:GetAccountSummary
+                  - iam:GetCredentialReport
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListAccessKeys
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListAttachedUserPolicies
+                  - iam:ListEntitiesForPolicy
+                  - iam:ListOpenIDConnectProviders
+                  - iam:ListOrganizationsFeatures
+                  - iam:ListPolicies
+                  - iam:ListRolePolicies
+                  - iam:ListSAMLProviders
+                  - iam:ListUserPolicies
+                  - iam:ListVirtualMFADevices
+                  - organizations:DescribeOrganization
+                  - organizations:DescribePolicy
+                  - organizations:DescribeResourcePolicy
+                  - organizations:ListParents
+                  - organizations:ListPoliciesForTarget
+                  - sso:DescribePermissionSet
+                  - sts:GetCallerIdentity
+                Resource: '*'
+              # Storage and database CONFIGURATION only. Note what is absent:
+              # s3:GetObject, dynamodb:GetItem/Query/Scan, sqs:ReceiveMessage,
+              # secretsmanager:GetSecretValue. Reading a bucket's encryption setting is
+              # a different act from reading the bucket.
+              - Sid: DataStoreConfigReads
+                Effect: Allow
+                Action:
+                  - backup:DescribeBackupVault
+                  - backup:GetBackupPlan
+                  - backup:GetBackupVaultAccessPolicy
+                  - backup:ListBackupPlans
+                  - backup:ListBackupVaults
+                  - drs:DescribeReplicationConfigurationTemplates
+                  - drs:DescribeSourceServers
+                  - dynamodb:DescribeContinuousBackups
+                  - dynamodb:DescribeTable
+                  - dynamodb:GetResourcePolicy
+                  - dynamodb:ListTables
+                  - dynamodb:ListTagsOfResource
+                  - elasticache:DescribeCacheClusters
+                  - elasticache:DescribeReplicationGroups
+                  - elasticfilesystem:DescribeBackupPolicy
+                  - elasticfilesystem:DescribeFileSystemPolicy
+                  - elasticfilesystem:DescribeFileSystems
+                  - es:DescribeDomain
+                  - es:ListDomainNames
+                  - es:ListTags
+                  - glacier:GetVaultAccessPolicy
+                  - glacier:GetVaultLock
+                  - glacier:GetVaultNotifications
+                  - glacier:ListVaults
+                  - memorydb:DescribeUsers
+                  - rds:DescribeDBInstances
+                  - rds:DescribeDBSnapshotAttributes
+                  - rds:DescribeDBSnapshots
+                  - redshift-serverless:ListNamespaces
+                  - redshift-serverless:ListWorkgroups
+                  - redshift:DescribeClusterParameters
+                  - redshift:DescribeClusters
+                  - redshift:DescribeLoggingStatus
+                  - s3:GetBucketEncryption
+                  - s3:GetBucketLogging
+                  - s3:GetBucketPolicy
+                  - s3:GetBucketVersioning
+                  - s3:GetPublicAccessBlock
+                  - s3:HeadBucket
+                  - s3:ListBuckets
+                Resource: '*'
+              # The internet-facing surface: distributions, load balancers, zones,
+              # certificates and the WAF in front of them.
+              - Sid: EdgeAndDnsReads
+                Effect: Allow
+                Action:
+                  - acm:DescribeCertificate
+                  - acm:ListCertificates
+                  - apigateway:GetApis
+                  - apigateway:GetIntegrations
+                  - apigateway:GetRestApis
+                  - apigateway:GetRoutes
+                  - apigateway:GetStages
+                  - cloudfront:GetDistributionConfig
+                  - cloudfront:ListDistributions
+                  - elasticloadbalancing:DescribeListeners
+                  - elasticloadbalancing:DescribeLoadBalancerAttributes
+                  - elasticloadbalancing:DescribeLoadBalancerPolicies
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:DescribeRules
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeTargetHealth
+                  - route53:GetDNSSEC
+                  - route53:ListHealthChecks
+                  - route53:ListHostedZones
+                  - route53:ListQueryLoggingConfigs
+                  - route53:ListResourceRecordSets
+                  - route53domains:GetDomainDetail
+                  - route53domains:ListDomains
+                  - route53resolver:ListFirewallRuleGroupAssociations
+                  - route53resolver:ListResolverQueryLogConfigs
+                  - wafv2:ListResourcesForWebACL
+                Resource: '*'
+              # Logging, monitoring and the AWS security services OverWatch reconciles
+              # against. cloudwatch signs as `monitoring`, and GetMetricStatistics is
+              # the one metered call in this policy -- it is what distinguishes an idle
+              # database from a busy one.
+              - Sid: ObservabilityAndSecurityReads
+                Effect: Allow
+                Action:
+                  - bedrock:GetAgent
+                  - bedrock:GetCustomModel
+                  - bedrock:GetModelInvocationLoggingConfiguration
+                  - bedrock:ListAgentActionGroups
+                  - bedrock:ListAgentKnowledgeBases
+                  - bedrock:ListAgents
+                  - bedrock:ListCustomModels
+                  - bedrock:ListDataSources
+                  - bedrock:ListGuardrails
+                  - bedrock:ListKnowledgeBases
+                  - cloudtrail:DescribeTrails
+                  - cloudtrail:GetEventSelectors
+                  - cloudtrail:GetTrailStatus
+                  - codeartifact:ListRepositoriesInDomain
+                  - config:DescribeConfigurationRecorderStatus
+                  - inspector2:BatchGetAccountStatus
+                  - inspector2:BatchGetFindingDetails
+                  - inspector2:ListFindings
+                  - kms:DescribeKey
+                  - kms:GetKeyPolicy
+                  - kms:GetKeyRotationStatus
+                  - kms:ListKeys
+                  - logs:DescribeLogGroups
+                  - logs:DescribeMetricFilters
+                  - macie2:DescribeBuckets
+                  - macie2:GetMacieSession
+                  - monitoring:DescribeAlarmsForMetric
+                  - monitoring:GetMetricStatistics
+                  - sagemaker:DescribeDomain
+                  - sagemaker:DescribeEndpointConfig
+                  - sagemaker:DescribeFeatureGroup
+                  - sagemaker:DescribeInferenceExperiment
+                  - sagemaker:DescribeModel
+                  - sagemaker:DescribeNotebookInstance
+                  - sagemaker:ListDomains
+                  - sagemaker:ListEndpointConfigs
+                  - sagemaker:ListNotebookInstances
+                  - sagemaker:ListTags
+                  - secretsmanager:GetResourcePolicy
+                  - secretsmanager:ListSecrets
+                  - securityhub:GetEnabledStandards
+                  - sns:GetTopicAttributes
+                  - sns:ListSubscriptions
+                  - sns:ListSubscriptionsByTopic
+                  - sqs:GetQueueAttributes
+                  - sqs:ListQueues
+                  - ssm:DescribeInstanceInformation
+                  - ssm:DescribeInstancePatchStates
+                  - ssm:DescribeInstancePatches
+                  - ssm:ListInventoryEntries
+                Resource: '*'
       Tags:
         - { Key: 'cnapp:managed', Value: 'true' }
 

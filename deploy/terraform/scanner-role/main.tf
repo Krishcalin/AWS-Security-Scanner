@@ -225,6 +225,267 @@ resource "aws_iam_role_policy" "extras" {
   policy = data.aws_iam_policy_document.extras.json
 }
 
+
+# Generated from engine/aws_call_surface.py -- see the CloudFormation twin.
+data "aws_iam_policy_document" "service_reads" {
+  statement {
+    sid       = "ComputeAndContainerReads"
+    effect    = "Allow"
+    actions   = [
+      "apprunner:DescribeService",
+      "apprunner:ListServices",
+      "autoscaling:DescribeAutoScalingGroups",
+      "autoscaling:DescribeLaunchConfigurations",
+      "batch:DescribeJobDefinitions",
+      "ec2:DescribeAddresses",
+      "ec2:DescribeImageAttribute",
+      "ec2:DescribeImages",
+      "ec2:DescribeInstanceAttribute",
+      "ec2:DescribeInstanceTypes",
+      "ec2:DescribeInstances",
+      "ec2:DescribeLaunchTemplateVersions",
+      "ec2:DescribeLaunchTemplates",
+      "ec2:DescribeNetworkAcls",
+      "ec2:DescribeRegions",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeVolumes",
+      "ec2:DescribeVpcEndpoints",
+      "ec2:DescribeVpcPeeringConnections",
+      "ec2:DescribeVpcs",
+      "ecr:DescribeImageScanFindings",
+      "ecr:DescribeImages",
+      "ecr:DescribeRepositories",
+      "ecr:GetLifecyclePolicy",
+      "ecr:GetRegistryScanningConfiguration",
+      "ecr:GetRepositoryPolicy",
+      "ecr:GetSigningConfiguration",
+      "ecs:DescribeClusters",
+      "ecs:DescribeServices",
+      "ecs:DescribeTaskDefinition",
+      "ecs:DescribeTaskSets",
+      "ecs:DescribeTasks",
+      "ecs:ListClusters",
+      "ecs:ListTaskDefinitions",
+      "ecs:ListTasks",
+      "eks:DescribeAccessEntry",
+      "eks:DescribeCluster",
+      "eks:DescribeFargateProfile",
+      "eks:DescribeNodegroup",
+      "eks:ListAccessEntries",
+      "eks:ListAssociatedAccessPolicies",
+      "eks:ListClusters",
+      "eks:ListFargateProfiles",
+      "eks:ListNodegroups",
+      "eks:ListPodIdentityAssociations",
+      "elasticbeanstalk:DescribeConfigurationSettings",
+      "elasticbeanstalk:DescribeEnvironments",
+      "imagebuilder:GetDistributionConfiguration",
+      "imagebuilder:GetImageRecipe",
+      "imagebuilder:ListDistributionConfigurations",
+      "imagebuilder:ListImageRecipes",
+      "lambda:GetCodeSigningConfig",
+      "lambda:GetFunctionCodeSigningConfig",
+      "lambda:GetFunctionConcurrency",
+      "lambda:GetFunctionRecursionConfig",
+      "lambda:GetFunctionUrlConfig",
+      "lambda:GetLayerVersionPolicy",
+      "lambda:GetPolicy",
+      "lambda:ListFunctions",
+      "lightsail:GetBuckets",
+      "states:DescribeStateMachine",
+      "states:ListStateMachines",
+    ]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "IdentityAndOrgReads"
+    effect    = "Allow"
+    actions   = [
+      "access-analyzer:GetFindingV2",
+      "access-analyzer:ListAnalyzers",
+      "access-analyzer:ListFindingsV2",
+      "account:GetAlternateContact",
+      "account:GetContactInformation",
+      "cognito-identity:DescribeIdentityPool",
+      "cognito-identity:GetIdentityPoolRoles",
+      "cognito-identity:ListIdentityPools",
+      "cognito-idp:DescribeUserPool",
+      "cognito-idp:ListUserPools",
+      "iam:GenerateCredentialReport",
+      "iam:GetAccountAuthorizationDetails",
+      "iam:GetAccountPasswordPolicy",
+      "iam:GetAccountSummary",
+      "iam:GetCredentialReport",
+      "iam:GetPolicy",
+      "iam:GetPolicyVersion",
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListAccessKeys",
+      "iam:ListAttachedRolePolicies",
+      "iam:ListAttachedUserPolicies",
+      "iam:ListEntitiesForPolicy",
+      "iam:ListOpenIDConnectProviders",
+      "iam:ListOrganizationsFeatures",
+      "iam:ListPolicies",
+      "iam:ListRolePolicies",
+      "iam:ListSAMLProviders",
+      "iam:ListUserPolicies",
+      "iam:ListVirtualMFADevices",
+      "organizations:DescribeOrganization",
+      "organizations:DescribePolicy",
+      "organizations:DescribeResourcePolicy",
+      "organizations:ListParents",
+      "organizations:ListPoliciesForTarget",
+      "sso:DescribePermissionSet",
+      "sts:GetCallerIdentity",
+    ]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "DataStoreConfigReads"
+    effect    = "Allow"
+    actions   = [
+      "backup:DescribeBackupVault",
+      "backup:GetBackupPlan",
+      "backup:GetBackupVaultAccessPolicy",
+      "backup:ListBackupPlans",
+      "backup:ListBackupVaults",
+      "drs:DescribeReplicationConfigurationTemplates",
+      "drs:DescribeSourceServers",
+      "dynamodb:DescribeContinuousBackups",
+      "dynamodb:DescribeTable",
+      "dynamodb:GetResourcePolicy",
+      "dynamodb:ListTables",
+      "dynamodb:ListTagsOfResource",
+      "elasticache:DescribeCacheClusters",
+      "elasticache:DescribeReplicationGroups",
+      "elasticfilesystem:DescribeBackupPolicy",
+      "elasticfilesystem:DescribeFileSystemPolicy",
+      "elasticfilesystem:DescribeFileSystems",
+      "es:DescribeDomain",
+      "es:ListDomainNames",
+      "es:ListTags",
+      "glacier:GetVaultAccessPolicy",
+      "glacier:GetVaultLock",
+      "glacier:GetVaultNotifications",
+      "glacier:ListVaults",
+      "memorydb:DescribeUsers",
+      "rds:DescribeDBInstances",
+      "rds:DescribeDBSnapshotAttributes",
+      "rds:DescribeDBSnapshots",
+      "redshift-serverless:ListNamespaces",
+      "redshift-serverless:ListWorkgroups",
+      "redshift:DescribeClusterParameters",
+      "redshift:DescribeClusters",
+      "redshift:DescribeLoggingStatus",
+      "s3:GetBucketEncryption",
+      "s3:GetBucketLogging",
+      "s3:GetBucketPolicy",
+      "s3:GetBucketVersioning",
+      "s3:GetPublicAccessBlock",
+      "s3:HeadBucket",
+      "s3:ListBuckets",
+    ]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "EdgeAndDnsReads"
+    effect    = "Allow"
+    actions   = [
+      "acm:DescribeCertificate",
+      "acm:ListCertificates",
+      "apigateway:GetApis",
+      "apigateway:GetIntegrations",
+      "apigateway:GetRestApis",
+      "apigateway:GetRoutes",
+      "apigateway:GetStages",
+      "cloudfront:GetDistributionConfig",
+      "cloudfront:ListDistributions",
+      "elasticloadbalancing:DescribeListeners",
+      "elasticloadbalancing:DescribeLoadBalancerAttributes",
+      "elasticloadbalancing:DescribeLoadBalancerPolicies",
+      "elasticloadbalancing:DescribeLoadBalancers",
+      "elasticloadbalancing:DescribeRules",
+      "elasticloadbalancing:DescribeTargetGroups",
+      "elasticloadbalancing:DescribeTargetHealth",
+      "route53:GetDNSSEC",
+      "route53:ListHealthChecks",
+      "route53:ListHostedZones",
+      "route53:ListQueryLoggingConfigs",
+      "route53:ListResourceRecordSets",
+      "route53domains:GetDomainDetail",
+      "route53domains:ListDomains",
+      "route53resolver:ListFirewallRuleGroupAssociations",
+      "route53resolver:ListResolverQueryLogConfigs",
+      "wafv2:ListResourcesForWebACL",
+    ]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "ObservabilityAndSecurityReads"
+    effect    = "Allow"
+    actions   = [
+      "bedrock:GetAgent",
+      "bedrock:GetCustomModel",
+      "bedrock:GetModelInvocationLoggingConfiguration",
+      "bedrock:ListAgentActionGroups",
+      "bedrock:ListAgentKnowledgeBases",
+      "bedrock:ListAgents",
+      "bedrock:ListCustomModels",
+      "bedrock:ListDataSources",
+      "bedrock:ListGuardrails",
+      "bedrock:ListKnowledgeBases",
+      "cloudtrail:DescribeTrails",
+      "cloudtrail:GetEventSelectors",
+      "cloudtrail:GetTrailStatus",
+      "codeartifact:ListRepositoriesInDomain",
+      "config:DescribeConfigurationRecorderStatus",
+      "inspector2:BatchGetAccountStatus",
+      "inspector2:BatchGetFindingDetails",
+      "inspector2:ListFindings",
+      "kms:DescribeKey",
+      "kms:GetKeyPolicy",
+      "kms:GetKeyRotationStatus",
+      "kms:ListKeys",
+      "logs:DescribeLogGroups",
+      "logs:DescribeMetricFilters",
+      "macie2:DescribeBuckets",
+      "macie2:GetMacieSession",
+      "monitoring:DescribeAlarmsForMetric",
+      "monitoring:GetMetricStatistics",
+      "sagemaker:DescribeDomain",
+      "sagemaker:DescribeEndpointConfig",
+      "sagemaker:DescribeFeatureGroup",
+      "sagemaker:DescribeInferenceExperiment",
+      "sagemaker:DescribeModel",
+      "sagemaker:DescribeNotebookInstance",
+      "sagemaker:ListDomains",
+      "sagemaker:ListEndpointConfigs",
+      "sagemaker:ListNotebookInstances",
+      "sagemaker:ListTags",
+      "secretsmanager:GetResourcePolicy",
+      "secretsmanager:ListSecrets",
+      "securityhub:GetEnabledStandards",
+      "sns:GetTopicAttributes",
+      "sns:ListSubscriptions",
+      "sns:ListSubscriptionsByTopic",
+      "sqs:GetQueueAttributes",
+      "sqs:ListQueues",
+      "ssm:DescribeInstanceInformation",
+      "ssm:DescribeInstancePatchStates",
+      "ssm:DescribeInstancePatches",
+      "ssm:ListInventoryEntries",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "service_reads" {
+  name   = "CnappScannerServiceReads"
+  role   = aws_iam_role.scanner.id
+  policy = data.aws_iam_policy_document.service_reads.json
+}
+
 # ── OPT-IN grants (default OFF). Each reproduces the corresponding commented CFN block. ──
 
 # Agentless EBS side-scan READ-ONLY (pre-existing snapshots) — the key for the DEFAULT

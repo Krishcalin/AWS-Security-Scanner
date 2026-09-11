@@ -58,6 +58,16 @@ LIST_OPERATIONS: Tuple[Tuple[str, str, str], ...] = (
 #: ``-control`` suffix belongs to the endpoint, not to the authorization namespace.
 IAM_PREFIX = "bedrock-agentcore"
 
+#: Declared for scripts/gen_call_surface.py, which derives the shipped role's grants
+#: by walking the AST. It cannot see these: aws_live_scanner drives them as
+#: ``getattr(ac, op)`` over the table above, so each operation name exists only as
+#: data and no attribute access anywhere names it. Eight grants therefore looked
+#: unused until this declaration existed, and would have been removable-looking.
+#: Derived FROM that table rather than written out beside it, because a parallel list
+#: is a list that drifts -- add a row to LIST_OPERATIONS and the grant follows.
+CALL_SURFACE_EXTRA: Tuple[str, ...] = tuple(
+    f"bedrock-agentcore-control:{op}" for op, _key, _kind in LIST_OPERATIONS)
+
 NETWORK_MODES = ("PUBLIC", "VPC")
 RUNTIME_STATUSES = ("CREATING", "CREATE_FAILED", "UPDATING", "UPDATE_FAILED",
                     "READY", "DELETING")
